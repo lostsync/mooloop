@@ -1,0 +1,273 @@
+import { HorizontalBox, VerticalBox } from "std-widgets.slint";
+
+// Dense dark palette. A global so later widgets inherit the same look.
+export global Palette {
+    out property <color> bg:        #18181b;
+    out property <color> surface:   #232328;
+    out property <color> surface-2: #2a2a2e;
+    out property <color> edge:      #3f3f46;
+    out property <color> text:      #e4e4e7;
+    out property <color> text-dim:  #a1a1aa;
+    out property <color> text-faint:#52525b;
+    out property <color> accent:    #84cc16;
+    out property <color> accent-on: #2d6a3e;
+    out property <color> warn:      #ef4444;
+}
+
+// A small flat button with a label.
+component FlatButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    in property <color> text-color: Palette.text;
+    callback clicked;
+
+    min-width: 52px;
+    min-height: 26px;
+    border-radius: 3px;
+    background: active ? Palette.accent-on : Palette.surface-2;
+
+    Text {
+        text: root.text;
+        color: root.text-color;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-size: 11px;
+    }
+
+    tap := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// A horizontal fader with click-and-drag value setting.
+component Fader inherits Rectangle {
+    in property <string> label;
+    in-out property <float> value;     // 0..1
+    in property <color> fill: Palette.accent;
+    callback changed(float);
+
+    property <length> track-height: 4px;
+    min-height: 26px;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: start;
+
+        Text {
+            text: root.label;
+            color: Palette.text-dim;
+            font-size: 10px;
+            vertical-alignment: center;
+            width: 32px;
+        }
+
+        track := Rectangle {
+            vertical-stretch: 1;
+            min-width: 90px;
+            height: parent.height;
+            background: transparent;
+
+            Rectangle {
+                y: (parent.height - root.track-height) / 2;
+                height: root.track-height;
+                width: parent.width;
+                background: Palette.edge;
+                border-radius: root.track-height / 2;
+            }
+            Rectangle {
+                y: (parent.height - root.track-height) / 2;
+                height: root.track-height;
+                width: parent.width * clamp(root.value, 0, 1);
+                background: root.fill;
+                border-radius: root.track-height / 2;
+            }
+
+            TouchArea {
+                mouse-cursor: pointer;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down
+                        || (e.kind == PointerEventKind.move && self.pressed)) {
+                        root.value = clamp(self.mouse-x / self.width, 0, 1);
+                        root.changed(root.value);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A horizontal LED-style peak meter.
+component Meter inherits Rectangle {
+    in property <float> level;          // 0..1
+    in property <color> color-low:  Palette.accent;
+    in property <color> color-high: Palette.warn;
+    min-width: 70px;
+    height: 6px;
+    border-radius: 2px;
+    background: Palette.edge;
+
+    Rectangle {
+        width: parent.width * clamp(root.level, 0, 1);
+        height: parent.height;
+        border-radius: 2px;
+        background: root.level > 0.85 ? root.color-high : root.color-low;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "mooloop";
+    preferred-width: 1280px;
+    preferred-height: 760px;
+    background: Palette.bg;
+
+    // ---- properties exchanged with Rust ----
+    in-out property <int>   bpm;
+    in-out property <float> metronome-volume;
+    in-out property <bool>  playing;
+    in-out property <int>   beat-in-bar;
+    in-out property <float> peak-l;
+    in-out property <float> peak-r;
+
+    // ---- callbacks to Rust ----
+    callback play-clicked();
+    callback stop-clicked();
+    callback bpm-changed(int);
+    callback metronome-volume-changed(float);
+
+    VerticalBox {
+        spacing: 0px;
+
+        // ===== Toolbar =====
+        toolbar := Rectangle {
+            height: 36px;
+            background: Palette.surface;
+
+            HorizontalBox {
+                padding: 4px;
+                spacing: 4px;
+                alignment: start;
+
+                FlatButton {
+                    text: "Play";
+                    active: root.playing;
+                    clicked => { root.play-clicked(); }
+                }
+
+                FlatButton {
+                    text: "Stop";
+                    text-color: root.playing ? Palette.text-dim : Palette.text;
+                    clicked => { root.stop-clicked(); }
+                }
+
+                Rectangle { width: 8px; }
+
+                // BPM display with - / +
+                Rectangle {
+                    width: 110px;
+                    height: 26px;
+                    background: Palette.surface-2;
+                    border-radius: 3px;
+                    HorizontalBox {
+                        padding: 0px;
+                        spacing: 0px;
+                        alignment: center;
+                        Text {
+                            text: "-";
+                            color: Palette.text-dim;
+                            width: 22px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            TouchArea {
+                                clicked => {
+                                    root.bpm = max(1, root.bpm - 1);
+                                    root.bpm-changed(root.bpm);
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.bpm;
+                            color: Palette.text;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 60px;
+                        }
+                        Text {
+                            text: "+";
+                            color: Palette.text-dim;
+                            width: 22px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            TouchArea {
+                                clicked => {
+                                    root.bpm = min(999, root.bpm + 1);
+                                    root.bpm-changed(root.bpm);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Metronome volume
+                Fader {
+                    label: "Met";
+                    value <=> root.metronome-volume;
+                    changed(v) => { root.metronome-volume-changed(v); }
+                }
+
+                // Beat indicator: four dots, one lit at a time
+                Rectangle {
+                    width: 64px;
+                    HorizontalBox {
+                        padding: 0px;
+                        spacing: 4px;
+                        alignment: center;
+                        for i in 4 : Rectangle {
+                            width: 10px;
+                            height: 10px;
+                            border-radius: 5px;
+                            background: (root.beat-in-bar == i) ? Palette.accent : Palette.edge;
+                        }
+                    }
+                }
+
+                // Output meters
+                Meter { level: root.peak-l; }
+                Meter { level: root.peak-r; }
+
+                // Flexible spacer.
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+
+        // Toolbar/channel-rack divider
+        Rectangle { height: 1px; background: Palette.edge; }
+
+        // ===== Channel rack (Phase 1) =====
+        Rectangle {
+            vertical-stretch: 1;
+            background: Palette.bg;
+            Text {
+                text: "channel rack";
+                color: Palette.text-faint;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // Channel-rack / bottom-strip divider
+        Rectangle { height: 1px; background: Palette.edge; }
+
+        // ===== Bottom strip: device rack + pane (Phase 2+) =====
+        Rectangle {
+            height: 180px;
+            background: #131316;
+            Text {
+                text: "device rack + bottom pane";
+                color: Palette.text-faint;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

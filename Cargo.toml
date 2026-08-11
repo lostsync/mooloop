@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mooloop-core",
+    "crates/mooloop-dsp",
+    "crates/mooloop-engine",
+    "crates/mooloop-ui",
+    "crates/mooloop-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["adam"]
+publish = false
+
+[workspace.dependencies]
+mooloop-core = { path = "crates/mooloop-core" }
+mooloop-dsp = { path = "crates/mooloop-dsp" }
+mooloop-engine = { path = "crates/mooloop-engine" }
+mooloop-ui = { path = "crates/mooloop-ui" }
+
+slint = "1.17"
+slint-build = "1.17"
+jack = "0.13"
+rtrb = "0.3"
+
+[profile.release]
+debug = true
