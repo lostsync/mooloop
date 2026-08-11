@@ -23,6 +23,8 @@ use graph::{AsyncClient, Graph};
 
 const QUEUE_CAPACITY: usize = 1024;
 const CLIENT_NAME: &str = "mooloop";
+const OUT_L_NAME: &str = "mooloop:out_l";
+const OUT_R_NAME: &str = "mooloop:out_r";
 
 #[derive(Debug)]
 pub enum Error {
@@ -73,6 +75,24 @@ impl Engine {
         let async_client = client
             .activate_async(graph::Notifications, graph)
             .map_err(|e| Error::Activate(e.to_string()))?;
+
+        // Best-effort: wire our outputs to the system playback sink so Phase 0
+        // is audible out of the box. PipeWire's JACK bridge and a stock jackd
+        // both expose `system:playback_{1,2}`. This will become user-
+        // configurable routing later; for now failing soft is fine.
+        let c = async_client.as_client();
+        let sources = [OUT_L_NAME, OUT_R_NAME];
+        let destinations = ["system:playback_1", "system:playback_2"];
+        for (src, dst) in sources.iter().zip(destinations.iter()) {
+            match c.connect_ports_by_name(src, dst) {
+                Ok(())
+                | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
+                Err(e) => eprintln!(
+                    "mooloop: could not auto-connect {src} -> {dst} ({e}); \
+                     connect it manually in a patchbay (e.g. qpwgraph, qjackctl, Helvum)"
+                ),
+            }
+        }
 
         Ok((Engine { _client: async_client }, EngineHandle { cmd_tx, evt_rx }))
     }
