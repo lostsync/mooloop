@@ -7,3 +7,4 @@ authors.workspace = true
 
 [dependencies]
 mooloop-core = { workspace = true }
+arc-swap = "1"

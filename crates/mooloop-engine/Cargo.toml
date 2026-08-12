@@ -10,3 +10,4 @@ mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
 jack = { workspace = true }
 rtrb = { workspace = true }
+arc-swap = "1"

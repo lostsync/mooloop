@@ -1,12 +1,11 @@
 //! DSP nodes: instruments, effects, and helpers.
 //!
-//! Phase 0 ships only the `Device` trait definition and a `Metronome` click
-//! generator used to prove the audio path works end-to-end. Real instruments
-//! (Sampler, DrumSynth, MonoSynth) and effects (Filter, Delay) arrive in
-//! later phases and implement the same `Device` trait.
+//! Phase 1 ships the `Device` trait and a `Sampler` instrument. Effects
+//! (Filter, Delay) and the DrumSynth / MonoSynth arrive in later phases and
+//! implement the same `Device` trait.
 
 pub mod device;
-pub mod metronome;
+pub mod sampler;
 
 pub use device::{Device, ProcessContext};
-pub use metronome::Metronome;
+pub use sampler::{SampleData, Sampler};

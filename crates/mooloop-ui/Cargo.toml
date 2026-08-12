@@ -7,8 +7,10 @@ authors.workspace = true
 
 [dependencies]
 mooloop-core = { workspace = true }
+mooloop-dsp = { workspace = true }
 mooloop-engine = { workspace = true }
 slint = { workspace = true }
+hound = "2"
 
 [build-dependencies]
 slint-build = { workspace = true }

@@ -2,7 +2,11 @@
 //! thread via SPSC ring buffers (`rtrb`).
 //!
 //! The audio thread must never block. Both enums are kept small and POD-like so
-//! they can be pushed/popped from a ring buffer without allocation.
+//! they can be pushed/popped from a ring buffer without allocation. Large or
+//! variable-size payloads (e.g. sample buffers) are transferred out of band
+//! via an `ArcSwap` slot owned by the engine, not through this queue.
+
+use crate::sampler::SamplerParams;
 
 /// GUI -> audio. Drained at the top of each process callback.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -11,12 +15,19 @@ pub enum EngineCommand {
     Play,
     /// Stop and reset transport position to the start.
     Stop,
-    /// Pause playback (hold position). Position is retained.
+    /// Pause playback (hold position).
     Pause,
     /// Set tempo in beats per minute.
     SetTempo(f64),
-    /// Set the metronome output volume in `[0.0, 1.0]`.
-    SetMetronomeVolume(f32),
+    /// Toggle or set a step in the current pattern.
+    SetStep {
+        channel: u8,
+        step: u8,
+        on: bool,
+        velocity: u8,
+    },
+    /// Replace the sampler's parameter set.
+    SetSamplerParams(SamplerParams),
 }
 
 /// audio -> GUI. Pushed sparingly (a few times per block at most) and drained
