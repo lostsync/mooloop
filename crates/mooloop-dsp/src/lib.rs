@@ -1,11 +1,19 @@
-//! DSP nodes: instruments, effects, and helpers.
+//! DSP nodes: instruments, effects, and the buffers/events that connect them.
 //!
-//! Phase 1 ships the `Device` trait and a `Sampler` instrument. Effects
-//! (Filter, Delay) and the DrumSynth / MonoSynth arrive in later phases and
-//! implement the same `Device` trait.
+//! - [`bus`]: the stereo buffers nodes process in place.
+//! - [`event`]: sample-accurate event lists (VST3/CLAP-style).
+//! - [`node`]: the `AudioNode` trait every DSP unit implements.
+//! - [`sampler`]: the sample-playback instrument.
+//!
+//! Effects (Filter, Delay) and the DrumSynth / MonoSynth arrive in later
+//! phases and implement the same `AudioNode` trait.
 
-pub mod device;
+pub mod bus;
+pub mod event;
+pub mod node;
 pub mod sampler;
 
-pub use device::{Device, ProcessContext};
+pub use bus::{pan_gains, StereoBus, MAX_BLOCK_SIZE};
+pub use event::{Event, EventList, TimedEvent};
+pub use node::{AudioNode, ProcessContext};
 pub use sampler::{SampleData, Sampler};

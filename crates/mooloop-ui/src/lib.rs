@@ -44,6 +44,13 @@ impl ChannelState {
     }
 }
 
+/// Result of a background sample load, delivered to the pump.
+struct LoadResult {
+    channel: usize,
+    /// `None` = dialog cancelled; `Some(Err)` = decode failed.
+    result: Option<Result<(String, Arc<SampleData>), String>>,
+}
+
 pub struct AppUi {
     window: MainWindow,
     _pump: Timer,
@@ -419,44 +426,29 @@ impl AppUi {
         }
 
         // --- Sample loading via zenity + hound (selected channel) ---
+        // The dialog + decode run on a worker thread so the UI stays
+        // responsive (a blocking dialog makes the OS mark the app frozen and
+        // offer to kill it). Results come back through `load_rx` and are
+        // applied by the pump on the UI thread.
+        let (load_tx, load_rx) = std::sync::mpsc::channel::<LoadResult>();
         {
             let st = state.clone();
-            let weak = window.as_weak();
             window.on_load_sample_clicked(move || {
-                let selected = st.borrow().selected;
-                let Some(path) = pick_wav_via_zenity() else { return };
-                match decode_wav(&path) {
-                    Ok(sample) => {
-                        let name = std::path::Path::new(&path)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("loaded")
-                            .to_string();
-                        if let Some(ch) = st.borrow_mut().channels.get_mut(selected) {
-                            ch.sample_name = name;
-                        }
-                        if let Some(w) = weak.upgrade() {
-                            if selected == st.borrow().selected {
-                                st.borrow().refresh_editor(&w);
-                            }
-                        }
-                        LOAD_TARGET.with(|t| *t.borrow_mut() = Some((selected, sample)));
-                    }
-                    Err(e) => {
-                        eprintln!("mooloop: failed to load sample {path}: {e}");
-                    }
-                }
+                let channel = st.borrow().selected;
+                let tx = load_tx.clone();
+                dbg_log(&format!("UI: loading sample for channel {channel}"));
+                std::thread::spawn(move || {
+                    let result = pick_wav_via_zenity()
+                        .map(|path| decode_wav(&path).map(|sample| (path, sample)));
+                    let _ = tx.send(LoadResult { channel, result });
+                });
             });
         }
-        // The load callback can't capture the handle (it lives in the pump),
-        // so park the decoded sample here and let the pump deliver it.
-        thread_local! {
-            static LOAD_TARGET: RefCell<Option<(usize, Arc<SampleData>)>> =
-                const { RefCell::new(None) };
-        }
 
-        // --- Pump: forward queued commands, drain audio events onto window ---
+        // --- Pump: forward queued commands, apply finished sample loads,
+        //     drain audio events onto window ---
         let weak = window.as_weak();
+        let st = state.clone();
         let pump = Timer::default();
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
         let stats = Rc::new(std::cell::Cell::new((0.0f32, false, 0usize)));
@@ -465,11 +457,34 @@ impl AppUi {
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
-                LOAD_TARGET.with(|t| {
-                    if let Some((ch, sample)) = t.borrow_mut().take() {
-                        handle.load_sample(ch, sample);
+                while let Ok(load) = load_rx.try_recv() {
+                    let Some((path, sample)) = (match load.result {
+                        Some(Ok((path, sample))) => Some((path, sample)),
+                        Some(Err(e)) => {
+                            eprintln!("mooloop: failed to load sample: {e}");
+                            None
+                        }
+                        None => None, // dialog cancelled
+                    }) else {
+                        continue;
+                    };
+                    let name = std::path::Path::new(&path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("loaded")
+                        .to_string();
+                    dbg_log(&format!("UI: channel {} loaded {name}", load.channel));
+                    handle.load_sample(load.channel, sample);
+                    let mut st = st.borrow_mut();
+                    if let Some(ch) = st.channels.get_mut(load.channel) {
+                        ch.sample_name = name;
                     }
-                });
+                    if load.channel == st.selected {
+                        if let Some(w) = weak.upgrade() {
+                            st.refresh_editor(&w);
+                        }
+                    }
+                }
                 let mut forwarded = 0usize;
                 while let Ok(cmd) = cmd_rx.try_recv() {
                     handle.send(cmd);
@@ -495,7 +510,9 @@ impl AppUi {
                             w.set_peak_l(p);
                             w.set_peak_r(peak_r.clamp(0.0, 1.0));
                         }
-                        EngineEvent::Xrun => {}
+                        EngineEvent::Xrun => {
+                            eprintln!("mooloop: JACK reported an xrun (audio dropout)");
+                        }
                     }
                 }
                 let (mp, sp, cf) = stats_in.get();

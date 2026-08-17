@@ -1,26 +1,29 @@
-//! A sample-playback instrument. The first real `Device` in mooloop.
+//! A sample-playback instrument. The first real `AudioNode` in mooloop.
 //!
 //! Behaviour:
-//! - On `note_on`, captures the currently-published sample (from the shared
-//!   `ArcSwapOption` slot) and starts a voice from `params.start`.
+//! - On a `NoteOn` event, captures the currently-published sample (from the
+//!   shared `ArcSwapOption` slot) and starts a voice from `params.start`.
 //! - The voice runs through an ADSR amplitude envelope. In loop mode `Off`,
 //!   reaching `loop_end` enters release; in `Forward`/`Pingpong`, the voice
 //!   loops until retrigged or released.
-//! - Sample rate conversion is linear-interpolated. Phase-accurate enough for
-//!   Phase 1; can be upgraded later.
+//! - Sample rate conversion is linear-interpolated; can be upgraded later.
+//!
+//! Processing is **segment-based**: the block is split at each event's
+//! sample offset, the voice renders the segment, then the event is applied.
+//! This keeps note timing sample-accurate at any block size without a
+//! per-sample event scan.
 
 use std::sync::Arc;
 
-use crate::device::{Device, ProcessContext};
+use crate::bus::StereoBus;
+use crate::event::{Event, EventList};
+use crate::node::{AudioNode, ProcessContext};
 use mooloop_core::{clamp01, LoopMode, SamplerParams};
 
 use arc_swap::ArcSwapOption;
 
 /// Minimum envelope stage time, to avoid divide-by-zero and infinite rates.
 const MIN_STAGE_S: f32 = 1.0e-4;
-/// Capacity for the pending note-on ring. A single block at sane tempos
-/// contains at most a few triggers.
-const PENDING_CAP: usize = 8;
 
 /// Decoded sample data: stereo frames of f32 in `[-1, 1]`, plus the source
 /// sample rate and a root MIDI note (default middle-C).
@@ -39,7 +42,7 @@ impl SampleData {
         self.frames.is_empty()
     }
 
-    /// A punchy synthesised kick so Phase 1 makes sound out of the box. The
+    /// A punchy synthesised kick so the app makes sound out of the box. The
     /// user can load a real WAV to replace it.
     pub fn default_kick(sample_rate: u32) -> Arc<Self> {
         let dur_s = 0.25;
@@ -159,14 +162,8 @@ impl AdsrEnv {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct PendingNote {
-    offset: usize,
-    velocity: u8,
-}
-
-/// One playback voice. Phase 1 is monophonic — a new note retriggers and
-/// cuts the previous voice (standard drum-sampler behaviour).
+/// One playback voice. Monophonic for now — a new note retriggers and cuts
+/// the previous voice (standard drum-sampler behaviour).
 struct Voice {
     sample: Option<Arc<SampleData>>,
     play_pos: f64,
@@ -189,13 +186,12 @@ impl Voice {
     }
 }
 
-/// The sampler device.
+/// The sampler node.
 pub struct Sampler {
     sample_slot: Arc<ArcSwapOption<SampleData>>,
     params: SamplerParams,
     sample_rate: u32,
     voice: Voice,
-    pending: [Option<PendingNote>; PENDING_CAP],
 }
 
 impl Sampler {
@@ -213,7 +209,6 @@ impl Sampler {
             params,
             sample_rate,
             voice,
-            pending: [None; PENDING_CAP],
         }
     }
 
@@ -245,68 +240,35 @@ impl Sampler {
         let le = clamp01(self.params.loop_end).max(ls + 1.0) * l;
         (ls as f64, le as f64)
     }
-}
 
-impl Device for Sampler {
-    fn note_on(&mut self, sample_offset: usize, _note: u8, velocity: u8) {
-        for slot in &mut self.pending {
-            if slot.is_none() {
-                *slot = Some(PendingNote {
-                    offset: sample_offset,
-                    velocity,
-                });
-                return;
-            }
+    /// Render the voice into `bus[start..end]`, adding into the buffers.
+    /// Handles looping, envelope advancement, and voice termination.
+    fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        if !self.voice.active {
+            return;
         }
-    }
-
-    fn note_off(&mut self, _sample_offset: usize, _note: u8) {
-        // Step-grid one-shots don't send note-off. Melodic note-off arrives
-        // with the piano roll; for now schedule an immediate release.
-        self.voice.env.release();
-    }
-
-    fn process(&mut self, ctx: ProcessContext, out_l: &mut [f32], out_r: &mut [f32]) {
-        let mut pending = self.pending;
-        self.pending = [None; PENDING_CAP];
-
         let engine_sr = self.sample_rate as f64;
 
-        for i in 0..ctx.frames {
-            // Launch any triggers scheduled for this sample.
-            for slot in pending.iter_mut() {
-                if let Some(pn) = *slot {
-                    if pn.offset == i {
-                        self.trigger(pn.velocity);
-                        *slot = None;
-                    }
-                }
-            }
-
-            if !self.voice.active {
-                continue;
-            }
-
+        for i in start..end {
             let Some(sample) = self.voice.sample.as_ref() else {
                 self.voice.active = false;
-                continue;
+                return;
             };
-
-            // Advance envelope and, if it finished during release, end voice.
-            self.voice.env.advance();
-            if self.voice.env.is_idle() {
-                self.voice.active = false;
-                continue;
-            }
-
-            let amp = self.voice.env.level * self.voice.velocity_amp;
-
-            // Fetch interpolated frame.
             let len = sample.len();
             if len == 0 {
                 self.voice.active = false;
-                continue;
+                return;
             }
+
+            // Advance envelope; if it finished during release, end voice.
+            self.voice.env.advance();
+            if self.voice.env.is_idle() {
+                self.voice.active = false;
+                return;
+            }
+            let amp = self.voice.env.level * self.voice.velocity_amp;
+
+            // Fetch interpolated frame.
             let pos = self.voice.play_pos;
             let idx = pos.floor() as isize;
             let frac = pos - idx as f64;
@@ -325,8 +287,8 @@ impl Device for Sampler {
             let f1 = frame_at(idx + 1);
             let l = f0[0] + (f1[0] - f0[0]) * frac as f32;
             let r = f0[1] + (f1[1] - f0[1]) * frac as f32;
-            out_l[i] += amp * l;
-            out_r[i] += amp * r;
+            bus.l[i] += amp * l;
+            bus.r[i] += amp * r;
 
             // Advance the read position and handle looping / end-of-region.
             let inc = sample.sample_rate as f64 / engine_sr;
@@ -355,5 +317,88 @@ impl Device for Sampler {
                 }
             }
         }
+    }
+}
+
+impl AudioNode for Sampler {
+    fn process(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        _events_out: Option<&mut EventList>,
+    ) {
+        let frames = ctx.frames.min(bus.capacity());
+
+        // Split the block at event offsets: render, apply event, repeat.
+        let mut pos = 0usize;
+        for ev in events_in.iter() {
+            let off = (ev.offset as usize).min(frames).max(pos);
+            self.render_range(bus, pos, off);
+            match ev.event {
+                Event::NoteOn { velocity, .. } => self.trigger(velocity),
+                Event::NoteOff { .. } => self.voice.env.release(),
+                Event::ParamValue { .. } => {}
+            }
+            pos = off;
+        }
+        self.render_range(bus, pos, frames);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::TimedEvent;
+
+    fn make_sampler(sr: u32) -> Sampler {
+        let kick = SampleData::default_kick(sr);
+        let slot: Arc<ArcSwapOption<SampleData>> = Arc::new(ArcSwapOption::from(Some(kick)));
+        Sampler::new(slot, SamplerParams::default(), sr)
+    }
+
+    fn ctx(frames: usize, sr: u32) -> ProcessContext {
+        ProcessContext {
+            sample_rate: sr,
+            frames,
+            playing: true,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        }
+    }
+
+    /// A note at offset K must produce exact silence before K and signal
+    /// after — the point of segment-based processing.
+    #[test]
+    fn note_on_at_offset_is_sample_accurate() {
+        let sr = 48_000;
+        let frames = 512;
+        let k = 200usize;
+        let mut sampler = make_sampler(sr);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: k as u32,
+            event: Event::NoteOn {
+                note: 60,
+                velocity: 127,
+            },
+        });
+
+        sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+
+        assert!(bus.l[..k].iter().all(|s| *s == 0.0));
+        assert!(bus.l[k..].iter().any(|s| s.abs() > 0.01));
+    }
+
+    /// No events, no prior note: silence (and no panic on the empty path).
+    #[test]
+    fn idle_is_silent() {
+        let sr = 48_000;
+        let mut sampler = make_sampler(sr);
+        let mut bus = StereoBus::with_capacity(256);
+        sampler.process(&ctx(256, sr), &mut bus, &EventList::empty(), None);
+        assert_eq!(bus.peak(256), (0.0, 0.0));
     }
 }

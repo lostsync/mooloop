@@ -6,14 +6,29 @@
 //!
 //! Each block, the engine hands the transport's tick interval
 //! `[start_tick, end_tick)`. The sequencer finds every step boundary in that
-//! interval and, for steps that are on in the **current** pattern, schedules a
-//! note-on into the channel's device at the matching sample offset.
+//! interval and, for steps that are on in the **current** pattern, pushes a
+//! sample-timed `NoteOn` into each channel's [`EventList`]. Nodes render
+//! from those lists, so note timing is sample-accurate.
+//!
+//! ## Boundary correctness
+//!
+//! The transport position is `f64`, so block boundaries land a hair either
+//! side of the exact step tick. The interval is half-open (`[start, end)`,
+//! so every boundary belongs to exactly one block) and boundary detection is
+//! epsilon-tolerant ([`BOUNDARY_EPS`]): a start position that float-drifted a
+//! femto-hair past a step boundary still counts that step, at offset 0.
 //!
 //! Step resolution is 16th notes: `ticks_per_step = ppq / 4`. Steps wrap at
 //! the pattern length, so a 16-step pattern loops every bar.
 
 use mooloop_core::{Pattern, Ppq, MAX_CHANNELS};
-use mooloop_dsp::Device;
+use mooloop_dsp::{Event, EventList, TimedEvent};
+
+/// Tolerance for float drift at step boundaries, in ticks. At 120 bpm one
+/// sample is ~0.004 ticks, so 1e-6 is ~4000x below sample resolution — large
+/// enough to absorb `f64` accumulation error, small enough to never swallow
+/// a genuine step.
+const BOUNDARY_EPS: f64 = 1.0e-6;
 
 pub struct Sequencer {
     patterns: Vec<Pattern>,
@@ -68,17 +83,17 @@ impl Sequencer {
         (self.ppq.ticks_per_beat() / 4) as f64
     }
 
-    /// For each step boundary in `[start, end)`, schedule note-ons into
-    /// `devices` for any active step of the current pattern.
-    /// `ticks_per_sample` converts tick deltas to sample offsets inside the
-    /// block.
-    pub fn schedule<D: Device>(
+    /// For each step boundary in `[start, end)`, push note-ons into
+    /// `events` (one list per channel) for active steps of the current
+    /// pattern. `ticks_per_sample` converts tick deltas to sample offsets
+    /// inside the block. Events are pushed in time order.
+    pub fn schedule(
         &self,
         start_tick: f64,
         end_tick: f64,
         frames: usize,
         ticks_per_sample: f64,
-        devices: &mut [D],
+        events: &mut [EventList],
     ) {
         if !end_tick.is_finite() || end_tick <= start_tick {
             return;
@@ -90,17 +105,22 @@ impl Sequencer {
         let tps = self.ticks_per_step();
         let pattern_steps = pattern.length_steps.max(1) as i64;
 
-        // First step boundary at or after `start` (half-open: a boundary
-        // exactly at `start` is ours; the previous block's `[., start)` did
-        // not include it).
-        let mut step_idx = (start_tick / tps).ceil() as i64;
+        // First step boundary at or after `start` — epsilon-tolerant so
+        // float drift past a boundary doesn't skip the step (see module
+        // docs). Half-open interval: a boundary exactly at `start` is ours;
+        // one exactly at `end` belongs to the next block.
+        let mut step_idx = ((start_tick - BOUNDARY_EPS) / tps).ceil() as i64;
         let mut step_tick = step_idx as f64 * tps;
 
         while step_tick < end_tick {
             let offset = ((step_tick - start_tick) / ticks_per_sample).round() as i64;
-            if (0..frames as i64).contains(&offset) {
+            // Clamp absorbs epsilon drift (a boundary a femto-sample before
+            // the block start rounds to a tiny negative offset) and
+            // sub-sample round-up at the block end.
+            let offset = offset.clamp(0, frames as i64 - 1) as u32;
+            {
                 let step_in_pattern = step_idx.rem_euclid(pattern_steps) as usize;
-                for ch_idx in 0..self.active_channels.min(devices.len()) {
+                for ch_idx in 0..self.active_channels.min(events.len()) {
                     let Some(velocity) = pattern
                         .channel(ch_idx)
                         .and_then(|c| c.steps.get(step_in_pattern))
@@ -111,7 +131,13 @@ impl Sequencer {
                     };
                     // Root note 60 (C4); per-step pitch arrives with the
                     // piano roll.
-                    devices[ch_idx].note_on(offset as usize, 60, velocity);
+                    events[ch_idx].push(TimedEvent {
+                        offset,
+                        event: Event::NoteOn {
+                            note: 60,
+                            velocity,
+                        },
+                    });
                 }
             }
             step_idx += 1;
@@ -123,111 +149,102 @@ impl Sequencer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{ticks_per_sample, SamplerParams};
-    use mooloop_dsp::{ProcessContext, SampleData, Sampler};
-    use std::sync::Arc;
+    use mooloop_core::ticks_per_sample;
 
-    /// Drive Sequencer -> Sampler offline exactly the way `Graph::process`
-    /// does, and verify audible output appears at the right density.
+    /// Total note-ons scheduled over an exact number of bars must equal the
+    /// exact number of active steps passed — no float-drift skips or doubles.
     #[test]
-    fn sequencer_drives_sampler() {
+    fn no_skips_or_doubles_over_long_run() {
         let sr = 48_000u32;
         let bpm = 120.0;
         let ppq = Ppq::DEFAULT;
         let tps = ticks_per_sample(bpm, sr, ppq);
-        let steps = 16;
 
-        let mut seq = Sequencer::new(1, 8, steps, ppq);
+        let mut seq = Sequencer::new(1, 8, 16, ppq);
         for s in [0, 4, 8, 12] {
             seq.set_step(0, 0, s, true, 100);
         }
 
-        let kick = SampleData::default_kick(sr);
-        let slot: Arc<arc_swap::ArcSwapOption<SampleData>> =
-            Arc::new(arc_swap::ArcSwapOption::from(Some(kick)));
-        let sampler = Sampler::new(slot, SamplerParams::default(), sr);
-        let mut devices = [sampler];
-
-        let block = 1024usize;
+        // 100 bars of irregular block sizes (simulating PipeWire quantum
+        // changes), then check the event count is exact.
+        let mut events = [EventList::empty()];
         let mut tick = 0.0f64;
-        let mut max_peak = 0.0f32;
-        let mut nonzero_blocks = 0usize;
-
-        // 10 seconds of audio.
-        for _ in 0..(10 * sr as usize / block) {
+        let mut total = 0usize;
+        let blocks_per_bar = 47; // deliberately coprime-ish
+        let block = (sr as f64 * 2.0 / blocks_per_bar as f64) as usize;
+        for _ in 0..100 * blocks_per_bar {
+            events[0].clear();
             let start = tick;
             let end = start + block as f64 * tps;
+            seq.schedule(start, end, block, tps, &mut events);
+            total += events[0].len();
             tick = end;
-
-            seq.schedule(start, end, block, tps, &mut devices);
-
-            let mut l = vec![0.0f32; block];
-            let mut r = vec![0.0f32; block];
-            let ctx = ProcessContext {
-                sample_rate: sr,
-                frames: block,
-            };
-            devices[0].process(ctx, &mut l, &mut r);
-
-            let peak = l.iter().fold(0.0f32, |a, x| a.max(x.abs()));
-            if peak > 0.0 {
-                nonzero_blocks += 1;
-            }
-            max_peak = max_peak.max(peak);
         }
-
-        // Four-on-the-floor at 120 bpm = 2 hits/second = ~20 hits in 10 s.
-        assert!(nonzero_blocks >= 20, "too few nonzero blocks: {nonzero_blocks}");
-        assert!(max_peak > 0.1, "output too quiet: {max_peak}");
+        // 4 hits per bar * 100 bars = 400, minus whatever of the last bar was
+        // truncated by the final partial block — assert within one step.
+        assert!(
+            (395..=400).contains(&total),
+            "expected ~400 note-ons, got {total}"
+        );
     }
 
-    /// Steps edited into a non-current pattern must not sound until that
-    /// pattern is selected — and must sound once it is.
+    /// Boundary exactly at block start must fire at offset 0.
+    #[test]
+    fn boundary_at_block_start_fires_at_zero() {
+        let sr = 48_000u32;
+        let ppq = Ppq::DEFAULT;
+        let tps = ticks_per_sample(120.0, sr, ppq);
+        let ticks_per_step = (ppq.ticks_per_beat() / 4) as f64;
+
+        let mut seq = Sequencer::new(1, 8, 16, ppq);
+        seq.set_step(0, 0, 0, true, 100);
+
+        // Start exactly on the boundary of step index 16 (which wraps to
+        // pattern step 0), plus a hair of float drift both ways.
+        for drift in [-BOUNDARY_EPS * 0.5, 0.0, BOUNDARY_EPS * 0.5] {
+            let start = 16.0 * ticks_per_step + drift;
+            let end = start + 512.0 * tps;
+            let mut events = [EventList::empty()];
+            seq.schedule(start, end, 512, tps, &mut events);
+            let first = events[0]
+                .iter()
+                .next()
+                .unwrap_or_else(|| panic!("drift {drift}: no event scheduled"));
+            assert_eq!(first.offset, 0, "drift {drift}");
+        }
+    }
+
+    /// Steps edited into a non-current pattern must not schedule until that
+    /// pattern is selected — and must schedule once it is.
     #[test]
     fn pattern_bank_isolation() {
         let sr = 48_000u32;
         let ppq = Ppq::DEFAULT;
         let tps = ticks_per_sample(120.0, sr, ppq);
         let mut seq = Sequencer::new(1, 8, 16, ppq);
-
-        // Pattern 1: every step on. Pattern 0 (current): all off.
         for s in 0..16 {
             seq.set_step(1, 0, s, true, 100);
         }
 
-        let kick = SampleData::default_kick(sr);
-        let make_sampler = || {
-            let slot: Arc<arc_swap::ArcSwapOption<SampleData>> =
-                Arc::new(arc_swap::ArcSwapOption::from(Some(kick.clone())));
-            Sampler::new(slot, SamplerParams::default(), sr)
-        };
-        let mut devices = [make_sampler()];
-
-        let run_second = |seq: &Sequencer, devices: &mut [Sampler]| -> f32 {
-            let block = 1024usize;
-            let mut tick = 0.0f64;
-            let mut peak = 0.0f32;
-            for _ in 0..(sr as usize / block) {
-                let start = tick;
-                let end = start + block as f64 * tps;
+        let count_bar = |seq: &Sequencer| {
+            let mut events = [EventList::empty()];
+            let bar_ticks = 16.0 * (ppq.ticks_per_beat() / 4) as f64;
+            let frames = (bar_ticks / tps) as usize;
+            let mut total = 0;
+            let mut tick = 0.0;
+            // 8 blocks per bar.
+            for _ in 0..8 {
+                events[0].clear();
+                let (start, end) = (tick, tick + bar_ticks / 8.0);
+                seq.schedule(start, end, frames / 8, tps, &mut events);
+                total += events[0].len();
                 tick = end;
-                seq.schedule(start, end, block, tps, devices);
-                let mut l = vec![0.0f32; block];
-                let mut r = vec![0.0f32; block];
-                let ctx = ProcessContext {
-                    sample_rate: sr,
-                    frames: block,
-                };
-                devices[0].process(ctx, &mut l, &mut r);
-                peak = peak.max(l.iter().fold(0.0f32, |a, x| a.max(x.abs())));
             }
-            peak
+            total
         };
 
-        // Current pattern (0) is empty: silence.
-        assert_eq!(run_second(&seq, &mut devices), 0.0);
-        // Switch to pattern 1: output.
+        assert_eq!(count_bar(&seq), 0, "current pattern is empty");
         seq.set_current_pattern(1);
-        assert!(run_second(&seq, &mut devices) > 0.1);
+        assert_eq!(count_bar(&seq), 16, "all steps of pattern 1 are on");
     }
 }

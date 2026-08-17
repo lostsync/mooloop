@@ -11,6 +11,7 @@
 //! `Engine` owns the JACK `AsyncClient` and must stay alive for as long as the
 //! handle is used. Dropping `Engine` deactivates audio.
 
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
@@ -82,18 +83,23 @@ impl Engine {
             .map(|_| Arc::new(ArcSwapOption::from(Some(kick.clone()))))
             .collect());
 
-        let graph = Graph::new(
-            sample_rate,
+        let xrun_count = Arc::new(AtomicU64::new(0));
+        let io = graph::GraphIo {
             out_l,
             out_r,
             cmd_rx,
             evt_tx,
+        };
+        let graph = Graph::new(
+            sample_rate,
+            io,
             sample_slots.clone(),
             SamplerParams::default(),
+            xrun_count.clone(),
         );
 
         let async_client = client
-            .activate_async(graph::Notifications, graph)
+            .activate_async(graph::Notifications { xrun_count }, graph)
             .map_err(|e| Error::Activate(e.to_string()))?;
 
         // Best-effort: wire our outputs to system playback so the app is
