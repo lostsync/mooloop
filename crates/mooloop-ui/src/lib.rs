@@ -38,6 +38,13 @@ fn loop_mode_from_int(i: i32) -> LoopMode {
     }
 }
 
+/// Env-gated diagnostic logging (MOOLOOP_DEBUG=1).
+fn dbg_log(msg: &str) {
+    if std::env::var("MOOLOOP_DEBUG").is_ok() {
+        eprintln!("mooloop: {msg}");
+    }
+}
+
 impl AppUi {
     pub fn new(mut handle: EngineHandle) -> Result<Self, slint::PlatformError> {
         let window = MainWindow::new()?;
@@ -78,12 +85,14 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             window.on_play_clicked(move || {
+                dbg_log("UI: play clicked, queuing Play");
                 let _ = tx.send(EngineCommand::Play);
             });
         }
         {
             let tx = cmd_tx.clone();
             window.on_stop_clicked(move || {
+                dbg_log("UI: stop clicked, queuing Stop");
                 let _ = tx.send(EngineCommand::Stop);
             });
         }
@@ -91,6 +100,19 @@ impl AppUi {
             let tx = cmd_tx.clone();
             window.on_bpm_changed(move |bpm| {
                 let _ = tx.send(EngineCommand::SetTempo(bpm as f64));
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_toggle_play(move || {
+                let playing = weak.upgrade().map(|w| w.get_playing()).unwrap_or(false);
+                dbg_log(if playing { "UI: toggle-play -> Pause" } else { "UI: toggle-play -> Play" });
+                let _ = tx.send(if playing {
+                    EngineCommand::Pause
+                } else {
+                    EngineCommand::Play
+                });
             });
         }
 
@@ -103,6 +125,7 @@ impl AppUi {
                 if i >= NUM_STEPS {
                     return;
                 }
+                dbg_log(&format!("UI: step {i} clicked, toggling"));
                 let cur = model.row_data(i).map(|c| c.active).unwrap_or(false);
                 let new_active = !cur;
                 model.set_row_data(i, StepCell { active: new_active });
@@ -185,14 +208,20 @@ impl AppUi {
         // --- Pump: forward queued commands, drain audio events onto window ---
         let weak = window.as_weak();
         let pump = Timer::default();
+        // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
+        let stats = Rc::new(std::cell::Cell::new((0.0f32, false, 0usize)));
+        let stats_in = stats.clone();
         pump.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
+                let mut forwarded = 0usize;
                 while let Ok(cmd) = cmd_rx.try_recv() {
                     handle.send(cmd);
+                    forwarded += 1;
                 }
                 let Some(w) = weak.upgrade() else { return };
+                let mut saw_nonzero = false;
                 for ev in handle.drain() {
                     match ev {
                         EngineEvent::Position {
@@ -204,14 +233,50 @@ impl AppUi {
                             w.set_playing(playing);
                         }
                         EngineEvent::Metering { peak_l, peak_r } => {
-                            w.set_peak_l(peak_l.clamp(0.0, 1.0));
+                            let p = peak_l.clamp(0.0, 1.0);
+                            if p > 0.0 {
+                                saw_nonzero = true;
+                            }
+                            w.set_peak_l(p);
                             w.set_peak_r(peak_r.clamp(0.0, 1.0));
                         }
                         EngineEvent::Xrun => {}
                     }
                 }
+                let (mp, sp, cf) = stats_in.get();
+                let new_mp = if saw_nonzero { mp.max(1.0) } else { mp };
+                let new_sp = sp || w.get_playing();
+                stats_in.set((new_mp, new_sp, cf + forwarded));
             },
         );
+
+        // --- Optional autodrive self-test (MOOLOOP_AUTODRIVE=1) ---
+        // Drives the actual Slint callbacks (as if the user clicked), then
+        // exits with a report. Lets the full GUI build be tested headlessly.
+        if std::env::var("MOOLOOP_AUTODRIVE").is_ok() {
+            let weak = window.as_weak();
+            slint::Timer::single_shot(std::time::Duration::from_millis(300), move || {
+                let Some(w) = weak.upgrade() else { return };
+                for step in [0, 4, 8, 12] {
+                    w.invoke_step_clicked(step);
+                }
+                w.invoke_play_clicked();
+            });
+            let stats = stats.clone();
+            slint::Timer::single_shot(std::time::Duration::from_millis(4500), move || {
+                let (max_peak, saw_playing, forwarded) = stats.get();
+                println!("--- ui autodrive report ---");
+                println!("commands forwarded by pump : {forwarded}");
+                println!("saw playing=true on window : {saw_playing}");
+                println!("nonzero metering seen     : {max_peak:.4}");
+                let ok = saw_playing && forwarded >= 5;
+                println!(
+                    "RESULT: {}",
+                    if ok { "PASS — UI wiring delivers commands/events" } else { "FAIL" }
+                );
+                slint::quit_event_loop().ok();
+            });
+        }
 
         Ok(AppUi {
             window,

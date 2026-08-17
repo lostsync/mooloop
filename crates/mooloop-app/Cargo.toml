@@ -10,5 +10,6 @@ name = "mooloop"
 path = "src/main.rs"
 
 [dependencies]
+mooloop-core = { workspace = true }
 mooloop-engine = { workspace = true }
 mooloop-ui = { workspace = true }

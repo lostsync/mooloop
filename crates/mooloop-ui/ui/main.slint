@@ -168,6 +168,21 @@ export component MainWindow inherits Window {
     callback play-clicked();
     callback stop-clicked();
     callback bpm-changed(int);
+    callback toggle-play();
+
+    // Keyboard transport: Space toggles play/pause. Gives an input path
+    // independent of mouse clicks (also useful for diagnosing input issues).
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " ") {
+                root.toggle-play();
+                accept
+            } else {
+                reject
+            }
+        }
+    }
 
     VerticalBox {
         spacing: 0px;
