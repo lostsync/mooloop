@@ -313,18 +313,50 @@ fn pick_wav_via_zenity() -> Option<String> {
     }
 }
 
-/// Decode a WAV/RIFF file into stereo f32 frames. hound handles common PCM
-/// bit depths and IEEE float, normalising integers to [-1, 1].
+/// Decode a WAV/RIFF file into stereo f32 frames. hound's `samples::<f32>()`
+/// only works for IEEE-float files, so integer formats are read at their
+/// native width and normalised to [-1, 1] here. Errors propagate loudly —
+/// never silently drop samples (an empty buffer would silently mute the
+/// sampler).
 fn decode_wav(path: &str) -> Result<Arc<SampleData>, String> {
     let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
     let spec = reader.spec();
     let sample_rate = spec.sample_rate;
     let channels = spec.channels.max(1) as usize;
 
-    let samples: Vec<f32> = reader
-        .samples::<f32>()
-        .filter_map(Result::ok)
-        .collect();
+    let samples: Vec<f32> = match (spec.sample_format, spec.bits_per_sample) {
+        (hound::SampleFormat::Float, 32) => reader
+            .samples::<f32>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("sample decode failed: {e}"))?,
+        (hound::SampleFormat::Int, 8) => reader
+            .samples::<i8>()
+            .map(|s| s.map(|v| f32::from(v) / 128.0))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("sample decode failed: {e}"))?,
+        (hound::SampleFormat::Int, 16) => reader
+            .samples::<i16>()
+            .map(|s| s.map(|v| f32::from(v) / 32_768.0))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("sample decode failed: {e}"))?,
+        (hound::SampleFormat::Int, 24) => reader
+            .samples::<i32>()
+            .map(|s| s.map(|v| v as f32 / 8_388_608.0))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("sample decode failed: {e}"))?,
+        (hound::SampleFormat::Int, 32) => reader
+            .samples::<i32>()
+            .map(|s| s.map(|v| v as f32 / 2_147_483_648.0))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("sample decode failed: {e}"))?,
+        (fmt, bits) => {
+            return Err(format!("unsupported WAV format ({fmt:?}, {bits}-bit)"));
+        }
+    };
+
+    if samples.is_empty() {
+        return Err("file contained no samples".into());
+    }
 
     let frames: Vec<[f32; 2]> = samples
         .chunks(channels)
@@ -340,4 +372,44 @@ fn decode_wav(path: &str) -> Result<Arc<SampleData>, String> {
         sample_rate,
         root_note: 60,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: hound's `samples::<f32>()` errors on integer-PCM
+    /// files; the decoder must decode them at native width instead (and
+    /// never silently return an empty buffer).
+    #[test]
+    fn decodes_16bit_stereo_wav() {
+        let path = std::env::temp_dir().join("mooloop_decode_test_16bit.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..1000i32 {
+            let v = ((i % 100) * 300 - 15_000) as i16;
+            writer.write_sample(v).unwrap();
+            writer.write_sample(v).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let data = decode_wav(path.to_str().unwrap()).unwrap();
+        assert_eq!(data.sample_rate, 44_100);
+        assert_eq!(data.len(), 1000);
+        assert!(data.frames.iter().any(|f| f[0] != 0.0));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rejects_garbage_file() {
+        let path = std::env::temp_dir().join("mooloop_decode_test_garbage.wav");
+        std::fs::write(&path, b"not a wav at all").unwrap();
+        assert!(decode_wav(path.to_str().unwrap()).is_err());
+        let _ = std::fs::remove_file(&path);
+    }
 }
