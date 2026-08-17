@@ -28,7 +28,9 @@
 use jack::ProcessHandler;
 use jack::{AudioOut, Client, Control, Port, ProcessScope};
 use mooloop_core::{EngineCommand, EngineEvent, SamplerParams, MAX_CHANNELS, MAX_PATTERNS};
-use mooloop_dsp::{pan_gains, AudioNode, EventList, ProcessContext, SampleData, Sampler, StereoBus, MAX_BLOCK_SIZE};
+use mooloop_dsp::{
+    pan_gains, AudioNode, EventList, ProcessContext, SampleData, Sampler, StereoBus, MAX_BLOCK_SIZE,
+};
 use rtrb::Consumer;
 
 use crate::sequencer::Sequencer;
@@ -100,8 +102,12 @@ impl Graph {
         initial_params: SamplerParams,
         xrun_count: Arc<AtomicU64>,
     ) -> Self {
-        let sequencer =
-            Sequencer::new(INITIAL_CHANNELS, MAX_PATTERNS, INITIAL_STEPS, mooloop_core::Ppq::DEFAULT);
+        let sequencer = Sequencer::new(
+            INITIAL_CHANNELS,
+            MAX_PATTERNS,
+            INITIAL_STEPS,
+            mooloop_core::Ppq::DEFAULT,
+        );
         let strips = sample_slots
             .iter()
             .map(|slot| ChannelStrip::new(Sampler::new(slot.clone(), initial_params, sample_rate)))
@@ -129,9 +135,13 @@ impl Graph {
             EngineCommand::Pause => self.transport.pause(),
             EngineCommand::Stop => self.transport.stop(),
             EngineCommand::SetTempo(bpm) => self.transport.set_tempo(bpm),
-            EngineCommand::SetCurrentPattern(p) => {
-                self.sequencer.set_current_pattern(p as usize)
-            }
+            EngineCommand::SetCurrentPattern(p) => self.sequencer.set_current_pattern(p as usize),
+            EngineCommand::SetPatternLength {
+                pattern,
+                length_steps,
+            } => self
+                .sequencer
+                .set_pattern_length(pattern as usize, length_steps as usize),
             EngineCommand::AddChannel => {
                 let n = self.sequencer.active_channels() + 1;
                 self.sequencer.set_active_channels(n);
@@ -150,10 +160,16 @@ impl Graph {
                 channel,
                 step,
                 on,
+                note,
                 velocity,
-            } => self
-                .sequencer
-                .set_step(pattern as usize, channel as usize, step as usize, on, velocity),
+            } => self.sequencer.set_step(
+                pattern as usize,
+                channel as usize,
+                step as usize,
+                on,
+                note,
+                velocity,
+            ),
             EngineCommand::SetChannelSamplerParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.instrument.set_params(params);
@@ -209,7 +225,9 @@ impl ProcessHandler for Graph {
                 continue;
             }
             strip.bus.clear(frames);
-            strip.instrument.process(&ctx, &mut strip.bus, &self.events[i], None);
+            strip
+                .instrument
+                .process(&ctx, &mut strip.bus, &self.events[i], None);
             for fx in strip.effects.iter_mut() {
                 fx.process(&ctx, &mut strip.bus, &self.empty_events, None);
             }

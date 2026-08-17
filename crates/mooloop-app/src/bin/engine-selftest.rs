@@ -19,6 +19,7 @@ fn main() {
             channel: 0,
             step,
             on: true,
+            note: 60,
             velocity: 100,
         });
     }
@@ -57,14 +58,13 @@ fn main() {
     println!("position events : {position_events}");
     println!("metering events : {metering_events} (nonzero: {nonzero_meter_events})");
     println!("saw playing     : {saw_playing}");
-    println!("last tick       : {last_tick} (~{} expected after 4 s at 120 bpm)",
-        4 * 120 * 96 / 60);
+    println!(
+        "last tick       : {last_tick} (~{} expected after 4 s at 120 bpm)",
+        4 * 120 * 96 / 60
+    );
     println!("max peak        : {max_peak:.4}");
 
-    let ok = saw_playing
-        && last_tick > 500
-        && position_events > 100
-        && max_peak > 0.1;
+    let ok = saw_playing && last_tick > 500 && position_events > 100 && max_peak > 0.1;
     if ok {
         println!("RESULT: PASS — audio engine produces output end-to-end");
     } else {

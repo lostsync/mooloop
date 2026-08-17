@@ -45,6 +45,14 @@ pub struct SamplerParams {
     pub sustain: f32,
     /// Release time (seconds).
     pub release: f32,
+    /// Low-pass cutoff on a perceptual `[0, 1]` scale. `1` bypasses it.
+    pub filter_cutoff: f32,
+    /// Bipolar filter envelope depth in `[-1, 1]` (up to six octaves).
+    pub filter_env_amount: f32,
+    /// Bit-depth reduction amount in `[0, 1]`. `0` bypasses it.
+    pub bit_reduction: f32,
+    /// Sample-rate reduction amount in `[0, 1]`. `0` bypasses it.
+    pub rate_reduction: f32,
 }
 
 impl Default for SamplerParams {
@@ -56,8 +64,12 @@ impl Default for SamplerParams {
             loop_mode: LoopMode::Off,
             attack: 0.001,
             decay: 0.25,
-            sustain: 0.0,
+            sustain: 1.0,
             release: 0.05,
+            filter_cutoff: 1.0,
+            filter_env_amount: 0.0,
+            bit_reduction: 0.0,
+            rate_reduction: 0.0,
         }
     }
 }

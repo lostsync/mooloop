@@ -1,0 +1,181 @@
+import { HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import {
+    AudioOrientation, ParameterFader, ParameterKnob, PeakMeter, SectionLabel,
+    SegmentedControl, StereoPeakMeter, ToggleButton, ToolButton, ValueScale, ValueReadout
+} from "controls.slint";
+import { AppearanceDialog } from "appearance-dialog.slint";
+
+export component ControlGallery inherits Window {
+    title: "mooloop control gallery";
+    preferred-width: 980px;
+    preferred-height: 720px;
+    background: Theme.background;
+
+    in-out property <float> linear-value: 0.64;
+    in-out property <float> frequency: 440;
+    in-out property <float> meter-value: -9;
+    in-out property <int> segment: 1;
+    in-out property <int> gallery-preset;
+    in-out property <bool> gallery-dialog-open;
+    in-out property <string> gallery-accent: "#84CC16";
+
+    function use-preset(preset: int) {
+        root.gallery-preset = preset;
+        if (preset == 1) {
+            Theme.background = #151617; Theme.panel = #111213; Theme.surface = #222426;
+            Theme.surface-raised = #2c2f31; Theme.surface-active = #373a3d; Theme.border = #45494d;
+            Theme.text = #f1f3f5; Theme.text-muted = #a6adb4; Theme.text-faint = #61686f;
+            Theme.accent = #f59e0b; Theme.accent-active = #67450a; Theme.focus = #fbbf24;
+        } else if (preset == 2) {
+            Theme.background = #000000; Theme.panel = #080808; Theme.surface = #151515;
+            Theme.surface-raised = #262626; Theme.surface-active = #363636; Theme.border = #707070;
+            Theme.text = #ffffff; Theme.text-muted = #c7c7c7; Theme.text-faint = #888888;
+            Theme.accent = #22d3ee; Theme.accent-active = #155e75; Theme.focus = #67e8f9;
+        } else {
+            Theme.background = #18181b; Theme.panel = #131316; Theme.surface = #232328;
+            Theme.surface-raised = #2a2a2e; Theme.surface-active = #33333a; Theme.border = #3f3f46;
+            Theme.text = #e4e4e7; Theme.text-muted = #a1a1aa; Theme.text-faint = #52525b;
+            Theme.accent = #84cc16; Theme.accent-active = #2d6a3e; Theme.focus = #bef264;
+        }
+    }
+
+    VerticalBox {
+        spacing: 0px;
+        Rectangle {
+            height: 44px;
+            background: Theme.surface;
+            HorizontalBox {
+                padding: 8px;
+                spacing: 6px;
+                Text { text: "MOOLOOP / CONTROLS"; color: Theme.text; font-size: 14px; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                ToolButton {
+                    text: "Mooloop"; active: root.gallery-preset == 0;
+                    clicked => { root.use-preset(0); }
+                }
+                ToolButton {
+                    text: "Graphite"; active: root.gallery-preset == 1;
+                    clicked => { root.use-preset(1); }
+                }
+                ToolButton {
+                    text: "High Contrast"; active: root.gallery-preset == 2;
+                    clicked => { root.use-preset(2); }
+                }
+                ToolButton {
+                    text: "Appearance...";
+                    clicked => { root.gallery-dialog-open = true; }
+                }
+            }
+        }
+
+        ScrollView {
+            viewport-width: self.visible-width;
+            viewport-height: 650px;
+            VerticalBox {
+                padding: 18px;
+                spacing: 18px;
+
+                SectionLabel { text: "PARAMETER KNOBS"; }
+                HorizontalBox {
+                    spacing: 20px;
+                    alignment: start;
+                    ParameterKnob {
+                        label: "MIX"; tooltip: "Linear wet/dry mix";
+                        value <=> root.linear-value;
+                        default-value: 0.5;
+                        value-text: round(root.linear-value * 100) + "%";
+                    }
+                    ParameterKnob {
+                        label: "FREQUENCY"; tooltip: "Logarithmic frequency";
+                        value <=> root.frequency;
+                        minimum: 20; maximum: 20000; default-value: 440;
+                        scale: ValueScale.logarithmic;
+                        value-text: root.frequency >= 1000
+                            ? round(root.frequency / 100) / 10 + " kHz"
+                            : round(root.frequency) + " Hz";
+                    }
+                    ParameterKnob {
+                        label: "DISABLED"; value: 0.35; value-text: "35%"; enabled: false;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "FADERS AND METERS"; }
+                HorizontalBox {
+                    spacing: 24px;
+                    alignment: start;
+                    VerticalBox {
+                        width: 300px;
+                        spacing: 8px;
+                        ParameterFader {
+                            label: "LEVEL"; value <=> root.linear-value; default-value: 0.75;
+                            tooltip: "Horizontal level fader";
+                        }
+                        ParameterFader {
+                            label: "FREQ"; value <=> root.frequency;
+                            minimum: 20; maximum: 20000; default-value: 440;
+                            scale: ValueScale.logarithmic; tooltip: "Logarithmic frequency fader";
+                        }
+                        ValueReadout { value-text: round(root.frequency) + " Hz"; }
+                    }
+                    ParameterFader {
+                        label: "GAIN"; value <=> root.linear-value; default-value: 0.75;
+                        orientation: AudioOrientation.vertical;
+                    }
+                    VerticalBox {
+                        width: 260px;
+                        spacing: 10px;
+                        ParameterFader {
+                            label: "METER"; value <=> root.meter-value;
+                            minimum: -60; maximum: 0; default-value: -12; step: 1;
+                        }
+                        StereoPeakMeter {
+                            left-db: root.meter-value;
+                            right-db: root.meter-value - 3;
+                            held-left-db: max(root.meter-value, -3);
+                            held-right-db: max(root.meter-value - 3, -6);
+                            left-clipping: root.meter-value >= 0;
+                            right-clipping: false;
+                        }
+                        PeakMeter {
+                            width: 12px; height: 120px;
+                            orientation: AudioOrientation.vertical;
+                            level-db: root.meter-value;
+                            held-db: max(root.meter-value, -3);
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "COMMANDS AND MODES"; }
+                HorizontalBox {
+                    spacing: 10px;
+                    alignment: start;
+                    ToolButton { text: "Command"; tooltip: "Regular command"; }
+                    ToolButton { text: "Selected"; active: true; }
+                    ToolButton { text: "Disabled"; enabled: false; }
+                    ToggleButton { text: "Toggle"; checked: true; }
+                    SegmentedControl {
+                        width: 280px;
+                        options: ["Mono", "Stereo", "M/S"];
+                        selected-index <=> root.segment;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            }
+        }
+    }
+
+    AppearanceDialog {
+        width: parent.width;
+        height: parent.height;
+        open <=> root.gallery-dialog-open;
+        preset <=> root.gallery-preset;
+        accent-text <=> root.gallery-accent;
+        preview(preset, accent) => { root.use-preset(preset); }
+        save(preset, accent) => { root.use-preset(preset); true }
+    }
+}

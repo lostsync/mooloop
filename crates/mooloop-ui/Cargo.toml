@@ -11,6 +11,11 @@ mooloop-dsp = { workspace = true }
 mooloop-engine = { workspace = true }
 slint = { workspace = true }
 hound = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
 
 [build-dependencies]
 slint-build = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

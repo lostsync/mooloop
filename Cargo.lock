@@ -2876,8 +2876,11 @@ dependencies = [
  "mooloop-core",
  "mooloop-dsp",
  "mooloop-engine",
+ "serde",
  "slint",
  "slint-build",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]

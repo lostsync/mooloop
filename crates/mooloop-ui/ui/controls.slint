@@ -1,0 +1,488 @@
+import { Theme } from "theme.slint";
+
+export enum ValueScale { linear, logarithmic }
+export enum AudioOrientation { horizontal, vertical }
+
+export component ToolButton inherits Rectangle {
+    in property <string> text;
+    in property <string> tooltip: root.text;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    in property <color> text-color: Theme.text;
+    callback clicked;
+
+    min-width: 44px;
+    min-height: 24px;
+    border-radius: 3px;
+    border-width: (tap.has-hover || button-keyboard.has-focus) && root.enabled ? 1px : 0px;
+    border-color: button-keyboard.has-focus ? Theme.focus : Theme.border;
+    background: !root.enabled
+        ? Theme.surface
+        : tap.pressed
+            ? Theme.surface-active
+            : root.active ? Theme.accent-active : Theme.surface-raised;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+    forward-focus: button-keyboard;
+
+    Text {
+        text: root.text;
+        color: root.enabled ? root.text-color : Theme.text-faint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-size: 11px;
+    }
+
+    tap := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        pointer-event(e) => { if (e.kind == PointerEventKind.down) { button-keyboard.focus(); } }
+        clicked => { root.clicked(); }
+    }
+
+    button-keyboard := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == " " || e.text == "\n") { root.clicked(); accept } else { reject }
+        }
+    }
+
+    Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
+export component ToggleButton inherits Rectangle {
+    in property <string> text;
+    in property <string> tooltip: root.text;
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+    min-width: 44px;
+    min-height: 24px;
+
+    ToolButton {
+        text: root.text;
+        tooltip: root.tooltip;
+        active: root.checked;
+        enabled: root.enabled;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+export component SegmentedControl inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected-index;
+    in property <bool> enabled: true;
+    callback selected(int);
+
+    min-height: 26px;
+    background: Theme.surface;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        spacing: 1px;
+        for option[i] in root.options : ToolButton {
+            text: option;
+            tooltip: option;
+            active: root.selected-index == i;
+            enabled: root.enabled;
+            horizontal-stretch: 1;
+            clicked => {
+                root.selected-index = i;
+                root.selected(i);
+            }
+        }
+    }
+}
+
+export component SectionLabel inherits Text {
+    color: Theme.text-faint;
+    font-size: 9px;
+    height: 12px;
+}
+
+export component ValueReadout inherits Rectangle {
+    in property <string> value-text;
+    in property <string> unit;
+    min-width: 54px;
+    min-height: 18px;
+    border-radius: 2px;
+    background: Theme.surface;
+
+    Text {
+        text: root.value-text + (root.unit == "" ? "" : " " + root.unit);
+        color: Theme.text;
+        font-size: 10px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+export component ParameterKnob inherits Rectangle {
+    in property <string> label;
+    in property <string> tooltip: root.label;
+    in property <string> value-text;
+    in-out property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> default-value: root.minimum;
+    in property <float> step: 0;
+    in property <ValueScale> scale: ValueScale.linear;
+    in property <bool> enabled: true;
+    in property <color> fill: Theme.accent;
+    callback changed(float);
+
+    private property <float> pressed-normalized;
+    private property <bool> fine-drag;
+    private property <float> normalized: root.normalized-value(root.value);
+    private property <angle> indicator-angle: (-135deg + root.normalized * 270deg);
+
+    width: 72px;
+    height: 94px;
+    accessible-role: slider;
+    accessible-label: root.tooltip;
+    accessible-value: root.value-text;
+    forward-focus: keyboard;
+
+    pure function normalized-value(v: float) -> float {
+        if (root.maximum <= root.minimum) { return 0; }
+        if (root.scale == ValueScale.logarithmic && root.minimum > 0 && root.maximum > 0) {
+            return clamp(ln(clamp(v, root.minimum, root.maximum) / root.minimum)
+                / ln(root.maximum / root.minimum), 0, 1);
+        }
+        return clamp((v - root.minimum) / (root.maximum - root.minimum), 0, 1);
+    }
+
+    pure function value-at(n: float) -> float {
+        let position = clamp(n, 0, 1);
+        if (root.scale == ValueScale.logarithmic && root.minimum > 0 && root.maximum > 0) {
+            return root.minimum * pow(root.maximum / root.minimum, position);
+        }
+        return root.minimum + position * (root.maximum - root.minimum);
+    }
+
+    function set-normalized(n: float) {
+        let raw = root.value-at(n);
+        let quantized = root.step > 0
+            ? root.minimum + round((raw - root.minimum) / root.step) * root.step
+            : raw;
+        let next = clamp(quantized, root.minimum, root.maximum);
+        if (next != root.value) {
+            root.value = next;
+            root.changed(next);
+        }
+    }
+
+    VerticalLayout {
+        spacing: 3px;
+        alignment: center;
+
+        knob-face := Rectangle {
+            width: 58px;
+            height: 58px;
+            border-radius: 29px;
+            border-width: knob-touch.has-hover || keyboard.has-focus ? 2px : 1px;
+            border-color: keyboard.has-focus ? Theme.focus : Theme.border;
+            background: Theme.surface-raised;
+
+            Rectangle {
+                x: parent.width / 2 - 3px + sin(root.indicator-angle) * 19px;
+                y: parent.height / 2 - 3px - cos(root.indicator-angle) * 19px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: root.enabled ? root.fill : Theme.text-faint;
+            }
+
+            knob-touch := TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: ns-resize;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        keyboard.focus();
+                        root.pressed-normalized = root.normalized;
+                        root.fine-drag = e.modifiers.shift;
+                    } else if (e.kind == PointerEventKind.move && self.pressed) {
+                        root.set-normalized(root.pressed-normalized
+                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 600px : 150px));
+                    }
+                }
+                double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
+                scroll-event(e) => {
+                    root.set-normalized(root.normalized - e.delta-y / (e.modifiers.shift ? 2400px : 600px));
+                    accept
+                }
+            }
+        }
+
+        Text {
+            text: root.label;
+            color: root.enabled ? Theme.text-muted : Theme.text-faint;
+            font-size: 9px;
+            height: 12px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        ValueReadout { value-text: root.value-text; width: parent.width; }
+    }
+
+    keyboard := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
+                root.set-normalized(root.normalized + (e.modifiers.shift ? 0.002 : 0.01)); accept
+            } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
+                root.set-normalized(root.normalized - (e.modifiers.shift ? 0.002 : 0.01)); accept
+            } else { reject }
+        }
+    }
+    Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
+export component ParameterFader inherits Rectangle {
+    in property <string> label;
+    in property <string> tooltip: root.label;
+    in property <string> value-text;
+    in-out property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> default-value: root.minimum;
+    in property <float> step: 0;
+    in property <ValueScale> scale: ValueScale.linear;
+    in property <AudioOrientation> orientation: AudioOrientation.horizontal;
+    in property <bool> enabled: true;
+    in property <color> fill: Theme.accent;
+    in property <color> text-color: Theme.text-muted;
+    callback changed(float);
+
+    private property <float> normalized: root.normalized-value(root.value);
+    private property <length> track-height: 4px;
+    private property <float> pressed-normalized;
+    private property <bool> fine-drag;
+    min-height: root.orientation == AudioOrientation.horizontal ? 22px : 112px;
+    width: root.orientation == AudioOrientation.horizontal ? 176px : 32px;
+    accessible-role: slider;
+    accessible-label: root.tooltip;
+    accessible-value: root.value-text;
+    forward-focus: fader-keyboard;
+
+    pure function normalized-value(v: float) -> float {
+        if (root.maximum <= root.minimum) { return 0; }
+        if (root.scale == ValueScale.logarithmic && root.minimum > 0 && root.maximum > 0) {
+            return clamp(ln(clamp(v, root.minimum, root.maximum) / root.minimum)
+                / ln(root.maximum / root.minimum), 0, 1);
+        }
+        return clamp((v - root.minimum) / (root.maximum - root.minimum), 0, 1);
+    }
+
+    pure function value-at(n: float) -> float {
+        let position = clamp(n, 0, 1);
+        if (root.scale == ValueScale.logarithmic && root.minimum > 0 && root.maximum > 0) {
+            return root.minimum * pow(root.maximum / root.minimum, position);
+        }
+        return root.minimum + position * (root.maximum - root.minimum);
+    }
+
+    function set-normalized(n: float) {
+        let raw = root.value-at(n);
+        let quantized = root.step > 0
+            ? root.minimum + round((raw - root.minimum) / root.step) * root.step
+            : raw;
+        let next = clamp(quantized, root.minimum, root.maximum);
+        if (next != root.value) {
+            root.value = next;
+            root.changed(next);
+        }
+    }
+
+    if root.orientation == AudioOrientation.horizontal : HorizontalLayout {
+        spacing: 6px;
+        alignment: start;
+        Text {
+            text: root.label;
+            color: root.text-color;
+            font-size: 10px;
+            vertical-alignment: center;
+            width: 34px;
+        }
+        horizontal-track := Rectangle {
+            horizontal-stretch: 1;
+            min-width: 112px;
+            vertical-stretch: 1;
+            Rectangle {
+                y: (parent.height - root.track-height) / 2;
+                height: root.track-height;
+                width: parent.width;
+                background: Theme.border;
+                border-radius: root.track-height / 2;
+            }
+            Rectangle {
+                y: (parent.height - root.track-height) / 2;
+                height: root.track-height;
+                width: parent.width * root.normalized;
+                background: root.enabled ? root.fill : Theme.text-faint;
+                border-radius: root.track-height / 2;
+            }
+            TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: pointer;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        fader-keyboard.focus();
+                        root.pressed-normalized = root.normalized;
+                        root.fine-drag = e.modifiers.shift;
+                        if (!root.fine-drag) { root.set-normalized(self.mouse-x / self.width); }
+                    } else if (e.kind == PointerEventKind.move && self.pressed) {
+                        root.set-normalized(root.fine-drag
+                            ? root.pressed-normalized + (self.mouse-x - self.pressed-x) / 600px
+                            : self.mouse-x / self.width);
+                    }
+                }
+                double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
+                scroll-event(e) => {
+                    root.set-normalized(root.normalized - e.delta-y / (e.modifiers.shift ? 2400px : 600px)); accept
+                }
+            }
+        }
+    }
+
+    if root.orientation == AudioOrientation.vertical : VerticalLayout {
+        spacing: 4px;
+        Text {
+            text: root.label;
+            color: root.text-color;
+            font-size: 9px;
+            height: 12px;
+            horizontal-alignment: center;
+        }
+        vertical-track := Rectangle {
+            vertical-stretch: 1;
+            min-height: 76px;
+            Rectangle {
+                x: (parent.width - root.track-height) / 2;
+                width: root.track-height;
+                height: parent.height;
+                background: Theme.border;
+                border-radius: root.track-height / 2;
+            }
+            Rectangle {
+                x: (parent.width - root.track-height) / 2;
+                y: parent.height * (1 - root.normalized);
+                width: root.track-height;
+                height: parent.height * root.normalized;
+                background: root.enabled ? root.fill : Theme.text-faint;
+                border-radius: root.track-height / 2;
+            }
+            TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: ns-resize;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        fader-keyboard.focus();
+                        root.pressed-normalized = root.normalized;
+                        root.fine-drag = e.modifiers.shift;
+                        if (!root.fine-drag) { root.set-normalized(1 - self.mouse-y / self.height); }
+                    } else if (e.kind == PointerEventKind.move && self.pressed) {
+                        root.set-normalized(root.fine-drag
+                            ? root.pressed-normalized + (self.pressed-y - self.mouse-y) / 600px
+                            : 1 - self.mouse-y / self.height);
+                    }
+                }
+                double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
+                scroll-event(e) => {
+                    root.set-normalized(root.normalized - e.delta-y / (e.modifiers.shift ? 2400px : 600px)); accept
+                }
+            }
+        }
+    }
+    fader-keyboard := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
+                root.set-normalized(root.normalized + (e.modifiers.shift ? 0.002 : 0.01)); accept
+            } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
+                root.set-normalized(root.normalized - (e.modifiers.shift ? 0.002 : 0.01)); accept
+            } else { reject }
+        }
+    }
+    Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
+export component PeakMeter inherits Rectangle {
+    in property <float> level-db: -60;
+    in property <float> held-db: -60;
+    in property <float> minimum-db: -60;
+    in property <float> warning-db: -12;
+    in property <float> hot-db: -3;
+    in property <bool> clipping;
+    in property <AudioOrientation> orientation: AudioOrientation.horizontal;
+
+    private property <float> level-normalized: clamp(
+        (root.level-db - root.minimum-db) / (0 - root.minimum-db), 0, 1);
+    private property <float> held-normalized: clamp(
+        (root.held-db - root.minimum-db) / (0 - root.minimum-db), 0, 1);
+    min-width: root.orientation == AudioOrientation.horizontal ? 72px : 8px;
+    min-height: root.orientation == AudioOrientation.horizontal ? 8px : 72px;
+    border-radius: 2px;
+    background: Theme.border;
+    clip: true;
+
+    if root.orientation == AudioOrientation.horizontal : Rectangle {
+        width: parent.width * root.level-normalized;
+        height: parent.height;
+        background: root.level-db >= root.hot-db ? Theme.meter-clip
+            : root.level-db >= root.warning-db ? Theme.meter-warning : Theme.meter-safe;
+    }
+    if root.orientation == AudioOrientation.horizontal : Rectangle {
+        x: parent.width * root.held-normalized - 1px;
+        width: 2px;
+        height: parent.height;
+        background: root.clipping ? Theme.meter-clip : Theme.text;
+    }
+    if root.orientation == AudioOrientation.vertical : Rectangle {
+        y: parent.height * (1 - root.level-normalized);
+        width: parent.width;
+        height: parent.height * root.level-normalized;
+        background: root.level-db >= root.hot-db ? Theme.meter-clip
+            : root.level-db >= root.warning-db ? Theme.meter-warning : Theme.meter-safe;
+    }
+    if root.orientation == AudioOrientation.vertical : Rectangle {
+        y: parent.height * (1 - root.held-normalized) - 1px;
+        width: parent.width;
+        height: 2px;
+        background: root.clipping ? Theme.meter-clip : Theme.text;
+    }
+}
+
+export component StereoPeakMeter inherits Rectangle {
+    in property <float> left-db: -60;
+    in property <float> right-db: -60;
+    in property <float> held-left-db: -60;
+    in property <float> held-right-db: -60;
+    in property <bool> left-clipping;
+    in property <bool> right-clipping;
+    min-width: 96px;
+    height: 18px;
+
+    VerticalLayout {
+        spacing: 2px;
+        PeakMeter { level-db: root.left-db; held-db: root.held-left-db; clipping: root.left-clipping; }
+        PeakMeter { level-db: root.right-db; held-db: root.held-right-db; clipping: root.right-clipping; }
+    }
+}
+
+export component MuteButton inherits ToolButton {
+    in property <bool> muted;
+    text: "M";
+    tooltip: "Mute channel";
+    active: root.muted;
+    text-color: root.muted ? #fecaca : Theme.text-faint;
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
+}

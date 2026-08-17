@@ -11,6 +11,6 @@ pub mod time;
 
 pub use bridge::{EngineCommand, EngineEvent};
 pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_PATTERNS};
-pub use pattern::{ChannelPattern, Pattern, Step, DEFAULT_STEPS};
+pub use pattern::{ChannelPattern, Pattern, Step, DEFAULT_STEPS, MAX_PATTERN_STEPS};
 pub use sampler::{clamp01, LoopMode, SamplerParams};
 pub use time::{ticks_per_sample, Ppq, Samples, Ticks};

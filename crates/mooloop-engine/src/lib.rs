@@ -79,9 +79,11 @@ impl Engine {
 
         // Every channel's slot starts with the same shared default kick.
         let kick = SampleData::default_kick(sample_rate);
-        let sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new((0..MAX_CHANNELS)
-            .map(|_| Arc::new(ArcSwapOption::from(Some(kick.clone()))))
-            .collect());
+        let sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::from(Some(kick.clone()))))
+                .collect(),
+        );
 
         let xrun_count = Arc::new(AtomicU64::new(0));
         let io = graph::GraphIo {
@@ -161,5 +163,11 @@ impl EngineHandle {
         if let Some(slot) = self.sample_slots.get(channel) {
             slot.store(Some(sample));
         }
+    }
+
+    /// Clone the currently-published sample pointer for non-realtime display
+    /// work such as waveform peak generation.
+    pub fn sample_snapshot(&self, channel: usize) -> Option<Arc<SampleData>> {
+        self.sample_slots.get(channel)?.load_full()
     }
 }

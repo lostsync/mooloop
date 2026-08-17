@@ -1,0 +1,134 @@
+import { HorizontalBox, LineEdit, VerticalBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { SectionLabel, ToolButton } from "controls.slint";
+
+export component AppearanceDialog inherits Rectangle {
+    in-out property <bool> open;
+    in-out property <int> preset;
+    in-out property <string> accent-text;
+    in property <string> validation-error;
+    callback preview(int, string);
+    callback save(int, string) -> bool;
+    callback cancelled;
+
+    visible: root.open;
+    background: #00000099;
+    z: 100;
+
+    TouchArea { }
+
+    Rectangle {
+        width: min(parent.width - 32px, 520px);
+        height: min(parent.height - 32px, 370px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: 6px;
+
+        VerticalBox {
+            padding: 16px;
+            spacing: 12px;
+
+            Text { text: "Appearance"; color: Theme.text; font-size: 16px; height: 24px; }
+            SectionLabel { text: "THEME PRESET"; }
+            HorizontalBox {
+                spacing: 6px;
+                for name[i] in ["Mooloop", "Graphite", "High Contrast"] : ToolButton {
+                    text: name;
+                    tooltip: "Use " + name + " palette";
+                    active: root.preset == i;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.preset = i;
+                        root.accent-text = i == 0 ? "#84CC16" : i == 1 ? "#F59E0B" : "#22D3EE";
+                        root.preview(root.preset, root.accent-text);
+                    }
+                }
+            }
+
+            SectionLabel { text: "ACCENT"; }
+            HorizontalBox {
+                spacing: 8px;
+                alignment: start;
+                for swatch[i] in [#84cc16, #22d3ee, #f59e0b, #f43f5e, #a78bfa] : Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 3px;
+                    border-width: swatch == Theme.accent ? 2px : 1px;
+                    border-color: swatch == Theme.accent ? Theme.text : Theme.border;
+                    background: swatch;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.accent-text = i == 0 ? "#84CC16"
+                                : i == 1 ? "#22D3EE"
+                                : i == 2 ? "#F59E0B"
+                                : i == 3 ? "#F43F5E" : "#A78BFA";
+                            root.preview(root.preset, root.accent-text);
+                        }
+                    }
+                }
+                LineEdit {
+                    text <=> root.accent-text;
+                    width: 120px;
+                    placeholder-text: "#RRGGBB";
+                    edited => { root.preview(root.preset, root.accent-text); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            Text {
+                text: root.validation-error;
+                color: Theme.destructive;
+                font-size: 10px;
+                height: 18px;
+            }
+
+            Rectangle {
+                height: 64px;
+                background: Theme.background;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: 4px;
+                HorizontalBox {
+                    padding: 10px;
+                    spacing: 8px;
+                    Text { text: "Preview"; color: Theme.text; vertical-alignment: center; }
+                    ToolButton { text: "Selected"; active: true; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Rectangle { width: 80px; height: 8px; background: Theme.accent; border-radius: 2px; }
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+            HorizontalBox {
+                spacing: 6px;
+                alignment: end;
+                ToolButton {
+                    text: "Reset";
+                    clicked => {
+                        root.preset = 0;
+                        root.accent-text = "#84CC16";
+                        root.preview(root.preset, root.accent-text);
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                ToolButton {
+                    text: "Cancel";
+                    clicked => { root.cancelled(); root.open = false; }
+                }
+                ToolButton {
+                    text: "Apply";
+                    clicked => { root.save(root.preset, root.accent-text); }
+                }
+                ToolButton {
+                    text: "OK";
+                    active: true;
+                    clicked => { if (root.save(root.preset, root.accent-text)) { root.open = false; } }
+                }
+            }
+        }
+    }
+}

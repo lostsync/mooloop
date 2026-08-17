@@ -6,13 +6,22 @@
 //! params) as the source of truth and mirrors every mutation to the engine
 //! via commands. The engine keeps its own pre-allocated copy.
 
+mod meter;
+mod settings;
+
 slint::include_modules!();
 
-use mooloop_core::{EngineCommand, EngineEvent, LoopMode, SamplerParams, MAX_CHANNELS, MAX_PATTERNS};
+use meter::MeterBallistics;
+use mooloop_core::{
+    EngineCommand, EngineEvent, LoopMode, Ppq, SamplerParams, Step, DEFAULT_STEPS, MAX_CHANNELS,
+    MAX_PATTERNS, MAX_PATTERN_STEPS,
+};
 use mooloop_dsp::SampleData;
 use mooloop_engine::EngineHandle;
+use settings::{AppearancePreset, AppearanceSettings, ThemePalette, UiSettings};
 use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -20,7 +29,35 @@ const PUMP_INTERVAL_MS: u64 = 8;
 const INITIAL_BPM: i32 = 120;
 /// Fader positions for time-based params map onto [0, MAX_TIME_S] seconds.
 const MAX_TIME_S: f32 = 2.0;
-const NUM_STEPS: usize = mooloop_core::DEFAULT_STEPS as usize;
+const WAVEFORM_BINS: usize = 256;
+
+fn apply_theme(window: &MainWindow, palette: ThemePalette) {
+    let theme = window.global::<Theme>();
+    theme.set_background(palette.background.color());
+    theme.set_panel(palette.panel.color());
+    theme.set_surface(palette.surface.color());
+    theme.set_surface_raised(palette.raised.color());
+    theme.set_surface_active(palette.active.color());
+    theme.set_border(palette.border.color());
+    theme.set_text(palette.text.color());
+    theme.set_text_muted(palette.muted.color());
+    theme.set_text_faint(palette.faint.color());
+    theme.set_accent(palette.accent.color());
+    theme.set_accent_active(palette.accent_active.color());
+    theme.set_focus(palette.focus.color());
+    theme.set_warning(palette.warning.color());
+    theme.set_destructive(palette.destructive.color());
+    theme.set_destructive_active(palette.destructive_active.color());
+    theme.set_meter_safe(palette.meter_safe.color());
+    theme.set_meter_warning(palette.meter_warning.color());
+    theme.set_meter_clip(palette.meter_clip.color());
+}
+
+fn sync_appearance_properties(window: &MainWindow, appearance: &AppearanceSettings) {
+    window.set_appearance_preset(appearance.preset.index());
+    window.set_appearance_accent(appearance.accent.as_str().into());
+    window.set_appearance_error("".into());
+}
 
 /// UI-side state for one channel. `steps` is the pattern bank:
 /// `[pattern][step]`.
@@ -29,26 +66,41 @@ struct ChannelState {
     muted: bool,
     params: SamplerParams,
     sample_name: String,
-    steps: Vec<Vec<bool>>,
+    sample_path: Option<PathBuf>,
+    waveform: Vec<f32>,
+    can_previous_sample: bool,
+    can_next_sample: bool,
+    steps: Vec<Vec<Step>>,
 }
 
 impl ChannelState {
-    fn new(index: usize) -> Self {
+    fn new(index: usize, default_waveform: Vec<f32>) -> Self {
         Self {
             name: format!("Sampler {}", index + 1),
             muted: false,
             params: SamplerParams::default(),
             sample_name: "default kick".into(),
-            steps: vec![vec![false; NUM_STEPS]; MAX_PATTERNS],
+            sample_path: None,
+            waveform: default_waveform,
+            can_previous_sample: false,
+            can_next_sample: false,
+            steps: vec![vec![Step::default(); MAX_PATTERN_STEPS as usize]; MAX_PATTERNS],
         }
     }
+}
+
+struct LoadedSample {
+    path: PathBuf,
+    sample: Arc<SampleData>,
+    can_previous: bool,
+    can_next: bool,
 }
 
 /// Result of a background sample load, delivered to the pump.
 struct LoadResult {
     channel: usize,
     /// `None` = dialog cancelled; `Some(Err)` = decode failed.
-    result: Option<Result<(String, Arc<SampleData>), String>>,
+    result: Option<Result<LoadedSample, String>>,
 }
 
 pub struct AppUi {
@@ -83,8 +135,13 @@ struct UiState {
     channels: Vec<ChannelState>,
     rows: Rc<VecModel<ChannelRow>>,
     step_models: Vec<Rc<VecModel<StepCell>>>,
+    note_model: Rc<VecModel<NoteCell>>,
+    waveform_model: Rc<VecModel<f32>>,
+    default_waveform: Vec<f32>,
+    pattern_lengths: Vec<usize>,
     current_pattern: usize,
     selected: usize,
+    selected_step: usize,
 }
 
 impl UiState {
@@ -102,12 +159,39 @@ impl UiState {
 
     /// Rebuild every channel's step model from `pattern`.
     fn show_pattern(&self, pattern: usize) {
+        let length = self.pattern_lengths[pattern];
         for (i, ch) in self.channels.iter().enumerate() {
             let cells: Vec<StepCell> = ch.steps[pattern]
                 .iter()
-                .map(|&active| StepCell { active })
+                .take(length)
+                .map(|step| StepCell { active: step.on })
                 .collect();
             self.step_models[i].set_vec(cells);
+        }
+    }
+
+    fn refresh_note_editor(&self, window: &MainWindow) {
+        let length = self.pattern_lengths[self.current_pattern];
+        let Some(channel) = self.channels.get(self.selected) else {
+            return;
+        };
+        let cells: Vec<NoteCell> = channel.steps[self.current_pattern]
+            .iter()
+            .take(length)
+            .enumerate()
+            .map(|(index, step)| NoteCell {
+                active: step.on,
+                note: step.note as i32,
+                velocity: step.velocity as i32,
+                selected: index == self.selected_step,
+            })
+            .collect();
+        self.note_model.set_vec(cells);
+
+        if let Some(step) = channel.steps[self.current_pattern].get(self.selected_step) {
+            window.set_selected_note_step(self.selected_step as i32);
+            window.set_selected_note(step.note as i32);
+            window.set_selected_velocity(step.velocity as i32);
         }
     }
 
@@ -119,6 +203,9 @@ impl UiState {
         let p = &ch.params;
         window.set_selected_channel_name(ch.name.as_str().into());
         window.set_sample_name(ch.sample_name.as_str().into());
+        self.waveform_model.set_vec(ch.waveform.clone());
+        window.set_can_previous_sample(ch.can_previous_sample);
+        window.set_can_next_sample(ch.can_next_sample);
         window.set_attack(time_to_norm(p.attack));
         window.set_decay(time_to_norm(p.decay));
         window.set_sustain(p.sustain);
@@ -131,6 +218,11 @@ impl UiState {
             LoopMode::Forward => 1,
             LoopMode::Pingpong => 2,
         });
+        window.set_filter_cutoff(p.filter_cutoff);
+        window.set_filter_env((p.filter_env_amount + 1.0) * 0.5);
+        window.set_bit_reduction(p.bit_reduction);
+        window.set_rate_reduction(p.rate_reduction);
+        self.refresh_note_editor(window);
     }
 }
 
@@ -142,18 +234,117 @@ impl AppUi {
         window.set_bpm(INITIAL_BPM);
         window.set_playing(false);
         window.set_beat_in_bar(0);
-        window.set_peak_l(0.0);
-        window.set_peak_r(0.0);
+        window.set_meter_l_db(-60.0);
+        window.set_meter_r_db(-60.0);
+        window.set_meter_l_held_db(-60.0);
+        window.set_meter_r_held_db(-60.0);
+        window.set_meter_l_clipping(false);
+        window.set_meter_r_clipping(false);
         window.set_current_pattern(0);
+        window.set_pattern_length(DEFAULT_STEPS as i32);
+        window.set_current_step(0);
+        window.set_editor_page(0);
         handle.send(EngineCommand::SetTempo(INITIAL_BPM as f64));
 
+        // --- Appearance settings and live preview ---
+        let ui_settings = Rc::new(RefCell::new(UiSettings::load_or_default()));
+        {
+            let settings = ui_settings.borrow();
+            apply_theme(&window, settings.appearance.palette());
+            sync_appearance_properties(&window, &settings.appearance);
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_appearance_opened(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let settings = settings.borrow();
+                apply_theme(&window, settings.appearance.palette());
+                sync_appearance_properties(&window, &settings.appearance);
+            });
+        }
+        {
+            let weak = window.as_weak();
+            window.on_appearance_preview(move |preset, accent| {
+                let Some(window) = weak.upgrade() else { return };
+                match AppearanceSettings::validated(
+                    AppearancePreset::from_index(preset),
+                    accent.as_str(),
+                ) {
+                    Ok(appearance) => {
+                        apply_theme(&window, appearance.palette());
+                        window.set_appearance_error("".into());
+                    }
+                    Err(error) => window.set_appearance_error(error.to_string().into()),
+                }
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_appearance_save(move |preset, accent| {
+                let Some(window) = weak.upgrade() else {
+                    return false;
+                };
+                let appearance = match AppearanceSettings::validated(
+                    AppearancePreset::from_index(preset),
+                    accent.as_str(),
+                ) {
+                    Ok(appearance) => appearance,
+                    Err(error) => {
+                        window.set_appearance_error(error.to_string().into());
+                        return false;
+                    }
+                };
+                apply_theme(&window, appearance.palette());
+                let mut settings = settings.borrow_mut();
+                let previous = settings.appearance.clone();
+                settings.appearance = appearance;
+                if let Err(error) = settings.save() {
+                    settings.appearance = previous;
+                    window.set_appearance_error(format!("Could not save settings: {error}").into());
+                    return false;
+                }
+                sync_appearance_properties(&window, &settings.appearance);
+                true
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_appearance_cancelled(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let settings = settings.borrow();
+                apply_theme(&window, settings.appearance.palette());
+                sync_appearance_properties(&window, &settings.appearance);
+            });
+        }
+
         // --- Channel rack state: start with one channel ---
-        let first = ChannelState::new(0);
+        let default_waveform = handle
+            .sample_snapshot(0)
+            .map(|sample| waveform_peaks(&sample, WAVEFORM_BINS))
+            .unwrap_or_default();
+        let first = ChannelState::new(0, default_waveform.clone());
         let first_steps: Vec<StepCell> = first.steps[0]
             .iter()
-            .map(|&active| StepCell { active })
+            .take(DEFAULT_STEPS as usize)
+            .map(|step| StepCell { active: step.on })
             .collect();
         let step_model = Rc::new(VecModel::from(first_steps));
+        let note_model = Rc::new(VecModel::from(
+            first.steps[0]
+                .iter()
+                .take(DEFAULT_STEPS as usize)
+                .enumerate()
+                .map(|(index, step)| NoteCell {
+                    active: step.on,
+                    note: step.note as i32,
+                    velocity: step.velocity as i32,
+                    selected: index == 0,
+                })
+                .collect::<Vec<_>>(),
+        ));
         let row = ChannelRow {
             name: first.name.as_str().into(),
             muted: false,
@@ -161,14 +352,22 @@ impl AppUi {
             steps: ModelRc::from(step_model.clone()),
         };
         let rows_model = Rc::new(VecModel::from(vec![row]));
+        let waveform_model = Rc::new(VecModel::from(first.waveform.clone()));
         window.set_channels(ModelRc::from(rows_model.clone()));
+        window.set_notes(ModelRc::from(note_model.clone()));
+        window.set_waveform(ModelRc::from(waveform_model.clone()));
 
         let state = Rc::new(RefCell::new(UiState {
             channels: vec![first],
             rows: rows_model,
             step_models: vec![step_model],
+            note_model,
+            waveform_model,
+            default_waveform,
+            pattern_lengths: vec![DEFAULT_STEPS as usize; MAX_PATTERNS],
             current_pattern: 0,
             selected: 0,
+            selected_step: 0,
         }));
         state.borrow().refresh_editor(&window);
 
@@ -225,12 +424,45 @@ impl AppUi {
                 {
                     let mut st = st.borrow_mut();
                     st.current_pattern = p;
+                    st.selected_step = st
+                        .selected_step
+                        .min(st.pattern_lengths[p].saturating_sub(1));
                     st.show_pattern(p);
                 }
                 if let Some(w) = weak.upgrade() {
                     w.set_current_pattern(p as i32);
+                    let st = st.borrow();
+                    w.set_pattern_length(st.pattern_lengths[p] as i32);
+                    st.refresh_editor(&w);
                 }
                 let _ = tx.send(EngineCommand::SetCurrentPattern(p as u8));
+            });
+        }
+
+        // Per-pattern logical length. Channel storage stays at the maximum so
+        // shortening and re-extending a pattern does not discard hidden steps.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_pattern_length_changed(move |length| {
+                let length = length.clamp(1, MAX_PATTERN_STEPS as i32) as usize;
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                if st.pattern_lengths[pattern] == length {
+                    return;
+                }
+                st.pattern_lengths[pattern] = length;
+                st.selected_step = st.selected_step.min(length - 1);
+                st.show_pattern(pattern);
+                if let Some(w) = weak.upgrade() {
+                    w.set_pattern_length(length as i32);
+                    st.refresh_note_editor(&w);
+                }
+                let _ = tx.send(EngineCommand::SetPatternLength {
+                    pattern: pattern as u8,
+                    length_steps: length as u16,
+                });
             });
         }
 
@@ -238,28 +470,161 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let weak = window.as_weak();
             window.on_step_clicked(move |ch, step| {
                 let (ch, step) = (ch as usize, step as usize);
                 let mut st = st.borrow_mut();
-                if ch >= st.channels.len() || step >= NUM_STEPS {
+                let pattern = st.current_pattern;
+                if ch >= st.channels.len() || step >= st.pattern_lengths[pattern] {
                     return;
                 }
                 dbg_log(&format!("UI: ch {ch} step {step} toggled"));
-                let p = st.current_pattern;
-                let new_active = !st.channels[ch].steps[p][step];
-                st.channels[ch].steps[p][step] = new_active;
-                st.step_models[ch].set_row_data(
-                    step,
-                    StepCell {
-                        active: new_active,
-                    },
-                );
+                let p = pattern;
+                st.channels[ch].steps[p][step].on = !st.channels[ch].steps[p][step].on;
+                let edited = st.channels[ch].steps[p][step];
+                let new_active = edited.on;
+                st.step_models[ch].set_row_data(step, StepCell { active: new_active });
+                if ch == st.selected {
+                    st.selected_step = step;
+                    if let Some(w) = weak.upgrade() {
+                        st.refresh_note_editor(&w);
+                    }
+                }
                 let _ = tx.send(EngineCommand::SetStep {
                     pattern: p as u8,
                     channel: ch as u8,
                     step: step as u8,
                     on: new_active,
-                    velocity: 100,
+                    note: edited.note,
+                    velocity: edited.velocity,
+                });
+            });
+        }
+
+        // Piano roll pitch editing for the selected channel and pattern.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_piano_note_edited(move |step, note| {
+                let step = step as usize;
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                if step >= st.pattern_lengths[pattern] {
+                    return;
+                }
+                st.selected_step = step;
+                let edited = {
+                    let edited = &mut st.channels[channel].steps[pattern][step];
+                    edited.on = true;
+                    edited.note = note.clamp(36, 84) as u8;
+                    *edited
+                };
+                st.step_models[channel].set_row_data(step, StepCell { active: true });
+                if let Some(w) = weak.upgrade() {
+                    st.refresh_note_editor(&w);
+                }
+                let _ = tx.send(EngineCommand::SetStep {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    step: step as u8,
+                    on: edited.on,
+                    note: edited.note,
+                    velocity: edited.velocity,
+                });
+            });
+        }
+
+        // Direct drawing in the parameter lane. Velocity zero is avoided so
+        // an active note never becomes an implicit MIDI note-off.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_velocity_edited(move |step, value| {
+                let step = step as usize;
+                let velocity = (1.0 + value.clamp(0.0, 1.0) * 126.0).round() as u8;
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                if step >= st.pattern_lengths[pattern] {
+                    return;
+                }
+                st.selected_step = step;
+                let edited = {
+                    let edited = &mut st.channels[channel].steps[pattern][step];
+                    edited.velocity = velocity;
+                    *edited
+                };
+                if let Some(w) = weak.upgrade() {
+                    st.refresh_note_editor(&w);
+                }
+                let _ = tx.send(EngineCommand::SetStep {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    step: step as u8,
+                    on: edited.on,
+                    note: edited.note,
+                    velocity: edited.velocity,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_selected_note_changed(move |note| {
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let step = st.selected_step;
+                let edited = {
+                    let edited = &mut st.channels[channel].steps[pattern][step];
+                    edited.on = true;
+                    edited.note = note.clamp(36, 84) as u8;
+                    *edited
+                };
+                st.step_models[channel].set_row_data(step, StepCell { active: true });
+                if let Some(w) = weak.upgrade() {
+                    st.refresh_note_editor(&w);
+                }
+                let _ = tx.send(EngineCommand::SetStep {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    step: step as u8,
+                    on: edited.on,
+                    note: edited.note,
+                    velocity: edited.velocity,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_selected_velocity_changed(move |velocity| {
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let step = st.selected_step;
+                let edited = {
+                    let edited = &mut st.channels[channel].steps[pattern][step];
+                    edited.velocity = velocity.clamp(1, 127) as u8;
+                    *edited
+                };
+                if let Some(w) = weak.upgrade() {
+                    st.refresh_note_editor(&w);
+                }
+                let _ = tx.send(EngineCommand::SetStep {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    step: step as u8,
+                    on: edited.on,
+                    note: edited.note,
+                    velocity: edited.velocity,
                 });
             });
         }
@@ -314,10 +679,11 @@ impl AppUi {
                 }
                 dbg_log("UI: add channel");
                 let index = st.channels.len();
-                let ch = ChannelState::new(index);
+                let ch = ChannelState::new(index, st.default_waveform.clone());
                 let cells: Vec<StepCell> = ch.steps[st.current_pattern]
                     .iter()
-                    .map(|&active| StepCell { active })
+                    .take(st.pattern_lengths[st.current_pattern])
+                    .map(|step| StepCell { active: step.on })
                     .collect();
                 let model = Rc::new(VecModel::from(cells));
                 let row = ChannelRow {
@@ -406,6 +772,26 @@ impl AppUi {
         wire_unit_param!(on_start_pos_changed, start);
         wire_unit_param!(on_loop_start_changed, loop_start);
         wire_unit_param!(on_loop_end_changed, loop_end);
+        wire_unit_param!(on_filter_cutoff_changed, filter_cutoff);
+        wire_unit_param!(on_bit_reduction_changed, bit_reduction);
+        wire_unit_param!(on_rate_reduction_changed, rate_reduction);
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_filter_env_changed(move |v| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                channel.params.filter_env_amount = v.clamp(0.0, 1.0) * 2.0 - 1.0;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: ch as u8,
+                    params: channel.params,
+                });
+            });
+        }
 
         {
             let tx = cmd_tx.clone();
@@ -433,13 +819,53 @@ impl AppUi {
         let (load_tx, load_rx) = std::sync::mpsc::channel::<LoadResult>();
         {
             let st = state.clone();
+            let load_tx = load_tx.clone();
             window.on_load_sample_clicked(move || {
                 let channel = st.borrow().selected;
                 let tx = load_tx.clone();
                 dbg_log(&format!("UI: loading sample for channel {channel}"));
                 std::thread::spawn(move || {
-                    let result = pick_wav_via_zenity()
-                        .map(|path| decode_wav(&path).map(|sample| (path, sample)));
+                    let result = pick_wav_via_zenity().map(|path| load_sample_at_path(&path));
+                    let _ = tx.send(LoadResult { channel, result });
+                });
+            });
+        }
+        {
+            let st = state.clone();
+            let load_tx = load_tx.clone();
+            window.on_previous_sample_clicked(move || {
+                let (channel, path) = {
+                    let st = st.borrow();
+                    (st.selected, st.channels[st.selected].sample_path.clone())
+                };
+                let Some(path) = path else { return };
+                let tx = load_tx.clone();
+                std::thread::spawn(move || {
+                    let result = match adjacent_wav(&path, -1) {
+                        Ok(Some(path)) => Some(load_sample_at_path(&path)),
+                        Ok(None) => None,
+                        Err(error) => Some(Err(error)),
+                    };
+                    let _ = tx.send(LoadResult { channel, result });
+                });
+            });
+        }
+        {
+            let st = state.clone();
+            let load_tx = load_tx.clone();
+            window.on_next_sample_clicked(move || {
+                let (channel, path) = {
+                    let st = st.borrow();
+                    (st.selected, st.channels[st.selected].sample_path.clone())
+                };
+                let Some(path) = path else { return };
+                let tx = load_tx.clone();
+                std::thread::spawn(move || {
+                    let result = match adjacent_wav(&path, 1) {
+                        Ok(Some(path)) => Some(load_sample_at_path(&path)),
+                        Ok(None) => None,
+                        Err(error) => Some(Err(error)),
+                    };
                     let _ = tx.send(LoadResult { channel, result });
                 });
             });
@@ -453,13 +879,16 @@ impl AppUi {
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
         let stats = Rc::new(std::cell::Cell::new((0.0f32, false, 0usize)));
         let stats_in = stats.clone();
+        let mut left_meter = MeterBallistics::default();
+        let mut right_meter = MeterBallistics::default();
+        let mut last_meter_update = std::time::Instant::now();
         pump.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
                 while let Ok(load) = load_rx.try_recv() {
-                    let Some((path, sample)) = (match load.result {
-                        Some(Ok((path, sample))) => Some((path, sample)),
+                    let Some(loaded) = (match load.result {
+                        Some(Ok(loaded)) => Some(loaded),
                         Some(Err(e)) => {
                             eprintln!("mooloop: failed to load sample: {e}");
                             None
@@ -468,16 +897,22 @@ impl AppUi {
                     }) else {
                         continue;
                     };
-                    let name = std::path::Path::new(&path)
+                    let name = loaded
+                        .path
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("loaded")
                         .to_string();
                     dbg_log(&format!("UI: channel {} loaded {name}", load.channel));
-                    handle.load_sample(load.channel, sample);
+                    let waveform = waveform_peaks(&loaded.sample, WAVEFORM_BINS);
+                    handle.load_sample(load.channel, loaded.sample);
                     let mut st = st.borrow_mut();
                     if let Some(ch) = st.channels.get_mut(load.channel) {
                         ch.sample_name = name;
+                        ch.sample_path = Some(loaded.path);
+                        ch.waveform = waveform;
+                        ch.can_previous_sample = loaded.can_previous;
+                        ch.can_next_sample = loaded.can_next;
                     }
                     if load.channel == st.selected {
                         if let Some(w) = weak.upgrade() {
@@ -492,29 +927,45 @@ impl AppUi {
                 }
                 let Some(w) = weak.upgrade() else { return };
                 let mut saw_nonzero = false;
+                let mut block_peak_l = 0.0f32;
+                let mut block_peak_r = 0.0f32;
                 for ev in handle.drain() {
                     match ev {
                         EngineEvent::Position {
+                            tick,
                             beat_in_bar,
                             playing,
-                            ..
                         } => {
                             w.set_beat_in_bar(beat_in_bar as i32);
                             w.set_playing(playing);
+                            let st = st.borrow();
+                            let length = st.pattern_lengths[st.current_pattern] as u64;
+                            let ticks_per_step = (Ppq::DEFAULT.ticks_per_beat() / 4) as u64;
+                            w.set_current_step(((tick / ticks_per_step) % length) as i32);
                         }
                         EngineEvent::Metering { peak_l, peak_r } => {
-                            let p = peak_l.clamp(0.0, 1.0);
-                            if p > 0.0 {
+                            block_peak_l = block_peak_l.max(peak_l.max(0.0));
+                            block_peak_r = block_peak_r.max(peak_r.max(0.0));
+                            if peak_l > 0.0 || peak_r > 0.0 {
                                 saw_nonzero = true;
                             }
-                            w.set_peak_l(p);
-                            w.set_peak_r(peak_r.clamp(0.0, 1.0));
                         }
                         EngineEvent::Xrun => {
                             eprintln!("mooloop: JACK reported an xrun (audio dropout)");
                         }
                     }
                 }
+                let now = std::time::Instant::now();
+                let elapsed = now.duration_since(last_meter_update).as_secs_f32();
+                last_meter_update = now;
+                let left = left_meter.update(block_peak_l, elapsed);
+                let right = right_meter.update(block_peak_r, elapsed);
+                w.set_meter_l_db(left.level_db);
+                w.set_meter_r_db(right.level_db);
+                w.set_meter_l_held_db(left.held_db);
+                w.set_meter_r_held_db(right.held_db);
+                w.set_meter_l_clipping(left.clipping);
+                w.set_meter_r_clipping(right.clipping);
                 let (mp, sp, cf) = stats_in.get();
                 let new_mp = if saw_nonzero { mp.max(1.0) } else { mp };
                 let new_sp = sp || w.get_playing();
@@ -538,6 +989,10 @@ impl AppUi {
                 w.invoke_add_channel_clicked();
                 w.invoke_step_clicked(1, 2);
                 w.invoke_pattern_selected(0);
+                w.invoke_pattern_length_changed(32);
+                w.invoke_piano_note_edited(6, 72);
+                w.invoke_velocity_edited(6, 0.35);
+                w.set_editor_page(1);
                 w.invoke_play_clicked();
             });
             let stats = stats.clone();
@@ -547,7 +1002,7 @@ impl AppUi {
                 println!("commands forwarded by pump : {forwarded}");
                 println!("saw playing=true on window : {saw_playing}");
                 println!("nonzero metering seen     : {max_peak:.4}");
-                let ok = saw_playing && forwarded >= 5;
+                let ok = saw_playing && forwarded >= 12;
                 println!(
                     "RESULT: {}",
                     if ok {
@@ -576,7 +1031,7 @@ impl AppUi {
 }
 
 /// Spawn zenity to pick a WAV file. Returns `None` if cancelled or unavailable.
-fn pick_wav_via_zenity() -> Option<String> {
+fn pick_wav_via_zenity() -> Option<PathBuf> {
     let out = std::process::Command::new("zenity")
         .arg("--file-selection")
         .arg("--file-filter=*.wav")
@@ -591,8 +1046,91 @@ fn pick_wav_via_zenity() -> Option<String> {
     if path.is_empty() {
         None
     } else {
-        Some(path)
+        Some(PathBuf::from(path))
     }
+}
+
+fn wav_files_in_directory(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| "sample path has no parent directory".to_string())?;
+    let mut files = std::fs::read_dir(directory)
+        .map_err(|e| format!("could not read sample directory: {e}"))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|entry| {
+            entry.is_file()
+                && entry
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+        })
+        .collect::<Vec<_>>();
+    files.sort_by_cached_key(|entry| {
+        entry
+            .file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    });
+    Ok(files)
+}
+
+fn sample_index(path: &Path, files: &[PathBuf]) -> Option<usize> {
+    files
+        .iter()
+        .position(|candidate| candidate == path)
+        .or_else(|| {
+            let name = path.file_name()?;
+            files
+                .iter()
+                .position(|candidate| candidate.file_name() == Some(name))
+        })
+}
+
+fn adjacent_wav(path: &Path, direction: isize) -> Result<Option<PathBuf>, String> {
+    let files = wav_files_in_directory(path)?;
+    let Some(index) = sample_index(path, &files) else {
+        return Ok(None);
+    };
+    let next = index as isize + direction;
+    Ok((next >= 0)
+        .then(|| files.get(next as usize).cloned())
+        .flatten())
+}
+
+fn load_sample_at_path(path: &Path) -> Result<LoadedSample, String> {
+    let files = wav_files_in_directory(path)?;
+    let index = sample_index(path, &files);
+    let sample = decode_wav(path)?;
+    Ok(LoadedSample {
+        path: path.to_path_buf(),
+        sample,
+        can_previous: index.is_some_and(|index| index > 0),
+        can_next: index.is_some_and(|index| index + 1 < files.len()),
+    })
+}
+
+fn waveform_peaks(sample: &SampleData, max_bins: usize) -> Vec<f32> {
+    if sample.frames.is_empty() || max_bins == 0 {
+        return Vec::new();
+    }
+    let bins = max_bins.min(sample.frames.len());
+    let mut peaks = (0..bins)
+        .map(|bin| {
+            let start = bin * sample.frames.len() / bins;
+            let end = ((bin + 1) * sample.frames.len() / bins).max(start + 1);
+            sample.frames[start..end]
+                .iter()
+                .map(|frame| frame[0].abs().max(frame[1].abs()))
+                .fold(0.0f32, f32::max)
+        })
+        .collect::<Vec<_>>();
+    let peak = peaks.iter().copied().fold(0.0f32, f32::max);
+    if peak > 0.0 {
+        for value in &mut peaks {
+            *value /= peak;
+        }
+    }
+    peaks
 }
 
 /// Decode a WAV/RIFF file into stereo f32 frames. hound's `samples::<f32>()`
@@ -600,7 +1138,7 @@ fn pick_wav_via_zenity() -> Option<String> {
 /// native width and normalised to [-1, 1] here. Errors propagate loudly —
 /// never silently drop samples (an empty buffer would silently mute the
 /// sampler).
-fn decode_wav(path: &str) -> Result<Arc<SampleData>, String> {
+fn decode_wav(path: &Path) -> Result<Arc<SampleData>, String> {
     let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
     let spec = reader.spec();
     let sample_rate = spec.sample_rate;
@@ -680,7 +1218,7 @@ mod tests {
         }
         writer.finalize().unwrap();
 
-        let data = decode_wav(path.to_str().unwrap()).unwrap();
+        let data = decode_wav(&path).unwrap();
         assert_eq!(data.sample_rate, 44_100);
         assert_eq!(data.len(), 1000);
         assert!(data.frames.iter().any(|f| f[0] != 0.0));
@@ -691,7 +1229,43 @@ mod tests {
     fn rejects_garbage_file() {
         let path = std::env::temp_dir().join("mooloop_decode_test_garbage.wav");
         std::fs::write(&path, b"not a wav at all").unwrap();
-        assert!(decode_wav(path.to_str().unwrap()).is_err());
+        assert!(decode_wav(&path).is_err());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn waveform_peaks_are_normalized_and_bounded() {
+        let sample = SampleData {
+            frames: vec![[0.0, 0.0], [0.25, -0.5], [1.0, -0.75], [0.1, 0.2]],
+            sample_rate: 48_000,
+            root_note: 60,
+        };
+
+        let peaks = waveform_peaks(&sample, 2);
+
+        assert_eq!(peaks, vec![0.5, 1.0]);
+    }
+
+    #[test]
+    fn adjacent_wav_walks_sorted_directory_without_wrapping() {
+        let directory = std::env::temp_dir().join(format!(
+            "mooloop_sample_browser_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let a = directory.join("a-kick.wav");
+        let b = directory.join("B-snare.WAV");
+        let c = directory.join("c-hat.wav");
+        for path in [&a, &b, &c] {
+            std::fs::write(path, []).unwrap();
+        }
+        std::fs::write(directory.join("ignore.txt"), []).unwrap();
+
+        assert_eq!(adjacent_wav(&a, -1).unwrap(), None);
+        assert_eq!(adjacent_wav(&a, 1).unwrap(), Some(b.clone()));
+        assert_eq!(adjacent_wav(&b, 1).unwrap(), Some(c.clone()));
+        assert_eq!(adjacent_wav(&c, 1).unwrap(), None);
+
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

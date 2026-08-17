@@ -24,6 +24,9 @@ pub enum EngineCommand {
     SetTempo(f64),
     /// Select which pattern the transport loops (live-switchable).
     SetCurrentPattern(u8),
+    /// Set one pattern's logical length. Storage is pre-allocated, so this is
+    /// a bounded mutation on the realtime thread.
+    SetPatternLength { pattern: u8, length_steps: u16 },
     /// Grow the channel pool's active region by one (appends a channel).
     AddChannel,
     /// Shrink the channel pool's active region by one (removes the last
@@ -38,6 +41,7 @@ pub enum EngineCommand {
         channel: u8,
         step: u8,
         on: bool,
+        note: u8,
         velocity: u8,
     },
     /// Replace a channel's sampler parameter set.

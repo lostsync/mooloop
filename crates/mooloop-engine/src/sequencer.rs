@@ -7,8 +7,9 @@
 //! Each block, the engine hands the transport's tick interval
 //! `[start_tick, end_tick)`. The sequencer finds every step boundary in that
 //! interval and, for steps that are on in the **current** pattern, pushes a
-//! sample-timed `NoteOn` into each channel's [`EventList`]. Nodes render
-//! from those lists, so note timing is sample-accurate.
+//! sample-timed `NoteOn` with that step's pitch and velocity into each
+//! channel's [`EventList`]. Nodes render from those lists, so note timing is
+//! sample-accurate.
 //!
 //! ## Boundary correctness
 //!
@@ -21,7 +22,7 @@
 //! Step resolution is 16th notes: `ticks_per_step = ppq / 4`. Steps wrap at
 //! the pattern length, so a 16-step pattern loops every bar.
 
-use mooloop_core::{Pattern, Ppq, MAX_CHANNELS};
+use mooloop_core::{Pattern, Ppq, MAX_CHANNELS, MAX_PATTERN_STEPS};
 use mooloop_dsp::{Event, EventList, TimedEvent};
 
 /// Tolerance for float drift at step boundaries, in ticks. At 120 bpm one
@@ -42,7 +43,11 @@ impl Sequencer {
     /// and `num_steps` steps, with `initial_channels` rows active.
     pub fn new(initial_channels: usize, num_patterns: usize, num_steps: usize, ppq: Ppq) -> Self {
         let patterns = (0..num_patterns)
-            .map(|_| Pattern::with_steps(MAX_CHANNELS, num_steps))
+            .map(|_| {
+                let mut pattern = Pattern::with_steps(MAX_CHANNELS, MAX_PATTERN_STEPS as usize);
+                pattern.set_length_steps(num_steps);
+                pattern
+            })
             .collect();
         Self {
             patterns,
@@ -58,6 +63,12 @@ impl Sequencer {
         }
     }
 
+    pub fn set_pattern_length(&mut self, pattern: usize, length_steps: usize) {
+        if let Some(pattern) = self.patterns.get_mut(pattern) {
+            pattern.set_length_steps(length_steps);
+        }
+    }
+
     pub fn active_channels(&self) -> usize {
         self.active_channels
     }
@@ -68,11 +79,20 @@ impl Sequencer {
 
     /// Apply a step change coming in from the UI. Addressed by pattern so
     /// edits to non-playing patterns take effect when they're selected.
-    pub fn set_step(&mut self, pattern: usize, channel: usize, step: usize, on: bool, velocity: u8) {
+    pub fn set_step(
+        &mut self,
+        pattern: usize,
+        channel: usize,
+        step: usize,
+        on: bool,
+        note: u8,
+        velocity: u8,
+    ) {
         if let Some(pat) = self.patterns.get_mut(pattern) {
             if let Some(ch) = pat.channel_mut(channel) {
                 if let Some(s) = ch.steps.get_mut(step) {
                     s.on = on;
+                    s.note = note.min(127);
                     s.velocity = velocity;
                 }
             }
@@ -121,22 +141,17 @@ impl Sequencer {
             {
                 let step_in_pattern = step_idx.rem_euclid(pattern_steps) as usize;
                 for ch_idx in 0..self.active_channels.min(events.len()) {
-                    let Some(velocity) = pattern
+                    let Some((note, velocity)) = pattern
                         .channel(ch_idx)
                         .and_then(|c| c.steps.get(step_in_pattern))
                         .filter(|s| s.on)
-                        .map(|s| s.velocity)
+                        .map(|s| (s.note, s.velocity))
                     else {
                         continue;
                     };
-                    // Root note 60 (C4); per-step pitch arrives with the
-                    // piano roll.
                     events[ch_idx].push(TimedEvent {
                         offset,
-                        event: Event::NoteOn {
-                            note: 60,
-                            velocity,
-                        },
+                        event: Event::NoteOn { note, velocity },
                     });
                 }
             }
@@ -162,7 +177,7 @@ mod tests {
 
         let mut seq = Sequencer::new(1, 8, 16, ppq);
         for s in [0, 4, 8, 12] {
-            seq.set_step(0, 0, s, true, 100);
+            seq.set_step(0, 0, s, true, 60, 100);
         }
 
         // 100 bars of irregular block sizes (simulating PipeWire quantum
@@ -197,7 +212,7 @@ mod tests {
         let ticks_per_step = (ppq.ticks_per_beat() / 4) as f64;
 
         let mut seq = Sequencer::new(1, 8, 16, ppq);
-        seq.set_step(0, 0, 0, true, 100);
+        seq.set_step(0, 0, 0, true, 60, 100);
 
         // Start exactly on the boundary of step index 16 (which wraps to
         // pattern step 0), plus a hair of float drift both ways.
@@ -223,7 +238,7 @@ mod tests {
         let tps = ticks_per_sample(120.0, sr, ppq);
         let mut seq = Sequencer::new(1, 8, 16, ppq);
         for s in 0..16 {
-            seq.set_step(1, 0, s, true, 100);
+            seq.set_step(1, 0, s, true, 60, 100);
         }
 
         let count_bar = |seq: &Sequencer| {
@@ -246,5 +261,35 @@ mod tests {
         assert_eq!(count_bar(&seq), 0, "current pattern is empty");
         seq.set_current_pattern(1);
         assert_eq!(count_bar(&seq), 16, "all steps of pattern 1 are on");
+    }
+
+    #[test]
+    fn each_pattern_wraps_at_its_own_length() {
+        let ppq = Ppq::DEFAULT;
+        let tps = ticks_per_sample(120.0, 48_000, ppq);
+        let ticks_per_step = (ppq.ticks_per_beat() / 4) as f64;
+        let mut seq = Sequencer::new(1, 2, 16, ppq);
+        seq.set_step(0, 0, 0, true, 48, 91);
+        seq.set_pattern_length(0, 12);
+
+        let mut events = [EventList::empty()];
+        seq.schedule(
+            12.0 * ticks_per_step,
+            13.0 * ticks_per_step,
+            (ticks_per_step / tps) as usize,
+            tps,
+            &mut events,
+        );
+
+        assert_eq!(events[0].len(), 1, "step zero repeats after twelve steps");
+        let event = events[0].iter().next().unwrap();
+        assert_eq!(event.offset, 0);
+        assert_eq!(
+            event.event,
+            Event::NoteOn {
+                note: 48,
+                velocity: 91
+            }
+        );
     }
 }
