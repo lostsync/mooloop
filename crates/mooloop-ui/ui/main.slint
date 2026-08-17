@@ -5,6 +5,7 @@ export global Palette {
     out property <color> bg:        #18181b;
     out property <color> surface:   #232328;
     out property <color> surface-2: #2a2a2e;
+    out property <color> surface-3: #33333a;
     out property <color> edge:      #3f3f46;
     out property <color> text:      #e4e4e7;
     out property <color> text-dim:  #a1a1aa;
@@ -12,11 +13,20 @@ export global Palette {
     out property <color> accent:    #84cc16;
     out property <color> accent-on: #2d6a3e;
     out property <color> warn:      #ef4444;
+    out property <color> mute-on:   #7f1d1d;
 }
 
-// One step cell used in the step-grid model.
+// One step cell used in the step-grid models.
 struct StepCell {
     active: bool,
+}
+
+// One channel row in the rack.
+struct ChannelRow {
+    name: string,
+    muted: bool,
+    selected: bool,
+    steps: [StepCell],
 }
 
 // A small flat button with a label.
@@ -126,6 +136,30 @@ component SectionLabel inherits Text {
     height: 12px;
 }
 
+// A tiny square mute LED button.
+component MuteButton inherits Rectangle {
+    in property <bool> muted;
+    callback clicked;
+
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    background: muted ? Palette.mute-on : Palette.surface-2;
+
+    Text {
+        text: "M";
+        color: root.muted ? #fecaca : Palette.text-faint;
+        font-size: 9px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    tap := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "mooloop";
     preferred-width: 1280px;
@@ -139,11 +173,19 @@ export component MainWindow inherits Window {
     in-out property <float> peak-l;
     in-out property <float> peak-r;
 
-    // ---- step grid ----
-    in-out property <[StepCell]> steps;
-    callback step-clicked(int);
+    // ---- channels / patterns ----
+    in-out property <[ChannelRow]> channels;
+    in-out property <int> current-pattern;
+    in-out property <int> selected-channel;
 
-    // ---- sampler params (normalised 0..1; Rust maps units) ----
+    callback step-clicked(int, int);       // channel, step
+    callback channel-selected(int);
+    callback channel-muted(int);
+    callback add-channel-clicked();
+    callback remove-channel-clicked();
+    callback pattern-selected(int);
+
+    // ---- sampler params of the selected channel (normalised 0..1) ----
     in-out property <float> attack;
     in-out property <float> decay;
     in-out property <float> sustain;
@@ -153,6 +195,7 @@ export component MainWindow inherits Window {
     in-out property <float> loop-end;
     in-out property <int>   loop-mode;     // 0=Off 1=Fwd 2=Pong
     in-out property <string> sample-name;
+    in-out property <string> selected-channel-name;
 
     callback attack-changed(float);
     callback decay-changed(float);
@@ -205,6 +248,20 @@ export component MainWindow inherits Window {
                     text: "Stop";
                     text-color: root.playing ? Palette.text-dim : Palette.text;
                     clicked => { root.stop-clicked(); }
+                }
+
+                Rectangle { width: 6px; }
+
+                // Pattern selector: buttons 1..8
+                HorizontalBox {
+                    padding: 0px;
+                    spacing: 2px;
+                    for p in 8 : FlatButton {
+                        text: p + 1;
+                        active: root.current-pattern == p;
+                        min-width: 26px;
+                        clicked => { root.pattern-selected(p); }
+                    }
                 }
 
                 Rectangle { width: 6px; }
@@ -271,45 +328,73 @@ export component MainWindow inherits Window {
 
         Rectangle { height: 1px; background: Palette.edge; }
 
-        // ===== Channel rack: step grid =====
+        // ===== Channel rack: one step-grid row per channel =====
         VerticalBox {
             vertical-stretch: 1;
-            spacing: 0px;
+            spacing: 2px;
             padding: 8px;
 
-            // One channel row.
-            HorizontalBox {
+            for row[ch] in root.channels : HorizontalBox {
                 padding: 2px;
                 spacing: 6px;
                 alignment: start;
 
-                // Channel label
+                // Channel name (selects the channel for the bottom editor)
                 Rectangle {
-                    width: 80px;
+                    width: 88px;
+                    min-height: 24px;
+                    border-radius: 3px;
+                    background: row.selected ? Palette.surface-3 : Palette.surface;
                     Text {
-                        text: "Sampler";
-                        color: Palette.text-dim;
+                        text: row.name;
+                        color: row.selected ? Palette.text : Palette.text-dim;
                         font-size: 11px;
+                        horizontal-alignment: left;
                         vertical-alignment: center;
+                        x: 6px;
                     }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.channel-selected(ch); }
+                    }
+                }
+
+                MuteButton {
+                    muted: row.muted;
+                    clicked => { root.channel-muted(ch); }
                 }
 
                 // 16 step cells. Every 4th gets a slightly brighter "off"
                 // shade so the beats group visually (FL-style).
                 HorizontalLayout {
                     spacing: 3px;
-                    for cell[i] in root.steps : Rectangle {
+                    for cell[i] in row.steps : Rectangle {
                         width: 24px;
                         height: 24px;
                         border-radius: 2px;
                         background: cell.active
                             ? Palette.accent
-                            : (mod(i, 4) == 0 ? #33333a : Palette.surface-2);
+                            : (mod(i, 4) == 0 ? Palette.surface-3 : Palette.surface-2);
                         TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.step-clicked(i); }
+                            clicked => { root.step-clicked(ch, i); }
                         }
                     }
+                }
+            }
+
+            // Add / remove channel row.
+            HorizontalBox {
+                padding: 0px;
+                spacing: 4px;
+                alignment: start;
+                FlatButton {
+                    text: "+ Channel";
+                    clicked => { root.add-channel-clicked(); }
+                }
+                FlatButton {
+                    text: "- Channel";
+                    clicked => { root.remove-channel-clicked(); }
                 }
             }
 
@@ -319,7 +404,7 @@ export component MainWindow inherits Window {
 
         Rectangle { height: 1px; background: Palette.edge; }
 
-        // ===== Bottom strip: sampler editor =====
+        // ===== Bottom strip: sampler editor for the selected channel =====
         Rectangle {
             height: 180px;
             background: #131316;
@@ -332,6 +417,12 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     spacing: 6px;
                     SectionLabel { text: "SAMPLE"; }
+                    Text {
+                        text: root.selected-channel-name;
+                        color: Palette.text;
+                        font-size: 11px;
+                        height: 14px;
+                    }
                     FlatButton {
                         text: "Load Sample...";
                         clicked => { root.load-sample-clicked(); }

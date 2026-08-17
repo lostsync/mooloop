@@ -1,10 +1,13 @@
 //! Lock-free message types exchanged between the GUI and the realtime audio
 //! thread via SPSC ring buffers (`rtrb`).
 //!
-//! The audio thread must never block. Both enums are kept small and POD-like so
-//! they can be pushed/popped from a ring buffer without allocation. Large or
-//! variable-size payloads (e.g. sample buffers) are transferred out of band
-//! via an `ArcSwap` slot owned by the engine, not through this queue.
+//! The audio thread must never block or allocate. Both enums are kept small
+//! and POD-like so they can be pushed/popped from a ring buffer without
+//! allocation. Large or variable-size payloads (e.g. sample buffers) are
+//! transferred out of band via `ArcSwap` slots owned by the engine.
+//!
+//! Channel/pattern indices are bounded by `MAX_CHANNELS`/`MAX_PATTERNS`; the
+//! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::sampler::SamplerParams;
 
@@ -19,15 +22,26 @@ pub enum EngineCommand {
     Pause,
     /// Set tempo in beats per minute.
     SetTempo(f64),
-    /// Toggle or set a step in the current pattern.
+    /// Select which pattern the transport loops (live-switchable).
+    SetCurrentPattern(u8),
+    /// Grow the channel pool's active region by one (appends a channel).
+    AddChannel,
+    /// Shrink the channel pool's active region by one (removes the last
+    /// channel). Kept last-index-only so existing indices stay valid.
+    RemoveChannel,
+    /// Mute/unmute a channel.
+    SetChannelMuted { channel: u8, muted: bool },
+    /// Toggle or set a step. Addresses the pattern bank so edits to
+    /// non-playing patterns take effect when selected.
     SetStep {
+        pattern: u8,
         channel: u8,
         step: u8,
         on: bool,
         velocity: u8,
     },
-    /// Replace the sampler's parameter set.
-    SetSamplerParams(SamplerParams),
+    /// Replace a channel's sampler parameter set.
+    SetChannelSamplerParams { channel: u8, params: SamplerParams },
 }
 
 /// audio -> GUI. Pushed sparingly (a few times per block at most) and drained

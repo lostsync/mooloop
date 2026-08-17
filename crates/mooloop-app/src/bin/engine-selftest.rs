@@ -15,6 +15,7 @@ fn main() {
     // Four-on-the-floor so there's no ambiguity about silence-vs-no-steps.
     for step in [0, 4, 8, 12] {
         handle.send(EngineCommand::SetStep {
+            pattern: 0,
             channel: 0,
             step,
             on: true,

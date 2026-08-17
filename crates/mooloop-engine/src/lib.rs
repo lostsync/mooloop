@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use jack::{AudioOut, Client, ClientOptions};
-use mooloop_core::{EngineCommand, EngineEvent, SamplerParams};
+use mooloop_core::{EngineCommand, EngineEvent, SamplerParams, MAX_CHANNELS};
 use mooloop_dsp::SampleData;
 use rtrb::{Consumer, Producer};
 
@@ -56,15 +56,10 @@ pub struct Engine {
 
 impl Engine {
     /// Open the JACK client (works against pipewire-jack transparently) and
-    /// start the realtime thread. The returned `EngineHandle` owns the queues
-    /// and the sample-publishing slot.
+    /// start the realtime thread. All channel devices and the pattern bank are
+    /// pre-allocated to pool size; every channel starts with a synthesised
+    /// default kick so the app is audible before the user loads a WAV.
     pub fn new() -> Result<(Engine, EngineHandle), Error> {
-        Self::with_params(SamplerParams::default())
-    }
-
-    /// Open the engine with an initial sampler parameter set and a default
-    /// synthesised sample so the app is audible before the user loads a WAV.
-    pub fn with_params(initial_params: SamplerParams) -> Result<(Engine, EngineHandle), Error> {
         let (client, _status) = Client::new(CLIENT_NAME, ClientOptions::NO_START_SERVER)
             .map_err(|e| Error::ClientOpen(e.to_string()))?;
         let sample_rate = client.sample_rate();
@@ -81,8 +76,11 @@ impl Engine {
             .register_port("out_r", AudioOut::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
 
-        let sample_slot: Arc<ArcSwapOption<SampleData>> =
-            Arc::new(ArcSwapOption::from(Some(SampleData::default_kick(sample_rate))));
+        // Every channel's slot starts with the same shared default kick.
+        let kick = SampleData::default_kick(sample_rate);
+        let sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new((0..MAX_CHANNELS)
+            .map(|_| Arc::new(ArcSwapOption::from(Some(kick.clone()))))
+            .collect());
 
         let graph = Graph::new(
             sample_rate,
@@ -90,15 +88,15 @@ impl Engine {
             out_r,
             cmd_rx,
             evt_tx,
-            sample_slot.clone(),
-            initial_params,
+            sample_slots.clone(),
+            SamplerParams::default(),
         );
 
         let async_client = client
             .activate_async(graph::Notifications, graph)
             .map_err(|e| Error::Activate(e.to_string()))?;
 
-        // Best-effort: wire our outputs to system playback so Phase 0/1 is
+        // Best-effort: wire our outputs to system playback so the app is
         // audible out of the box. User-configurable routing comes later.
         let c = async_client.as_client();
         let sources = [OUT_L_NAME, OUT_R_NAME];
@@ -120,7 +118,7 @@ impl Engine {
             EngineHandle {
                 cmd_tx,
                 evt_rx,
-                sample_slot,
+                sample_slots,
             },
         ))
     }
@@ -131,7 +129,7 @@ impl Engine {
 pub struct EngineHandle {
     cmd_tx: Producer<EngineCommand>,
     evt_rx: Consumer<EngineEvent>,
-    sample_slot: Arc<ArcSwapOption<SampleData>>,
+    sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
 }
 
 impl EngineHandle {
@@ -151,15 +149,11 @@ impl EngineHandle {
         std::iter::from_fn(|| self.evt_rx.pop().ok())
     }
 
-    /// Publish a freshly-decoded sample. The realtime sampler picks it up on
-    /// the next note-on. Wait-free; safe to call from the UI thread.
-    pub fn load_sample(&self, sample: Arc<SampleData>) {
-        self.sample_slot.store(Some(sample));
-    }
-
-    /// A clone of the shared sample slot. Lets the UI publish samples without
-    /// routing through the command queue (which only carries `Copy` payloads).
-    pub fn sample_slot(&self) -> Arc<ArcSwapOption<SampleData>> {
-        self.sample_slot.clone()
+    /// Publish a freshly-decoded sample for `channel`. The realtime sampler
+    /// picks it up on the next note-on. Wait-free; UI-thread safe.
+    pub fn load_sample(&self, channel: usize, sample: Arc<SampleData>) {
+        if let Some(slot) = self.sample_slots.get(channel) {
+            slot.store(Some(sample));
+        }
     }
 }
