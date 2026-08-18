@@ -18,7 +18,9 @@ use std::sync::Arc;
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::node::{AudioNode, ProcessContext};
-use mooloop_core::{clamp01, LoopMode, SamplerParams};
+use mooloop_core::{
+    clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,
+};
 
 use arc_swap::ArcSwapOption;
 
@@ -133,6 +135,11 @@ impl AdsrEnv {
         self.stage = Stage::Release;
     }
 
+    fn release_with(&mut self, seconds: f32) {
+        self.release_dec = self.level / (seconds.max(MIN_STAGE_S) * self.sample_rate as f32);
+        self.stage = Stage::Release;
+    }
+
     fn advance(&mut self) {
         match self.stage {
             Stage::Idle => self.level = 0.0,
@@ -170,10 +177,13 @@ impl AdsrEnv {
     }
 }
 
-/// One playback voice. Monophonic for now — a new note retriggers and cuts
-/// the previous voice (standard drum-sampler behaviour).
+const CHOKE_RELEASE_S: f32 = 0.005;
+
+/// One independently enveloped sample playback voice.
 struct Voice {
     event_id: u64,
+    midi_note: u8,
+    age: u64,
     sample: Option<Arc<SampleData>>,
     play_pos: f64,
     playback_rate: f64,
@@ -184,6 +194,7 @@ struct Voice {
     filter_band: [f32; 2],
     held_frame: [f32; 2],
     hold_remaining: u32,
+    loop_enabled: bool,
     active: bool,
 }
 
@@ -191,6 +202,8 @@ impl Voice {
     fn new(sample_rate: u32) -> Self {
         Self {
             event_id: 0,
+            midi_note: 60,
+            age: 0,
             sample: None,
             play_pos: 0.0,
             playback_rate: 1.0,
@@ -201,6 +214,7 @@ impl Voice {
             filter_band: [0.0, 0.0],
             held_frame: [0.0, 0.0],
             hold_remaining: 0,
+            loop_enabled: false,
             active: false,
         }
     }
@@ -211,7 +225,8 @@ pub struct Sampler {
     sample_slot: Arc<ArcSwapOption<SampleData>>,
     params: SamplerParams,
     sample_rate: u32,
-    voice: Voice,
+    voices: [Voice; MAX_SAMPLER_VOICES as usize],
+    next_age: u64,
 }
 
 impl Sampler {
@@ -219,63 +234,150 @@ impl Sampler {
     /// the same slot from the non-RT thread.
     pub fn new(
         sample_slot: Arc<ArcSwapOption<SampleData>>,
-        params: SamplerParams,
+        mut params: SamplerParams,
         sample_rate: u32,
     ) -> Self {
-        let mut voice = Voice::new(sample_rate);
-        voice.env.configure(params);
+        params.polyphony = params.polyphony.clamp(1, MAX_SAMPLER_VOICES);
+        params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
+        let mut voices = std::array::from_fn(|_| Voice::new(sample_rate));
+        for voice in &mut voices {
+            voice.env.configure(params);
+        }
         Self {
             sample_slot,
             params,
             sample_rate,
-            voice,
+            voices,
+            next_age: 1,
         }
     }
 
     /// Replace the parameter set. Called from the RT command drain.
-    pub fn set_params(&mut self, params: SamplerParams) {
+    pub fn set_params(&mut self, mut params: SamplerParams) {
+        params.polyphony = params.polyphony.clamp(1, MAX_SAMPLER_VOICES);
+        params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
         self.params = params;
-        self.voice.env.configure(params);
+        for (index, voice) in self.voices.iter_mut().enumerate() {
+            voice.env.configure(params);
+            if index >= params.polyphony as usize {
+                voice.active = false;
+            }
+        }
+    }
+
+    pub fn choke_group(&self) -> u8 {
+        self.params.choke_group
+    }
+
+    fn voice_limit(&self) -> usize {
+        self.params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize
+    }
+
+    fn select_voice(&self, midi_note: u8) -> usize {
+        let voices = &self.voices[..self.voice_limit()];
+        if self.params.retrigger_mode == RetriggerMode::Restart {
+            if let Some((index, _)) = voices
+                .iter()
+                .enumerate()
+                .filter(|(_, voice)| voice.active && voice.midi_note == midi_note)
+                .min_by_key(|(_, voice)| voice.age)
+            {
+                return index;
+            }
+        }
+        if let Some(index) = voices.iter().position(|voice| !voice.active) {
+            return index;
+        }
+        voices
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, voice)| voice.age)
+            .map(|(index, _)| index)
+            .unwrap_or(0)
     }
 
     fn trigger(&mut self, event_id: u64, note: u8, velocity: u8) {
-        self.voice.event_id = event_id;
-        let sample = self.sample_slot.load_full();
-        self.voice.sample = sample;
-        self.voice.active = self.voice.sample.is_some();
-        if !self.voice.active {
+        let Some(sample) = self.sample_slot.load_full() else {
             return;
-        }
-        let len = self.voice.sample.as_ref().unwrap().len().max(1);
-        let (start, end) = self.playback_bounds(len);
-        self.voice.play_pos = if self.params.reverse {
-            end - 1.0
-        } else {
-            start
         };
-        let sample = self.voice.sample.as_ref().unwrap();
+        let index = self.select_voice(note);
+        let len = sample.len().max(1);
+        let (start, end) = Self::resolve_playback_bounds(self.params, len);
         let root_note = self.params.root_note.min(127);
         let key_semitones = i16::from(note.min(127)) - i16::from(root_note);
         let tuning = f64::from(self.params.tune_semitones.clamp(-48.0, 48.0))
             + f64::from(self.params.tune_cents.clamp(-100.0, 100.0)) / 100.0;
         let pitch_ratio = 2.0_f64.powf((f64::from(key_semitones) + tuning) / 12.0);
-        self.voice.playback_rate =
-            sample.sample_rate as f64 / self.sample_rate as f64 * pitch_ratio;
-        self.voice.direction = if self.params.reverse { -1.0 } else { 1.0 };
-        self.voice.velocity_amp = (velocity as f32) / 127.0;
-        self.voice.filter_low = [0.0, 0.0];
-        self.voice.filter_band = [0.0, 0.0];
-        self.voice.held_frame = [0.0, 0.0];
-        self.voice.hold_remaining = 0;
-        self.voice.env.note_on();
+        let age = self.next_age;
+        self.next_age = self.next_age.wrapping_add(1).max(1);
+
+        let voice = &mut self.voices[index];
+        voice.event_id = event_id;
+        voice.midi_note = note;
+        voice.age = age;
+        voice.sample = Some(sample.clone());
+        voice.active = !sample.is_empty();
+        if !voice.active {
+            return;
+        }
+        voice.play_pos = if self.params.reverse {
+            end - 1.0
+        } else {
+            start
+        };
+        voice.playback_rate = sample.sample_rate as f64 / self.sample_rate as f64 * pitch_ratio;
+        voice.direction = if self.params.reverse { -1.0 } else { 1.0 };
+        voice.velocity_amp = f32::from(velocity) / 127.0;
+        voice.filter_low = [0.0, 0.0];
+        voice.filter_band = [0.0, 0.0];
+        voice.held_frame = [0.0, 0.0];
+        voice.hold_remaining = 0;
+        voice.loop_enabled = self.params.loop_mode != LoopMode::Off;
+        voice.env.configure(self.params);
+        voice.env.note_on();
     }
 
-    fn shape_frame(&mut self, frame: [f32; 2]) -> [f32; 2] {
-        let rate_reduction = clamp01(self.params.rate_reduction);
+    fn release_note(&mut self, event_id: u64) {
+        let mode = self.params.voice_mode;
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|voice| voice.active && voice.event_id == event_id)
+        {
+            match mode {
+                VoiceMode::Gate => voice.env.release(),
+                VoiceMode::OneShot if voice.loop_enabled => voice.loop_enabled = false,
+                VoiceMode::OneShot => {}
+            }
+        }
+    }
+
+    fn release_all(&mut self) {
+        for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+            if !voice.env.is_releasing() {
+                voice.env.release();
+            }
+        }
+    }
+
+    fn choke(&mut self) {
+        for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+            voice.loop_enabled = false;
+            voice.env.release_with(CHOKE_RELEASE_S);
+        }
+    }
+
+    fn shape_frame(
+        params: SamplerParams,
+        sample_rate: u32,
+        voice: &mut Voice,
+        frame: [f32; 2],
+    ) -> [f32; 2] {
+        let rate_reduction = clamp01(params.rate_reduction);
         let hold_frames = 1 + (rate_reduction * 31.0).round() as u32;
-        if self.voice.hold_remaining == 0 {
-            let bit_reduction = clamp01(self.params.bit_reduction);
-            self.voice.held_frame = if bit_reduction <= f32::EPSILON {
+        if voice.hold_remaining == 0 {
+            let bit_reduction = clamp01(params.bit_reduction);
+            voice.held_frame = if bit_reduction <= f32::EPSILON {
                 frame
             } else {
                 let bits = (16.0 - bit_reduction * 12.0).round().clamp(4.0, 16.0);
@@ -285,12 +387,12 @@ impl Sampler {
                     (frame[1] * scale).round() / scale,
                 ]
             };
-            self.voice.hold_remaining = hold_frames;
+            voice.hold_remaining = hold_frames;
         }
-        self.voice.hold_remaining -= 1;
-        let mut frame = self.voice.held_frame;
+        voice.hold_remaining -= 1;
+        let mut frame = voice.held_frame;
 
-        let drive = clamp01(self.params.drive);
+        let drive = clamp01(params.drive);
         if drive > f32::EPSILON {
             let input_gain = 1.0 + drive * 15.0;
             let compensation = input_gain.tanh().recip();
@@ -300,85 +402,101 @@ impl Sampler {
             ];
         }
 
-        let cutoff = clamp01(self.params.filter_cutoff);
-        let env_amount = self.params.filter_env_amount.clamp(-1.0, 1.0);
-        let resonance = clamp01(self.params.filter_resonance);
+        let cutoff = clamp01(params.filter_cutoff);
+        let env_amount = params.filter_env_amount.clamp(-1.0, 1.0);
+        let resonance = clamp01(params.filter_resonance);
         if cutoff >= 0.999 && env_amount.abs() <= f32::EPSILON && resonance <= f32::EPSILON {
             return frame;
         }
-        let max_hz = self.sample_rate as f32 * 0.45;
+        let max_hz = sample_rate as f32 * 0.45;
         let base_hz = 20.0 * (max_hz / 20.0).powf(cutoff);
         let cutoff_hz =
-            (base_hz * 2.0_f32.powf(self.voice.env.level * env_amount * 6.0)).clamp(20.0, max_hz);
+            (base_hz * 2.0_f32.powf(voice.env.level * env_amount * 6.0)).clamp(20.0, max_hz);
         // Topology-preserving state-variable low-pass. Unlike a biquad this
         // remains well behaved while cutoff and envelope move every sample.
-        let g = (core::f32::consts::PI * cutoff_hz / self.sample_rate as f32).tan();
+        let g = (core::f32::consts::PI * cutoff_hz / sample_rate as f32).tan();
         let damping = (2.0 - resonance * 1.9).clamp(0.1, 2.0);
         let a1 = 1.0 / (1.0 + g * (g + damping));
         let a2 = g * a1;
         let a3 = g * a2;
         for (channel, output) in frame.iter_mut().enumerate() {
             let input = *output;
-            let v3 = input - self.voice.filter_low[channel];
-            let v1 = a1 * self.voice.filter_band[channel] + a2 * v3;
-            let v2 =
-                self.voice.filter_low[channel] + a2 * self.voice.filter_band[channel] + a3 * v3;
-            self.voice.filter_band[channel] = 2.0 * v1 - self.voice.filter_band[channel];
-            self.voice.filter_low[channel] = 2.0 * v2 - self.voice.filter_low[channel];
+            let v3 = input - voice.filter_low[channel];
+            let v1 = a1 * voice.filter_band[channel] + a2 * v3;
+            let v2 = voice.filter_low[channel] + a2 * voice.filter_band[channel] + a3 * v3;
+            voice.filter_band[channel] = 2.0 * v1 - voice.filter_band[channel];
+            voice.filter_low[channel] = 2.0 * v2 - voice.filter_low[channel];
             *output = v2;
         }
         frame
     }
 
     /// Normalized playback region resolved against the current sample length.
-    fn playback_bounds(&self, len: usize) -> (f64, f64) {
+    fn resolve_playback_bounds(params: SamplerParams, len: usize) -> (f64, f64) {
         let len = len.max(1) as f64;
-        let start = f64::from(clamp01(self.params.start)) * len;
-        let end = (f64::from(clamp01(self.params.end)) * len)
+        let start = f64::from(clamp01(params.start)) * len;
+        let end = (f64::from(clamp01(params.end)) * len)
             .max(start + 1.0)
             .min(len);
         (start.min(end - 1.0), end)
     }
 
+    #[cfg(test)]
+    fn playback_bounds(&self, len: usize) -> (f64, f64) {
+        Self::resolve_playback_bounds(self.params, len)
+    }
+
     /// Normalized loop bounds resolved against the current sample length.
-    fn loop_bounds(&self, len: usize) -> (f64, f64) {
+    fn resolve_loop_bounds(params: SamplerParams, len: usize) -> (f64, f64) {
         let len_f = len.max(1) as f64;
-        let (play_start, play_end) = self.playback_bounds(len);
+        let (play_start, play_end) = Self::resolve_playback_bounds(params, len);
         let loop_start =
-            (f64::from(clamp01(self.params.loop_start)) * len_f).clamp(play_start, play_end - 1.0);
-        let loop_end = (f64::from(clamp01(self.params.loop_end)) * len_f)
+            (f64::from(clamp01(params.loop_start)) * len_f).clamp(play_start, play_end - 1.0);
+        let loop_end = (f64::from(clamp01(params.loop_end)) * len_f)
             .max(loop_start + 1.0)
             .min(play_end);
         (loop_start.min(loop_end - 1.0), loop_end)
     }
 
+    #[cfg(test)]
+    fn loop_bounds(&self, len: usize) -> (f64, f64) {
+        Self::resolve_loop_bounds(self.params, len)
+    }
+
     /// Render the voice into `bus[start..end]`, adding into the buffers.
     /// Handles looping, envelope advancement, and voice termination.
-    fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
-        if !self.voice.active {
+    fn render_voice_range(
+        params: SamplerParams,
+        sample_rate: u32,
+        voice: &mut Voice,
+        bus: &mut StereoBus,
+        start: usize,
+        end: usize,
+    ) {
+        if !voice.active {
             return;
         }
         for i in start..end {
-            let Some(sample) = self.voice.sample.as_ref() else {
-                self.voice.active = false;
+            let Some(sample) = voice.sample.as_ref() else {
+                voice.active = false;
                 return;
             };
             let len = sample.len();
             if len == 0 {
-                self.voice.active = false;
+                voice.active = false;
                 return;
             }
 
             // Advance envelope; if it finished during release, end voice.
-            self.voice.env.advance();
-            if self.voice.env.is_idle() {
-                self.voice.active = false;
+            voice.env.advance();
+            if voice.env.is_idle() {
+                voice.active = false;
                 return;
             }
-            let amp = self.voice.env.level * self.voice.velocity_amp;
+            let amp = voice.env.level * voice.velocity_amp;
 
             // Fetch interpolated frame.
-            let pos = self.voice.play_pos;
+            let pos = voice.play_pos;
             let idx = pos.floor() as isize;
             let frac = pos - idx as f64;
             let frame_at = |k: isize| -> [f32; 2] {
@@ -394,48 +512,75 @@ impl Sampler {
             };
             let f0 = frame_at(idx);
             let f1 = frame_at(idx + 1);
-            let frame = self.shape_frame([
-                f0[0] + (f1[0] - f0[0]) * frac as f32,
-                f0[1] + (f1[1] - f0[1]) * frac as f32,
-            ]);
+            let frame = Self::shape_frame(
+                params,
+                sample_rate,
+                voice,
+                [
+                    f0[0] + (f1[0] - f0[0]) * frac as f32,
+                    f0[1] + (f1[1] - f0[1]) * frac as f32,
+                ],
+            );
             bus.l[i] += amp * frame[0];
             bus.r[i] += amp * frame[1];
 
             // Advance the read position and handle looping / end-of-region.
-            self.voice.play_pos += self.voice.direction * self.voice.playback_rate;
+            voice.play_pos += voice.direction * voice.playback_rate;
 
-            let (play_start, play_end) = self.playback_bounds(len);
-            let (ls, le) = self.loop_bounds(len);
-            match self.params.loop_mode {
+            let (play_start, play_end) = Self::resolve_playback_bounds(params, len);
+            let (ls, le) = Self::resolve_loop_bounds(params, len);
+            let loop_mode = if voice.loop_enabled {
+                params.loop_mode
+            } else {
+                LoopMode::Off
+            };
+            match loop_mode {
                 LoopMode::Off => {
-                    let reached_end = self.voice.direction > 0.0 && self.voice.play_pos >= play_end;
-                    let reached_start =
-                        self.voice.direction < 0.0 && self.voice.play_pos < play_start;
+                    let reached_end = voice.direction > 0.0 && voice.play_pos >= play_end;
+                    let reached_start = voice.direction < 0.0 && voice.play_pos < play_start;
                     if reached_end || reached_start {
                         // There is no audio beyond a non-looping region, so an
                         // envelope tail would only hold its final sample value.
-                        self.voice.active = false;
+                        voice.active = false;
                         return;
                     }
                 }
                 LoopMode::Forward => {
-                    if self.voice.direction > 0.0 && self.voice.play_pos >= le {
-                        self.voice.play_pos = ls + (self.voice.play_pos - le);
-                    } else if self.voice.direction < 0.0 && self.voice.play_pos < ls {
-                        self.voice.play_pos = le - (ls - self.voice.play_pos);
+                    if voice.direction > 0.0 && voice.play_pos >= le {
+                        voice.play_pos = ls + (voice.play_pos - le);
+                    } else if voice.direction < 0.0 && voice.play_pos < ls {
+                        voice.play_pos = le - (ls - voice.play_pos);
                     }
                 }
                 LoopMode::Pingpong => {
-                    if self.voice.direction > 0.0 && self.voice.play_pos >= le {
-                        self.voice.play_pos = le - (self.voice.play_pos - le);
-                        self.voice.direction = -1.0;
-                    } else if self.voice.direction < 0.0 && self.voice.play_pos <= ls {
-                        self.voice.play_pos = ls + (ls - self.voice.play_pos);
-                        self.voice.direction = 1.0;
+                    if voice.direction > 0.0 && voice.play_pos >= le {
+                        voice.play_pos = le - (voice.play_pos - le);
+                        voice.direction = -1.0;
+                    } else if voice.direction < 0.0 && voice.play_pos <= ls {
+                        voice.play_pos = ls + (ls - voice.play_pos);
+                        voice.direction = 1.0;
                     }
                 }
             }
         }
+    }
+
+    fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        let params = self.params;
+        let sample_rate = self.sample_rate;
+        for voice in &mut self.voices[..params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize] {
+            Self::render_voice_range(params, sample_rate, voice, bus, start, end);
+        }
+    }
+
+    #[cfg(test)]
+    fn active_voice_count(&self) -> usize {
+        self.voices.iter().filter(|voice| voice.active).count()
+    }
+
+    #[cfg(test)]
+    fn shape_first_voice(&mut self, frame: [f32; 2]) -> [f32; 2] {
+        Self::shape_frame(self.params, self.sample_rate, &mut self.voices[0], frame)
     }
 }
 
@@ -449,8 +594,8 @@ impl AudioNode for Sampler {
     ) {
         let frames = ctx.frames.min(bus.capacity());
 
-        if !ctx.playing && self.voice.active && !self.voice.env.is_releasing() {
-            self.voice.env.release();
+        if !ctx.playing {
+            self.release_all();
         }
 
         // Split the block at event offsets: render, apply event, repeat.
@@ -460,8 +605,8 @@ impl AudioNode for Sampler {
             self.render_range(bus, pos, off);
             match ev.event {
                 Event::NoteOn { id, note, velocity } => self.trigger(id, note, velocity),
-                Event::NoteOff { id, .. } if id == self.voice.event_id => self.voice.env.release(),
-                Event::NoteOff { .. } => {}
+                Event::NoteOff { id, .. } => self.release_note(id),
+                Event::Choke => self.choke(),
                 Event::ParamValue { .. } => {}
             }
             pos = off;
@@ -537,6 +682,10 @@ mod tests {
     fn stale_note_off_does_not_release_a_retriggered_voice() {
         let sr = 48_000;
         let mut sampler = make_sampler(sr);
+        sampler.set_params(SamplerParams {
+            voice_mode: VoiceMode::Gate,
+            ..SamplerParams::default()
+        });
         let mut bus = StereoBus::with_capacity(64);
         let mut events = EventList::empty();
         events.push(TimedEvent {
@@ -562,8 +711,119 @@ mod tests {
 
         sampler.process(&ctx(64, sr), &mut bus, &events, None);
 
-        assert_eq!(sampler.voice.event_id, 2);
-        assert!(!sampler.voice.env.is_releasing());
+        assert_eq!(sampler.voices[0].event_id, 2);
+        assert!(!sampler.voices[0].env.is_releasing());
+    }
+
+    #[test]
+    fn one_shot_ignores_note_off_without_a_loop() {
+        let mut sampler = sampler_with_frames(48_000, 4096, SamplerParams::default());
+        sampler.trigger(1, 60, 100);
+        sampler.release_note(1);
+        assert!(!sampler.voices[0].env.is_releasing());
+        assert!(sampler.voices[0].active);
+    }
+
+    #[test]
+    fn gated_note_enters_release_on_matching_note_off() {
+        let params = SamplerParams {
+            voice_mode: VoiceMode::Gate,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(48_000, 4096, params);
+        sampler.trigger(7, 60, 100);
+        sampler.release_note(7);
+        assert!(sampler.voices[0].env.is_releasing());
+    }
+
+    #[test]
+    fn one_shot_note_off_exits_loop_and_plays_tail() {
+        let params = SamplerParams {
+            loop_start: 0.2,
+            loop_end: 0.4,
+            loop_mode: LoopMode::Forward,
+            voice_mode: VoiceMode::OneShot,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(48_000, 100, params);
+        sampler.trigger(1, 60, 127);
+        let mut bus = StereoBus::with_capacity(200);
+        sampler.render_range(&mut bus, 0, 80);
+        assert!(sampler.voices[0].active);
+        assert!(sampler.voices[0].loop_enabled);
+
+        sampler.release_note(1);
+        sampler.render_range(&mut bus, 80, 200);
+        assert!(!sampler.voices[0].active);
+    }
+
+    #[test]
+    fn layered_retriggers_fill_the_bounded_voice_pool() {
+        let params = SamplerParams {
+            polyphony: 3,
+            retrigger_mode: RetriggerMode::Layer,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(48_000, 4096, params);
+        sampler.trigger(1, 60, 100);
+        sampler.trigger(2, 60, 100);
+        sampler.trigger(3, 60, 100);
+        assert_eq!(sampler.active_voice_count(), 3);
+
+        sampler.trigger(4, 60, 100);
+        assert_eq!(sampler.active_voice_count(), 3);
+        assert!(!sampler
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.event_id == 1));
+        assert!(sampler
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.event_id == 4));
+    }
+
+    #[test]
+    fn restart_reuses_the_oldest_matching_pitch() {
+        let params = SamplerParams {
+            polyphony: 4,
+            retrigger_mode: RetriggerMode::Restart,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(48_000, 4096, params);
+        sampler.trigger(1, 60, 100);
+        sampler.trigger(2, 64, 100);
+        sampler.trigger(3, 60, 100);
+        assert_eq!(sampler.active_voice_count(), 2);
+        assert!(!sampler
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.event_id == 1));
+        assert!(sampler
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.event_id == 3));
+    }
+
+    #[test]
+    fn choke_releases_every_active_voice_quickly() {
+        let params = SamplerParams {
+            polyphony: 4,
+            retrigger_mode: RetriggerMode::Layer,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(48_000, 4096, params);
+        sampler.trigger(1, 60, 100);
+        sampler.trigger(2, 64, 100);
+        let mut bus = StereoBus::with_capacity(512);
+        sampler.render_range(&mut bus, 0, 32);
+        sampler.choke();
+        assert!(sampler
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .all(|voice| voice.env.is_releasing()));
+        sampler.render_range(&mut bus, 32, 512);
+        assert_eq!(sampler.active_voice_count(), 0);
     }
 
     /// No events, no prior note: silence (and no panic on the empty path).
@@ -593,7 +853,7 @@ mod tests {
                 },
             });
             sampler.process(&ctx(frames, sr), &mut bus, &events, None);
-            sampler.voice.play_pos
+            sampler.voices[0].play_pos
         };
 
         let root_position = render_note(60);
@@ -623,7 +883,7 @@ mod tests {
                 },
             });
             sampler.process(&ctx(100, sr), &mut bus, &events, None);
-            sampler.voice.play_pos
+            sampler.voices[0].play_pos
         };
 
         assert!((render_with(12.0, 0.0) - 200.0).abs() < 0.001);
@@ -653,8 +913,8 @@ mod tests {
 
         sampler.process(&ctx(100, sr), &mut bus, &events, None);
 
-        assert!((sampler.voice.play_pos - 649.0).abs() < 0.001);
-        assert!(sampler.voice.active);
+        assert!((sampler.voices[0].play_pos - 649.0).abs() < 0.001);
+        assert!(sampler.voices[0].active);
     }
 
     #[test]
@@ -678,7 +938,7 @@ mod tests {
 
         sampler.process(&ctx(64, sr), &mut bus, &events, None);
 
-        assert!(!sampler.voice.active);
+        assert!(!sampler.voices[0].active);
         assert!(bus.l[..25].iter().any(|sample| *sample > 0.0));
         assert!(bus.l[25..].iter().all(|sample| *sample == 0.0));
     }
@@ -737,8 +997,8 @@ mod tests {
 
         sampler.process(&ctx(frames, sr), &mut bus, &events, None);
 
-        assert!(sampler.voice.active);
-        assert!((16.0..32.0).contains(&sampler.voice.play_pos));
+        assert!(sampler.voices[0].active);
+        assert!((16.0..32.0).contains(&sampler.voices[0].play_pos));
         assert!(bus.l.iter().any(|sample| *sample > 0.01));
     }
 
@@ -751,11 +1011,11 @@ mod tests {
         };
         let mut sampler = sampler_with_frames(sr, 64, params);
 
-        let first = sampler.shape_frame([0.125, -0.125]);
-        let second = sampler.shape_frame([0.875, -0.875]);
+        let first = sampler.shape_first_voice([0.125, -0.125]);
+        let second = sampler.shape_first_voice([0.875, -0.875]);
 
         assert_eq!(first, second);
-        assert_eq!(sampler.voice.hold_remaining, 30);
+        assert_eq!(sampler.voices[0].hold_remaining, 30);
     }
 
     #[test]
@@ -767,7 +1027,7 @@ mod tests {
         };
         let mut sampler = sampler_with_frames(sr, 64, params);
 
-        assert_eq!(sampler.shape_frame([0.19, -0.19]), [0.25, -0.25]);
+        assert_eq!(sampler.shape_first_voice([0.19, -0.19]), [0.25, -0.25]);
     }
 
     #[test]
@@ -779,7 +1039,7 @@ mod tests {
         };
         let mut sampler = sampler_with_frames(sr, 64, params);
 
-        let filtered = sampler.shape_frame([1.0, 1.0]);
+        let filtered = sampler.shape_first_voice([1.0, 1.0]);
         assert!(filtered[0] > 0.0);
         assert!(filtered[0] < 0.01);
     }
@@ -795,7 +1055,7 @@ mod tests {
         let mut sampler = sampler_with_frames(sr, 64, params);
         for index in 0..20_000 {
             let input = if index == 0 { [1.0, 1.0] } else { [0.0, 0.0] };
-            let output = sampler.shape_frame(input);
+            let output = sampler.shape_first_voice(input);
             assert!(output[0].is_finite() && output[1].is_finite());
         }
     }
@@ -808,7 +1068,7 @@ mod tests {
             ..SamplerParams::default()
         };
         let mut sampler = sampler_with_frames(sr, 64, params);
-        let driven = sampler.shape_frame([0.2, -0.2]);
+        let driven = sampler.shape_first_voice([0.2, -0.2]);
         assert!(driven[0] > 0.9);
         assert!(driven[1] < -0.9);
         assert!(driven[0] <= 1.0 && driven[1] >= -1.0);
@@ -838,6 +1098,6 @@ mod tests {
         stopped.playing = false;
         sampler.process(&stopped, &mut bus, &EventList::empty(), None);
 
-        assert!(sampler.voice.env.is_releasing());
+        assert!(sampler.voices[0].env.is_releasing());
     }
 }

@@ -29,7 +29,8 @@ use jack::ProcessHandler;
 use jack::{AudioOut, Client, Control, Port, ProcessScope};
 use mooloop_core::{EngineCommand, EngineEvent, SamplerParams, MAX_CHANNELS, MAX_PATTERNS};
 use mooloop_dsp::{
-    pan_gains, AudioNode, EventList, ProcessContext, SampleData, Sampler, StereoBus, MAX_BLOCK_SIZE,
+    pan_gains, AudioNode, Event, EventList, ProcessContext, SampleData, Sampler, StereoBus,
+    TimedEvent, MAX_BLOCK_SIZE,
 };
 use rtrb::Consumer;
 
@@ -40,6 +41,36 @@ use std::sync::Arc;
 
 const INITIAL_STEPS: usize = mooloop_core::DEFAULT_STEPS as usize;
 const INITIAL_CHANNELS: usize = 1;
+
+fn inject_choke_events(choke_groups: &[u8], events: &mut [EventList]) {
+    let active = choke_groups.len().min(events.len());
+    for source in 0..active {
+        let group = choke_groups[source];
+        if group == 0 {
+            continue;
+        }
+        for target in 0..active {
+            if source == target || choke_groups[target] != group {
+                continue;
+            }
+            let (source_events, target_events) = if source < target {
+                let (left, right) = events.split_at_mut(target);
+                (&left[source], &mut right[0])
+            } else {
+                let (left, right) = events.split_at_mut(source);
+                (&right[0], &mut left[target])
+            };
+            for event in source_events.iter() {
+                if matches!(event.event, Event::NoteOn { .. }) {
+                    target_events.push_ordered(TimedEvent {
+                        offset: event.offset,
+                        event: Event::Choke,
+                    });
+                }
+            }
+        }
+    }
+}
 
 /// Ports and queues handed to the graph at construction.
 pub(crate) struct GraphIo {
@@ -219,6 +250,21 @@ impl ProcessHandler for Graph {
             }
             self.sequencer
                 .schedule(start_tick, end_tick, frames, tps, &mut self.events);
+            let mut choke_groups = [0; MAX_CHANNELS];
+            for (index, strip) in self
+                .strips
+                .iter()
+                .enumerate()
+                .take(self.sequencer.active_channels())
+            {
+                if !strip.muted {
+                    choke_groups[index] = strip.instrument.choke_group();
+                }
+            }
+            inject_choke_events(
+                &choke_groups[..self.sequencer.active_channels()],
+                &mut self.events,
+            );
         } else {
             for ev in self.events.iter_mut() {
                 ev.clear();
@@ -301,3 +347,54 @@ impl jack::NotificationHandler for Notifications {
 }
 
 pub(crate) type AsyncClient = jack::AsyncClient<Notifications, Graph>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matching_choke_group_receives_sample_timed_choke() {
+        let mut events = [EventList::empty(), EventList::empty(), EventList::empty()];
+        events[0].push(TimedEvent {
+            offset: 37,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 100,
+            },
+        });
+
+        inject_choke_events(&[2, 2, 3], &mut events);
+
+        assert_eq!(events[0].len(), 1, "a channel does not choke itself");
+        let target = events[1].iter().next().unwrap();
+        assert_eq!(target.offset, 37);
+        assert_eq!(target.event, Event::Choke);
+        assert!(events[2].is_empty());
+    }
+
+    #[test]
+    fn choke_is_ordered_before_a_simultaneous_note_on() {
+        let mut events = [EventList::empty(), EventList::empty()];
+        for (channel, id) in events.iter_mut().zip([1, 2]) {
+            channel.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id,
+                    note: 60,
+                    velocity: 100,
+                },
+            });
+        }
+
+        inject_choke_events(&[1, 1], &mut events);
+
+        for channel in &events {
+            assert!(matches!(channel.iter().next().unwrap().event, Event::Choke));
+            assert!(matches!(
+                channel.iter().nth(1).unwrap().event,
+                Event::NoteOn { .. }
+            ));
+        }
+    }
+}

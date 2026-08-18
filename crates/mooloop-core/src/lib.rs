@@ -15,5 +15,7 @@ pub use pattern::{
     ChannelPattern, NoteEvent, NoteId, Pattern, Step, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, TICKS_PER_64TH, TICKS_PER_STEP,
 };
-pub use sampler::{clamp01, LoopMode, SamplerParams};
+pub use sampler::{
+    clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,
+};
 pub use time::{ticks_per_sample, Ppq, Samples, Ticks};

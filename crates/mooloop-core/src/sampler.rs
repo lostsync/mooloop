@@ -1,5 +1,8 @@
 //! Sampler device parameters. Pure data so the bridge can carry them.
 
+pub const MAX_SAMPLER_VOICES: u8 = 16;
+pub const MAX_CHOKE_GROUP: u8 = 16;
+
 /// How the sampler treats the loop region once the play head reaches it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LoopMode {
@@ -26,10 +29,37 @@ impl LoopMode {
     }
 }
 
+/// How note-off events affect sample playback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VoiceMode {
+    /// Play the full region. For a looped voice, note-off exits the loop and
+    /// lets the remaining sample tail play once.
+    #[default]
+    OneShot,
+    /// Note-off enters the amplitude envelope's release stage.
+    Gate,
+}
+
+/// How repeated notes of the same pitch use the voice pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RetriggerMode {
+    /// Replace the oldest active voice on the same pitch.
+    #[default]
+    Restart,
+    /// Allow repeated pitches to overlap up to the polyphony limit.
+    Layer,
+}
+
 /// All sampler parameters, in the units the DSP and UI share. All points are
 /// fractions of the sample length in `[0, 1]`; times are seconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SamplerParams {
+    pub voice_mode: VoiceMode,
+    /// Active voice limit in `1..=16`.
+    pub polyphony: u8,
+    pub retrigger_mode: RetriggerMode,
+    /// `0` disables choking; matching non-zero groups choke each other.
+    pub choke_group: u8,
     /// Play start point as a fraction of the sample length.
     pub start: f32,
     /// Play end point as a fraction of the sample length.
@@ -72,6 +102,10 @@ pub struct SamplerParams {
 impl Default for SamplerParams {
     fn default() -> Self {
         Self {
+            voice_mode: VoiceMode::OneShot,
+            polyphony: 1,
+            retrigger_mode: RetriggerMode::Restart,
+            choke_group: 0,
             start: 0.0,
             end: 1.0,
             reverse: false,

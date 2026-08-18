@@ -25,6 +25,8 @@ pub enum Event {
         id: u64,
         note: u8,
     },
+    /// Release every active voice quickly. Used by channel choke groups.
+    Choke,
     /// Generic parameter automation point. `id` is node-defined.
     ParamValue {
         id: u32,
@@ -109,7 +111,7 @@ impl EventList {
 
 fn event_sort_key(event: &TimedEvent) -> (u32, u8) {
     let priority = match event.event {
-        Event::NoteOff { .. } => 0,
+        Event::NoteOff { .. } | Event::Choke => 0,
         Event::ParamValue { .. } => 1,
         Event::NoteOn { .. } => 2,
     };
