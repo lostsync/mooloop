@@ -677,6 +677,11 @@ export component MainWindow inherits Window {
                             property <int> stretch-origin: -1;
                             property <bool> paint-on;
                             property <bool> velocity-drag;
+                            // TouchArea.pressed only tracks the left button, so
+                            // a right-drag would report its first cell and then
+                            // go silent. Track the held button ourselves; this
+                            // also stops hover moves from painting.
+                            property <int> drag-button: -1;
                             mouse-cursor: root.tool-mode == 1 ? crosshair
                                 : root.tool-mode == 3 ? ew-resize : pointer;
 
@@ -690,6 +695,8 @@ export component MainWindow inherits Window {
                             pointer-event(e) => {
                                 let step = parent.step-at(self.mouse-x);
                                 if (e.kind == PointerEventKind.down) {
+                                    self.drag-button =
+                                        e.button == PointerEventButton.right ? 1 : 0;
                                     if (root.tool-mode == 1) {
                                         // Left fills, right clears, for the
                                         // whole drag. Toggling per cell would
@@ -721,7 +728,7 @@ export component MainWindow inherits Window {
                                             root.step-clicked(ch, step);
                                         }
                                     }
-                                } else if (e.kind == PointerEventKind.move && self.pressed) {
+                                } else if (e.kind == PointerEventKind.move && self.drag-button >= 0) {
                                     if (root.tool-mode == 1) {
                                         self.paint-to(step);
                                     } else if (root.tool-mode == 3 && self.stretch-origin >= 0) {
@@ -732,6 +739,7 @@ export component MainWindow inherits Window {
                                             clamp(1 - self.mouse-y / self.height, 0, 1));
                                     }
                                 } else if (e.kind == PointerEventKind.up) {
+                                    self.drag-button = -1;
                                     self.velocity-drag = false;
                                     self.last-step = -1;
                                     self.stretch-origin = -1;
