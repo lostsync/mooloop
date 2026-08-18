@@ -140,6 +140,8 @@ impl Engine {
                 sample_slots,
                 project_slot,
                 sample_rate,
+                install_generation: 0,
+                retired_projects: Vec::new(),
             },
         ))
     }
@@ -153,6 +155,8 @@ pub struct EngineHandle {
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     project_slot: Arc<ArcSwapOption<mooloop_core::Project>>,
     sample_rate: u32,
+    install_generation: u64,
+    retired_projects: Vec<(u64, Arc<mooloop_core::Project>)>,
 }
 
 impl EngineHandle {
@@ -164,12 +168,20 @@ impl EngineHandle {
 
     /// Pop one event if available.
     pub fn poll(&mut self) -> Option<EngineEvent> {
-        self.evt_rx.pop().ok()
+        loop {
+            match self.evt_rx.pop().ok()? {
+                EngineEvent::ProjectInstalled { generation } => {
+                    self.retired_projects
+                        .retain(|(retire_after, _)| *retire_after > generation);
+                }
+                event => return Some(event),
+            }
+        }
     }
 
     /// Drain all currently-queued events.
     pub fn drain(&mut self) -> impl Iterator<Item = EngineEvent> + '_ {
-        std::iter::from_fn(|| self.evt_rx.pop().ok())
+        std::iter::from_fn(|| self.poll())
     }
 
     /// Publish a freshly-decoded sample for `channel`. The realtime sampler
@@ -187,11 +199,21 @@ impl EngineHandle {
     }
 
     /// Publish a validated project snapshot and import it on the next block.
-    /// The ArcSwap slot retains the allocation so it cannot be freed on the
-    /// realtime thread when the callback finishes copying bounded data.
+    /// Replaced snapshots remain owned here until the audio callback
+    /// acknowledges the generation, so their allocations are reclaimed on
+    /// this non-realtime thread.
     pub fn install_project(&mut self, project: Arc<mooloop_core::Project>) {
-        self.project_slot.store(Some(project));
-        self.send(EngineCommand::InstallProject);
+        self.install_generation = self
+            .install_generation
+            .checked_add(1)
+            .expect("project install generation exhausted");
+        if let Some(retired) = self.project_slot.swap(Some(project)) {
+            self.retired_projects
+                .push((self.install_generation, retired));
+        }
+        self.send(EngineCommand::InstallProject {
+            generation: self.install_generation,
+        });
     }
 
     pub fn sample_rate(&self) -> u32 {

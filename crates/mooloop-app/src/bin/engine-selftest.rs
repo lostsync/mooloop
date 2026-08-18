@@ -49,6 +49,7 @@ fn main() {
                     max_peak = max_peak.max(peak_l).max(peak_r);
                 }
                 EngineEvent::Xrun => println!("xrun reported"),
+                EngineEvent::ProjectInstalled { .. } => unreachable!("filtered engine event"),
             }
         }
         std::thread::sleep(Duration::from_millis(5));

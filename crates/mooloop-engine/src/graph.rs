@@ -56,12 +56,17 @@ impl ProcessHandler for Graph {
     fn process(&mut self, _client: &Client, scope: &ProcessScope) -> Control {
         let frames = (scope.n_frames() as usize).min(MAX_BLOCK_SIZE);
         while let Ok(command) = self.cmd_rx.pop() {
-            if command == EngineCommand::InstallProject {
-                if let Some(project) = self.project_slot.load_full() {
-                    self.render.load_project(&project);
+            match command {
+                EngineCommand::InstallProject { generation } => {
+                    if let Some(project) = self.project_slot.load_full() {
+                        self.render.load_project(&project);
+                        drop(project);
+                    }
+                    let _ = self
+                        .evt_tx
+                        .push(EngineEvent::ProjectInstalled { generation });
                 }
-            } else {
-                self.render.apply_command(command);
+                other => self.render.apply_command(other),
             }
         }
 

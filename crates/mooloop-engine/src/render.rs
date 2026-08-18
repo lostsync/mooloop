@@ -248,7 +248,7 @@ impl RenderState {
                     strip.instrument.set_params(params);
                 }
             }
-            EngineCommand::InstallProject => {}
+            EngineCommand::InstallProject { .. } => {}
         }
     }
 
@@ -407,6 +407,31 @@ mod tests {
         assert_eq!(events[0].len(), 1);
         assert_eq!(events[1].iter().next().unwrap().event, Event::Choke);
         assert!(events[2].is_empty());
+    }
+
+    #[test]
+    fn choke_is_ordered_before_a_simultaneous_note_on() {
+        let mut events = [EventList::empty(), EventList::empty()];
+        for (channel, id) in events.iter_mut().zip([1, 2]) {
+            channel.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id,
+                    note: 60,
+                    velocity: 100,
+                },
+            });
+        }
+
+        inject_choke_events(&[1, 1], &mut events);
+
+        for channel in &events {
+            assert!(matches!(channel.iter().next().unwrap().event, Event::Choke));
+            assert!(matches!(
+                channel.iter().nth(1).unwrap().event,
+                Event::NoteOn { .. }
+            ));
+        }
     }
 
     #[test]

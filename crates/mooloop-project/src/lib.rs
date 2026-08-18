@@ -16,17 +16,12 @@ use serde::{Deserialize, Serialize};
 pub const FORMAT_VERSION: u32 = 1;
 pub const MANIFEST_FILE: &str = "manifest.toml";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssetMode {
+    #[default]
     Embedded,
     Referenced,
-}
-
-impl Default for AssetMode {
-    fn default() -> Self {
-        Self::Embedded
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,6 +241,13 @@ fn prepare_setup_asset(
     let source = path.clone();
     let keep_owned = *embedded && source.starts_with(target);
     if mode == AssetMode::Referenced && !keep_owned {
+        if !source.is_file() {
+            warnings.push(AssetWarning {
+                channel,
+                path: source.clone(),
+                message: "referenced sample is missing".into(),
+            });
+        }
         let relative = pathdiff::diff_paths(&source, target).unwrap_or(source);
         *path = relative;
         *embedded = false;
@@ -638,7 +640,8 @@ mod tests {
             path: temp.path().join("gone.wav"),
             embedded: false,
         };
-        save_song(&bundle, &project, AssetMode::Referenced).unwrap();
+        let saved = save_song(&bundle, &project, AssetMode::Referenced).unwrap();
+        assert_eq!(saved.warnings.len(), 1);
         let report = load_bundle(&bundle).unwrap();
         assert_eq!(report.warnings.len(), 1);
     }

@@ -75,7 +75,7 @@ pub enum EngineCommand {
     SetChannelSamplerParams { channel: u8, params: SamplerParams },
     /// Import the latest project snapshot published through the engine's
     /// out-of-band ArcSwap slot into preallocated realtime storage.
-    InstallProject,
+    InstallProject { generation: u64 },
 }
 
 /// audio -> GUI. Pushed sparingly (a few times per block at most) and drained
@@ -92,4 +92,7 @@ pub enum EngineEvent {
     Metering { peak_l: f32, peak_r: f32 },
     /// An xrun (buffer overrun/underrun) was reported by JACK.
     Xrun,
+    /// Internal acknowledgement used to reclaim a replaced project snapshot
+    /// on the non-realtime thread.
+    ProjectInstalled { generation: u64 },
 }
