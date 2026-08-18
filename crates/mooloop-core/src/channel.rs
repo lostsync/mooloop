@@ -5,8 +5,9 @@
 /// to this size so channel add/remove never allocates on the RT thread.
 pub const MAX_CHANNELS: usize = 16;
 
-/// Upper bound on stored patterns (the pattern bank).
-pub const MAX_PATTERNS: usize = 8;
+/// Upper bound on stored patterns. Pattern IDs cross the realtime bridge as
+/// `u8`, so 256 is the complete addressable bank rather than a UI limit.
+pub const MAX_PATTERNS: usize = u8::MAX as usize + 1;
 
 /// Instrument kind for a channel. More kinds arrive with Phase 4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -18,7 +18,7 @@ pub use pattern::{
 };
 pub use playlist::{
     PatternPlacement, PlaybackMode, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
-    PLAYLIST_SNAP_TICKS, STEPS_PER_BAR, TICKS_PER_BAR,
+    STEPS_PER_BAR, TICKS_PER_BAR,
 };
 pub use sampler::{
     clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,

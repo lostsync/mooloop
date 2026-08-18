@@ -15,6 +15,7 @@ const BOUNDARY_EPS: f64 = 1.0e-6;
 
 pub struct Sequencer {
     patterns: Vec<Pattern>,
+    active_patterns: usize,
     current: usize,
     active_channels: usize,
     playback_mode: PlaybackMode,
@@ -22,9 +23,14 @@ pub struct Sequencer {
 }
 
 impl Sequencer {
-    pub fn new(initial_channels: usize, num_patterns: usize, num_steps: usize, ppq: Ppq) -> Self {
+    pub fn new(
+        initial_channels: usize,
+        active_patterns: usize,
+        num_steps: usize,
+        ppq: Ppq,
+    ) -> Self {
         assert_eq!(ppq, Ppq::DEFAULT, "pattern tick constants require PPQ 96");
-        let patterns = (0..num_patterns)
+        let patterns = (0..mooloop_core::MAX_PATTERNS)
             .map(|_| {
                 let mut pattern = Pattern::with_steps(MAX_CHANNELS, MAX_PATTERN_STEPS as usize);
                 pattern.set_length_steps(num_steps);
@@ -33,6 +39,7 @@ impl Sequencer {
             .collect();
         Self {
             patterns,
+            active_patterns: active_patterns.clamp(1, mooloop_core::MAX_PATTERNS),
             current: 0,
             active_channels: initial_channels.min(MAX_CHANNELS),
             playback_mode: PlaybackMode::Pattern,
@@ -41,13 +48,27 @@ impl Sequencer {
     }
 
     pub fn set_current_pattern(&mut self, pattern: usize) {
-        if pattern < self.patterns.len() {
+        if pattern < self.active_patterns {
             self.current = pattern;
         }
     }
 
+    pub fn add_pattern(&mut self) -> bool {
+        if self.active_patterns >= self.patterns.len() {
+            return false;
+        }
+        self.active_patterns += 1;
+        true
+    }
+
+    #[cfg(test)]
+    pub fn active_patterns(&self) -> usize {
+        self.active_patterns
+    }
+
     pub fn set_pattern_length(&mut self, pattern: usize, length_steps: usize) {
-        if let Some(pattern) = self.patterns.get_mut(pattern) {
+        if pattern < self.active_patterns {
+            let pattern = &mut self.patterns[pattern];
             pattern.set_length_steps(length_steps);
         }
     }
@@ -57,7 +78,7 @@ impl Sequencer {
     }
 
     pub fn set_playlist_placement(&mut self, pattern: usize, start_tick: u32, on: bool) -> bool {
-        if self.patterns.get(pattern).is_none() {
+        if pattern >= self.active_patterns {
             return false;
         }
         if start_tick >= MAX_PLAYLIST_TICKS {
@@ -86,6 +107,7 @@ impl Sequencer {
             .filter_map(|placement| {
                 self.patterns
                     .get(placement.pattern as usize)
+                    .filter(|_| (placement.pattern as usize) < self.active_patterns)
                     .map(|pattern| placement.start_tick.saturating_add(pattern.length_ticks()))
             })
             .max()
@@ -103,15 +125,15 @@ impl Sequencer {
     }
 
     pub fn upsert_note(&mut self, pattern: usize, channel: usize, note: NoteEvent) -> bool {
-        self.patterns
-            .get_mut(pattern)
+        (pattern < self.active_patterns)
+            .then(|| &mut self.patterns[pattern])
             .and_then(|pattern| pattern.channel_mut(channel))
             .is_some_and(|channel| channel.upsert_note(note))
     }
 
     pub fn remove_note(&mut self, pattern: usize, channel: usize, id: NoteId) -> bool {
-        self.patterns
-            .get_mut(pattern)
+        (pattern < self.active_patterns)
+            .then(|| &mut self.patterns[pattern])
             .and_then(|pattern| pattern.channel_mut(channel))
             .and_then(|channel| channel.remove_note(id))
             .is_some()
@@ -240,9 +262,11 @@ impl Sequencer {
         let song_ticks = self.song_length_ticks();
         let instance_stride = MAX_PLAYLIST_TICKS as u64 * self.patterns.len() as u64;
         for placement in &self.playlist {
-            let Some(pattern) = self.patterns.get(placement.pattern as usize) else {
+            let pattern_index = placement.pattern as usize;
+            if pattern_index >= self.active_patterns {
                 continue;
-            };
+            }
+            let pattern = &self.patterns[pattern_index];
             let instance_offset = placement.pattern as u64 * MAX_PLAYLIST_TICKS as u64
                 + u64::from(placement.start_tick);
             let pattern_ticks = pattern.length_ticks();
@@ -340,7 +364,9 @@ impl Sequencer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{ticks_per_sample, PLAYLIST_SNAP_TICKS, TICKS_PER_64TH};
+    use mooloop_core::{ticks_per_sample, TICKS_PER_64TH};
+
+    const TEST_PLACEMENT_TICKS: u32 = TICKS_PER_BAR / 2;
 
     fn schedule_range(sequencer: &Sequencer, start_tick: f64, end_tick: f64) -> Vec<TimedEvent> {
         let ticks_per_sample = ticks_per_sample(120.0, 48_000, Ppq::DEFAULT);
@@ -348,6 +374,17 @@ mod tests {
         let mut events = [EventList::empty()];
         sequencer.schedule(start_tick, end_tick, frames, ticks_per_sample, &mut events);
         events[0].iter().copied().collect()
+    }
+
+    #[test]
+    fn patterns_become_addressable_only_after_creation() {
+        let mut sequencer = Sequencer::new(1, 1, 16, Ppq::DEFAULT);
+        assert_eq!(sequencer.active_patterns(), 1);
+        assert!(!sequencer.upsert_note(1, 0, NoteEvent::new(1, 0, 24, 60, 100)));
+
+        assert!(sequencer.add_pattern());
+        assert_eq!(sequencer.active_patterns(), 2);
+        assert!(sequencer.upsert_note(1, 0, NoteEvent::new(1, 0, 24, 60, 100)));
     }
 
     #[test]
@@ -450,12 +487,12 @@ mod tests {
     #[test]
     fn playlist_placements_are_bounded_and_idempotent() {
         let mut sequencer = Sequencer::new(1, 2, 16, Ppq::DEFAULT);
-        assert!(sequencer.set_playlist_placement(1, PLAYLIST_SNAP_TICKS, true));
-        assert!(!sequencer.set_playlist_placement(1, PLAYLIST_SNAP_TICKS, true));
+        assert!(sequencer.set_playlist_placement(1, TEST_PLACEMENT_TICKS, true));
+        assert!(!sequencer.set_playlist_placement(1, TEST_PLACEMENT_TICKS, true));
         assert!(!sequencer.set_playlist_placement(2, 0, true));
         assert!(!sequencer.set_playlist_placement(0, MAX_PLAYLIST_TICKS, true));
-        assert!(sequencer.set_playlist_placement(1, PLAYLIST_SNAP_TICKS, false));
-        assert!(!sequencer.set_playlist_placement(1, PLAYLIST_SNAP_TICKS, false));
+        assert!(sequencer.set_playlist_placement(1, TEST_PLACEMENT_TICKS, false));
+        assert!(!sequencer.set_playlist_placement(1, TEST_PLACEMENT_TICKS, false));
     }
 
     #[test]
@@ -489,14 +526,14 @@ mod tests {
     fn song_placement_can_start_on_a_half_bar() {
         let mut sequencer = Sequencer::new(1, 1, 16, Ppq::DEFAULT);
         sequencer.set_step(0, 0, 0, true, 60, 100);
-        assert!(sequencer.set_playlist_placement(0, PLAYLIST_SNAP_TICKS, true));
+        assert!(sequencer.set_playlist_placement(0, TEST_PLACEMENT_TICKS, true));
         sequencer.set_playback_mode(PlaybackMode::Song);
 
         assert!(schedule_range(&sequencer, 0.0, 2.0).is_empty());
         let events = schedule_range(
             &sequencer,
-            f64::from(PLAYLIST_SNAP_TICKS),
-            f64::from(PLAYLIST_SNAP_TICKS + 2),
+            f64::from(TEST_PLACEMENT_TICKS),
+            f64::from(TEST_PLACEMENT_TICKS + 2),
         );
         assert_eq!(events[0].offset, 0);
         assert!(matches!(events[0].event, Event::NoteOn { .. }));

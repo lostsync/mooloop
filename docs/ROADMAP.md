@@ -62,8 +62,8 @@ Scope:
   and renderer.
 - Save/load, autosave or recovery, missing-sample handling, and undoable edits.
 - Pattern duplicate, rename, copy/paste, and independent lengths.
-- Extend the initial layered, tick-addressed playlist beyond its half-bar edit
-  grid with clip dragging and finer placement options.
+- Extend the initial layered, tick-addressed playlist with clip dragging,
+  selection, duplication, and keyboard editing on the shared musical grid.
 - Add independent loop ranges to the existing Pattern and Song transport modes.
 - Swing and groove features built on explicit timing displacement.
 - Extract the render graph from JACK and render offline to WAV.

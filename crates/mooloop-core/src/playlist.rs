@@ -2,11 +2,11 @@
 
 use crate::TICKS_PER_STEP;
 
-/// The first playlist UI shows 64 bars and snaps placement starts to half bars.
+/// The playlist opens on a 64-bar canvas. Placement starts retain absolute PPQ
+/// ticks; the active musical snap belongs to the editor, not stored data.
 pub const MAX_PLAYLIST_BARS: u32 = 64;
 pub const STEPS_PER_BAR: u32 = 16;
 pub const TICKS_PER_BAR: u32 = STEPS_PER_BAR * TICKS_PER_STEP;
-pub const PLAYLIST_SNAP_TICKS: u32 = TICKS_PER_BAR / 2;
 /// Exclusive end of the editable placement-start grid. Long clips may extend
 /// past this point and still contribute to the derived song length.
 pub const MAX_PLAYLIST_TICKS: u32 = MAX_PLAYLIST_BARS * TICKS_PER_BAR;

@@ -16,7 +16,7 @@ use mooloop_core::{
     EngineCommand, EngineEvent, LoopMode, NoteEvent, NoteId, PatternPlacement, PlaybackMode, Ppq,
     RetriggerMode, SamplerParams, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
     MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
-    MAX_PLAYLIST_TICKS, PLAYLIST_SNAP_TICKS, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
+    MAX_PLAYLIST_TICKS, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::SampleData;
 use mooloop_engine::EngineHandle;
@@ -99,19 +99,19 @@ impl ChannelState {
             waveform: default_waveform,
             can_previous_sample: false,
             can_next_sample: false,
-            notes: vec![Vec::new(); MAX_PATTERNS],
+            notes: vec![Vec::new()],
             next_note_id: 1,
         }
     }
 
-    fn create_note(&mut self, pattern: usize, start_tick: u32, note: u8) -> NoteEvent {
-        let event = NoteEvent::new(
-            self.next_note_id,
-            start_tick,
-            DEFAULT_NOTE_DURATION_TICKS,
-            note,
-            100,
-        );
+    fn create_note(
+        &mut self,
+        pattern: usize,
+        start_tick: u32,
+        duration_ticks: u32,
+        note: u8,
+    ) -> NoteEvent {
+        let event = NoteEvent::new(self.next_note_id, start_tick, duration_ticks, note, 100);
         self.next_note_id = self.next_note_id.wrapping_add(1).max(1);
         self.notes[pattern].push(event);
         self.notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
@@ -285,7 +285,7 @@ impl UiState {
                     .get(placement.pattern as usize)
                     .map(|length| PlaylistClip {
                         pattern: placement.pattern as i32,
-                        start_half_bar: (placement.start_tick / PLAYLIST_SNAP_TICKS) as i32,
+                        start_tick: placement.start_tick as i32,
                         length_steps: *length as i32,
                     })
             })
@@ -528,6 +528,7 @@ impl AppUi {
         window.set_notes(ModelRc::from(note_model.clone()));
         window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
         window.set_waveform(ModelRc::from(waveform_model.clone()));
+        window.set_pattern_count(1);
 
         let state = Rc::new(RefCell::new(UiState {
             channels: vec![first],
@@ -539,7 +540,7 @@ impl AppUi {
             default_waveform,
             default_sample_description,
             default_sample_duration,
-            pattern_lengths: vec![DEFAULT_STEPS as usize; MAX_PATTERNS],
+            pattern_lengths: vec![DEFAULT_STEPS as usize],
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
             song_mode: false,
             current_pattern: 0,
@@ -623,7 +624,11 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_pattern_selected(move |p| {
-                let p = p.clamp(0, MAX_PATTERNS as i32 - 1) as usize;
+                let count = st.borrow().pattern_lengths.len();
+                if p < 0 || p as usize >= count {
+                    return;
+                }
+                let p = p as usize;
                 dbg_log(&format!("UI: pattern {p} selected"));
                 {
                     let mut st = st.borrow_mut();
@@ -638,6 +643,37 @@ impl AppUi {
                     st.refresh_editor(&w);
                 }
                 let _ = tx.send(EngineCommand::SetCurrentPattern(p as u8));
+            });
+        }
+
+        // Patterns are created explicitly. The realtime engine owns a fully
+        // preallocated pool, while the UI exposes only this active prefix.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_add_pattern_clicked(move || {
+                let mut st = st.borrow_mut();
+                if st.pattern_lengths.len() >= MAX_PATTERNS {
+                    return;
+                }
+                let pattern = st.pattern_lengths.len();
+                st.pattern_lengths.push(DEFAULT_STEPS as usize);
+                for channel in &mut st.channels {
+                    channel.notes.push(Vec::new());
+                }
+                st.current_pattern = pattern;
+                st.selected_note_id = None;
+                st.show_pattern(pattern);
+                if let Some(window) = weak.upgrade() {
+                    window.set_pattern_count(st.pattern_lengths.len() as i32);
+                    window.set_current_pattern(pattern as i32);
+                    window.set_pattern_length(DEFAULT_STEPS as i32);
+                    st.refresh_editor(&window);
+                    st.sync_playlist(&window);
+                }
+                let _ = tx.send(EngineCommand::AddPattern);
+                let _ = tx.send(EngineCommand::SetCurrentPattern(pattern as u8));
             });
         }
 
@@ -677,16 +713,19 @@ impl AppUi {
             });
         }
 
-        // Playlist placement starts snap to half bars. Clip duration always
-        // follows the referenced pattern's current logical length.
+        // Placement callbacks already carry musical-grid-snapped PPQ ticks.
+        // Clip duration follows the referenced pattern's logical length.
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_playlist_placement_added(move |pattern, half_bar| {
-                let pattern = pattern.clamp(0, MAX_PATTERNS as i32 - 1) as usize;
-                let start_tick = (half_bar.max(0) as u32).saturating_mul(PLAYLIST_SNAP_TICKS);
+            window.on_playlist_placement_added(move |pattern, start_tick| {
                 let mut st = st.borrow_mut();
+                if pattern < 0 || pattern as usize >= st.pattern_lengths.len() {
+                    return;
+                }
+                let pattern = pattern as usize;
+                let start_tick = start_tick.max(0) as u32;
                 if start_tick >= MAX_PLAYLIST_TICKS || st.playlist.len() >= MAX_PLAYLIST_PLACEMENTS
                 {
                     return;
@@ -722,10 +761,13 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_playlist_placement_removed(move |pattern, half_bar| {
-                let pattern = pattern.clamp(0, MAX_PATTERNS as i32 - 1) as usize;
-                let tick = (half_bar.max(0) as u32).saturating_mul(PLAYLIST_SNAP_TICKS);
+            window.on_playlist_placement_removed(move |pattern, tick| {
                 let mut st = st.borrow_mut();
+                if pattern < 0 || pattern as usize >= st.pattern_lengths.len() {
+                    return;
+                }
+                let pattern = pattern as usize;
+                let tick = tick.max(0) as u32;
                 let Some(placement) = st.placement_covering(pattern, tick) else {
                     return;
                 };
@@ -766,7 +808,12 @@ impl AppUi {
                     .map(|note| note.id)
                     .collect();
                 if ids.is_empty() {
-                    let note = st.channels[channel].create_note(pattern, start, 60);
+                    let note = st.channels[channel].create_note(
+                        pattern,
+                        start,
+                        DEFAULT_NOTE_DURATION_TICKS,
+                        60,
+                    );
                     if channel == st.selected {
                         st.selected_note_id = Some(note.id);
                     }
@@ -856,7 +903,12 @@ impl AppUi {
                     })
                     .collect();
                 if edited.is_empty() {
-                    let mut note = st.channels[channel].create_note(pattern, start, 60);
+                    let mut note = st.channels[channel].create_note(
+                        pattern,
+                        start,
+                        DEFAULT_NOTE_DURATION_TICKS,
+                        60,
+                    );
                     note.velocity = velocity;
                     *st.channels[channel].notes[pattern]
                         .iter_mut()
@@ -886,7 +938,7 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_piano_note_created(move |start_tick, midi_note| {
+            window.on_piano_note_created(move |start_tick, midi_note, duration_ticks| {
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
                 let channel = st.selected;
@@ -895,6 +947,7 @@ impl AppUi {
                 let mut note = st.channels[channel].create_note(
                     pattern,
                     start_tick,
+                    duration_ticks.max(1) as u32,
                     midi_note.clamp(36, 84) as u8,
                 );
                 note.duration_ticks = note
@@ -1201,12 +1254,13 @@ impl AppUi {
                 }
                 dbg_log("UI: add channel");
                 let index = st.channels.len();
-                let ch = ChannelState::new(
+                let mut ch = ChannelState::new(
                     index,
                     st.default_waveform.clone(),
                     st.default_sample_description.clone(),
                     st.default_sample_duration,
                 );
+                ch.notes.resize_with(st.pattern_lengths.len(), Vec::new);
                 let cells: Vec<StepCell> = (0..st.pattern_lengths[st.current_pattern])
                     .map(|step| rack_cell(&ch.notes[st.current_pattern], step))
                     .collect();
@@ -1620,14 +1674,14 @@ impl AppUi {
                     w.invoke_step_clicked(0, step);
                 }
                 // Pattern 1: off-beat ghost notes; channel 1 on pattern 0.
-                w.invoke_pattern_selected(1);
+                w.invoke_add_pattern_clicked();
                 w.invoke_add_channel_clicked();
                 w.invoke_step_clicked(1, 2);
                 w.invoke_pattern_selected(0);
                 w.invoke_pattern_length_changed(32);
                 w.invoke_step_velocity_edited(0, 0, 0.5);
                 w.invoke_step_removed(0, 4);
-                w.invoke_piano_note_created(36, 72);
+                w.invoke_piano_note_created(36, 72, 24);
                 w.invoke_piano_note_moved(5, 42, 74);
                 w.invoke_piano_note_resized(5, 12);
                 w.invoke_velocity_edited(5, 0.35);
@@ -1639,12 +1693,12 @@ impl AppUi {
                 w.invoke_channel_volume_changed(0, 0.65);
                 w.invoke_channel_pan_changed(0, -0.25);
                 w.invoke_playlist_placement_added(0, 0);
-                w.invoke_playlist_placement_added(1, 1);
-                w.invoke_playlist_placement_added(1, 4);
-                w.invoke_playlist_placement_removed(1, 4);
+                w.invoke_playlist_placement_added(1, 192);
+                w.invoke_playlist_placement_added(1, 768);
+                w.invoke_playlist_placement_removed(1, 768);
                 w.set_song_mode(true);
                 w.invoke_playback_mode_changed(true);
-                w.set_editor_page(0);
+                w.set_editor_page(2);
                 w.invoke_play_clicked();
             });
             let stats = stats.clone();
@@ -1654,7 +1708,7 @@ impl AppUi {
                 println!("commands forwarded by pump : {forwarded}");
                 println!("saw playing=true on window : {saw_playing}");
                 println!("nonzero metering seen     : {max_peak:.4}");
-                let ok = saw_playing && forwarded >= 28;
+                let ok = saw_playing && forwarded >= 29;
                 println!(
                     "RESULT: {}",
                     if ok {
@@ -1874,8 +1928,8 @@ mod tests {
     #[test]
     fn channel_assigns_stable_note_ids() {
         let mut channel = ChannelState::new(0, Vec::new(), String::new(), 0.0);
-        let first = channel.create_note(0, 0, 60);
-        let second = channel.create_note(0, TICKS_PER_64TH, 62);
+        let first = channel.create_note(0, 0, DEFAULT_NOTE_DURATION_TICKS, 60);
+        let second = channel.create_note(0, TICKS_PER_64TH, DEFAULT_NOTE_DURATION_TICKS, 62);
         assert_ne!(first.id, second.id);
         assert_eq!(channel.notes[0][0].id, first.id);
         assert_eq!(channel.notes[0][1].id, second.id);

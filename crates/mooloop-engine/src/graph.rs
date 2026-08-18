@@ -27,7 +27,7 @@
 
 use jack::ProcessHandler;
 use jack::{AudioOut, Client, Control, Port, ProcessScope};
-use mooloop_core::{EngineCommand, EngineEvent, SamplerParams, MAX_CHANNELS, MAX_PATTERNS};
+use mooloop_core::{EngineCommand, EngineEvent, SamplerParams, MAX_CHANNELS};
 use mooloop_dsp::{
     pan_gains, AudioNode, Event, EventList, ProcessContext, SampleData, Sampler, StereoBus,
     TimedEvent, MAX_BLOCK_SIZE,
@@ -143,7 +143,7 @@ impl Graph {
     ) -> Self {
         let sequencer = Sequencer::new(
             INITIAL_CHANNELS,
-            MAX_PATTERNS,
+            1,
             INITIAL_STEPS,
             mooloop_core::Ppq::DEFAULT,
         );
@@ -175,6 +175,9 @@ impl Graph {
             EngineCommand::Stop => self.transport.stop(),
             EngineCommand::SetTempo(bpm) => self.transport.set_tempo(bpm),
             EngineCommand::SetCurrentPattern(p) => self.sequencer.set_current_pattern(p as usize),
+            EngineCommand::AddPattern => {
+                self.sequencer.add_pattern();
+            }
             EngineCommand::SetPlaybackMode(mode) => self.sequencer.set_playback_mode(mode),
             EngineCommand::SetPatternLength {
                 pattern,

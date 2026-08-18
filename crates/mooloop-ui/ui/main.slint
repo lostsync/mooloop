@@ -38,7 +38,7 @@ struct ChannelRow {
 // One pattern instance in the song playlist.
 struct PlaylistClip {
     pattern: int,
-    start-half-bar: int,
+    start-tick: int,
     length-steps: int,
 }
 
@@ -124,6 +124,7 @@ export component MainWindow inherits Window {
     // ---- channels / patterns ----
     in-out property <[ChannelRow]> channels;
     in-out property <int> current-pattern;
+    in-out property <int> pattern-count: 1;
     in-out property <int> pattern-length;
     in-out property <int> current-step;
     in-out property <int> selected-channel;
@@ -133,8 +134,21 @@ export component MainWindow inherits Window {
     in-out property <int> playlist-position-ticks;
     in-out property <int> playlist-song-length-ticks: 384;
     in-out property <int> playlist-bars: 64;
-    property <length> playlist-bar-width: 24px;
+    in-out property <length> playlist-bar-width: 24px;
     property <int> playlist-bar-ticks: 384;
+    property <[string]> musical-snap-options: [
+        "1 Bar", "1/2", "1/4", "1/4T", "1/8", "1/8T",
+        "1/16", "1/16T", "1/32", "1/32T", "1/64",
+    ];
+    in-out property <int> musical-snap-index: 6;
+    property <int> musical-snap-ticks: root.snap-ticks(root.musical-snap-index);
+
+    pure function snap-ticks(index: int) -> int {
+        index == 0 ? 384 : index == 1 ? 192 : index == 2 ? 96
+            : index == 3 ? 64 : index == 4 ? 48 : index == 5 ? 32
+            : index == 6 ? 24 : index == 7 ? 16 : index == 8 ? 12
+            : index == 9 ? 8 : 6
+    }
 
     callback step-clicked(int, int);       // channel, step
     callback step-removed(int, int);       // channel, step
@@ -145,14 +159,15 @@ export component MainWindow inherits Window {
     callback channel-pan-changed(int, float);
     callback add-channel-clicked();
     callback remove-channel-clicked();
+    callback add-pattern-clicked();
     callback pattern-selected(int);
     callback pattern-length-changed(int);
     callback playback-mode-changed(bool);
-    callback playlist-placement-added(int, int);   // pattern, half-bar slot
-    callback playlist-placement-removed(int, int); // pattern, half-bar slot
+    callback playlist-placement-added(int, int);   // pattern, absolute start tick
+    callback playlist-placement-removed(int, int); // pattern, tick covered by clip
 
     // ---- lower editor ----
-    in-out property <int> editor-page;      // 0=Sampler, 1=Notes
+    in-out property <int> editor-page;      // 0=Sampler, 1=Notes, 2=Playlist
     in-out property <int> selected-note-step;
     in-out property <int> selected-note;
     in-out property <int> selected-velocity;
@@ -163,7 +178,7 @@ export component MainWindow inherits Window {
     property <length> piano-row-height: 5px;
     property <length> piano-step-width: 32px;
 
-    callback piano-note-created(int, int);  // start tick, MIDI note
+    callback piano-note-created(int, int, int);  // start tick, MIDI note, duration ticks
     callback piano-note-selected(int);      // stable note ID
     callback piano-note-moved(int, int, int); // ID, start tick, MIDI note
     callback piano-note-resized(int, int);  // ID, duration ticks
@@ -292,7 +307,7 @@ export component MainWindow inherits Window {
                     spacing: 1px;
                     FlatButton {
                         text: "PAT";
-                        tooltip: "Play and edit the selected pattern";
+                        tooltip: "Loop the selected pattern during playback";
                         active: !root.song-mode;
                         min-width: 38px;
                         clicked => {
@@ -304,7 +319,7 @@ export component MainWindow inherits Window {
                     }
                     FlatButton {
                         text: "SONG";
-                        tooltip: "Arrange and play patterns in the playlist";
+                        tooltip: "Follow the playlist during playback";
                         active: root.song-mode;
                         min-width: 44px;
                         clicked => {
@@ -318,17 +333,31 @@ export component MainWindow inherits Window {
 
                 Rectangle { width: 6px; }
 
-                // Pattern selector: buttons 1..8
-                HorizontalBox {
-                    padding: 0px;
-                    spacing: 2px;
-                    for p in 8 : FlatButton {
-                        text: p + 1;
-                        tooltip: "Select pattern " + (p + 1);
-                        active: root.current-pattern == p;
-                        min-width: 26px;
-                        clicked => { root.pattern-selected(p); }
+                ScrollView {
+                    width: 220px;
+                    height: 26px;
+                    viewport-width: max(self.visible-width, root.pattern-count * 30px);
+                    viewport-height: self.visible-height;
+                    HorizontalLayout {
+                        width: root.pattern-count * 30px;
+                        spacing: 2px;
+                        for p in root.pattern-count : FlatButton {
+                            text: p + 1;
+                            tooltip: "Select pattern " + (p + 1);
+                            active: root.current-pattern == p;
+                            min-width: 28px;
+                            max-width: 28px;
+                            clicked => { root.pattern-selected(p); }
+                        }
                     }
+                }
+                FlatButton {
+                    text: "+";
+                    tooltip: "Create pattern";
+                    min-width: 28px;
+                    max-width: 28px;
+                    enabled: root.pattern-count < 256;
+                    clicked => { root.add-pattern-clicked(); }
                 }
 
                 Rectangle { width: 6px; }
@@ -431,7 +460,7 @@ export component MainWindow inherits Window {
         Rectangle { height: 1px; background: Theme.border; }
 
         // ===== Channel rack: one step-grid row per channel =====
-        if !root.song-mode : ScrollView {
+        ScrollView {
             vertical-stretch: 1;
             viewport-width: max(self.visible-width, 300px + root.pattern-length * 27px);
             viewport-height: max(self.visible-height, root.channels.length * 32px + 48px);
@@ -574,165 +603,6 @@ export component MainWindow inherits Window {
             }
         }
 
-        // ===== Song playlist: pattern rows on an absolute bar timeline =====
-        if root.song-mode : ScrollView {
-            vertical-stretch: 1;
-            viewport-width: max(self.visible-width,
-                104px + root.playlist-bars * root.playlist-bar-width);
-            viewport-height: max(self.visible-height, 270px);
-
-            playlist-canvas := Rectangle {
-                width: 104px + root.playlist-bars * root.playlist-bar-width;
-                height: 270px;
-
-                Text {
-                    x: 8px; y: 5px;
-                    width: 88px; height: 18px;
-                    text: "PATTERN";
-                    color: Theme.text-faint;
-                    font-size: 9px;
-                    vertical-alignment: center;
-                }
-
-                header := Rectangle {
-                    x: 104px; y: 0px;
-                    width: root.playlist-bars * root.playlist-bar-width;
-                    height: 28px;
-                    background: Theme.surface;
-                    for bar in root.playlist-bars : Rectangle {
-                        x: bar * root.playlist-bar-width;
-                        width: root.playlist-bar-width;
-                        height: parent.height;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        Text {
-                            text: bar + 1;
-                            color: Theme.text-faint;
-                            font-size: 8px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                for pattern in 8 : Rectangle {
-                    x: 0px;
-                    y: 30px + pattern * 28px;
-                    width: playlist-canvas.width;
-                    height: 26px;
-
-                    pattern-label := Rectangle {
-                        x: 8px;
-                        width: 88px;
-                        height: parent.height;
-                        border-radius: 3px;
-                        background: root.current-pattern == pattern
-                            ? Theme.surface-active : Theme.surface;
-                        Text {
-                            x: 6px;
-                            text: "Pattern " + (pattern + 1);
-                            color: root.current-pattern == pattern
-                                ? Theme.text : Theme.text-muted;
-                            font-size: 10px;
-                            vertical-alignment: center;
-                        }
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.pattern-selected(pattern); }
-                        }
-                    }
-
-                    timeline := Rectangle {
-                        x: 104px;
-                        width: root.playlist-bars * root.playlist-bar-width;
-                        height: parent.height;
-                        background: Theme.background;
-
-                        for bar in root.playlist-bars : Rectangle {
-                            x: bar * root.playlist-bar-width;
-                            width: root.playlist-bar-width;
-                            height: parent.height;
-                            background: mod(bar, 4) == 0
-                                ? Theme.surface : Theme.background;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            Rectangle {
-                                x: parent.width / 2;
-                                width: 1px;
-                                height: parent.height;
-                                background: Theme.border;
-                                opacity: 0.55;
-                            }
-                        }
-
-                        for clip in root.playlist-clips : Rectangle {
-                            visible: clip.pattern == pattern;
-                            property <int> clip-start-tick:
-                                clip.start-half-bar * root.playlist-bar-ticks / 2;
-                            property <int> clip-end-tick:
-                                self.clip-start-tick + clip.length-steps * 24;
-                            x: clip.start-half-bar * root.playlist-bar-width / 2;
-                            y: 2px;
-                            width: max(4px,
-                                clip.length-steps * root.playlist-bar-width / 16);
-                            height: parent.height - 4px;
-                            border-radius: 2px;
-                            border-width: root.playing
-                                && root.playlist-position-ticks >= self.clip-start-tick
-                                && root.playlist-position-ticks < self.clip-end-tick ? 1px : 0px;
-                            border-color: Theme.text;
-                            background: Theme.accent;
-                            opacity: root.current-pattern == pattern ? 1 : 0.62;
-                            Text {
-                                text: pattern + 1;
-                                color: Theme.background;
-                                font-size: 9px;
-                                font-weight: 600;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                        }
-
-                        if root.playing : Rectangle {
-                            x: root.playlist-position-ticks * root.playlist-bar-width
-                                / root.playlist-bar-ticks;
-                            width: 1px;
-                            height: parent.height;
-                            background: Theme.text;
-                        }
-
-                        Rectangle {
-                            x: root.playlist-song-length-ticks * root.playlist-bar-width
-                                / root.playlist-bar-ticks - 1px;
-                            width: 1px;
-                            height: parent.height;
-                            background: Theme.text-faint;
-                        }
-
-                        playlist-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            pointer-event(e) => {
-                                if (e.kind == PointerEventKind.down) {
-                                    let half-bar = clamp(floor(self.mouse-x
-                                        / (root.playlist-bar-width / 2)),
-                                        0, root.playlist-bars * 2 - 1);
-                                    if (e.button == PointerEventButton.right) {
-                                        root.playlist-placement-removed(pattern, half-bar);
-                                    } else if (e.button == PointerEventButton.left) {
-                                        root.playlist-placement-added(pattern, half-bar);
-                                    }
-                                }
-                            }
-                            Tooltip {
-                                text: @markdown("Click to place a pattern at a half-bar boundary. **Right-click** a clip to remove it.");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         Rectangle { height: 1px; background: Theme.border; }
 
         // ===== Bottom dock: sampler and note editors =====
@@ -762,14 +632,226 @@ export component MainWindow inherits Window {
                             active: root.editor-page == 1;
                             clicked => { root.editor-page = 1; }
                         }
+                        FlatButton {
+                            text: "Playlist";
+                            tooltip: "Song arrangement";
+                            active: root.editor-page == 2;
+                            clicked => { root.editor-page = 2; }
+                        }
                         Rectangle { width: 8px; }
                         Text {
-                            text: root.selected-channel-name;
+                            text: root.editor-page == 2 ? "SONG ARRANGEMENT" : root.selected-channel-name;
                             color: Theme.text-muted;
                             font-size: 10px;
                             vertical-alignment: center;
                         }
                         Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+
+                if root.editor-page == 2 : Rectangle {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 0px;
+
+                        Rectangle {
+                            height: 34px;
+                            background: Theme.surface-raised;
+                            HorizontalBox {
+                                padding: 4px;
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "SNAP";
+                                    color: Theme.text-faint;
+                                    font-size: 9px;
+                                    vertical-alignment: center;
+                                }
+                                ComboBox {
+                                    model: root.musical-snap-options;
+                                    current-index <=> root.musical-snap-index;
+                                    width: 92px;
+                                    height: 24px;
+                                    Tooltip { text: @markdown("Musical placement grid shared with the piano roll"); }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: "↔"; color: Theme.text-faint; vertical-alignment: center; }
+                                FlatButton {
+                                    text: "−"; tooltip: "Zoom timeline out";
+                                    min-width: 26px; max-width: 26px;
+                                    enabled: root.playlist-bar-width > 12px;
+                                    clicked => { root.playlist-bar-width = max(12px, root.playlist-bar-width - 4px); }
+                                }
+                                FlatButton {
+                                    text: "+"; tooltip: "Zoom timeline in";
+                                    min-width: 26px; max-width: 26px;
+                                    enabled: root.playlist-bar-width < 96px;
+                                    clicked => { root.playlist-bar-width = min(96px, root.playlist-bar-width + 4px); }
+                                }
+                            }
+                        }
+
+                        ScrollView {
+                            vertical-stretch: 1;
+                            viewport-width: max(self.visible-width,
+                                104px + root.playlist-bars * root.playlist-bar-width);
+                            viewport-height: max(self.visible-height,
+                                30px + root.pattern-count * 28px);
+
+                            playlist-canvas := Rectangle {
+                                width: 104px + root.playlist-bars * root.playlist-bar-width;
+                                height: max(346px, 30px + root.pattern-count * 28px);
+
+                                Text {
+                                    x: 8px; y: 5px;
+                                    width: 88px; height: 18px;
+                                    text: "PATTERN";
+                                    color: Theme.text-faint;
+                                    font-size: 9px;
+                                    vertical-alignment: center;
+                                }
+
+                                Rectangle {
+                                    x: 104px; y: 0px;
+                                    width: root.playlist-bars * root.playlist-bar-width;
+                                    height: 28px;
+                                    background: Theme.surface;
+                                    for bar in root.playlist-bars : Rectangle {
+                                        x: bar * root.playlist-bar-width;
+                                        width: root.playlist-bar-width;
+                                        height: parent.height;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        Text {
+                                            text: bar + 1;
+                                            color: Theme.text-faint;
+                                            font-size: 8px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                for pattern in root.pattern-count : Rectangle {
+                                    x: 0px;
+                                    y: 30px + pattern * 28px;
+                                    width: playlist-canvas.width;
+                                    height: 26px;
+
+                                    Rectangle {
+                                        x: 8px;
+                                        width: 88px;
+                                        height: parent.height;
+                                        border-radius: 3px;
+                                        background: root.current-pattern == pattern
+                                            ? Theme.surface-active : Theme.surface;
+                                        Text {
+                                            x: 6px;
+                                            text: "Pattern " + (pattern + 1);
+                                            color: root.current-pattern == pattern
+                                                ? Theme.text : Theme.text-muted;
+                                            font-size: 10px;
+                                            vertical-alignment: center;
+                                        }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.pattern-selected(pattern); }
+                                        }
+                                    }
+
+                                    timeline := Rectangle {
+                                        x: 104px;
+                                        width: root.playlist-bars * root.playlist-bar-width;
+                                        height: parent.height;
+                                        background: Theme.background;
+
+                                        for bar in root.playlist-bars : Rectangle {
+                                            x: bar * root.playlist-bar-width;
+                                            width: root.playlist-bar-width;
+                                            height: parent.height;
+                                            background: mod(bar, 4) == 0
+                                                ? Theme.surface : Theme.background;
+                                            border-width: 1px;
+                                            border-color: Theme.border;
+                                            for division in root.playlist-bar-ticks / root.musical-snap-ticks : Rectangle {
+                                                visible: division > 0;
+                                                x: division * parent.width
+                                                    / (root.playlist-bar-ticks / root.musical-snap-ticks);
+                                                width: 1px;
+                                                height: parent.height;
+                                                background: Theme.border;
+                                                opacity: 0.48;
+                                            }
+                                        }
+
+                                        for clip in root.playlist-clips : Rectangle {
+                                            visible: clip.pattern == pattern;
+                                            property <int> clip-end-tick:
+                                                clip.start-tick + clip.length-steps * 24;
+                                            x: clip.start-tick * root.playlist-bar-width
+                                                / root.playlist-bar-ticks;
+                                            y: 2px;
+                                            width: max(4px,
+                                                clip.length-steps * root.playlist-bar-width / 16);
+                                            height: parent.height - 4px;
+                                            border-radius: 2px;
+                                            border-width: root.playing && root.song-mode
+                                                && root.playlist-position-ticks >= clip.start-tick
+                                                && root.playlist-position-ticks < self.clip-end-tick ? 1px : 0px;
+                                            border-color: Theme.text;
+                                            background: Theme.accent;
+                                            opacity: root.current-pattern == pattern ? 1 : 0.62;
+                                            Text {
+                                                text: pattern + 1;
+                                                color: Theme.background;
+                                                font-size: 9px;
+                                                font-weight: 600;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                        }
+
+                                        if root.playing && root.song-mode : Rectangle {
+                                            x: root.playlist-position-ticks * root.playlist-bar-width
+                                                / root.playlist-bar-ticks;
+                                            width: 1px;
+                                            height: parent.height;
+                                            background: Theme.text;
+                                        }
+
+                                        Rectangle {
+                                            x: root.playlist-song-length-ticks * root.playlist-bar-width
+                                                / root.playlist-bar-ticks - 1px;
+                                            width: 1px;
+                                            height: parent.height;
+                                            background: Theme.text-faint;
+                                        }
+
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            pointer-event(e) => {
+                                                if (e.kind == PointerEventKind.down) {
+                                                    let raw-tick = clamp(floor(self.mouse-x
+                                                        * root.playlist-bar-ticks / root.playlist-bar-width),
+                                                        0, root.playlist-bars * root.playlist-bar-ticks - 1);
+                                                    if (e.button == PointerEventButton.right) {
+                                                        root.playlist-placement-removed(pattern, raw-tick);
+                                                    } else if (e.button == PointerEventButton.left) {
+                                                        root.playlist-placement-added(pattern,
+                                                            floor(raw-tick / root.musical-snap-ticks)
+                                                                * root.musical-snap-ticks);
+                                                    }
+                                                }
+                                            }
+                                            Tooltip {
+                                                text: @markdown("Click to place on the musical grid. **Right-click** a clip to remove it.");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1227,7 +1309,7 @@ export component MainWindow inherits Window {
                                     value <=> root.selected-duration-ticks;
                                     minimum: 1;
                                     maximum: max(1, root.pattern-length * 24);
-                                    step-size: 6;
+                                    step-size: root.musical-snap-ticks;
                                     width: 78px;
                                     height: 24px;
                                     edited(value) => { root.selected-duration-changed(value); }
@@ -1241,6 +1323,19 @@ export component MainWindow inherits Window {
                                     width: 120px;
                                     height: 24px;
                                     Tooltip { text: @markdown("Parameter lane"); }
+                                }
+                                Text {
+                                    text: "SNAP";
+                                    color: Theme.text-faint;
+                                    font-size: 9px;
+                                    vertical-alignment: center;
+                                }
+                                ComboBox {
+                                    model: root.musical-snap-options;
+                                    current-index <=> root.musical-snap-index;
+                                    width: 84px;
+                                    height: 24px;
+                                    Tooltip { text: @markdown("Musical grid shared with the playlist"); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 Text { text: "↔"; color: Theme.text-faint; vertical-alignment: center; }
@@ -1355,12 +1450,15 @@ export component MainWindow inherits Window {
                                                 ? Theme.surface : Theme.surface-raised;
                                         }
 
-                                        for division in root.pattern-length * 4 : Rectangle {
-                                            x: division * root.piano-step-width / 4;
+                                        for division in root.pattern-length * 24 / root.musical-snap-ticks : Rectangle {
+                                            x: division * root.musical-snap-ticks
+                                                * root.piano-step-width / 24;
                                             width: 1px;
                                             height: parent.height;
-                                            background: mod(division, 4) == 0 ? Theme.text-faint : Theme.border;
-                                            opacity: mod(division, 4) == 0 ? 0.8 : 0.5;
+                                            background: mod(division * root.musical-snap-ticks, 24) == 0
+                                                ? Theme.text-faint : Theme.border;
+                                            opacity: mod(division * root.musical-snap-ticks, 24) == 0
+                                                ? 0.8 : 0.5;
                                         }
 
                                         TouchArea {
@@ -1369,14 +1467,20 @@ export component MainWindow inherits Window {
                                                 if (e.kind == PointerEventKind.down
                                                     && e.button == PointerEventButton.left) {
                                                     let start-tick = clamp(
-                                                        floor(self.mouse-x / (root.piano-step-width / 4)) * 6,
-                                                        0, root.pattern-length * 24 - 6);
+                                                        floor(self.mouse-x * 24
+                                                            / root.piano-step-width
+                                                            / root.musical-snap-ticks)
+                                                            * root.musical-snap-ticks,
+                                                        0, max(0, root.pattern-length * 24
+                                                            - root.musical-snap-ticks));
                                                     let note = clamp(
                                                         root.piano-high-note
                                                             - floor(self.mouse-y / root.piano-row-height),
                                                         root.piano-low-note,
                                                         root.piano-high-note);
-                                                    root.piano-note-created(start-tick, note);
+                                                    root.piano-note-created(start-tick, note,
+                                                        min(root.musical-snap-ticks,
+                                                            root.pattern-length * 24 - start-tick));
                                                 }
                                             }
                                         }
@@ -1384,7 +1488,7 @@ export component MainWindow inherits Window {
                                         for cell in root.notes : Rectangle {
                                             x: cell.start-tick * root.piano-step-width / 24;
                                             y: (root.piano-high-note - cell.note) * root.piano-row-height;
-                                            width: max(root.piano-step-width / 4,
+                                            width: max(root.musical-snap-ticks * root.piano-step-width / 24,
                                                 cell.duration-ticks * root.piano-step-width / 24);
                                             height: root.piano-row-height;
                                             background: cell.selected ? Theme.focus : Theme.accent;
@@ -1416,8 +1520,11 @@ export component MainWindow inherits Window {
                                                         && self.pressed && self.dragging-note) {
                                                         let tick = clamp(self.original-start
                                                             + round((self.mouse-x - self.origin-x)
-                                                                / (root.piano-step-width / 4)) * 6,
-                                                            0, root.pattern-length * 24 - 6);
+                                                                * 24 / root.piano-step-width
+                                                                / root.musical-snap-ticks)
+                                                                * root.musical-snap-ticks,
+                                                            0, max(0, root.pattern-length * 24
+                                                                - root.musical-snap-ticks));
                                                         let note = clamp(self.original-note
                                                             + round((self.origin-y - self.mouse-y)
                                                                 / root.piano-row-height),
@@ -1441,10 +1548,15 @@ export component MainWindow inherits Window {
                                                         self.origin-x = self.mouse-x;
                                                         self.original-duration = cell.duration-ticks;
                                                     } else if (e.kind == PointerEventKind.move && self.pressed) {
+                                                        let max-duration = root.pattern-length * 24
+                                                            - cell.start-tick;
                                                         let duration = clamp(self.original-duration
                                                             + round((self.mouse-x - self.origin-x)
-                                                                / (root.piano-step-width / 4)) * 6,
-                                                            1, root.pattern-length * 24 - cell.start-tick);
+                                                                * 24 / root.piano-step-width
+                                                                / root.musical-snap-ticks)
+                                                                * root.musical-snap-ticks,
+                                                            min(root.musical-snap-ticks, max-duration),
+                                                            max-duration);
                                                         root.piano-note-resized(cell.id, duration);
                                                     }
                                                 }

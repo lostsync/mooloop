@@ -25,6 +25,8 @@ pub enum EngineCommand {
     SetTempo(f64),
     /// Select which pattern the transport loops (live-switchable).
     SetCurrentPattern(u8),
+    /// Make the next preallocated pattern available to the project.
+    AddPattern,
     /// Switch transport scheduling between the selected pattern and playlist.
     SetPlaybackMode(PlaybackMode),
     /// Set one pattern's logical length. Storage is pre-allocated, so this is

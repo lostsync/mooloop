@@ -7,22 +7,25 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 
 ## Implemented User Surface
 
-- One application window with transport, eight pattern selectors, tempo,
-  master peak meters, channel rack, and a lower editor.
+- One application window with transport playback modes, a scrollable created-
+  pattern selector, tempo, master peak meters, channel rack, and a lower editor.
 - Up to 16 channels. The UI starts with one sampler channel and can append or
   remove channels. Every rack row exposes mute, output volume, and
   constant-power stereo pan.
-- Eight patterns with independent logical lengths from 1 to 256 steps. Hidden
-  steps survive shortening and re-extending a pattern.
-- Pattern and Song transport modes. The playlist shows pattern rows on a
-  bar-scale timeline, supports layered pattern instances, and snaps placement
-  starts to half bars. Clip width follows each pattern's natural length.
+- Patterns are created explicitly from a one-pattern project, with up to 256
+  addressable pattern IDs and independent logical lengths from 1 to 256 steps.
+  Hidden steps survive shortening and re-extending a pattern.
+- Pattern and Song transport modes are independent of the visible editor.
+  The playlist is a lower-pane tab, supports layered tick-addressed pattern
+  instances, and remains editable while either mode plays. Clip width follows
+  each pattern's natural length.
 - Tick-addressed notes with stable IDs, start, duration, MIDI pitch, and
   velocity. Starts snap to 64ths in the piano roll while retaining PPQ tick
   precision internally.
 - A horizontally and vertically zoomable piano roll with note creation,
   movement, length resizing, right-click removal, exact pitch/velocity/length
-  fields, and a pinned velocity lane.
+  fields, and a pinned velocity lane. It shares selectable straight/triplet
+  musical snap values from one bar through 1/64 with the playlist.
 - Sixteenth-note rack cells summarize their four 64th-note substeps without
   discarding rests between hits.
 - A sampler editor with waveform, WAV loading and sibling navigation, trim,
@@ -89,8 +92,9 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 - Pattern mode loops the selected pattern. Song mode layers playlist placements
   on the shared absolute clock and loops at the bar after the furthest clip end.
-- Playlist starts currently snap to half bars and are bounded to a 64-bar start
-  grid. There is no clip dragging, explicit song loop range, time-signature
+- Playlist starts use the shared musical snap while retaining absolute PPQ
+  ticks and are bounded to a 64-bar start canvas. The timeline is horizontally
+  zoomable. There is no clip dragging, explicit song loop range, time-signature
   model, swing, groove, or per-channel timing offset.
 
 ### State And Persistence
