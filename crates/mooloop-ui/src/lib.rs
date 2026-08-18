@@ -13,8 +13,9 @@ slint::include_modules!();
 
 use meter::MeterBallistics;
 use mooloop_core::{
-    EngineCommand, EngineEvent, LoopMode, Ppq, SamplerParams, Step, DEFAULT_STEPS, MAX_CHANNELS,
-    MAX_PATTERNS, MAX_PATTERN_STEPS,
+    EngineCommand, EngineEvent, LoopMode, NoteEvent, NoteId, Ppq, SamplerParams,
+    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS,
+    TICKS_PER_64TH, TICKS_PER_STEP,
 };
 use mooloop_dsp::SampleData;
 use mooloop_engine::EngineHandle;
@@ -59,8 +60,7 @@ fn sync_appearance_properties(window: &MainWindow, appearance: &AppearanceSettin
     window.set_appearance_error("".into());
 }
 
-/// UI-side state for one channel. `steps` is the pattern bank:
-/// `[pattern][step]`.
+/// UI-side state for one channel. `notes` is the pattern bank.
 struct ChannelState {
     name: String,
     muted: bool,
@@ -72,7 +72,8 @@ struct ChannelState {
     waveform: Vec<f32>,
     can_previous_sample: bool,
     can_next_sample: bool,
-    steps: Vec<Vec<Step>>,
+    notes: Vec<Vec<NoteEvent>>,
+    next_note_id: NoteId,
 }
 
 impl ChannelState {
@@ -93,8 +94,23 @@ impl ChannelState {
             waveform: default_waveform,
             can_previous_sample: false,
             can_next_sample: false,
-            steps: vec![vec![Step::default(); MAX_PATTERN_STEPS as usize]; MAX_PATTERNS],
+            notes: vec![Vec::new(); MAX_PATTERNS],
+            next_note_id: 1,
         }
+    }
+
+    fn create_note(&mut self, pattern: usize, start_tick: u32, note: u8) -> NoteEvent {
+        let event = NoteEvent::new(
+            self.next_note_id,
+            start_tick,
+            DEFAULT_NOTE_DURATION_TICKS,
+            note,
+            100,
+        );
+        self.next_note_id = self.next_note_id.wrapping_add(1).max(1);
+        self.notes[pattern].push(event);
+        self.notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+        event
     }
 }
 
@@ -139,6 +155,37 @@ fn dbg_log(msg: &str) {
     }
 }
 
+fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
+    let start = (step as u32).saturating_mul(TICKS_PER_STEP);
+    let end = start.saturating_add(TICKS_PER_STEP);
+    let mut substeps = 0;
+    let mut velocity = 100;
+    for note in notes
+        .iter()
+        .filter(|note| note.start_tick >= start && note.start_tick < end)
+    {
+        let substep = ((note.start_tick - start) / TICKS_PER_64TH).min(3);
+        substeps |= 1 << substep;
+        velocity = velocity.max(i32::from(note.velocity));
+    }
+    StepCell {
+        active: substeps != 0,
+        velocity,
+        substeps,
+    }
+}
+
+fn note_cell(note: NoteEvent, selected_id: Option<NoteId>) -> NoteCell {
+    NoteCell {
+        id: note.id as i32,
+        start_tick: note.start_tick as i32,
+        duration_ticks: note.duration_ticks as i32,
+        note: note.note as i32,
+        velocity: note.velocity as i32,
+        selected: selected_id == Some(note.id),
+    }
+}
+
 /// Shared UI state handed to the callback closures.
 struct UiState {
     channels: Vec<ChannelState>,
@@ -152,7 +199,7 @@ struct UiState {
     pattern_lengths: Vec<usize>,
     current_pattern: usize,
     selected: usize,
-    selected_step: usize,
+    selected_note_id: Option<NoteId>,
 }
 
 impl UiState {
@@ -172,70 +219,49 @@ impl UiState {
     fn show_pattern(&self, pattern: usize) {
         let length = self.pattern_lengths[pattern];
         for (i, ch) in self.channels.iter().enumerate() {
-            let cells: Vec<StepCell> = ch.steps[pattern]
-                .iter()
-                .take(length)
-                .map(|step| StepCell {
-                    active: step.on,
-                    velocity: step.velocity as i32,
-                })
+            let cells: Vec<StepCell> = (0..length)
+                .map(|step| rack_cell(&ch.notes[pattern], step))
                 .collect();
             self.step_models[i].set_vec(cells);
         }
     }
 
-    fn refresh_note_editor(&self, window: &MainWindow) {
-        let length = self.pattern_lengths[self.current_pattern];
-        let Some(channel) = self.channels.get(self.selected) else {
-            return;
-        };
-        let cells: Vec<NoteCell> = channel.steps[self.current_pattern]
-            .iter()
-            .take(length)
-            .enumerate()
-            .map(|(index, step)| NoteCell {
-                active: step.on,
-                note: step.note as i32,
-                velocity: step.velocity as i32,
-                selected: index == self.selected_step,
-            })
-            .collect();
-        self.note_model.set_vec(cells);
-
-        if let Some(step) = channel.steps[self.current_pattern].get(self.selected_step) {
-            window.set_selected_note_step(self.selected_step as i32);
-            window.set_selected_note(step.note as i32);
-            window.set_selected_velocity(step.velocity as i32);
-        }
+    fn refresh_rack_cell(&self, channel: usize, step: usize) {
+        let notes = &self.channels[channel].notes[self.current_pattern];
+        self.step_models[channel].set_row_data(step, rack_cell(notes, step));
     }
 
-    fn refresh_note_cell(&self, index: usize) {
+    fn refresh_note_editor(&self, window: &MainWindow) {
         let Some(channel) = self.channels.get(self.selected) else {
             return;
         };
-        let Some(step) = channel.steps[self.current_pattern].get(index) else {
-            return;
-        };
-        self.note_model.set_row_data(
-            index,
-            NoteCell {
-                active: step.on,
-                note: step.note as i32,
-                velocity: step.velocity as i32,
-                selected: index == self.selected_step,
-            },
-        );
+        let length_ticks = self.pattern_lengths[self.current_pattern] as u32 * TICKS_PER_STEP;
+        let cells: Vec<NoteCell> = channel.notes[self.current_pattern]
+            .iter()
+            .copied()
+            .filter(|note| note.start_tick < length_ticks)
+            .map(|note| note_cell(note, self.selected_note_id))
+            .collect();
+        self.note_model.set_vec(cells);
+        self.refresh_selected_note_controls(window);
     }
 
     fn refresh_selected_note_controls(&self, window: &MainWindow) {
-        let Some(step) =
-            self.channels[self.selected].steps[self.current_pattern].get(self.selected_step)
+        window.set_has_selected_note(false);
+        let Some(id) = self.selected_note_id else {
+            return;
+        };
+        let Some(note) = self.channels[self.selected].notes[self.current_pattern]
+            .iter()
+            .find(|note| note.id == id)
         else {
             return;
         };
-        window.set_selected_note_step(self.selected_step as i32);
-        window.set_selected_note(step.note as i32);
-        window.set_selected_velocity(step.velocity as i32);
+        window.set_has_selected_note(true);
+        window.set_selected_note_step(note.start_tick as i32);
+        window.set_selected_note(note.note as i32);
+        window.set_selected_velocity(note.velocity as i32);
+        window.set_selected_duration_ticks(note.duration_ticks as i32);
     }
 
     /// Refresh the bottom editor's properties from `selected`.
@@ -397,28 +423,11 @@ impl AppUi {
             default_sample_description.clone(),
             default_sample_duration,
         );
-        let first_steps: Vec<StepCell> = first.steps[0]
-            .iter()
-            .take(DEFAULT_STEPS as usize)
-            .map(|step| StepCell {
-                active: step.on,
-                velocity: step.velocity as i32,
-            })
+        let first_steps: Vec<StepCell> = (0..DEFAULT_STEPS as usize)
+            .map(|step| rack_cell(&first.notes[0], step))
             .collect();
         let step_model = Rc::new(VecModel::from(first_steps));
-        let note_model = Rc::new(VecModel::from(
-            first.steps[0]
-                .iter()
-                .take(DEFAULT_STEPS as usize)
-                .enumerate()
-                .map(|(index, step)| NoteCell {
-                    active: step.on,
-                    note: step.note as i32,
-                    velocity: step.velocity as i32,
-                    selected: index == 0,
-                })
-                .collect::<Vec<_>>(),
-        ));
+        let note_model = Rc::new(VecModel::from(Vec::<NoteCell>::new()));
         let row = ChannelRow {
             name: first.name.as_str().into(),
             muted: false,
@@ -443,7 +452,7 @@ impl AppUi {
             pattern_lengths: vec![DEFAULT_STEPS as usize; MAX_PATTERNS],
             current_pattern: 0,
             selected: 0,
-            selected_step: 0,
+            selected_note_id: None,
         }));
         state.borrow().refresh_editor(&window);
 
@@ -507,9 +516,7 @@ impl AppUi {
                 {
                     let mut st = st.borrow_mut();
                     st.current_pattern = p;
-                    st.selected_step = st
-                        .selected_step
-                        .min(st.pattern_lengths[p].saturating_sub(1));
+                    st.selected_note_id = None;
                     st.show_pattern(p);
                 }
                 if let Some(w) = weak.upgrade() {
@@ -536,7 +543,15 @@ impl AppUi {
                     return;
                 }
                 st.pattern_lengths[pattern] = length;
-                st.selected_step = st.selected_step.min(length - 1);
+                let length_ticks = length as u32 * TICKS_PER_STEP;
+                if st.selected_note_id.is_some_and(|id| {
+                    st.channels[st.selected].notes[pattern]
+                        .iter()
+                        .find(|note| note.id == id)
+                        .is_none_or(|note| note.start_tick >= length_ticks)
+                }) {
+                    st.selected_note_id = None;
+                }
                 st.show_pattern(pattern);
                 if let Some(w) = weak.upgrade() {
                     w.set_pattern_length(length as i32);
@@ -549,399 +564,373 @@ impl AppUi {
             });
         }
 
-        // Step toggle (channel, step).
+        // Rack cells summarize all notes starting in their sixteenth. A click
+        // adds an anchor note to an empty cell or clears every substep in a
+        // populated one; right-click always clears.
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_step_clicked(move |ch, step| {
-                let (ch, step) = (ch as usize, step as usize);
+            window.on_step_clicked(move |channel, step| {
+                let (channel, step) = (channel as usize, step as usize);
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
-                if ch >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
                     return;
                 }
-                dbg_log(&format!("UI: ch {ch} step {step} toggled"));
-                let p = pattern;
-                st.channels[ch].steps[p][step].on = !st.channels[ch].steps[p][step].on;
-                let edited = st.channels[ch].steps[p][step];
-                let new_active = edited.on;
-                st.step_models[ch].set_row_data(
-                    step,
-                    StepCell {
-                        active: new_active,
-                        velocity: edited.velocity as i32,
-                    },
-                );
-                if ch == st.selected {
-                    st.selected_step = step;
-                    if let Some(w) = weak.upgrade() {
-                        st.refresh_note_editor(&w);
+                let start = step as u32 * TICKS_PER_STEP;
+                let end = start + TICKS_PER_STEP;
+                let ids: Vec<NoteId> = st.channels[channel].notes[pattern]
+                    .iter()
+                    .filter(|note| note.start_tick >= start && note.start_tick < end)
+                    .map(|note| note.id)
+                    .collect();
+                if ids.is_empty() {
+                    let note = st.channels[channel].create_note(pattern, start, 60);
+                    if channel == st.selected {
+                        st.selected_note_id = Some(note.id);
                     }
-                }
-                let _ = tx.send(EngineCommand::SetStep {
-                    pattern: p as u8,
-                    channel: ch as u8,
-                    step: step as u8,
-                    on: new_active,
-                    note: edited.note,
-                    velocity: edited.velocity,
-                });
-            });
-        }
-
-        // Right-click clearing is idempotent and preserves pitch/velocity.
-        {
-            let tx = cmd_tx.clone();
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_step_removed(move |ch, step| {
-                let (ch, step) = (ch as usize, step as usize);
-                let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                if ch >= st.channels.len() || step >= st.pattern_lengths[pattern] {
-                    return;
-                }
-                let edited = {
-                    let edited = &mut st.channels[ch].steps[pattern][step];
-                    edited.on = false;
-                    *edited
-                };
-                st.step_models[ch].set_row_data(
-                    step,
-                    StepCell {
-                        active: false,
-                        velocity: edited.velocity as i32,
-                    },
-                );
-                if ch == st.selected {
-                    st.selected_step = step;
-                    if let Some(w) = weak.upgrade() {
-                        st.refresh_note_editor(&w);
-                    }
-                }
-                let _ = tx.send(EngineCommand::SetStep {
-                    pattern: pattern as u8,
-                    channel: ch as u8,
-                    step: step as u8,
-                    on: false,
-                    note: edited.note,
-                    velocity: edited.velocity,
-                });
-            });
-        }
-
-        // Ctrl-dragging a rack step sets velocity and activates the step.
-        {
-            let tx = cmd_tx.clone();
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_step_velocity_edited(move |ch, step, value| {
-                let (ch, step) = (ch as usize, step as usize);
-                let velocity = (1.0 + value.clamp(0.0, 1.0) * 126.0).round() as u8;
-                let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                if ch >= st.channels.len() || step >= st.pattern_lengths[pattern] {
-                    return;
-                }
-                let edited = {
-                    let edited = &mut st.channels[ch].steps[pattern][step];
-                    edited.on = true;
-                    edited.velocity = velocity;
-                    *edited
-                };
-                st.step_models[ch].set_row_data(
-                    step,
-                    StepCell {
-                        active: true,
-                        velocity: edited.velocity as i32,
-                    },
-                );
-                if ch == st.selected {
-                    st.selected_step = step;
-                    if let Some(w) = weak.upgrade() {
-                        st.refresh_note_editor(&w);
-                    }
-                }
-                let _ = tx.send(EngineCommand::SetStep {
-                    pattern: pattern as u8,
-                    channel: ch as u8,
-                    step: step as u8,
-                    on: true,
-                    note: edited.note,
-                    velocity: edited.velocity,
-                });
-            });
-        }
-
-        // Piano roll pitch editing for the selected channel and pattern.
-        {
-            let tx = cmd_tx.clone();
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_piano_note_edited(move |step, note| {
-                let step = step as usize;
-                let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                if step >= st.pattern_lengths[pattern] {
-                    return;
-                }
-                let previous = st.selected_step;
-                st.selected_step = step;
-                let edited = {
-                    let edited = &mut st.channels[channel].steps[pattern][step];
-                    edited.on = true;
-                    edited.note = note.clamp(36, 84) as u8;
-                    *edited
-                };
-                st.step_models[channel].set_row_data(
-                    step,
-                    StepCell {
-                        active: true,
-                        velocity: edited.velocity as i32,
-                    },
-                );
-                if let Some(w) = weak.upgrade() {
-                    st.refresh_note_cell(previous);
-                    st.refresh_note_cell(step);
-                    st.refresh_selected_note_controls(&w);
-                }
-                let _ = tx.send(EngineCommand::SetStep {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    step: step as u8,
-                    on: edited.on,
-                    note: edited.note,
-                    velocity: edited.velocity,
-                });
-            });
-        }
-
-        {
-            let tx = cmd_tx.clone();
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_piano_note_removed(move |step| {
-                let step = step as usize;
-                let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                if step >= st.pattern_lengths[pattern] {
-                    return;
-                }
-                let previous = st.selected_step;
-                st.selected_step = step;
-                let edited = {
-                    let edited = &mut st.channels[channel].steps[pattern][step];
-                    edited.on = false;
-                    *edited
-                };
-                st.step_models[channel].set_row_data(
-                    step,
-                    StepCell {
-                        active: false,
-                        velocity: edited.velocity as i32,
-                    },
-                );
-                if let Some(w) = weak.upgrade() {
-                    st.refresh_note_cell(previous);
-                    st.refresh_note_cell(step);
-                    st.refresh_selected_note_controls(&w);
-                }
-                let _ = tx.send(EngineCommand::SetStep {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    step: step as u8,
-                    on: false,
-                    note: edited.note,
-                    velocity: edited.velocity,
-                });
-            });
-        }
-
-        {
-            let tx = cmd_tx.clone();
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_piano_note_moved(move |_source, destination, note| {
-                let destination = destination as usize;
-                let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let source = st.selected_step;
-                if source >= st.pattern_lengths[pattern]
-                    || destination >= st.pattern_lengths[pattern]
-                {
-                    return;
-                }
-
-                let mut moved = st.channels[channel].steps[pattern][source];
-                moved.on = true;
-                moved.note = note.clamp(36, 84) as u8;
-
-                if source != destination {
-                    let source_after = {
-                        let source_step = &mut st.channels[channel].steps[pattern][source];
-                        source_step.on = false;
-                        *source_step
-                    };
-                    st.channels[channel].steps[pattern][destination] = moved;
-                    st.step_models[channel].set_row_data(
-                        source,
-                        StepCell {
-                            active: false,
-                            velocity: source_after.velocity as i32,
-                        },
-                    );
-                    let _ = tx.send(EngineCommand::SetStep {
+                    let _ = tx.send(EngineCommand::UpsertNote {
                         pattern: pattern as u8,
                         channel: channel as u8,
-                        step: source as u8,
-                        on: false,
-                        note: source_after.note,
-                        velocity: source_after.velocity,
+                        note,
                     });
                 } else {
-                    st.channels[channel].steps[pattern][source] = moved;
+                    st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                    if st.selected_note_id.is_some_and(|id| ids.contains(&id)) {
+                        st.selected_note_id = None;
+                    }
+                    for id in ids {
+                        let _ = tx.send(EngineCommand::RemoveNote {
+                            pattern: pattern as u8,
+                            channel: channel as u8,
+                            id,
+                        });
+                    }
                 }
-
-                st.selected_step = destination;
-                st.step_models[channel].set_row_data(
-                    destination,
-                    StepCell {
-                        active: true,
-                        velocity: moved.velocity as i32,
-                    },
-                );
-                if let Some(w) = weak.upgrade() {
-                    st.refresh_note_cell(source);
-                    st.refresh_note_cell(destination);
-                    st.refresh_selected_note_controls(&w);
+                st.refresh_rack_cell(channel, step);
+                if channel == st.selected {
+                    if let Some(window) = weak.upgrade() {
+                        st.refresh_note_editor(&window);
+                    }
                 }
-                let _ = tx.send(EngineCommand::SetStep {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    step: destination as u8,
-                    on: true,
-                    note: moved.note,
-                    velocity: moved.velocity,
-                });
             });
         }
-
-        // Direct drawing in the parameter lane. Velocity zero is avoided so
-        // an active note never becomes an implicit MIDI note-off.
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_velocity_edited(move |step, value| {
-                let step = step as usize;
+            window.on_step_removed(move |channel, step| {
+                let (channel, step) = (channel as usize, step as usize);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                    return;
+                }
+                let start = step as u32 * TICKS_PER_STEP;
+                let end = start + TICKS_PER_STEP;
+                let ids: Vec<NoteId> = st.channels[channel].notes[pattern]
+                    .iter()
+                    .filter(|note| note.start_tick >= start && note.start_tick < end)
+                    .map(|note| note.id)
+                    .collect();
+                st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                if st.selected_note_id.is_some_and(|id| ids.contains(&id)) {
+                    st.selected_note_id = None;
+                }
+                for id in ids {
+                    let _ = tx.send(EngineCommand::RemoveNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        id,
+                    });
+                }
+                st.refresh_rack_cell(channel, step);
+                if channel == st.selected {
+                    if let Some(window) = weak.upgrade() {
+                        st.refresh_note_editor(&window);
+                    }
+                }
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_step_velocity_edited(move |channel, step, value| {
+                let (channel, step) = (channel as usize, step as usize);
+                let velocity = (1.0 + value.clamp(0.0, 1.0) * 126.0).round() as u8;
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                    return;
+                }
+                let start = step as u32 * TICKS_PER_STEP;
+                let end = start + TICKS_PER_STEP;
+                let mut edited: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                    .iter_mut()
+                    .filter(|note| note.start_tick >= start && note.start_tick < end)
+                    .map(|note| {
+                        note.velocity = velocity;
+                        *note
+                    })
+                    .collect();
+                if edited.is_empty() {
+                    let mut note = st.channels[channel].create_note(pattern, start, 60);
+                    note.velocity = velocity;
+                    *st.channels[channel].notes[pattern]
+                        .iter_mut()
+                        .find(|stored| stored.id == note.id)
+                        .unwrap() = note;
+                    edited.push(note);
+                }
+                st.selected_note_id = (channel == st.selected).then_some(edited[0].id);
+                st.refresh_rack_cell(channel, step);
+                if channel == st.selected {
+                    if let Some(window) = weak.upgrade() {
+                        st.refresh_note_editor(&window);
+                    }
+                }
+                for note in edited {
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                }
+            });
+        }
+
+        // Tick-addressed piano-roll editing.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_piano_note_created(move |start_tick, midi_note| {
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let start_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
+                let mut note = st.channels[channel].create_note(
+                    pattern,
+                    start_tick,
+                    midi_note.clamp(36, 84) as u8,
+                );
+                note.duration_ticks = note
+                    .duration_ticks
+                    .min(length_ticks.saturating_sub(start_tick).max(1));
+                if let Some(stored) = st.channels[channel].notes[pattern]
+                    .iter_mut()
+                    .find(|stored| stored.id == note.id)
+                {
+                    *stored = note;
+                }
+                st.selected_note_id = Some(note.id);
+                st.refresh_rack_cell(channel, (start_tick / TICKS_PER_STEP) as usize);
+                if let Some(window) = weak.upgrade() {
+                    st.refresh_note_editor(&window);
+                }
+                let _ = tx.send(EngineCommand::UpsertNote {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    note,
+                });
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_piano_note_selected(move |id| {
+                let mut st = st.borrow_mut();
+                let id = id as NoteId;
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                if st.channels[channel].notes[pattern]
+                    .iter()
+                    .any(|note| note.id == id)
+                {
+                    st.selected_note_id = Some(id);
+                    if let Some(window) = weak.upgrade() {
+                        st.refresh_note_editor(&window);
+                    }
+                }
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_piano_note_moved(move |id, start_tick, midi_note| {
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let Some(index) = st.channels[channel].notes[pattern]
+                    .iter()
+                    .position(|note| note.id == id as NoteId)
+                else {
+                    return;
+                };
+                let old_step =
+                    st.channels[channel].notes[pattern][index].start_tick / TICKS_PER_STEP;
+                let edited = {
+                    let note = &mut st.channels[channel].notes[pattern][index];
+                    note.start_tick =
+                        (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
+                    note.duration_ticks = note
+                        .duration_ticks
+                        .min(length_ticks.saturating_sub(note.start_tick).max(1));
+                    note.note = midi_note.clamp(36, 84) as u8;
+                    *note
+                };
+                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                st.selected_note_id = Some(edited.id);
+                st.refresh_rack_cell(channel, old_step as usize);
+                st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
+                if let Some(window) = weak.upgrade() {
+                    st.refresh_note_editor(&window);
+                }
+                let _ = tx.send(EngineCommand::UpsertNote {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    note: edited,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_piano_note_resized(move |id, duration| {
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let Some(note) = st.channels[channel].notes[pattern]
+                    .iter_mut()
+                    .find(|note| note.id == id as NoteId)
+                else {
+                    return;
+                };
+                note.duration_ticks = (duration.max(1) as u32)
+                    .min(length_ticks.saturating_sub(note.start_tick).max(1));
+                let edited = *note;
+                st.selected_note_id = Some(edited.id);
+                if let Some(window) = weak.upgrade() {
+                    st.refresh_note_editor(&window);
+                }
+                let _ = tx.send(EngineCommand::UpsertNote {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    note: edited,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_piano_note_removed(move |id| {
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let Some(index) = st.channels[channel].notes[pattern]
+                    .iter()
+                    .position(|note| note.id == id as NoteId)
+                else {
+                    return;
+                };
+                let removed = st.channels[channel].notes[pattern].remove(index);
+                st.selected_note_id = None;
+                st.refresh_rack_cell(channel, (removed.start_tick / TICKS_PER_STEP) as usize);
+                if let Some(window) = weak.upgrade() {
+                    st.refresh_note_editor(&window);
+                }
+                let _ = tx.send(EngineCommand::RemoveNote {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    id: removed.id,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_velocity_edited(move |id, value| {
                 let velocity = (1.0 + value.clamp(0.0, 1.0) * 126.0).round() as u8;
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
                 let channel = st.selected;
-                if step >= st.pattern_lengths[pattern] {
+                let Some(note) = st.channels[channel].notes[pattern]
+                    .iter_mut()
+                    .find(|note| note.id == id as NoteId)
+                else {
                     return;
-                }
-                st.selected_step = step;
-                let edited = {
-                    let edited = &mut st.channels[channel].steps[pattern][step];
-                    edited.velocity = velocity;
-                    *edited
                 };
-                st.step_models[channel].set_row_data(
-                    step,
-                    StepCell {
-                        active: edited.on,
-                        velocity: edited.velocity as i32,
-                    },
-                );
-                if let Some(w) = weak.upgrade() {
-                    st.refresh_note_editor(&w);
+                note.velocity = velocity;
+                let edited = *note;
+                st.selected_note_id = Some(edited.id);
+                st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
+                if let Some(window) = weak.upgrade() {
+                    st.refresh_note_editor(&window);
                 }
-                let _ = tx.send(EngineCommand::SetStep {
+                let _ = tx.send(EngineCommand::UpsertNote {
                     pattern: pattern as u8,
                     channel: channel as u8,
-                    step: step as u8,
-                    on: edited.on,
-                    note: edited.note,
-                    velocity: edited.velocity,
+                    note: edited,
                 });
             });
         }
 
-        {
-            let tx = cmd_tx.clone();
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_selected_note_changed(move |note| {
-                let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let step = st.selected_step;
-                let edited = {
-                    let edited = &mut st.channels[channel].steps[pattern][step];
-                    edited.on = true;
-                    edited.note = note.clamp(36, 84) as u8;
-                    *edited
-                };
-                st.step_models[channel].set_row_data(
-                    step,
-                    StepCell {
-                        active: true,
-                        velocity: edited.velocity as i32,
-                    },
-                );
-                if let Some(w) = weak.upgrade() {
-                    st.refresh_note_editor(&w);
-                }
-                let _ = tx.send(EngineCommand::SetStep {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    step: step as u8,
-                    on: edited.on,
-                    note: edited.note,
-                    velocity: edited.velocity,
+        macro_rules! wire_selected_note_edit {
+            ($callback:ident, $field:ident, $value:expr) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                let weak = window.as_weak();
+                window.$callback(move |value| {
+                    let mut st = st.borrow_mut();
+                    let pattern = st.current_pattern;
+                    let channel = st.selected;
+                    let Some(id) = st.selected_note_id else {
+                        return;
+                    };
+                    let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                    let Some(note) = st.channels[channel].notes[pattern]
+                        .iter_mut()
+                        .find(|note| note.id == id)
+                    else {
+                        return;
+                    };
+                    note.$field = $value(value, &mut *note, length_ticks);
+                    let edited = *note;
+                    st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
+                    if let Some(window) = weak.upgrade() {
+                        st.refresh_note_editor(&window);
+                    }
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note: edited,
+                    });
                 });
-            });
+            }};
         }
-
-        {
-            let tx = cmd_tx.clone();
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_selected_velocity_changed(move |velocity| {
-                let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let step = st.selected_step;
-                let edited = {
-                    let edited = &mut st.channels[channel].steps[pattern][step];
-                    edited.velocity = velocity.clamp(1, 127) as u8;
-                    *edited
-                };
-                st.step_models[channel].set_row_data(
-                    step,
-                    StepCell {
-                        active: edited.on,
-                        velocity: edited.velocity as i32,
-                    },
-                );
-                if let Some(w) = weak.upgrade() {
-                    st.refresh_note_editor(&w);
-                }
-                let _ = tx.send(EngineCommand::SetStep {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    step: step as u8,
-                    on: edited.on,
-                    note: edited.note,
-                    velocity: edited.velocity,
-                });
-            });
-        }
+        wire_selected_note_edit!(on_selected_note_changed, note, |value: i32, _, _| value
+            .clamp(36, 84)
+            as u8);
+        wire_selected_note_edit!(
+            on_selected_velocity_changed,
+            velocity,
+            |value: i32, _, _| value.clamp(1, 127) as u8
+        );
+        wire_selected_note_edit!(
+            on_selected_duration_changed,
+            duration_ticks,
+            |value: i32, note: &mut NoteEvent, length_ticks: u32| (value.max(1) as u32)
+                .min(length_ticks.saturating_sub(note.start_tick).max(1))
+        );
 
         // Channel selection (for the bottom editor).
         {
@@ -954,6 +943,7 @@ impl AppUi {
                     return;
                 }
                 st.selected = ch;
+                st.selected_note_id = None;
                 if let Some(w) = weak.upgrade() {
                     w.set_selected_channel(ch as i32);
                     st.sync_row_flags();
@@ -999,13 +989,8 @@ impl AppUi {
                     st.default_sample_description.clone(),
                     st.default_sample_duration,
                 );
-                let cells: Vec<StepCell> = ch.steps[st.current_pattern]
-                    .iter()
-                    .take(st.pattern_lengths[st.current_pattern])
-                    .map(|step| StepCell {
-                        active: step.on,
-                        velocity: step.velocity as i32,
-                    })
+                let cells: Vec<StepCell> = (0..st.pattern_lengths[st.current_pattern])
+                    .map(|step| rack_cell(&ch.notes[st.current_pattern], step))
                     .collect();
                 let model = Rc::new(VecModel::from(cells));
                 let row = ChannelRow {
@@ -1035,6 +1020,7 @@ impl AppUi {
                 st.rows.remove(st.rows.row_count() - 1);
                 if st.selected >= st.channels.len() {
                     st.selected = st.channels.len() - 1;
+                    st.selected_note_id = None;
                     if let Some(w) = weak.upgrade() {
                         w.set_selected_channel(st.selected as i32);
                     }
@@ -1357,10 +1343,11 @@ impl AppUi {
                 w.invoke_pattern_length_changed(32);
                 w.invoke_step_velocity_edited(0, 0, 0.5);
                 w.invoke_step_removed(0, 4);
-                w.invoke_piano_note_edited(6, 72);
-                w.invoke_piano_note_moved(6, 7, 74);
-                w.invoke_velocity_edited(7, 0.35);
-                w.invoke_piano_note_removed(7);
+                w.invoke_piano_note_created(36, 72);
+                w.invoke_piano_note_moved(5, 42, 74);
+                w.invoke_piano_note_resized(5, 12);
+                w.invoke_velocity_edited(5, 0.35);
+                w.invoke_piano_note_removed(5);
                 w.set_editor_page(1);
                 w.invoke_play_clicked();
             });
@@ -1575,6 +1562,28 @@ fn decode_wav(path: &Path) -> Result<Arc<SampleData>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rack_cell_preserves_sixty_fourth_note_gaps() {
+        let notes = [
+            NoteEvent::new(1, 0, 6, 60, 70),
+            NoteEvent::new(2, 12, 6, 62, 110),
+        ];
+        let cell = rack_cell(&notes, 0);
+        assert!(cell.active);
+        assert_eq!(cell.substeps, 0b0101);
+        assert_eq!(cell.velocity, 110);
+    }
+
+    #[test]
+    fn channel_assigns_stable_note_ids() {
+        let mut channel = ChannelState::new(0, Vec::new(), String::new(), 0.0);
+        let first = channel.create_note(0, 0, 60);
+        let second = channel.create_note(0, TICKS_PER_64TH, 62);
+        assert_ne!(first.id, second.id);
+        assert_eq!(channel.notes[0][0].id, first.id);
+        assert_eq!(channel.notes[0][1].id, second.id);
+    }
 
     /// Regression test: hound's `samples::<f32>()` errors on integer-PCM
     /// files; the decoder must decode them at native width instead (and

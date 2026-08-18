@@ -1,6 +1,6 @@
 # Current System
 
-Status: code audit at commit `e7df93f`, August 2026.
+Status: implementation snapshot, August 2026.
 
 This document describes the prototype as implemented. It is deliberately
 blunt about gaps so roadmap decisions are based on the system that exists.
@@ -13,11 +13,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   remove channels.
 - Eight patterns with independent logical lengths from 1 to 256 steps. Hidden
   steps survive shortening and re-extending a pattern.
-- One note slot per channel per sixteenth-note step. A slot stores on/off,
-  MIDI pitch, and velocity. Default velocity is 100.
-- A horizontally and vertically zoomable piano roll with note movement,
-  right-click removal, exact pitch/velocity fields, and a pinned velocity
-  lane.
+- Tick-addressed notes with stable IDs, start, duration, MIDI pitch, and
+  velocity. Starts snap to 64ths in the piano roll while retaining PPQ tick
+  precision internally.
+- A horizontally and vertically zoomable piano roll with note creation,
+  movement, length resizing, right-click removal, exact pitch/velocity/length
+  fields, and a pinned velocity lane.
+- Sixteenth-note rack cells summarize their four 64th-note substeps without
+  discarding rests between hits.
 - A sampler editor with waveform, WAV loading and sibling navigation, trim,
   reverse, root note, coarse/fine tune, loop region and mode, ADSR, low-pass
   filter with envelope depth and resonance, drive, bit reduction, and rate
@@ -68,9 +71,10 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 ### Event And Voice Model
 
-- The sequencer emits NoteOn only at fixed sixteenth-note boundaries.
-- A step has no start offset, duration, probability, tie, or parameter locks.
-- No NoteOff events are scheduled.
+- Probability, microtiming controls, ties, and parameter locks are not yet
+  implemented. Note starts and lengths otherwise retain PPQ precision.
+- NoteOn and NoteOff events are sample-accurate and deterministically ordered,
+  but the sampler has not yet gained the full Phase 2 voice-mode surface.
 - The sampler has one voice. A new note cuts and retriggers the previous one.
 - There are no choke groups, voice modes, or explicit one-shot versus gated
   behavior.
@@ -120,8 +124,8 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 1. Define a canonical `Project` model before playlist, undo, persistence, and
    rendering create four competing state representations.
-2. Replace step-slot scheduling with tick-addressed note events before adding
-   synth polyphony or broad automation.
+2. Complete sampler polyphony and voice modes on top of the tick-addressed
+   event contract before adding synth polyphony or broad automation.
 3. Separate the render graph from the JACK adapter so realtime and offline
    rendering execute the same DSP path.
 4. Define fixed-capacity device and routing edits before populating the empty

@@ -12,11 +12,14 @@ export { ControlGallery } from "gallery.slint";
 struct StepCell {
     active: bool,
     velocity: int,
+    substeps: int,
 }
 
-// One monophonic note slot for the selected channel's piano roll.
+// One tick-addressed note event for the selected channel's piano roll.
 struct NoteCell {
-    active: bool,
+    id: int,
+    start-tick: int,
+    duration-ticks: int,
     note: int,
     velocity: int,
     selected: bool,
@@ -132,17 +135,22 @@ export component MainWindow inherits Window {
     in-out property <int> selected-note-step;
     in-out property <int> selected-note;
     in-out property <int> selected-velocity;
+    in-out property <int> selected-duration-ticks: 24;
+    in-out property <bool> has-selected-note;
     property <int> piano-low-note: 36;
     property <int> piano-high-note: 84;
     property <length> piano-row-height: 5px;
     property <length> piano-step-width: 32px;
 
-    callback piano-note-edited(int, int);   // step, MIDI note
-    callback piano-note-moved(int, int, int); // source step, destination step, MIDI note
-    callback piano-note-removed(int);       // step
-    callback velocity-edited(int, float);   // step, normalised value
+    callback piano-note-created(int, int);  // start tick, MIDI note
+    callback piano-note-selected(int);      // stable note ID
+    callback piano-note-moved(int, int, int); // ID, start tick, MIDI note
+    callback piano-note-resized(int, int);  // ID, duration ticks
+    callback piano-note-removed(int);       // stable note ID
+    callback velocity-edited(int, float);   // stable note ID, normalised value
     callback selected-note-changed(int);
     callback selected-velocity-changed(int);
+    callback selected-duration-changed(int);
 
     // ---- sampler params of the selected channel ----
     in-out property <float> attack;
@@ -413,12 +421,14 @@ export component MainWindow inherits Window {
                             border-width: root.playing && root.current-step == i ? 1px : 0px;
                             border-color: Theme.text;
                             background: mod(i, 4) == 0 ? Theme.surface-active : Theme.surface-raised;
-                            Rectangle {
-                                visible: cell.active;
+                            for sub in 4 : Rectangle {
+                                property <int> divisor: sub == 0 ? 1 : sub == 1 ? 2 : sub == 2 ? 4 : 8;
+                                visible: mod(floor(cell.substeps / self.divisor), 2) == 1;
+                                x: sub * parent.width / 4;
                                 y: parent.height - self.height;
-                                width: parent.width;
+                                width: parent.width / 4 - (sub < 3 ? 1px : 0px);
                                 height: max(3px, parent.height * cell.velocity / 127);
-                                border-radius: 2px;
+                                border-radius: 1px;
                                 background: Theme.accent;
                                 opacity: 0.55 + 0.45 * cell.velocity / 127;
                             }
@@ -862,7 +872,7 @@ export component MainWindow inherits Window {
                                 spacing: 6px;
                                 alignment: start;
                                 Text {
-                                    text: "STEP " + (root.selected-note-step + 1);
+                                    text: root.has-selected-note ? "TICK " + root.selected-note-step : "NO NOTE";
                                     color: Theme.text-muted;
                                     font-size: 9px;
                                     vertical-alignment: center;
@@ -874,6 +884,7 @@ export component MainWindow inherits Window {
                                     vertical-alignment: center;
                                 }
                                 SpinBox {
+                                    enabled: root.has-selected-note;
                                     value <=> root.selected-note;
                                     minimum: root.piano-low-note;
                                     maximum: root.piano-high-note;
@@ -890,6 +901,7 @@ export component MainWindow inherits Window {
                                     vertical-alignment: center;
                                 }
                                 SpinBox {
+                                    enabled: root.has-selected-note;
                                     value <=> root.selected-velocity;
                                     minimum: 1;
                                     maximum: 127;
@@ -898,6 +910,23 @@ export component MainWindow inherits Window {
                                     height: 24px;
                                     edited(value) => { root.selected-velocity-changed(value); }
                                     Tooltip { text: @markdown("Selected step velocity"); }
+                                }
+                                Text {
+                                    text: "LEN";
+                                    color: Theme.text-faint;
+                                    font-size: 9px;
+                                    vertical-alignment: center;
+                                }
+                                SpinBox {
+                                    enabled: root.has-selected-note;
+                                    value <=> root.selected-duration-ticks;
+                                    minimum: 1;
+                                    maximum: max(1, root.pattern-length * 24);
+                                    step-size: 6;
+                                    width: 78px;
+                                    height: 24px;
+                                    edited(value) => { root.selected-duration-changed(value); }
+                                    Tooltip { text: @markdown("Selected note length in PPQ ticks. **6** ticks = 1/64 note."); }
                                 }
                                 Rectangle { width: 8px; }
                                 ComboBox {
@@ -999,12 +1028,12 @@ export component MainWindow inherits Window {
                                     vertical-stretch: 1;
                                     horizontal-stretch: 1;
                                     viewport-width: max(self.visible-width,
-                                        root.notes.length * root.piano-step-width);
+                                        root.pattern-length * root.piano-step-width);
                                     viewport-height: max(self.visible-height,
                                         49 * root.piano-row-height);
                                     Rectangle {
                                         x: 0px;
-                                        width: root.notes.length * root.piano-step-width;
+                                        width: root.pattern-length * root.piano-step-width;
                                         height: 49 * root.piano-row-height;
                                         background: Theme.surface;
 
@@ -1021,58 +1050,97 @@ export component MainWindow inherits Window {
                                                 ? Theme.surface : Theme.surface-raised;
                                         }
 
-                                        for cell[i] in root.notes : Rectangle {
-                                            x: i * root.piano-step-width;
-                                            width: root.piano-step-width;
+                                        for division in root.pattern-length * 4 : Rectangle {
+                                            x: division * root.piano-step-width / 4;
+                                            width: 1px;
                                             height: parent.height;
-                                            background: transparent;
-                                            Rectangle {
-                                                x: 0px;
-                                                width: 1px;
-                                                height: parent.height;
-                                                background: mod(i, 4) == 0 ? Theme.text-faint : Theme.border;
-                                            }
-                                            Rectangle {
-                                                visible: cell.active;
-                                                y: (root.piano-high-note - cell.note) * root.piano-row-height;
-                                                x: 1px;
-                                                width: parent.width - 1px;
-                                                height: root.piano-row-height;
-                                                background: cell.selected ? Theme.focus : Theme.accent;
-                                                opacity: 0.55 + 0.45 * cell.velocity / 127;
-                                                border-width: cell.selected ? 1px : 0px;
-                                                border-color: Theme.text;
-                                            }
-                                            TouchArea {
-                                                property <bool> dragging-note;
-                                                mouse-cursor: crosshair;
-                                                pointer-event(e) => {
+                                            background: mod(division, 4) == 0 ? Theme.text-faint : Theme.border;
+                                            opacity: mod(division, 4) == 0 ? 0.8 : 0.5;
+                                        }
+
+                                        TouchArea {
+                                            mouse-cursor: crosshair;
+                                            pointer-event(e) => {
+                                                if (e.kind == PointerEventKind.down
+                                                    && e.button == PointerEventButton.left) {
+                                                    let start-tick = clamp(
+                                                        floor(self.mouse-x / (root.piano-step-width / 4)) * 6,
+                                                        0, root.pattern-length * 24 - 6);
                                                     let note = clamp(
                                                         root.piano-high-note
                                                             - floor(self.mouse-y / root.piano-row-height),
                                                         root.piano-low-note,
-                                                        root.piano-high-note
-                                                    );
+                                                        root.piano-high-note);
+                                                    root.piano-note-created(start-tick, note);
+                                                }
+                                            }
+                                        }
+
+                                        for cell in root.notes : Rectangle {
+                                            x: cell.start-tick * root.piano-step-width / 24;
+                                            y: (root.piano-high-note - cell.note) * root.piano-row-height;
+                                            width: max(root.piano-step-width / 4,
+                                                cell.duration-ticks * root.piano-step-width / 24);
+                                            height: root.piano-row-height;
+                                            background: cell.selected ? Theme.focus : Theme.accent;
+                                            opacity: 0.55 + 0.45 * cell.velocity / 127;
+                                            border-width: cell.selected ? 1px : 0px;
+                                            border-color: Theme.text;
+
+                                            note-touch := TouchArea {
+                                                width: max(1px, parent.width - 5px);
+                                                property <bool> dragging-note;
+                                                property <length> origin-x;
+                                                property <length> origin-y;
+                                                property <int> original-start;
+                                                property <int> original-note;
+                                                mouse-cursor: move;
+                                                pointer-event(e) => {
                                                     if (e.kind == PointerEventKind.down
                                                         && e.button == PointerEventButton.right) {
-                                                        if (cell.active && cell.note == note) {
-                                                            root.piano-note-removed(i);
-                                                        }
+                                                        root.piano-note-removed(cell.id);
                                                     } else if (e.kind == PointerEventKind.down
                                                         && e.button == PointerEventButton.left) {
+                                                        root.piano-note-selected(cell.id);
                                                         self.dragging-note = true;
-                                                        root.piano-note-edited(
-                                                            i,
-                                                            note
-                                                        );
+                                                        self.origin-x = self.mouse-x;
+                                                        self.origin-y = self.mouse-y;
+                                                        self.original-start = cell.start-tick;
+                                                        self.original-note = cell.note;
                                                     } else if (e.kind == PointerEventKind.move
                                                         && self.pressed && self.dragging-note) {
-                                                        let destination = clamp(i
-                                                            + floor(self.mouse-x / root.piano-step-width),
-                                                            0, root.notes.length - 1);
-                                                        root.piano-note-moved(i, destination, note);
+                                                        let tick = clamp(self.original-start
+                                                            + round((self.mouse-x - self.origin-x)
+                                                                / (root.piano-step-width / 4)) * 6,
+                                                            0, root.pattern-length * 24 - 6);
+                                                        let note = clamp(self.original-note
+                                                            + round((self.origin-y - self.mouse-y)
+                                                                / root.piano-row-height),
+                                                            root.piano-low-note, root.piano-high-note);
+                                                        root.piano-note-moved(cell.id, tick, note);
                                                     } else if (e.kind == PointerEventKind.up) {
                                                         self.dragging-note = false;
+                                                    }
+                                                }
+                                            }
+                                            resize-touch := TouchArea {
+                                                x: parent.width - 5px;
+                                                width: 5px;
+                                                property <length> origin-x;
+                                                property <int> original-duration;
+                                                mouse-cursor: ew-resize;
+                                                pointer-event(e) => {
+                                                    if (e.kind == PointerEventKind.down
+                                                        && e.button == PointerEventButton.left) {
+                                                        root.piano-note-selected(cell.id);
+                                                        self.origin-x = self.mouse-x;
+                                                        self.original-duration = cell.duration-ticks;
+                                                    } else if (e.kind == PointerEventKind.move && self.pressed) {
+                                                        let duration = clamp(self.original-duration
+                                                            + round((self.mouse-x - self.origin-x)
+                                                                / (root.piano-step-width / 4)) * 6,
+                                                            1, root.pattern-length * 24 - cell.start-tick);
+                                                        root.piano-note-resized(cell.id, duration);
                                                     }
                                                 }
                                             }
@@ -1098,12 +1166,12 @@ export component MainWindow inherits Window {
                                     clip: true;
                                     Rectangle {
                                         x: -piano-scroll.viewport-x;
-                                        width: root.notes.length * root.piano-step-width;
+                                        width: root.pattern-length * root.piano-step-width;
                                         height: parent.height;
                                         background: transparent;
-                                        for cell[i] in root.notes : Rectangle {
-                                            x: i * root.piano-step-width;
-                                            width: root.piano-step-width;
+                                        for cell in root.notes : Rectangle {
+                                            x: cell.start-tick * root.piano-step-width / 24;
+                                            width: max(6px, cell.duration-ticks * root.piano-step-width / 24);
                                             height: parent.height;
                                             border-width: cell.selected ? 1px : 0px;
                                             border-color: Theme.text-muted;
@@ -1113,7 +1181,7 @@ export component MainWindow inherits Window {
                                                 y: parent.height * (127 - cell.velocity) / 127;
                                                 width: parent.width - 6px;
                                                 height: max(2px, parent.height * cell.velocity / 127);
-                                                background: cell.active ? Theme.accent : Theme.border;
+                                                background: Theme.accent;
                                             }
                                             TouchArea {
                                                 mouse-cursor: crosshair;
@@ -1122,7 +1190,7 @@ export component MainWindow inherits Window {
                                                         && (e.kind == PointerEventKind.down
                                                         || (e.kind == PointerEventKind.move && self.pressed))) {
                                                         root.velocity-edited(
-                                                            i,
+                                                            cell.id,
                                                             clamp(1 - self.mouse-y / self.height, 0, 1)
                                                         );
                                                     }

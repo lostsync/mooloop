@@ -103,7 +103,11 @@ mod tests {
         t.pause();
         let (s2, e2) = t.advance(256);
         assert_eq!(s2, e2);
-        assert_eq!(t.frames_played(), 256, "paused transport must not count frames");
+        assert_eq!(
+            t.frames_played(),
+            256,
+            "paused transport must not count frames"
+        );
         t.stop();
         assert_eq!(t.position_ticks, 0.0);
         assert_eq!(t.frames_played(), 0);

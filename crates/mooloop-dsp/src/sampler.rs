@@ -173,6 +173,7 @@ impl AdsrEnv {
 /// One playback voice. Monophonic for now — a new note retriggers and cuts
 /// the previous voice (standard drum-sampler behaviour).
 struct Voice {
+    event_id: u64,
     sample: Option<Arc<SampleData>>,
     play_pos: f64,
     playback_rate: f64,
@@ -189,6 +190,7 @@ struct Voice {
 impl Voice {
     fn new(sample_rate: u32) -> Self {
         Self {
+            event_id: 0,
             sample: None,
             play_pos: 0.0,
             playback_rate: 1.0,
@@ -236,7 +238,8 @@ impl Sampler {
         self.voice.env.configure(params);
     }
 
-    fn trigger(&mut self, note: u8, velocity: u8) {
+    fn trigger(&mut self, event_id: u64, note: u8, velocity: u8) {
+        self.voice.event_id = event_id;
         let sample = self.sample_slot.load_full();
         self.voice.sample = sample;
         self.voice.active = self.voice.sample.is_some();
@@ -456,8 +459,9 @@ impl AudioNode for Sampler {
             let off = (ev.offset as usize).min(frames).max(pos);
             self.render_range(bus, pos, off);
             match ev.event {
-                Event::NoteOn { note, velocity, .. } => self.trigger(note, velocity),
-                Event::NoteOff { .. } => self.voice.env.release(),
+                Event::NoteOn { id, note, velocity } => self.trigger(id, note, velocity),
+                Event::NoteOff { id, .. } if id == self.voice.event_id => self.voice.env.release(),
+                Event::NoteOff { .. } => {}
                 Event::ParamValue { .. } => {}
             }
             pos = off;
@@ -527,6 +531,39 @@ mod tests {
 
         assert!(bus.l[..k].iter().all(|s| *s == 0.0));
         assert!(bus.l[k..].iter().any(|s| s.abs() > 0.01));
+    }
+
+    #[test]
+    fn stale_note_off_does_not_release_a_retriggered_voice() {
+        let sr = 48_000;
+        let mut sampler = make_sampler(sr);
+        let mut bus = StereoBus::with_capacity(64);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 100,
+            },
+        });
+        events.push(TimedEvent {
+            offset: 8,
+            event: Event::NoteOn {
+                id: 2,
+                note: 64,
+                velocity: 100,
+            },
+        });
+        events.push(TimedEvent {
+            offset: 16,
+            event: Event::NoteOff { id: 1, note: 60 },
+        });
+
+        sampler.process(&ctx(64, sr), &mut bus, &events, None);
+
+        assert_eq!(sampler.voice.event_id, 2);
+        assert!(!sampler.voice.env.is_releasing());
     }
 
     /// No events, no prior note: silence (and no panic on the empty path).
