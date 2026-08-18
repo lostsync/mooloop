@@ -10,6 +10,10 @@ import {
     MeterScale, SegmentedMeter
 } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
+import {
+    BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
+    ToolbarLabel, ToolbarRule, ToolIcons, ToolModeButton
+} from "toolbar.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
 
 export component ControlGallery inherits Window {
@@ -36,6 +40,13 @@ export component ControlGallery inherits Window {
     in-out property <float> correlation: 0.7;
     in-out property <bool> transport-playing;
     in-out property <bool> transport-armed;
+    in-out property <int> gallery-steps: 16;
+    in-out property <int> gallery-snap: 2;
+    in-out property <int> gallery-pattern;
+    in-out property <int> gallery-tool;
+    in-out property <int> gallery-bpm: 128;
+    in-out property <int> gallery-beat: 1;
+    in-out property <string> gallery-pattern-name;
 
     function use-preset(preset: int) {
         root.gallery-preset = preset;
@@ -88,7 +99,7 @@ export component ControlGallery inherits Window {
 
         ScrollView {
             viewport-width: self.visible-width;
-            viewport-height: 1560px;
+            viewport-height: 1760px;
             VerticalBox {
                 padding: 18px;
                 spacing: 18px;
@@ -386,6 +397,110 @@ export component ControlGallery inherits Window {
                         LedIndicator { on: root.transport-armed; led-color: Theme.destructive; tooltip: "Armed"; }
                     }
                     ClipIndicator { clipping: root.meter-value >= 0; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "TOOLBAR FIELDS"; }
+                Rectangle {
+                    height: 34px;
+                    background: Theme.surface;
+                    border-radius: 3px;
+                    HorizontalBox {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        padding-top: 5px;
+                        padding-bottom: 5px;
+                        spacing: 3px;
+
+                        PositionReadout {
+                            bar: 12; beat: root.gallery-beat; tick: 48;
+                        }
+                        BeatLamps {
+                            current: root.gallery-beat - 1;
+                            running: true;
+                        }
+                        ToolbarRule {}
+                        TempoField { bpm <=> root.gallery-bpm; }
+                        ToolbarRule {}
+                        ToolbarLabel { text: "PAT"; }
+                        Rectangle {
+                            height: 24px;
+                            width: gallery-pattern-group.preferred-width;
+                            border-radius: 3px;
+                            background: Theme.surface-raised;
+                            gallery-pattern-group := HorizontalLayout {
+                                spacing: 0px;
+                                StepperField {
+                                    value: root.gallery-pattern + 1;
+                                    minimum: 1; maximum: 4;
+                                    value-width: 26px;
+                                    field-background: transparent;
+                                    tooltip: "Selected pattern";
+                                    changed(v) => { root.gallery-pattern = v - 1; }
+                                }
+                                MenuField {
+                                    options: ["01  Intro", "02  Beat A", "03  Beat B", "04  Break"];
+                                    selected-index <=> root.gallery-pattern;
+                                    display-text: "";
+                                    field-width: 0px;
+                                    menu-width: 160px;
+                                    field-background: transparent;
+                                    tooltip: "Jump to pattern";
+                                }
+                            }
+                        }
+                        NameField {
+                            text <=> root.gallery-pattern-name;
+                            placeholder: "Pattern " + (root.gallery-pattern + 1);
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+
+                SectionLabel { text: "CURSOR TOOLS AND STEPPERS"; }
+                HorizontalBox {
+                    spacing: 3px;
+                    alignment: start;
+                    ToolModeButton {
+                        icon: ToolIcons.select; name: "Select";
+                        hint: "Click toggles a step. Ctrl-drag sets velocity.";
+                        active: root.gallery-tool == 0;
+                        clicked => { root.gallery-tool = 0; }
+                    }
+                    ToolModeButton {
+                        icon: ToolIcons.paint; name: "Paint";
+                        hint: "Drag to fill steps. Right-drag to clear.";
+                        active: root.gallery-tool == 1;
+                        clicked => { root.gallery-tool = 1; }
+                    }
+                    ToolModeButton {
+                        icon: ToolIcons.slice; name: "Slice";
+                        hint: "Click a step to ratchet it into even hits.";
+                        active: root.gallery-tool == 2;
+                        clicked => { root.gallery-tool = 2; }
+                    }
+                    ToolModeButton {
+                        icon: ToolIcons.stretch; name: "Stretch";
+                        hint: "Drag a step sideways to set its length.";
+                        active: root.gallery-tool == 3;
+                        clicked => { root.gallery-tool = 3; }
+                    }
+                    ToolbarRule {}
+                    StepperField {
+                        label: "STEPS";
+                        value <=> root.gallery-steps;
+                        minimum: 1; maximum: 256;
+                        tooltip: "Pattern length in 16th-note steps";
+                    }
+                    MenuField {
+                        label: "SNAP";
+                        options: ["1 bar", "1/4", "1/8", "1/16", "1/32", "1/64"];
+                        selected-index <=> root.gallery-snap;
+                        field-width: 46px;
+                        menu-width: 120px;
+                        tooltip: "Grid resolution for editing";
+                    }
                     Rectangle { horizontal-stretch: 1; }
                 }
             }
