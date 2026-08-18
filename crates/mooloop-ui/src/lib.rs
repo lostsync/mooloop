@@ -13,15 +13,19 @@ slint::include_modules!();
 
 use meter::MeterBallistics;
 use mooloop_core::{
-    EngineCommand, EngineEvent, LoopMode, NoteEvent, NoteId, PatternPlacement, PlaybackMode, Ppq,
-    RetriggerMode, SamplerParams, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
-    MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
-    MAX_PLAYLIST_TICKS, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
+    Channel, ChannelSetup, ChannelSource, DeviceKind, EngineCommand, EngineEvent, Kit, LoopMode,
+    NoteEvent, NoteId, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
+    SampleReference, SamplerParams, SamplerState, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
+    DEFAULT_STEPS, MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
+    MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::SampleData;
-use mooloop_engine::EngineHandle;
+use mooloop_engine::{
+    EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, WavEncoding,
+};
+use mooloop_project::{AssetMode, AssetWarning, LoadReport, LoadedDocument, SaveReport};
 use settings::{AppearancePreset, AppearanceSettings, ThemePalette, UiSettings};
-use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
+use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -72,6 +76,8 @@ struct ChannelState {
     sample_description: String,
     sample_duration: f32,
     sample_path: Option<PathBuf>,
+    sample_embedded: bool,
+    sample_data: Option<Arc<SampleData>>,
     waveform: Vec<f32>,
     can_previous_sample: bool,
     can_next_sample: bool,
@@ -96,6 +102,8 @@ impl ChannelState {
             sample_description: default_description,
             sample_duration: default_duration,
             sample_path: None,
+            sample_embedded: false,
+            sample_data: None,
             waveform: default_waveform,
             can_previous_sample: false,
             can_next_sample: false,
@@ -131,6 +139,42 @@ struct LoadResult {
     channel: usize,
     /// `None` = dialog cancelled; `Some(Err)` = decode failed.
     result: Option<Result<LoadedSample, String>>,
+}
+
+struct ResolvedDocument {
+    report: LoadReport,
+    samples: Vec<Option<Arc<SampleData>>>,
+}
+
+enum DocumentResult {
+    Cancelled,
+    SavedSong {
+        path: PathBuf,
+        mode: AssetMode,
+        revision: u64,
+        report: SaveReport,
+        sample_references: Vec<SampleReference>,
+    },
+    SavedOther {
+        label: &'static str,
+        report: SaveReport,
+    },
+    Loaded {
+        path: PathBuf,
+        target: LoadTarget,
+        document: ResolvedDocument,
+    },
+    Exported {
+        path: PathBuf,
+    },
+    Failed(String),
+}
+
+#[derive(Clone, Copy)]
+enum LoadTarget {
+    Song,
+    Kit,
+    Channel,
 }
 
 pub struct AppUi {
@@ -239,9 +283,222 @@ struct UiState {
     current_pattern: usize,
     selected: usize,
     selected_note_id: Option<NoteId>,
+    bundle_path: Option<PathBuf>,
+    dirty: bool,
+    revision: u64,
 }
 
 impl UiState {
+    fn project_snapshot(&self, bpm: i32) -> Project {
+        let channels = self
+            .channels
+            .iter()
+            .map(|channel| {
+                let sample = channel
+                    .sample_path
+                    .as_ref()
+                    .map(|path| SampleReference::File {
+                        path: path.clone(),
+                        embedded: channel.sample_embedded,
+                    })
+                    .unwrap_or_default();
+                ProjectChannel {
+                    setup: ChannelSetup {
+                        channel: Channel {
+                            name: channel.name.clone(),
+                            kind: DeviceKind::Sampler,
+                            muted: channel.muted,
+                            volume: channel.volume,
+                            pan: channel.pan,
+                        },
+                        source: ChannelSource::Sampler(SamplerState {
+                            params: channel.params,
+                            sample,
+                        }),
+                    },
+                    notes: channel.notes.clone(),
+                    next_note_id: channel.next_note_id,
+                }
+            })
+            .collect();
+        Project {
+            bpm: bpm.clamp(1, 999) as u16,
+            ppq: 96,
+            beats_per_bar: 4,
+            playback_mode: if self.song_mode {
+                PlaybackMode::Song
+            } else {
+                PlaybackMode::Pattern
+            },
+            current_pattern: self.current_pattern as u16,
+            selected_channel: self.selected as u8,
+            channels,
+            pattern_lengths: self
+                .pattern_lengths
+                .iter()
+                .map(|length| *length as u16)
+                .collect(),
+            playlist: self.playlist.clone(),
+        }
+    }
+
+    fn sample_snapshots(&self) -> Vec<Option<Arc<SampleData>>> {
+        self.channels
+            .iter()
+            .map(|channel| channel.sample_data.clone())
+            .collect()
+    }
+
+    fn replace_project(
+        &mut self,
+        project: &Project,
+        samples: &[Option<Arc<SampleData>>],
+        window: &MainWindow,
+    ) {
+        let channels = project
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(index, project_channel)| {
+                let setup = &project_channel.setup;
+                let ChannelSource::Sampler(sampler) = &setup.source;
+                let sample = samples.get(index).cloned().flatten();
+                let (sample_path, embedded) = match &sampler.sample {
+                    SampleReference::Builtin { .. } => (None, false),
+                    SampleReference::File { path, embedded } => (Some(path.clone()), *embedded),
+                };
+                let missing = sample_path.is_some() && sample.is_none();
+                let sample_name = sample_path
+                    .as_ref()
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("default kick")
+                    .to_string();
+                let waveform = sample
+                    .as_ref()
+                    .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))
+                    .unwrap_or_else(|| {
+                        if sample_path.is_none() {
+                            self.default_waveform.clone()
+                        } else {
+                            Vec::new()
+                        }
+                    });
+                let description = sample
+                    .as_ref()
+                    .map(|sample| sample_description(sample))
+                    .unwrap_or_else(|| {
+                        if missing {
+                            "Missing sample - load a WAV to relink".into()
+                        } else {
+                            self.default_sample_description.clone()
+                        }
+                    });
+                let duration = sample
+                    .as_ref()
+                    .map(|sample| sample_duration(sample))
+                    .unwrap_or_else(|| {
+                        if missing {
+                            0.0
+                        } else {
+                            self.default_sample_duration
+                        }
+                    });
+                let (can_previous, can_next) = sample_path
+                    .as_ref()
+                    .and_then(|path| wav_files_in_directory(path).ok().map(|files| (path, files)))
+                    .map(|(path, files)| {
+                        let index = sample_index(path, &files);
+                        (
+                            index.is_some_and(|index| index > 0),
+                            index.is_some_and(|index| index + 1 < files.len()),
+                        )
+                    })
+                    .unwrap_or((false, false));
+                ChannelState {
+                    name: setup.channel.name.clone(),
+                    muted: setup.channel.muted,
+                    volume: setup.channel.volume,
+                    pan: setup.channel.pan,
+                    params: sampler.params,
+                    sample_name,
+                    sample_description: description,
+                    sample_duration: duration,
+                    sample_path,
+                    sample_embedded: embedded,
+                    sample_data: sample,
+                    waveform,
+                    can_previous_sample: can_previous,
+                    can_next_sample: can_next,
+                    notes: project_channel.notes.clone(),
+                    next_note_id: project_channel.next_note_id,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.pattern_lengths = project
+            .pattern_lengths
+            .iter()
+            .map(|length| *length as usize)
+            .collect();
+        self.playlist = project.playlist.clone();
+        self.song_mode = project.playback_mode == PlaybackMode::Song;
+        self.current_pattern = project.current_pattern as usize;
+        self.selected = project.selected_channel as usize;
+        self.selected_note_id = None;
+        self.channels = channels;
+        self.step_models = self
+            .channels
+            .iter()
+            .map(|channel| {
+                Rc::new(VecModel::from(
+                    (0..self.pattern_lengths[self.current_pattern])
+                        .map(|step| rack_cell(&channel.notes[self.current_pattern], step))
+                        .collect::<Vec<_>>(),
+                ))
+            })
+            .collect();
+        let rows: Vec<ChannelRow> = self
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(index, channel)| ChannelRow {
+                name: channel.name.as_str().into(),
+                muted: channel.muted,
+                volume: channel.volume,
+                pan: channel.pan,
+                selected: index == self.selected,
+                steps: ModelRc::from(self.step_models[index].clone()),
+            })
+            .collect();
+        self.rows.set_vec(rows);
+        window.set_bpm(project.bpm.into());
+        window.set_song_mode(self.song_mode);
+        window.set_current_pattern(self.current_pattern as i32);
+        window.set_pattern_count(self.pattern_lengths.len() as i32);
+        window.set_pattern_length(self.pattern_lengths[self.current_pattern] as i32);
+        window.set_selected_channel(self.selected as i32);
+        self.sync_row_flags();
+        self.sync_playlist(window);
+        self.refresh_editor(window);
+    }
+
+    fn update_document_title(&self, window: &MainWindow) {
+        let name = self
+            .bundle_path
+            .as_ref()
+            .and_then(|path| path.file_stem())
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled");
+        window.set_document_title(
+            if self.dirty {
+                format!("{name} * - mooloop")
+            } else {
+                format!("{name} - mooloop")
+            }
+            .into(),
+        );
+    }
     /// Push the selected/muted flags of every row to the rack model.
     fn sync_row_flags(&self) {
         for (i, ch) in self.channels.iter().enumerate() {
@@ -545,12 +802,13 @@ impl AppUi {
             .as_ref()
             .map(|sample| sample_duration(sample))
             .unwrap_or_default();
-        let first = ChannelState::new(
+        let mut first = ChannelState::new(
             0,
             default_waveform.clone(),
             default_sample_description.clone(),
             default_sample_duration,
         );
+        first.sample_data = default_sample.clone();
         let first_steps: Vec<StepCell> = (0..DEFAULT_STEPS as usize)
             .map(|step| rack_cell(&first.notes[0], step))
             .collect();
@@ -590,10 +848,289 @@ impl AppUi {
             current_pattern: 0,
             selected: 0,
             selected_note_id: None,
+            bundle_path: None,
+            dirty: false,
+            revision: 0,
         }));
+        state.borrow().update_document_title(&window);
         state.borrow().refresh_editor(&window);
         state.borrow().sync_playlist(&window);
         state.borrow().sync_pattern_menu(&window);
+
+        let (document_tx, document_rx) = std::sync::mpsc::channel::<DocumentResult>();
+        let export_sample_rate = handle.sample_rate();
+
+        {
+            let st = state.clone();
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            window.on_open_song(move || {
+                let dirty = st.borrow().dirty;
+                if let Some(window) = weak.upgrade() {
+                    window.set_document_busy(true);
+                    window.set_status_message("Opening song...".into());
+                }
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    if dirty && !confirm_via_zenity("Discard unsaved song changes?") {
+                        let _ = tx.send(DocumentResult::Cancelled);
+                        return;
+                    }
+                    let Some(path) = pick_bundle_via_zenity("Open mooloop song") else {
+                        let _ = tx.send(DocumentResult::Cancelled);
+                        return;
+                    };
+                    let result = resolve_document(&path)
+                        .map(|document| DocumentResult::Loaded {
+                            path,
+                            target: LoadTarget::Song,
+                            document,
+                        })
+                        .unwrap_or_else(DocumentResult::Failed);
+                    let _ = tx.send(result);
+                });
+            });
+        }
+        for save_as in [false, true] {
+            let st = state.clone();
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            let callback = move || {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let project = st.borrow().project_snapshot(window.get_bpm());
+                let revision = st.borrow().revision;
+                let mode = if window.get_embed_assets() {
+                    AssetMode::Embedded
+                } else {
+                    AssetMode::Referenced
+                };
+                let current = (!save_as)
+                    .then(|| st.borrow().bundle_path.clone())
+                    .flatten();
+                window.set_document_busy(true);
+                window.set_status_message("Saving song...".into());
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let path = current
+                        .or_else(|| pick_save_via_zenity("Save mooloop song", "Untitled.mooloop"));
+                    let Some(path) = path else {
+                        let _ = tx.send(DocumentResult::Cancelled);
+                        return;
+                    };
+                    let result = mooloop_project::save_song(&path, &project, mode)
+                        .and_then(|report| {
+                            let loaded = mooloop_project::load_bundle(&path)?;
+                            let LoadedDocument::Song(saved) = loaded.document else {
+                                return Err(mooloop_project::Error::Invalid(
+                                    "saved bundle did not contain a song".into(),
+                                ));
+                            };
+                            Ok(DocumentResult::SavedSong {
+                                path,
+                                mode,
+                                revision,
+                                report,
+                                sample_references: saved
+                                    .channels
+                                    .into_iter()
+                                    .map(|channel| channel.setup.sampler_state().sample.clone())
+                                    .collect(),
+                            })
+                        })
+                        .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                    let _ = tx.send(result);
+                });
+            };
+            if save_as {
+                window.on_save_song_as(callback);
+            } else {
+                window.on_save_song(callback);
+            }
+        }
+        {
+            let st = state.clone();
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            window.on_save_kit(move || {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let snapshot = st.borrow().project_snapshot(window.get_bpm());
+                let kit = Kit {
+                    channels: snapshot
+                        .channels
+                        .into_iter()
+                        .map(|channel| channel.setup)
+                        .collect(),
+                };
+                let mode = asset_mode_from_window(&window);
+                window.set_document_busy(true);
+                window.set_status_message("Saving kit...".into());
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let Some(path) =
+                        pick_save_via_zenity("Save mooloop kit", "Untitled.mooloop-kit")
+                    else {
+                        let _ = tx.send(DocumentResult::Cancelled);
+                        return;
+                    };
+                    let result = mooloop_project::save_kit(&path, &kit, mode)
+                        .map(|report| DocumentResult::SavedOther {
+                            label: "Kit saved",
+                            report,
+                        })
+                        .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                    let _ = tx.send(result);
+                });
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            window.on_save_channel(move || {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let snapshot = st.borrow().project_snapshot(window.get_bpm());
+                let channel = snapshot.channels[snapshot.selected_channel as usize]
+                    .setup
+                    .clone();
+                let mode = asset_mode_from_window(&window);
+                window.set_document_busy(true);
+                window.set_status_message("Saving channel...".into());
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let Some(path) =
+                        pick_save_via_zenity("Save mooloop channel", "Untitled.mooloop-channel")
+                    else {
+                        let _ = tx.send(DocumentResult::Cancelled);
+                        return;
+                    };
+                    let result = mooloop_project::save_channel(&path, &channel, mode)
+                        .map(|report| DocumentResult::SavedOther {
+                            label: "Channel saved",
+                            report,
+                        })
+                        .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                    let _ = tx.send(result);
+                });
+            });
+        }
+        for (kit, title) in [(true, "Load mooloop kit"), (false, "Load mooloop channel")] {
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            let callback = move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_document_busy(true);
+                    window.set_status_message(if kit {
+                        "Loading kit...".into()
+                    } else {
+                        "Loading channel...".into()
+                    });
+                }
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let Some(path) = pick_bundle_via_zenity(title) else {
+                        let _ = tx.send(DocumentResult::Cancelled);
+                        return;
+                    };
+                    let target = if kit {
+                        LoadTarget::Kit
+                    } else {
+                        LoadTarget::Channel
+                    };
+                    let result = resolve_document(&path)
+                        .map(|document| DocumentResult::Loaded {
+                            path,
+                            target,
+                            document,
+                        })
+                        .unwrap_or_else(DocumentResult::Failed);
+                    let _ = tx.send(result);
+                });
+            };
+            if kit {
+                window.on_load_kit(callback);
+            } else {
+                window.on_load_channel(callback);
+            }
+        }
+        {
+            let weak = window.as_weak();
+            window.on_export_audio(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_export_open(true);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            window.on_export_confirmed(move |format, bitrate, tail| {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let project = st.borrow().project_snapshot(window.get_bpm());
+                let samples = st.borrow().sample_snapshots();
+                let scope = if st.borrow().song_mode {
+                    RenderScope::Song
+                } else {
+                    RenderScope::Pattern {
+                        index: st.borrow().current_pattern,
+                    }
+                };
+                let format = match format {
+                    1 => ExportFormat::Wav(WavEncoding::Float32),
+                    2 => ExportFormat::Mp3(match bitrate {
+                        0 => Mp3Bitrate::Kbps192,
+                        1 => Mp3Bitrate::Kbps256,
+                        _ => Mp3Bitrate::Kbps320,
+                    }),
+                    _ => ExportFormat::Wav(WavEncoding::Pcm24),
+                };
+                window.set_export_open(false);
+                window.set_document_busy(true);
+                window.set_status_message("Rendering audio...".into());
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let extension = if matches!(format, ExportFormat::Mp3(_)) {
+                        "mp3"
+                    } else {
+                        "wav"
+                    };
+                    let Some(path) = pick_export_via_zenity(extension) else {
+                        let _ = tx.send(DocumentResult::Cancelled);
+                        return;
+                    };
+                    let spec = ExportSpec {
+                        path: path.clone(),
+                        scope,
+                        tail_seconds: tail as f32,
+                        format,
+                    };
+                    let result =
+                        OfflineRenderer::render(&project, &samples, export_sample_rate, &spec)
+                            .map(|_| DocumentResult::Exported { path })
+                            .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                    let _ = tx.send(result);
+                });
+            });
+        }
+
+        {
+            let st = state.clone();
+            window.window().on_close_requested(move || {
+                if st.borrow().dirty && !confirm_via_zenity("Quit without saving this song?") {
+                    CloseRequestResponse::KeepWindowShown
+                } else {
+                    CloseRequestResponse::HideWindow
+                }
+            });
+        }
 
         // --- Command channel from UI closures to the pump ---
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<EngineCommand>();
@@ -1801,6 +2338,7 @@ impl AppUi {
         //     drain audio events onto window ---
         let weak = window.as_weak();
         let st = state.clone();
+        let default_sample_for_pump = default_sample.clone();
         let pump = Timer::default();
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
         let stats = Rc::new(std::cell::Cell::new((0.0f32, false, 0usize)));
@@ -1812,6 +2350,167 @@ impl AppUi {
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
+                while let Ok(result) = document_rx.try_recv() {
+                    let Some(window) = weak.upgrade() else {
+                        return;
+                    };
+                    window.set_document_busy(false);
+                    match result {
+                        DocumentResult::Cancelled => {
+                            window.set_status_message("".into());
+                        }
+                        DocumentResult::SavedSong {
+                            path,
+                            mode,
+                            revision,
+                            report,
+                            sample_references,
+                        } => {
+                            let mut state = st.borrow_mut();
+                            state.bundle_path = Some(path.clone());
+                            if state.revision == revision {
+                                state.dirty = false;
+                                apply_sample_references(&mut state.channels, sample_references);
+                            }
+                            state.update_document_title(&window);
+                            window.set_embed_assets(mode == AssetMode::Embedded);
+                            window.set_status_message(
+                                operation_status("Song saved", &path, &report.warnings).into(),
+                            );
+                        }
+                        DocumentResult::SavedOther { label, report } => {
+                            window.set_status_message(
+                                format!("{label}{}", warning_suffix(report.warnings.len())).into(),
+                            );
+                        }
+                        DocumentResult::Exported { path } => {
+                            window
+                                .set_status_message(format!("Exported {}", path.display()).into());
+                        }
+                        DocumentResult::Failed(error) => {
+                            window.set_status_message(format!("Error: {error}").into());
+                        }
+                        DocumentResult::Loaded {
+                            path,
+                            target,
+                            document,
+                        } => {
+                            let ResolvedDocument {
+                                report,
+                                samples: loaded_samples,
+                            } = document;
+                            let LoadReport {
+                                document,
+                                asset_mode,
+                                warnings,
+                            } = report;
+                            let current = st.borrow().project_snapshot(window.get_bpm());
+                            let current_samples = st.borrow().sample_snapshots();
+                            let merged = match (target, document) {
+                                (LoadTarget::Song, LoadedDocument::Song(project)) => {
+                                    Some((project, loaded_samples, true))
+                                }
+                                (LoadTarget::Kit, LoadedDocument::Kit(kit)) => {
+                                    let dropping_notes = kit.channels.len()
+                                        < current.channels.len()
+                                        && current.channels[kit.channels.len()..].iter().any(
+                                            |channel| {
+                                                channel.notes.iter().any(|lane| !lane.is_empty())
+                                            },
+                                        );
+                                    if dropping_notes
+                                        && !confirm_via_zenity(
+                                            "This kit removes channels containing notes. Continue?",
+                                        )
+                                    {
+                                        window.set_status_message("Kit load cancelled".into());
+                                        None
+                                    } else {
+                                        let mut project = current.clone();
+                                        project.channels = kit
+                                            .channels
+                                            .into_iter()
+                                            .enumerate()
+                                            .map(|(index, setup)| {
+                                                if let Some(mut channel) =
+                                                    current.channels.get(index).cloned()
+                                                {
+                                                    channel.setup = setup;
+                                                    channel
+                                                } else {
+                                                    ProjectChannel {
+                                                        setup,
+                                                        notes: vec![
+                                                            Vec::new();
+                                                            current.pattern_lengths.len()
+                                                        ],
+                                                        next_note_id: 1,
+                                                    }
+                                                }
+                                            })
+                                            .collect();
+                                        project.selected_channel = project
+                                            .selected_channel
+                                            .min(project.channels.len().saturating_sub(1) as u8);
+                                        let mut samples = current_samples;
+                                        samples.resize(project.channels.len(), None);
+                                        samples.truncate(project.channels.len());
+                                        for (index, sample) in
+                                            loaded_samples.into_iter().enumerate()
+                                        {
+                                            if let Some(slot) = samples.get_mut(index) {
+                                                *slot = sample;
+                                            }
+                                        }
+                                        Some((project, samples, false))
+                                    }
+                                }
+                                (LoadTarget::Channel, LoadedDocument::Channel(setup)) => {
+                                    let mut project = current;
+                                    let selected = project.selected_channel as usize;
+                                    project.channels[selected].setup = setup;
+                                    let mut samples = current_samples;
+                                    samples[selected] = loaded_samples.into_iter().next().flatten();
+                                    Some((project, samples, false))
+                                }
+                                _ => {
+                                    window.set_status_message(
+                                        "Selected bundle has the wrong document type".into(),
+                                    );
+                                    None
+                                }
+                            };
+                            if let Some((project, samples, is_song)) = merged {
+                                install_project_in_ui(
+                                    &mut handle,
+                                    default_sample_for_pump.as_ref(),
+                                    &st,
+                                    &window,
+                                    &project,
+                                    &samples,
+                                );
+                                let mut state = st.borrow_mut();
+                                if is_song {
+                                    state.bundle_path = Some(path.clone());
+                                    state.dirty = false;
+                                    window.set_embed_assets(asset_mode == AssetMode::Embedded);
+                                } else {
+                                    state.dirty = true;
+                                    state.revision = state.revision.wrapping_add(1);
+                                }
+                                state.update_document_title(&window);
+                                window.set_status_message(
+                                    format!(
+                                        "Loaded {}{}",
+                                        path.display(),
+                                        warning_suffix(warnings.len())
+                                    )
+                                    .into(),
+                                );
+                            }
+                        }
+                    }
+                }
                 while let Ok(load) = load_rx.try_recv() {
                     let Some(loaded) = (match load.result {
                         Some(Ok(loaded)) => Some(loaded),
@@ -1833,25 +2532,41 @@ impl AppUi {
                     let waveform = waveform_peaks(&loaded.sample, WAVEFORM_BINS);
                     let description = sample_description(&loaded.sample);
                     let duration = sample_duration(&loaded.sample);
-                    handle.load_sample(load.channel, loaded.sample);
+                    handle.load_sample(load.channel, loaded.sample.clone());
                     let mut st = st.borrow_mut();
                     if let Some(ch) = st.channels.get_mut(load.channel) {
                         ch.sample_name = name;
                         ch.sample_description = description;
                         ch.sample_duration = duration;
                         ch.sample_path = Some(loaded.path);
+                        ch.sample_embedded = false;
+                        ch.sample_data = Some(loaded.sample.clone());
                         ch.waveform = waveform;
                         ch.can_previous_sample = loaded.can_previous;
                         ch.can_next_sample = loaded.can_next;
                     }
+                    st.dirty = true;
+                    st.revision = st.revision.wrapping_add(1);
                     if load.channel == st.selected {
                         if let Some(w) = weak.upgrade() {
                             st.refresh_editor(&w);
+                            st.update_document_title(&w);
                         }
                     }
                 }
                 let mut forwarded = 0usize;
                 while let Ok(cmd) = cmd_rx.try_recv() {
+                    if !matches!(
+                        cmd,
+                        EngineCommand::Play | EngineCommand::Pause | EngineCommand::Stop
+                    ) {
+                        let mut state = st.borrow_mut();
+                        state.dirty = true;
+                        state.revision = state.revision.wrapping_add(1);
+                        if let Some(window) = weak.upgrade() {
+                            state.update_document_title(&window);
+                        }
+                    }
                     handle.send(cmd);
                     forwarded += 1;
                 }
@@ -1896,6 +2611,9 @@ impl AppUi {
                         }
                         EngineEvent::Xrun => {
                             eprintln!("mooloop: JACK reported an xrun (audio dropout)");
+                        }
+                        EngineEvent::ProjectInstalled { .. } => {
+                            unreachable!("EngineHandle filters project acknowledgements")
                         }
                     }
                 }
@@ -1989,6 +2707,179 @@ impl AppUi {
     pub fn run(&self) -> Result<(), slint::PlatformError> {
         self.window.run()
     }
+}
+
+fn asset_mode_from_window(window: &MainWindow) -> AssetMode {
+    if window.get_embed_assets() {
+        AssetMode::Embedded
+    } else {
+        AssetMode::Referenced
+    }
+}
+
+fn apply_sample_references(
+    channels: &mut [ChannelState],
+    references: impl IntoIterator<Item = SampleReference>,
+) {
+    for (channel, sample) in channels.iter_mut().zip(references) {
+        match sample {
+            SampleReference::Builtin { .. } => {
+                channel.sample_path = None;
+                channel.sample_embedded = false;
+            }
+            SampleReference::File { path, embedded } => {
+                channel.sample_path = Some(path);
+                channel.sample_embedded = embedded;
+            }
+        }
+    }
+}
+
+fn warning_suffix(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!(
+            " ({count} sample warning{})",
+            if count == 1 { "" } else { "s" }
+        )
+    }
+}
+
+fn operation_status(label: &str, path: &Path, warnings: &[AssetWarning]) -> String {
+    format!(
+        "{label}: {}{}",
+        path.display(),
+        warning_suffix(warnings.len())
+    )
+}
+
+fn install_project_in_ui(
+    handle: &mut EngineHandle,
+    default_sample: Option<&Arc<SampleData>>,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    project: &Project,
+    samples: &[Option<Arc<SampleData>>],
+) {
+    for index in 0..MAX_CHANNELS {
+        let sample = samples.get(index).cloned().flatten().or_else(|| {
+            project.channels.get(index).and_then(|channel| {
+                matches!(
+                    channel.setup.sampler_state().sample,
+                    SampleReference::Builtin { .. }
+                )
+                .then(|| default_sample.cloned())
+                .flatten()
+            })
+        });
+        if let Some(sample) = sample {
+            handle.load_sample(index, sample);
+        } else {
+            handle.clear_sample(index);
+        }
+    }
+    handle.install_project(Arc::new(project.clone()));
+    state.borrow_mut().replace_project(project, samples, window);
+    window.set_playing(false);
+    window.set_playlist_position_ticks(0);
+}
+
+fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
+    let mut report = mooloop_project::load_bundle(path).map_err(|error| error.to_string())?;
+    let sample_references = match &report.document {
+        LoadedDocument::Song(project) => project
+            .channels
+            .iter()
+            .map(|channel| channel.setup.sampler_state().sample.clone())
+            .collect::<Vec<_>>(),
+        LoadedDocument::Kit(kit) => kit
+            .channels
+            .iter()
+            .map(|channel| channel.sampler_state().sample.clone())
+            .collect(),
+        LoadedDocument::Channel(channel) => {
+            vec![channel.sampler_state().sample.clone()]
+        }
+    };
+    let mut samples = Vec::with_capacity(sample_references.len());
+    for (channel, reference) in sample_references.into_iter().enumerate() {
+        match reference {
+            SampleReference::Builtin { .. } => samples.push(None),
+            SampleReference::File { path, .. } if path.is_file() => match decode_wav(&path) {
+                Ok(sample) => samples.push(Some(sample)),
+                Err(error) => {
+                    report.warnings.push(AssetWarning {
+                        channel,
+                        path,
+                        message: error,
+                    });
+                    samples.push(None);
+                }
+            },
+            SampleReference::File { .. } => samples.push(None),
+        }
+    }
+    Ok(ResolvedDocument { report, samples })
+}
+
+fn zenity_path(mut command: std::process::Command) -> Option<PathBuf> {
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then(|| PathBuf::from(value))
+}
+
+fn pick_bundle_via_zenity(title: &str) -> Option<PathBuf> {
+    let mut command = std::process::Command::new("zenity");
+    command
+        .arg("--file-selection")
+        .arg("--directory")
+        .arg(format!("--title={title}"));
+    zenity_path(command)
+}
+
+fn pick_save_via_zenity(title: &str, suggested: &str) -> Option<PathBuf> {
+    let mut command = std::process::Command::new("zenity");
+    command
+        .arg("--file-selection")
+        .arg("--save")
+        .arg("--confirm-overwrite")
+        .arg(format!("--title={title}"))
+        .arg(format!("--filename={suggested}"));
+    zenity_path(command)
+}
+
+fn pick_export_via_zenity(extension: &str) -> Option<PathBuf> {
+    let mut command = std::process::Command::new("zenity");
+    command
+        .arg("--file-selection")
+        .arg("--save")
+        .arg("--confirm-overwrite")
+        .arg("--title=Export audio")
+        .arg(format!("--filename=mooloop-export.{extension}"))
+        .arg(format!("--file-filter=*.{extension}"));
+    let mut path = zenity_path(command)?;
+    if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_none_or(|value| !value.eq_ignore_ascii_case(extension))
+    {
+        path.set_extension(extension);
+    }
+    Some(path)
+}
+
+fn confirm_via_zenity(question: &str) -> bool {
+    std::process::Command::new("zenity")
+        .arg("--question")
+        .arg(format!("--text={question}"))
+        .arg("--ok-label=Continue")
+        .arg("--cancel-label=Cancel")
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Spawn zenity to pick a WAV file. Returns `None` if cancelled or unavailable.
@@ -2301,5 +3192,25 @@ mod tests {
         assert_eq!(adjacent_wav(&c, 1).unwrap(), None);
 
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saved_bundle_sample_paths_replace_external_paths() {
+        let mut channel = ChannelState::new(0, Vec::new(), String::new(), 0.0);
+        channel.sample_path = Some(PathBuf::from("/samples/source.wav"));
+
+        apply_sample_references(
+            std::slice::from_mut(&mut channel),
+            [SampleReference::File {
+                path: PathBuf::from("/songs/beat.mooloop/samples/00-source.wav"),
+                embedded: true,
+            }],
+        );
+
+        assert_eq!(
+            channel.sample_path,
+            Some(PathBuf::from("/songs/beat.mooloop/samples/00-source.wav"))
+        );
+        assert!(channel.sample_embedded);
     }
 }

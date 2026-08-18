@@ -12,6 +12,7 @@ import {
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
+import { DocumentMenu, ExportDialog } from "document-menu.slint";
 export { Theme }
 export { ControlGallery } from "gallery.slint";
 
@@ -106,7 +107,7 @@ component WaveformMarker inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
-    title: "mooloop";
+    title: root.document-title;
     preferred-width: 1280px;
     preferred-height: 760px;
     background: Theme.background;
@@ -131,6 +132,25 @@ export component MainWindow inherits Window {
     callback appearance-preview(int, string);
     callback appearance-save(int, string) -> bool;
     callback appearance-cancelled();
+
+    // ---- document lifecycle ----
+    in-out property <string> document-title: "Untitled - mooloop";
+    in-out property <bool> embed-assets: true;
+    in-out property <bool> document-busy;
+    in-out property <string> status-message;
+    in-out property <bool> export-open;
+    in-out property <int> export-format;
+    in-out property <int> export-bitrate: 2;
+    in-out property <int> export-tail-seconds: 2;
+    callback open-song();
+    callback save-song();
+    callback save-song-as();
+    callback load-kit();
+    callback save-kit();
+    callback load-channel();
+    callback save-channel();
+    callback export-audio();
+    callback export-confirmed(int, int, int);
 
     // ---- channels / patterns ----
     in-out property <[ChannelRow]> channels;
@@ -331,6 +351,22 @@ export component MainWindow inherits Window {
                         padding-top: 4px;
                         padding-bottom: 4px;
                         spacing: 3px;
+
+                        DocumentMenu {
+                            height: 24px;
+                            embed-assets <=> root.embed-assets;
+                            busy: root.document-busy;
+                            open-song => { root.open-song(); }
+                            save-song => { root.save-song(); }
+                            save-song-as => { root.save-song-as(); }
+                            load-kit => { root.load-kit(); }
+                            save-kit => { root.save-kit(); }
+                            load-channel => { root.load-channel(); }
+                            save-channel => { root.save-channel(); }
+                            export-audio => { root.export-audio(); }
+                        }
+
+                        ToolbarRule {}
 
                         TransportButton {
                             text: root.playing ? "⏸" : "▶";
@@ -1774,6 +1810,21 @@ export component MainWindow inherits Window {
                 }
             }
         }
+
+        if root.status-message != "" : Rectangle {
+            height: 24px;
+            background: Theme.surface-raised;
+            border-width: 1px;
+            border-color: Theme.border;
+            Text {
+                text: root.status-message;
+                color: Theme.text-muted;
+                font-size: 10px;
+                x: 8px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
     }
 
     AppearanceDialog {
@@ -1786,5 +1837,15 @@ export component MainWindow inherits Window {
         preview(preset, accent) => { root.appearance-preview(preset, accent); }
         save(preset, accent) => { root.appearance-save(preset, accent) }
         cancelled => { root.appearance-cancelled(); }
+    }
+    ExportDialog {
+        width: parent.width;
+        height: parent.height;
+        open <=> root.export-open;
+        format-index <=> root.export-format;
+        bitrate-index <=> root.export-bitrate;
+        tail-seconds <=> root.export-tail-seconds;
+        accepted(format, bitrate, tail) => { root.export-confirmed(format, bitrate, tail); }
+        cancelled => { root.export-open = false; }
     }
 }

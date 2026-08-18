@@ -4,6 +4,16 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString
 use std::cell::Cell;
 use std::rc::Rc;
 
+fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variable: &str) {
+    if let Ok(path) = std::env::var(variable) {
+        let mut ppm = format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
+        for rgba in snapshot.as_bytes().chunks_exact(4) {
+            ppm.extend_from_slice(&rgba[..3]);
+        }
+        std::fs::write(path, ppm).unwrap();
+    }
+}
+
 #[test]
 fn render_playlist_snapshot() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
@@ -66,13 +76,7 @@ fn render_playlist_snapshot() {
     assert_eq!(snapshot.height(), 760);
     assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
 
-    if let Ok(path) = std::env::var("MOOLOOP_PLAYLIST_SNAPSHOT") {
-        let mut ppm = format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
-        for rgba in snapshot.as_bytes().chunks_exact(4) {
-            ppm.extend_from_slice(&rgba[..3]);
-        }
-        std::fs::write(path, ppm).unwrap();
-    }
+    write_snapshot(&snapshot, "MOOLOOP_PLAYLIST_SNAPSHOT");
 
     let pixel = |x: usize, y: usize| {
         let offset = (y * snapshot.width() as usize + x) * 4;
@@ -138,4 +142,42 @@ fn render_playlist_snapshot() {
     }
     assert_eq!(added.get(), Some((0, 192)));
     assert_eq!(removed.get(), Some((0, 192)));
+
+    let file_position = LogicalPosition::new(34.0, 24.0);
+    ui.window().dispatch_event(WindowEvent::PointerMoved {
+        position: file_position,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: file_position,
+        button: PointerEventButton::Left,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: file_position,
+        button: PointerEventButton::Left,
+    });
+    let menu_snapshot = ui.window().take_snapshot().unwrap();
+    write_snapshot(&menu_snapshot, "MOOLOOP_DOCUMENT_MENU_SNAPSHOT");
+
+    let outside_menu = LogicalPosition::new(250.0, 300.0);
+    ui.window().dispatch_event(WindowEvent::PointerMoved {
+        position: outside_menu,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: outside_menu,
+        button: PointerEventButton::Left,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: outside_menu,
+        button: PointerEventButton::Left,
+    });
+    ui.set_export_open(true);
+    let export_snapshot = ui.window().take_snapshot().unwrap();
+    assert_eq!(export_snapshot.width(), 960);
+    assert_eq!(export_snapshot.height(), 760);
+    assert_ne!(
+        export_snapshot.as_bytes(),
+        snapshot.as_bytes(),
+        "the export dialog must alter the rendered surface"
+    );
+    write_snapshot(&export_snapshot, "MOOLOOP_EXPORT_SNAPSHOT");
 }
