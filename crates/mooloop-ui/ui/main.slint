@@ -1,9 +1,14 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
-    MiniKnob, ParameterFader, ParameterKnob, PeakMeter, SectionLabel as DesignSectionLabel,
-    StereoPeakMeter, ToolButton, MuteButton as DesignMuteButton
+    IconButton, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
+    SectionLabel as DesignSectionLabel, SegmentedControl, StereoPeakMeter, ToolButton,
+    TransportButton, MuteButton as DesignMuteButton
 } from "controls.slint";
+import {
+    BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
+    ToolbarLabel, ToolbarRule, ToolIcons, ToolModeButton
+} from "toolbar.slint";
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
@@ -14,7 +19,11 @@ export { ControlGallery } from "gallery.slint";
 struct StepCell {
     active: bool,
     velocity: int,
+    // Which 64th slots a note covers, and which ones a note actually starts on.
+    // Coverage alone cannot tell a ratcheted step from one long note: both fill
+    // all four slots. Onsets are what make a slice visible.
     substeps: int,
+    onsets: int,
 }
 
 // One tick-addressed note event for the selected channel's piano roll.
@@ -143,6 +152,27 @@ export component MainWindow inherits Window {
         "1/16", "1/16T", "1/32", "1/32T", "1/64",
     ];
     in-out property <int> musical-snap-index: 6;
+
+    // Transport position, computed engine-side because it depends on PPQ and
+    // on whether the playlist or the pattern is driving.
+    in-out property <int> position-bar: 1;
+    in-out property <int> position-beat: 1;
+    in-out property <int> position-tick;
+
+    // Pattern identity. Names are optional; the selector falls back to the
+    // number so an unnamed pattern is never blank.
+    in-out property <string> current-pattern-name;
+    in-out property <[string]> pattern-menu-options;
+    callback pattern-renamed(int, string);
+
+    // Editing tool: 0=Select 1=Paint 2=Slice 3=Stretch.
+    in-out property <int> tool-mode;
+    in-out property <int> slice-divisions: 2;
+    // Paint and stretch are drags, so they report a target state rather than
+    // toggling: a drag across mixed steps must not invert each one.
+    callback step-painted(int, int, bool);   // channel, step, on
+    callback step-sliced(int, int, int);     // channel, step, divisions
+    callback step-length-dragged(int, int, int); // channel, step, length in steps
     property <int> musical-snap-ticks: root.snap-ticks(root.musical-snap-index);
 
     pure function snap-ticks(index: int) -> int {
@@ -280,181 +310,214 @@ export component MainWindow inherits Window {
         spacing: 0px;
 
         // ===== Toolbar =====
+        //
+        // Two rows, split by what they answer. The transport row is the state
+        // of playback and never changes meaning; the edit row is what the
+        // current click will do. Mixing the two into one strip is what made
+        // the old bar read as a row of unrelated buttons.
         Rectangle {
-            height: 34px;
+            height: 62px;
             background: Theme.surface;
-            HorizontalBox {
-                padding: 4px;
-                spacing: 4px;
-                alignment: start;
 
-                FlatButton {
-                    text: root.playing ? "Ⅱ" : "▶";
-                    tooltip: root.playing ? "Pause (Space)" : "Play (Space)";
-                    active: root.playing;
-                    min-width: 30px;
-                    clicked => { root.toggle-play(); }
-                }
-                FlatButton {
-                    text: "■";
-                    tooltip: "Stop";
-                    text-color: root.playing ? Theme.text-muted : Theme.text;
-                    min-width: 30px;
-                    clicked => { root.stop-clicked(); }
-                }
+            VerticalLayout {
+                spacing: 0px;
 
-                Rectangle { width: 4px; }
-
-                HorizontalLayout {
-                    spacing: 1px;
-                    FlatButton {
-                        text: "PAT";
-                        tooltip: "Loop the selected pattern during playback";
-                        active: !root.song-mode;
-                        min-width: 38px;
-                        clicked => {
-                            if (root.song-mode) {
-                                root.song-mode = false;
-                                root.playback-mode-changed(false);
-                            }
-                        }
-                    }
-                    FlatButton {
-                        text: "SONG";
-                        tooltip: "Follow the playlist during playback";
-                        active: root.song-mode;
-                        min-width: 44px;
-                        clicked => {
-                            if (!root.song-mode) {
-                                root.song-mode = true;
-                                root.playback-mode-changed(true);
-                            }
-                        }
-                    }
-                }
-
-                Rectangle { width: 6px; }
-
-                ScrollView {
-                    width: 220px;
-                    height: 26px;
-                    viewport-width: max(self.visible-width, root.pattern-count * 30px);
-                    viewport-height: self.visible-height;
-                    HorizontalLayout {
-                        width: root.pattern-count * 30px;
-                        spacing: 2px;
-                        for p in root.pattern-count : FlatButton {
-                            text: p + 1;
-                            tooltip: "Select pattern " + (p + 1);
-                            active: root.current-pattern == p;
-                            min-width: 28px;
-                            max-width: 28px;
-                            clicked => { root.pattern-selected(p); }
-                        }
-                    }
-                }
-                FlatButton {
-                    text: "+";
-                    tooltip: "Create pattern";
-                    min-width: 28px;
-                    max-width: 28px;
-                    enabled: root.pattern-count < 256;
-                    clicked => { root.add-pattern-clicked(); }
-                }
-
-                Rectangle { width: 6px; }
-
-                Text {
-                    text: "STEPS";
-                    color: Theme.text-faint;
-                    font-size: 9px;
-                    vertical-alignment: center;
-                }
-                SpinBox {
-                    value <=> root.pattern-length;
-                    minimum: 1;
-                    maximum: 256;
-                    step-size: 1;
-                    width: 72px;
-                    height: 24px;
-                    edited(value) => { root.pattern-length-changed(value); }
-                    Tooltip { text: @markdown("Length of the selected pattern in 16th-note steps"); }
-                }
-
-                Rectangle { width: 6px; }
-
+                // --- Transport row -----------------------------------------
                 Rectangle {
-                    width: 104px;
-                    height: 24px;
-                    background: Theme.surface-raised;
-                    border-radius: 3px;
+                    height: 32px;
                     HorizontalBox {
-                        padding: 0px;
-                        spacing: 0px;
-                        alignment: center;
-                        Text {
-                            text: "-"; color: Theme.text-muted;
-                            width: 22px;
-                            horizontal-alignment: center; vertical-alignment: center;
-                            TouchArea {
-                                clicked => {
-                                    root.bpm = max(1, root.bpm - 1);
-                                    root.bpm-changed(root.bpm);
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        spacing: 3px;
+
+                        TransportButton {
+                            text: root.playing ? "⏸" : "▶";
+                            tooltip: root.playing ? "Pause (Space)" : "Play (Space)";
+                            role: "play";
+                            active: root.playing;
+                            clicked => { root.toggle-play(); }
+                        }
+                        TransportButton {
+                            text: "■";
+                            tooltip: "Stop";
+                            enabled: root.playing || root.current-step > 0;
+                            clicked => { root.stop-clicked(); }
+                        }
+
+                        ToolbarRule {}
+
+                        SegmentedControl {
+                            width: 96px;
+                            height: 24px;
+                            options: ["PAT", "SONG"];
+                            selected-index: root.song-mode ? 1 : 0;
+                            selected(i) => {
+                                if ((i == 1) != root.song-mode) {
+                                    root.song-mode = i == 1;
+                                    root.playback-mode-changed(root.song-mode);
                                 }
                             }
                         }
-                        Text {
-                            text: root.bpm; color: Theme.text;
-                            horizontal-alignment: center; vertical-alignment: center;
-                            width: 56px;
+
+                        ToolbarRule {}
+
+                        PositionReadout {
+                            bar: root.position-bar;
+                            beat: root.position-beat;
+                            tick: root.position-tick;
                         }
-                        Text {
-                            text: "+"; color: Theme.text-muted;
-                            width: 22px;
-                            horizontal-alignment: center; vertical-alignment: center;
-                            TouchArea {
-                                clicked => {
-                                    root.bpm = min(999, root.bpm + 1);
-                                    root.bpm-changed(root.bpm);
-                                }
+                        BeatLamps {
+                            current: root.beat-in-bar;
+                            running: root.playing;
+                        }
+
+                        ToolbarRule {}
+
+                        TempoField {
+                            bpm <=> root.bpm;
+                            changed(v) => { root.bpm-changed(v); }
+                        }
+
+                        Rectangle { horizontal-stretch: 1; min-width: 8px; }
+
+                        MasterMeter {
+                            width: 200px;
+                            left-db: root.meter-l-db;
+                            right-db: root.meter-r-db;
+                            held-left-db: root.meter-l-held-db;
+                            held-right-db: root.meter-r-held-db;
+                            left-clipping: root.meter-l-clipping;
+                            right-clipping: root.meter-r-clipping;
+                        }
+
+                        IconButton {
+                            text: "⚙";
+                            tooltip: "Appearance settings";
+                            clicked => {
+                                root.appearance-opened();
+                                root.appearance-open = true;
                             }
                         }
                     }
                 }
 
+                Rectangle { height: 1px; background: Theme.border; opacity: 0.6; }
+
+                // --- Edit row ----------------------------------------------
                 Rectangle {
-                    width: 60px;
+                    height: 29px;
+                    background: Theme.panel;
                     HorizontalBox {
-                        padding: 0px;
-                        spacing: 4px;
-                        alignment: center;
-                        for i in 4 : Rectangle {
-                            width: 10px; height: 10px;
-                            border-radius: 5px;
-                            background: (root.beat-in-bar == i) ? Theme.accent : Theme.border;
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        padding-top: 3px;
+                        padding-bottom: 2px;
+                        spacing: 3px;
+
+                        // Pattern selection is a stepper plus a jump list, so
+                        // it costs the same width at 2 patterns and at 200.
+                        ToolbarLabel { text: "PAT"; }
+                        Rectangle {
+                            height: 24px;
+                            width: pattern-group.preferred-width;
+                            border-radius: 3px;
+                            background: Theme.surface-raised;
+                            pattern-group := HorizontalLayout {
+                                spacing: 0px;
+                                StepperField {
+                                    value: root.current-pattern + 1;
+                                    minimum: 1;
+                                    maximum: root.pattern-count;
+                                    tooltip: "Selected pattern";
+                                    value-width: 26px;
+                                    field-background: transparent;
+                                    changed(v) => { root.pattern-selected(v - 1); }
+                                }
+                                MenuField {
+                                    options: root.pattern-menu-options;
+                                    selected-index: root.current-pattern;
+                                    display-text: "";
+                                    field-width: 0px;
+                                    menu-width: 180px;
+                                    tooltip: "Jump to pattern";
+                                    field-background: transparent;
+                                    selected(i) => { root.pattern-selected(i); }
+                                }
+                            }
                         }
-                    }
-                }
+                        NameField {
+                            text: root.current-pattern-name;
+                            placeholder: "Pattern " + (root.current-pattern + 1);
+                            tooltip: "Name this pattern";
+                            edited(t) => { root.pattern-renamed(root.current-pattern, t); }
+                        }
+                        IconButton {
+                            text: "+";
+                            tooltip: "Create pattern";
+                            size: 24px;
+                            enabled: root.pattern-count < 256;
+                            clicked => { root.add-pattern-clicked(); }
+                        }
 
-                MasterMeter {
-                    width: 210px;
-                    left-db: root.meter-l-db;
-                    right-db: root.meter-r-db;
-                    held-left-db: root.meter-l-held-db;
-                    held-right-db: root.meter-r-held-db;
-                    left-clipping: root.meter-l-clipping;
-                    right-clipping: root.meter-r-clipping;
-                }
+                        ToolbarRule {}
 
-                Rectangle { horizontal-stretch: 1; }
+                        // Tool modes. The glyph row is the answer to "what
+                        // will my next drag across the grid do".
+                        ToolModeButton {
+                            icon: ToolIcons.select; name: "Select";
+                            hint: "Click toggles a step. Ctrl-drag sets velocity.";
+                            active: root.tool-mode == 0;
+                            clicked => { root.tool-mode = 0; }
+                        }
+                        ToolModeButton {
+                            icon: ToolIcons.paint; name: "Paint";
+                            hint: "Drag to fill steps. Right-drag to clear.";
+                            active: root.tool-mode == 1;
+                            clicked => { root.tool-mode = 1; }
+                        }
+                        ToolModeButton {
+                            icon: ToolIcons.slice; name: "Slice";
+                            hint: "Click a step to ratchet it into even hits.";
+                            active: root.tool-mode == 2;
+                            clicked => { root.tool-mode = 2; }
+                        }
+                        ToolModeButton {
+                            icon: ToolIcons.stretch; name: "Stretch";
+                            hint: "Drag a step sideways to set its length.";
+                            active: root.tool-mode == 3;
+                            clicked => { root.tool-mode = 3; }
+                        }
+                        if root.tool-mode == 2 : StepperField {
+                            label: "×";
+                            value <=> root.slice-divisions;
+                            minimum: 2;
+                            maximum: 4;
+                            tooltip: "Hits per sliced step";
+                            value-width: 18px;
+                        }
 
-                FlatButton {
-                    text: "⚙";
-                    tooltip: "Appearance settings";
-                    min-width: 30px;
-                    clicked => {
-                        root.appearance-opened();
-                        root.appearance-open = true;
+                        ToolbarRule {}
+
+                        StepperField {
+                            label: "STEPS";
+                            value <=> root.pattern-length;
+                            minimum: 1;
+                            maximum: 256;
+                            tooltip: "Length of the selected pattern in 16th-note steps";
+                            changed(v) => { root.pattern-length-changed(v); }
+                        }
+                        MenuField {
+                            label: "SNAP";
+                            options: root.musical-snap-options;
+                            selected-index <=> root.musical-snap-index;
+                            field-width: 46px;
+                            menu-width: 120px;
+                            tooltip: "Grid resolution for editing";
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
                     }
                 }
             }
@@ -528,53 +591,126 @@ export component MainWindow inherits Window {
                     }
 
                     // Beat grouping remains visible at any pattern length.
-                    HorizontalLayout {
-                        spacing: 3px;
-                        for cell[i] in row.steps : Rectangle {
-                            width: 24px;
-                            height: 24px;
-                            border-radius: 2px;
-                            clip: true;
-                            border-width: root.playing && root.current-step == i ? 1px : 0px;
-                            border-color: Theme.text;
-                            background: mod(i, 4) == 0 ? Theme.surface-active : Theme.surface-raised;
-                            for sub in 4 : Rectangle {
-                                property <int> divisor: sub == 0 ? 1 : sub == 1 ? 2 : sub == 2 ? 4 : 8;
-                                visible: mod(floor(cell.substeps / self.divisor), 2) == 1;
-                                x: sub * parent.width / 4;
-                                y: parent.height - self.height;
-                                width: parent.width / 4;
-                                height: max(3px, parent.height * cell.velocity / 127);
-                                border-radius: 0px;
-                                background: Theme.accent;
-                                opacity: 0.55 + 0.45 * cell.velocity / 127;
-                            }
-                            step-touch := TouchArea {
-                                property <bool> velocity-drag;
-                                mouse-cursor: pointer;
-                                pointer-event(e) => {
-                                    if (e.kind == PointerEventKind.down) {
-                                        if (e.button == PointerEventButton.right) {
-                                            root.step-removed(ch, i);
-                                        } else if (e.button == PointerEventButton.left) {
-                                            self.velocity-drag = e.modifiers.control;
-                                            if (self.velocity-drag) {
-                                                root.step-velocity-edited(ch, i,
-                                                    clamp(1 - self.mouse-y / self.height, 0, 1));
-                                            } else {
-                                                root.step-clicked(ch, i);
-                                            }
-                                        }
-                                    } else if (e.kind == PointerEventKind.move
-                                        && self.pressed && self.velocity-drag) {
-                                        root.step-velocity-edited(ch, i,
-                                            clamp(1 - self.mouse-y / self.height, 0, 1));
-                                    } else if (e.kind == PointerEventKind.up) {
-                                        self.velocity-drag = false;
-                                    }
+                    //
+                    // One hit area covers the whole run of steps and derives
+                    // the cell from mouse-x. Per-cell TouchAreas cannot support
+                    // a drag: the cell where the press landed keeps the grab,
+                    // so the pointer never reaches its neighbours.
+                    Rectangle {
+                        property <length> cell-pitch: 27px;
+                        property <int> step-count: row.steps.length;
+                        width: self.step-count * self.cell-pitch - 3px;
+                        height: 24px;
+
+                        pure function step-at(x: length) -> int {
+                            return clamp(floor(x / self.cell-pitch), 0, self.step-count - 1);
+                        }
+
+                        HorizontalLayout {
+                            spacing: 3px;
+                            for cell[i] in row.steps : Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                border-radius: 2px;
+                                clip: true;
+                                border-width: root.playing && root.current-step == i ? 1px : 0px;
+                                border-color: Theme.text;
+                                background: mod(i, 4) == 0 ? Theme.surface-active : Theme.surface-raised;
+                                for sub in 4 : Rectangle {
+                                    property <int> divisor: sub == 0 ? 1 : sub == 1 ? 2 : sub == 2 ? 4 : 8;
+                                    property <bool> onset: mod(floor(cell.onsets / self.divisor), 2) == 1;
+                                    visible: mod(floor(cell.substeps / self.divisor), 2) == 1;
+                                    x: sub * parent.width / 4;
+                                    y: parent.height - self.height;
+                                    width: parent.width / 4;
+                                    height: max(3px, parent.height * cell.velocity / 127);
+                                    border-radius: 0px;
+                                    background: Theme.accent;
+                                    // A struck slot is solid; one that is only
+                                    // being held stays dim, so a ratchet reads
+                                    // differently from a single sustained note.
+                                    opacity: (self.onset ? 1.0 : 0.3)
+                                        * (0.55 + 0.45 * cell.velocity / 127);
                                 }
-                                Tooltip { text: @markdown("Click to toggle. **Ctrl-drag** velocity. **Right-click** to clear."); }
                             }
+                        }
+
+                        grid-touch := TouchArea {
+                            // -1 means "no drag in progress"; it is not a step.
+                            property <int> last-step: -1;
+                            property <int> stretch-origin: -1;
+                            property <bool> paint-on;
+                            property <bool> velocity-drag;
+                            mouse-cursor: root.tool-mode == 1 ? crosshair
+                                : root.tool-mode == 3 ? ew-resize : pointer;
+
+                            function paint-to(step: int) {
+                                if (step != self.last-step) {
+                                    self.last-step = step;
+                                    root.step-painted(ch, step, self.paint-on);
+                                }
+                            }
+
+                            pointer-event(e) => {
+                                let step = parent.step-at(self.mouse-x);
+                                if (e.kind == PointerEventKind.down) {
+                                    if (root.tool-mode == 1) {
+                                        // Left fills, right clears, for the
+                                        // whole drag. Toggling per cell would
+                                        // invert whatever it crossed.
+                                        self.paint-on = e.button == PointerEventButton.left;
+                                        self.last-step = -1;
+                                        self.paint-to(step);
+                                    } else if (root.tool-mode == 2) {
+                                        if (e.button == PointerEventButton.right) {
+                                            root.step-removed(ch, step);
+                                        } else {
+                                            root.step-sliced(ch, step, root.slice-divisions);
+                                        }
+                                    } else if (root.tool-mode == 3) {
+                                        if (e.button == PointerEventButton.right) {
+                                            root.step-length-dragged(ch, step, 1);
+                                        } else {
+                                            self.stretch-origin = step;
+                                            root.step-length-dragged(ch, step, 1);
+                                        }
+                                    } else if (e.button == PointerEventButton.right) {
+                                        root.step-removed(ch, step);
+                                    } else {
+                                        self.velocity-drag = e.modifiers.control;
+                                        if (self.velocity-drag) {
+                                            root.step-velocity-edited(ch, step,
+                                                clamp(1 - self.mouse-y / self.height, 0, 1));
+                                        } else {
+                                            root.step-clicked(ch, step);
+                                        }
+                                    }
+                                } else if (e.kind == PointerEventKind.move && self.pressed) {
+                                    if (root.tool-mode == 1) {
+                                        self.paint-to(step);
+                                    } else if (root.tool-mode == 3 && self.stretch-origin >= 0) {
+                                        root.step-length-dragged(ch, self.stretch-origin,
+                                            max(1, step - self.stretch-origin + 1));
+                                    } else if (self.velocity-drag) {
+                                        root.step-velocity-edited(ch, step,
+                                            clamp(1 - self.mouse-y / self.height, 0, 1));
+                                    }
+                                } else if (e.kind == PointerEventKind.up) {
+                                    self.velocity-drag = false;
+                                    self.last-step = -1;
+                                    self.stretch-origin = -1;
+                                }
+                            }
+                            // @markdown takes a literal, so the per-tool hint
+                            // is resolved into a property first.
+                            property <string> hint: root.tool-mode == 1
+                                ? "**Paint** Drag to fill. Right-drag to clear."
+                                : root.tool-mode == 2
+                                ? "**Slice** Click to ratchet into \{root.slice-divisions} hits. Right-click clears."
+                                : root.tool-mode == 3
+                                ? "**Stretch** Drag right to lengthen. Right-click resets."
+                                : "Click to toggle. **Ctrl-drag** velocity. **Right-click** to clear.";
+                            Tooltip { text: @markdown("\{parent.hint}"); }
                         }
                     }
                 }

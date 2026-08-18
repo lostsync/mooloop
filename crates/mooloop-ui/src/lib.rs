@@ -180,6 +180,7 @@ fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
     let start = (step as u32).saturating_mul(TICKS_PER_STEP);
     let end = start.saturating_add(TICKS_PER_STEP);
     let mut substeps = 0;
+    let mut onsets = 0;
     let mut velocity = 0;
     for note in notes {
         let note_end = note.end_tick();
@@ -194,12 +195,18 @@ fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
         for substep in first..=last {
             substeps |= 1 << substep;
         }
+        // Only a note that begins inside this sixteenth is struck here; one
+        // that merely runs through it is being held.
+        if note.start_tick >= start && note.start_tick < end {
+            onsets |= 1 << ((note.start_tick - start) / TICKS_PER_64TH).min(3);
+        }
         velocity = velocity.max(i32::from(note.velocity));
     }
     StepCell {
         active: substeps != 0,
         velocity,
         substeps,
+        onsets,
     }
 }
 
@@ -226,6 +233,7 @@ struct UiState {
     default_sample_description: String,
     default_sample_duration: f32,
     pattern_lengths: Vec<usize>,
+    pattern_names: Vec<String>,
     playlist: Vec<PatternPlacement>,
     song_mode: bool,
     current_pattern: usize,
@@ -262,6 +270,31 @@ impl UiState {
     fn refresh_rack_cell(&self, channel: usize, step: usize) {
         let notes = &self.channels[channel].notes[self.current_pattern];
         self.step_models[channel].set_row_data(step, rack_cell(notes, step));
+    }
+
+    /// Push the current pattern's name and the full pattern menu to the
+    /// window. An empty name falls back to `Pattern N` in the menu.
+    fn sync_pattern_menu(&self, window: &MainWindow) {
+        let options: Vec<slint::SharedString> = self
+            .pattern_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let label = if name.is_empty() {
+                    format!("Pattern {}", i + 1)
+                } else {
+                    name.clone()
+                };
+                format!("{:02}  {label}", i + 1).into()
+            })
+            .collect();
+        window.set_pattern_menu_options(ModelRc::from(Rc::new(VecModel::from(options))));
+        let current = self
+            .pattern_names
+            .get(self.current_pattern)
+            .cloned()
+            .unwrap_or_default();
+        window.set_current_pattern_name(current.into());
     }
 
     fn song_length_ticks(&self) -> u32 {
@@ -404,6 +437,9 @@ impl AppUi {
         window.set_bpm(INITIAL_BPM);
         window.set_playing(false);
         window.set_beat_in_bar(0);
+        window.set_position_bar(1);
+        window.set_position_beat(1);
+        window.set_position_tick(0);
         window.set_meter_l_db(-60.0);
         window.set_meter_r_db(-60.0);
         window.set_meter_l_held_db(-60.0);
@@ -548,6 +584,7 @@ impl AppUi {
             default_sample_description,
             default_sample_duration,
             pattern_lengths: vec![DEFAULT_STEPS as usize],
+            pattern_names: vec![String::new()],
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
             song_mode: false,
             current_pattern: 0,
@@ -556,6 +593,7 @@ impl AppUi {
         }));
         state.borrow().refresh_editor(&window);
         state.borrow().sync_playlist(&window);
+        state.borrow().sync_pattern_menu(&window);
 
         // --- Command channel from UI closures to the pump ---
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<EngineCommand>();
@@ -576,6 +614,9 @@ impl AppUi {
                 if let Some(window) = weak.upgrade() {
                     window.set_playing(false);
                     window.set_playlist_position_ticks(0);
+                    window.set_position_bar(1);
+                    window.set_position_beat(1);
+                    window.set_position_tick(0);
                 }
                 let _ = tx.send(EngineCommand::Stop);
             });
@@ -648,6 +689,7 @@ impl AppUi {
                     let st = st.borrow();
                     w.set_pattern_length(st.pattern_lengths[p] as i32);
                     st.refresh_editor(&w);
+                    st.sync_pattern_menu(&w);
                 }
                 let _ = tx.send(EngineCommand::SetCurrentPattern(p as u8));
             });
@@ -666,6 +708,7 @@ impl AppUi {
                 }
                 let pattern = st.pattern_lengths.len();
                 st.pattern_lengths.push(DEFAULT_STEPS as usize);
+                st.pattern_names.push(String::new());
                 for channel in &mut st.channels {
                     channel.notes.push(Vec::new());
                 }
@@ -678,9 +721,28 @@ impl AppUi {
                     window.set_pattern_length(DEFAULT_STEPS as i32);
                     st.refresh_editor(&window);
                     st.sync_playlist(&window);
+                    st.sync_pattern_menu(&window);
                 }
                 let _ = tx.send(EngineCommand::AddPattern);
                 let _ = tx.send(EngineCommand::SetCurrentPattern(pattern as u8));
+            });
+        }
+
+        // Pattern renaming. An empty name is legal and falls back to
+        // "Pattern N" in the menu.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_pattern_renamed(move |index, name| {
+                let index = index as usize;
+                let mut st = st.borrow_mut();
+                if index >= st.pattern_names.len() {
+                    return;
+                }
+                st.pattern_names[index] = name.trim().to_string();
+                if let Some(window) = weak.upgrade() {
+                    st.sync_pattern_menu(&window);
+                }
             });
         }
 
@@ -925,6 +987,182 @@ impl AppUi {
                 }
                 st.selected_note_id = (channel == st.selected).then_some(edited[0].id);
                 st.refresh_rack_cell(channel, step);
+                if channel == st.selected {
+                    if let Some(window) = weak.upgrade() {
+                        st.refresh_note_editor(&window);
+                    }
+                }
+                for note in edited {
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                }
+            });
+        }
+
+        // Paint-drag step editing: idempotent per call so a mouse drag can
+        // call this repeatedly over the same cell without toggling it.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_step_painted(move |channel, step, on| {
+                let (channel, step) = (channel as usize, step as usize);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                    return;
+                }
+                let start = step as u32 * TICKS_PER_STEP;
+                let end = start + TICKS_PER_STEP;
+                let ids: Vec<NoteId> = st.channels[channel].notes[pattern]
+                    .iter()
+                    .filter(|note| note.start_tick >= start && note.start_tick < end)
+                    .map(|note| note.id)
+                    .collect();
+                if on {
+                    if !ids.is_empty() {
+                        return;
+                    }
+                    let note = st.channels[channel].create_note(
+                        pattern,
+                        start,
+                        DEFAULT_NOTE_DURATION_TICKS,
+                        60,
+                    );
+                    if channel == st.selected {
+                        st.selected_note_id = Some(note.id);
+                    }
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                } else {
+                    if ids.is_empty() {
+                        return;
+                    }
+                    st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                    if st.selected_note_id.is_some_and(|id| ids.contains(&id)) {
+                        st.selected_note_id = None;
+                    }
+                    for id in ids {
+                        let _ = tx.send(EngineCommand::RemoveNote {
+                            pattern: pattern as u8,
+                            channel: channel as u8,
+                            id,
+                        });
+                    }
+                }
+                st.refresh_rack_cell(channel, step);
+                if channel == st.selected {
+                    if let Some(window) = weak.upgrade() {
+                        st.refresh_note_editor(&window);
+                    }
+                }
+            });
+        }
+
+        // Slice a sixteenth into `divisions` evenly spaced notes.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_step_sliced(move |channel, step, divisions| {
+                let (channel, step) = (channel as usize, step as usize);
+                let divisions = divisions.clamp(2, 4) as u32;
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                    return;
+                }
+                let start = step as u32 * TICKS_PER_STEP;
+                let end = start + TICKS_PER_STEP;
+                let ids: Vec<NoteId> = st.channels[channel].notes[pattern]
+                    .iter()
+                    .filter(|note| note.start_tick >= start && note.start_tick < end)
+                    .map(|note| note.id)
+                    .collect();
+                st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                if st.selected_note_id.is_some_and(|id| ids.contains(&id)) {
+                    st.selected_note_id = None;
+                }
+                for id in ids {
+                    let _ = tx.send(EngineCommand::RemoveNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        id,
+                    });
+                }
+                let slice_ticks = TICKS_PER_STEP / divisions;
+                for k in 0..divisions {
+                    let note = st.channels[channel].create_note(
+                        pattern,
+                        start + k * slice_ticks,
+                        slice_ticks,
+                        60,
+                    );
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                }
+                st.refresh_rack_cell(channel, step);
+                if channel == st.selected {
+                    if let Some(window) = weak.upgrade() {
+                        st.refresh_note_editor(&window);
+                    }
+                }
+            });
+        }
+
+        // Drag-resize every note starting in a sixteenth. Called repeatedly
+        // during a drag, so no-op durations are skipped and only the cells
+        // the note used to (or now does) span are refreshed.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_step_length_dragged(move |channel, step, length_in_steps| {
+                let (channel, step) = (channel as usize, step as usize);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                    return;
+                }
+                let pattern_length = st.pattern_lengths[pattern];
+                let max_length = (pattern_length - step) as i32;
+                let length_in_steps = length_in_steps.clamp(1, max_length) as u32;
+                let duration_ticks = length_in_steps * TICKS_PER_STEP;
+                let start = step as u32 * TICKS_PER_STEP;
+                let end = start + TICKS_PER_STEP;
+                let mut edited = Vec::new();
+                let mut max_end_step = step;
+                for note in st.channels[channel].notes[pattern].iter_mut() {
+                    if note.start_tick < start || note.start_tick >= end {
+                        continue;
+                    }
+                    let old_end_step = ((note.start_tick + note.duration_ticks.max(1) - 1)
+                        / TICKS_PER_STEP) as usize;
+                    max_end_step = max_end_step.max(old_end_step);
+                    if note.duration_ticks == duration_ticks {
+                        continue;
+                    }
+                    note.duration_ticks = duration_ticks;
+                    let new_end_step =
+                        ((note.start_tick + duration_ticks - 1) / TICKS_PER_STEP) as usize;
+                    max_end_step = max_end_step.max(new_end_step);
+                    edited.push(*note);
+                }
+                if edited.is_empty() {
+                    return;
+                }
+                for s in step..=max_end_step.min(pattern_length - 1) {
+                    st.refresh_rack_cell(channel, s);
+                }
                 if channel == st.selected {
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);
@@ -1633,11 +1871,21 @@ impl AppUi {
                             let st = st.borrow();
                             let length = st.pattern_lengths[st.current_pattern] as u64;
                             let ticks_per_step = (Ppq::DEFAULT.ticks_per_beat() / 4) as u64;
+                            let ticks_per_beat = Ppq::DEFAULT.ticks_per_beat() as u64;
                             w.set_current_step(((tick / ticks_per_step) % length) as i32);
-                            if st.song_mode {
+                            let position_ticks = if st.song_mode {
                                 let song_length = u64::from(st.song_length_ticks());
-                                w.set_playlist_position_ticks((tick % song_length) as i32);
-                            }
+                                let song_position = tick % song_length;
+                                w.set_playlist_position_ticks(song_position as i32);
+                                song_position
+                            } else {
+                                tick % (length * ticks_per_step)
+                            };
+                            let ticks_per_bar = u64::from(TICKS_PER_BAR);
+                            let tick_in_bar = position_ticks % ticks_per_bar;
+                            w.set_position_bar((position_ticks / ticks_per_bar) as i32 + 1);
+                            w.set_position_beat((tick_in_bar / ticks_per_beat) as i32 + 1);
+                            w.set_position_tick((tick_in_bar % ticks_per_beat) as i32);
                         }
                         EngineEvent::Metering { peak_l, peak_r } => {
                             block_peak_l = block_peak_l.max(peak_l.max(0.0));
@@ -1945,6 +2193,33 @@ mod tests {
         let notes = [NoteEvent::new(1, 18, 12, 60, 90)];
         assert_eq!(rack_cell(&notes, 0).substeps, 0b1000);
         assert_eq!(rack_cell(&notes, 1).substeps, 0b0001);
+    }
+
+    #[test]
+    fn separates_struck_substeps_from_held_ones() {
+        // One note filling the whole sixteenth covers every 64th but is only
+        // struck on the first, so coverage alone cannot describe it.
+        let sustained = vec![NoteEvent::new(1, 0, TICKS_PER_STEP, 60, 100)];
+        let cell = rack_cell(&sustained, 0);
+        assert_eq!(cell.substeps, 0b1111);
+        assert_eq!(cell.onsets, 0b0001);
+
+        // The same coverage, ratcheted into two hits, is struck twice. If the
+        // rack drew coverage alone these two cells would be indistinguishable.
+        let half = TICKS_PER_STEP / 2;
+        let ratcheted = vec![
+            NoteEvent::new(1, 0, half, 60, 100),
+            NoteEvent::new(2, half, half, 60, 100),
+        ];
+        let cell = rack_cell(&ratcheted, 0);
+        assert_eq!(cell.substeps, 0b1111);
+        assert_eq!(cell.onsets, 0b0101);
+
+        // A note running in from an earlier sixteenth is held, never struck.
+        let carried = vec![NoteEvent::new(1, 0, TICKS_PER_STEP * 2, 60, 100)];
+        let cell = rack_cell(&carried, 1);
+        assert_eq!(cell.substeps, 0b1111);
+        assert_eq!(cell.onsets, 0);
     }
 
     #[test]

@@ -31,11 +31,13 @@ fn render_playlist_snapshot() {
             active: true,
             velocity: 42,
             substeps: 0b1111,
+            onsets: 0b0001,
         },
         StepCell {
             active: true,
             velocity: 100,
             substeps: 0b0101,
+            onsets: 0b0101,
         },
     ]));
     ui.set_channels(ModelRc::from(Rc::new(VecModel::from(vec![ChannelRow {
@@ -87,14 +89,33 @@ fn render_playlist_snapshot() {
     const FIRST_CELL_LAST_X: usize = 215;
     const CELL_GAP_X: usize = 216;
     const SECOND_CELL_X: usize = 220;
+    // Likewise these y values track the toolbar's height, since the rack sits
+    // directly beneath it. FILL_Y crosses both cells' fills; VELOCITY_Y is high
+    // enough that only the louder step reaches it.
+    const FILL_Y: usize = 101;
+    const VELOCITY_Y: usize = 87;
+    // Cell one covers all four 64ths but is struck only on the first, so its
+    // slots render at two different intensities.
+    const ONSET_X: usize = FIRST_CELL_X;
+    const HELD_X: usize = 205;
 
-    // A step's fill spans the whole cell and stops at the gap after it.
-    let low_velocity_fill = pixel(FIRST_CELL_X, 73).to_vec();
-    assert_eq!(pixel(FIRST_CELL_LAST_X, 73), low_velocity_fill);
-    assert_ne!(pixel(CELL_GAP_X, 73), low_velocity_fill);
+    // A struck 64th is solid, one that is only being held is dim, and the gap
+    // between cells is background. That ordering is the whole reason a
+    // ratcheted step looks different from a single sustained note.
+    let onset = pixel(ONSET_X, FILL_Y).to_vec();
+    let held = pixel(HELD_X, FILL_Y).to_vec();
+    let gap = pixel(CELL_GAP_X, FILL_Y).to_vec();
+    assert_ne!(onset, held);
+    assert_ne!(held, gap);
+    assert!(
+        onset[1] > held[1] && held[1] > gap[1],
+        "expected struck > held > empty, got {onset:?} {held:?} {gap:?}"
+    );
+    // The fill still stops at the cell boundary.
+    assert_ne!(pixel(FIRST_CELL_LAST_X, FILL_Y), gap);
     // Velocity 42 and velocity 100 reach different heights, so the two cells
     // differ on a row that only the taller one fills.
-    assert_ne!(pixel(FIRST_CELL_X, 59), pixel(SECOND_CELL_X, 59));
+    assert_ne!(pixel(FIRST_CELL_X, VELOCITY_Y), pixel(SECOND_CELL_X, VELOCITY_Y));
 
     let added = Rc::new(Cell::new(None));
     ui.on_playlist_placement_added({

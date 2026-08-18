@@ -7,8 +7,18 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 
 ## Implemented User Surface
 
-- One application window with transport playback modes, a scrollable created-
-  pattern selector, tempo, master peak meters, channel rack, and a lower editor.
+- One application window with a two-row toolbar, channel rack, and a lower
+  editor. The transport row carries play/stop, pattern-vs-song mode, a
+  bar:beat:tick position readout, beat lamps, drag-or-type tempo, and the master
+  meter; the edit row carries pattern selection, the cursor tools, pattern
+  length, and grid snap.
+- Patterns are chosen with a fixed-width stepper plus a jump menu and can be
+  named; the selector costs the same width at any pattern count.
+- Four cursor tools drive the rack grid: Select (click toggles, ctrl-drag sets
+  velocity), Paint (drag fills, right-drag clears), Slice (ratchet a step into
+  2-4 even hits), and Stretch (drag a step sideways to set note length). The
+  whole run of steps shares one hit area, because a per-cell one cannot follow
+  a drag past the cell the press landed in.
 - Up to 16 channels. The UI starts with one sampler channel and can append or
   remove channels. Every rack row exposes mute, output volume, and
   constant-power stereo pan.
@@ -27,7 +37,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   fields, and a pinned velocity lane. It shares selectable straight/triplet
   musical snap values from one bar through 1/64 with the playlist.
 - Sixteenth-note rack cells summarize their four 64th-note substeps without
-  discarding rests between hits.
+  discarding rests between hits. Each substep is drawn solid where a note is
+  struck and dim where one is merely held, so a ratcheted step is
+  distinguishable from a single sustained note; coverage alone renders both as
+  a full cell.
 - A sampler editor with waveform, WAV loading and sibling navigation, trim,
   reverse, root note, coarse/fine tune, loop region and mode, ADSR, low-pass
   filter with envelope depth and resonance, drive, bit reduction, and rate
@@ -43,6 +56,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   `MOOLOOP_GALLERY_SIZE` to capture it headlessly.
 - Some widgets exist ahead of the features that will use them: gain reduction and
   correlation have no audio behind them yet, and solo is a button style only.
+- There is no metronome. The toolbar deliberately does not offer a click-track
+  toggle, since nothing in the DSP graph produces one yet.
 
 ## Current Audio Path
 
