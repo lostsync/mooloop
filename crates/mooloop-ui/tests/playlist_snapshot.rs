@@ -1,4 +1,4 @@
-use mooloop_ui::{MainWindow, PlaylistClip};
+use mooloop_ui::{ChannelRow, MainWindow, PlaylistClip, StepCell};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::cell::Cell;
@@ -20,11 +20,32 @@ fn render_playlist_snapshot() {
     ui.set_song_mode(true);
     ui.set_editor_page(2);
     ui.set_pattern_count(2);
+    ui.set_pattern_length(2);
     ui.set_musical_snap_index(1);
     ui.set_current_pattern(0);
     ui.set_playlist_bars(64);
     ui.set_playlist_song_length_ticks(1152);
     ui.set_playlist_position_ticks(192);
+    let step_model = Rc::new(VecModel::from(vec![
+        StepCell {
+            active: true,
+            velocity: 42,
+            substeps: 0b1111,
+        },
+        StepCell {
+            active: true,
+            velocity: 100,
+            substeps: 0b0101,
+        },
+    ]));
+    ui.set_channels(ModelRc::from(Rc::new(VecModel::from(vec![ChannelRow {
+        name: SharedString::from("Sampler 1"),
+        muted: false,
+        volume: 0.8,
+        pan: 0.0,
+        selected: true,
+        steps: ModelRc::from(step_model),
+    }]))));
     ui.set_playlist_clips(ModelRc::from(std::rc::Rc::new(VecModel::from(vec![
         PlaylistClip {
             pattern: 0,
@@ -58,6 +79,11 @@ fn render_playlist_snapshot() {
     let clip_color = pixel(120, 450).to_vec();
     assert_eq!(pixel(159, 450), clip_color);
     assert_ne!(pixel(160, 450), clip_color);
+
+    let low_velocity_fill = pixel(301, 73).to_vec();
+    assert_eq!(pixel(323, 73), low_velocity_fill);
+    assert_ne!(pixel(324, 73), low_velocity_fill);
+    assert_ne!(pixel(301, 59), pixel(328, 59));
 
     let added = Rc::new(Cell::new(None));
     ui.on_playlist_placement_added({

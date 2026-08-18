@@ -537,6 +537,7 @@ export component MainWindow inherits Window {
                             width: 24px;
                             height: 24px;
                             border-radius: 2px;
+                            clip: true;
                             border-width: root.playing && root.current-step == i ? 1px : 0px;
                             border-color: Theme.text;
                             background: mod(i, 4) == 0 ? Theme.surface-active : Theme.surface-raised;
@@ -545,9 +546,9 @@ export component MainWindow inherits Window {
                                 visible: mod(floor(cell.substeps / self.divisor), 2) == 1;
                                 x: sub * parent.width / 4;
                                 y: parent.height - self.height;
-                                width: parent.width / 4 - (sub < 3 ? 1px : 0px);
+                                width: parent.width / 4;
                                 height: max(3px, parent.height * cell.velocity / 127);
-                                border-radius: 1px;
+                                border-radius: 0px;
                                 background: Theme.accent;
                                 opacity: 0.55 + 0.45 * cell.velocity / 127;
                             }

@@ -180,13 +180,20 @@ fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
     let start = (step as u32).saturating_mul(TICKS_PER_STEP);
     let end = start.saturating_add(TICKS_PER_STEP);
     let mut substeps = 0;
-    let mut velocity = 100;
-    for note in notes
-        .iter()
-        .filter(|note| note.start_tick >= start && note.start_tick < end)
-    {
-        let substep = ((note.start_tick - start) / TICKS_PER_64TH).min(3);
-        substeps |= 1 << substep;
+    let mut velocity = 0;
+    for note in notes {
+        let note_end = note.end_tick();
+        if note.start_tick >= end || note_end <= start {
+            continue;
+        }
+
+        let overlap_start = note.start_tick.max(start);
+        let overlap_end = note_end.min(end);
+        let first = ((overlap_start - start) / TICKS_PER_64TH).min(3);
+        let last = ((overlap_end - start - 1) / TICKS_PER_64TH).min(3);
+        for substep in first..=last {
+            substeps |= 1 << substep;
+        }
         velocity = velocity.max(i32::from(note.velocity));
     }
     StepCell {
@@ -1923,6 +1930,21 @@ mod tests {
         assert!(cell.active);
         assert_eq!(cell.substeps, 0b0101);
         assert_eq!(cell.velocity, 110);
+    }
+
+    #[test]
+    fn rack_cell_fills_note_duration_at_its_actual_velocity() {
+        let cell = rack_cell(&[NoteEvent::new(1, 0, TICKS_PER_STEP, 60, 42)], 0);
+        assert!(cell.active);
+        assert_eq!(cell.substeps, 0b1111);
+        assert_eq!(cell.velocity, 42);
+    }
+
+    #[test]
+    fn rack_cell_shows_duration_crossing_a_step_boundary() {
+        let notes = [NoteEvent::new(1, 18, 12, 60, 90)];
+        assert_eq!(rack_cell(&notes, 0).substeps, 0b1000);
+        assert_eq!(rack_cell(&notes, 1).substeps, 0b0001);
     }
 
     #[test]
