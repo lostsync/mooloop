@@ -632,6 +632,63 @@ mod tests {
     }
 
     #[test]
+    fn embedded_bundle_can_be_saved_again_without_the_external_source() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        fs::write(&source, b"wav bytes").unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.sampler_state_mut().sample = SampleReference::File {
+            path: source.clone(),
+            embedded: false,
+        };
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let LoadedDocument::Song(saved) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected song")
+        };
+        fs::remove_file(source).unwrap();
+
+        let report = save_song(&bundle, &saved, AssetMode::Embedded).unwrap();
+        assert!(report.warnings.is_empty());
+        let LoadedDocument::Song(saved_again) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected song")
+        };
+        let SampleReference::File { path, embedded } =
+            &saved_again.channels[0].setup.sampler_state().sample
+        else {
+            panic!("expected file sample")
+        };
+        assert!(*embedded);
+        assert!(path.is_file());
+    }
+
+    #[test]
+    fn kit_and_channel_setup_round_trip() {
+        let temp = tempdir().unwrap();
+        let mut setup = ChannelSetup::sampler("Closed Hat");
+        setup.channel.muted = true;
+        setup.channel.volume = 0.42;
+        setup.channel.pan = -0.25;
+        setup.sampler_state_mut().params.reverse = true;
+        setup.sampler_state_mut().params.choke_group = 3;
+        let kit = Kit {
+            channels: vec![setup.clone()],
+        };
+
+        let kit_path = temp.path().join("drums.mooloop-kit");
+        save_kit(&kit_path, &kit, AssetMode::Embedded).unwrap();
+        let loaded_kit = load_bundle(&kit_path).unwrap();
+        assert_eq!(loaded_kit.document, LoadedDocument::Kit(kit));
+
+        let channel_path = temp.path().join("hat.mooloop-channel");
+        save_channel(&channel_path, &setup, AssetMode::Referenced).unwrap();
+        let loaded_channel = load_bundle(&channel_path).unwrap();
+        assert_eq!(loaded_channel.asset_mode, AssetMode::Referenced);
+        assert_eq!(loaded_channel.document, LoadedDocument::Channel(setup));
+    }
+
+    #[test]
     fn missing_reference_loads_with_warning() {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("song.mooloop");
