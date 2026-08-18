@@ -7,6 +7,7 @@ pub mod bridge;
 pub mod channel;
 pub mod pattern;
 pub mod playlist;
+pub mod project;
 pub mod sampler;
 pub mod synth;
 pub mod time;
@@ -20,6 +21,10 @@ pub use pattern::{
 pub use playlist::{
     PatternPlacement, PlaybackMode, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
     STEPS_PER_BAR, TICKS_PER_BAR,
+};
+pub use project::{
+    ChannelPreset, ChannelSetup, ChannelSource, Kit, Project, ProjectChannel, SampleReference,
+    SamplerState,
 };
 pub use sampler::{
     clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,

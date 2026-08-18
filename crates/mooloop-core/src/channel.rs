@@ -10,13 +10,14 @@ pub const MAX_CHANNELS: usize = 16;
 pub const MAX_PATTERNS: usize = u8::MAX as usize + 1;
 
 /// Instrument kind for a channel. More kinds arrive with Phase 4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DeviceKind {
     Sampler,
 }
 
 /// One mixer channel.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Channel {
     pub name: String,
     pub kind: DeviceKind,

@@ -50,7 +50,7 @@ impl Step {
 }
 
 /// A pitched note on the pattern timeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NoteEvent {
     pub id: NoteId,
     pub start_tick: u32,

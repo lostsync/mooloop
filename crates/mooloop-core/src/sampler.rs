@@ -4,7 +4,8 @@ pub const MAX_SAMPLER_VOICES: u8 = 16;
 pub const MAX_CHOKE_GROUP: u8 = 16;
 
 /// How the sampler treats the loop region once the play head reaches it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LoopMode {
     /// No looping. Play from `start` to `loop_end` (or sample end), then stop.
     #[default]
@@ -30,7 +31,8 @@ impl LoopMode {
 }
 
 /// How note-off events affect sample playback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum VoiceMode {
     /// Play the full region. For a looped voice, note-off exits the loop and
     /// lets the remaining sample tail play once.
@@ -41,7 +43,8 @@ pub enum VoiceMode {
 }
 
 /// How repeated notes of the same pitch use the voice pool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RetriggerMode {
     /// Replace the oldest active voice on the same pitch.
     #[default]
@@ -52,7 +55,7 @@ pub enum RetriggerMode {
 
 /// All sampler parameters, in the units the DSP and UI share. All points are
 /// fractions of the sample length in `[0, 1]`; times are seconds.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SamplerParams {
     pub voice_mode: VoiceMode,
     /// Active voice limit in `1..=16`.

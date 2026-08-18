@@ -14,7 +14,8 @@ pub const MAX_PLAYLIST_TICKS: u32 = MAX_PLAYLIST_BARS * TICKS_PER_BAR;
 /// Fixed upper bound so the realtime sequencer never grows its placement store.
 pub const MAX_PLAYLIST_PLACEMENTS: usize = 512;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PlaybackMode {
     #[default]
     Pattern,
@@ -22,7 +23,9 @@ pub enum PlaybackMode {
 }
 
 /// One pattern instance on the absolute song timeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct PatternPlacement {
     pub pattern: u8,
     pub start_tick: u32,

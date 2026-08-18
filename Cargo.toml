@@ -4,6 +4,7 @@ members = [
     "crates/mooloop-core",
     "crates/mooloop-dsp",
     "crates/mooloop-engine",
+    "crates/mooloop-project",
     "crates/mooloop-ui",
     "crates/mooloop-app",
 ]
@@ -19,12 +20,15 @@ publish = false
 mooloop-core = { path = "crates/mooloop-core" }
 mooloop-dsp = { path = "crates/mooloop-dsp" }
 mooloop-engine = { path = "crates/mooloop-engine" }
+mooloop-project = { path = "crates/mooloop-project" }
 mooloop-ui = { path = "crates/mooloop-ui" }
 
 slint = "1.17"
 slint-build = "1.17"
 jack = "0.13"
 rtrb = "0.3"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
 
 [profile.release]
 debug = true
