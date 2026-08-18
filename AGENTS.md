@@ -108,3 +108,41 @@ Don't lecture him — just apply the rule above: figure out what the
 uncommitted changes are, get them into a proper branch/commit (asking if
 their intent is unclear), and only then start new work in its own
 worktree.
+
+## Running the app / taking screenshots
+
+Adam runs Hyprland and is often using the machine while an agent works.
+There is a dedicated headless Wayland output named `agent` (workspace
+`agent`, bound to it) set up specifically so agents can run and screenshot
+the UI without ever appearing on Adam's real screens or stealing focus.
+Always use it instead of running the GUI on whatever workspace happens to
+be active.
+
+- **Launch the app on it:**
+  `hyprctl dispatch exec '[workspace name:agent] <command>'`
+  Two gotchas that will silently break this:
+  - The `name:` prefix is required — bare `agent` gets misparsed and the
+    window lands on Adam's active workspace instead.
+  - Do **not** add `silent`. `silent` stops the *headless* monitor itself
+    from switching to the `agent` workspace, so the window exists but
+    nothing gets composited into it — screenshots come back blank. This is
+    the opposite of normal Hyprland advice (`silent` is usually what you
+    want) but here it's safe and necessary: the `agent` monitor is
+    headless, so "switching to it" is never visible to Adam on a real
+    screen.
+- **Screenshot it:**
+  `grim -o agent /tmp/whatever.png`
+- **Find/inspect the window:**
+  `hyprctl clients -j | jq '.[] | select(.workspace.name=="agent")'`
+- **Close it when done:**
+  `hyprctl dispatch closewindow address:<addr>` (get `<addr>` from
+  `hyprctl clients -j`), or just kill the process.
+
+If you need to click or type into the window (`ydotool`, no `wtype`
+installed), know that input goes wherever keyboard/pointer focus currently
+is — briefly focusing the agent window will steal Adam's input focus even
+though nothing changes on screen. Keep such interactions short and don't
+leave the agent workspace focused when you're done.
+
+If the `agent` output is ever missing (e.g. after a compositor crash before
+a full re-login), recreate it: `hyprctl output create headless agent`.
