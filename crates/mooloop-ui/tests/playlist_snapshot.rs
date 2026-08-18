@@ -119,7 +119,10 @@ fn render_playlist_snapshot() {
     assert_ne!(pixel(FIRST_CELL_LAST_X, FILL_Y), gap);
     // Velocity 42 and velocity 100 reach different heights, so the two cells
     // differ on a row that only the taller one fills.
-    assert_ne!(pixel(FIRST_CELL_X, VELOCITY_Y), pixel(SECOND_CELL_X, VELOCITY_Y));
+    assert_ne!(
+        pixel(FIRST_CELL_X, VELOCITY_Y),
+        pixel(SECOND_CELL_X, VELOCITY_Y)
+    );
 
     let added = Rc::new(Cell::new(None));
     ui.on_playlist_placement_added({
