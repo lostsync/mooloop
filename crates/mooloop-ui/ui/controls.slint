@@ -36,8 +36,12 @@ export component ToolButton inherits Rectangle {
     tap := TouchArea {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
-        pointer-event(e) => { if (e.kind == PointerEventKind.down) { button-keyboard.focus(); } }
-        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                button-keyboard.focus();
+                root.clicked();
+            }
+        }
     }
 
     button-keyboard := FocusScope {
@@ -206,15 +210,16 @@ export component ParameterKnob inherits Rectangle {
                     if (e.kind == PointerEventKind.down) {
                         keyboard.focus();
                         root.pressed-normalized = root.normalized;
-                        root.fine-drag = e.modifiers.shift;
+                        root.fine-drag = e.modifiers.control || e.modifiers.shift;
                     } else if (e.kind == PointerEventKind.move && self.pressed) {
                         root.set-normalized(root.pressed-normalized
-                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 600px : 150px));
+                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
                     }
                 }
                 double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
                 scroll-event(e) => {
-                    root.set-normalized(root.normalized - e.delta-y / (e.modifiers.shift ? 2400px : 600px));
+                    root.set-normalized(root.normalized
+                        - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
                     accept
                 }
             }
@@ -234,9 +239,11 @@ export component ParameterKnob inherits Rectangle {
     keyboard := FocusScope {
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
-                root.set-normalized(root.normalized + (e.modifiers.shift ? 0.002 : 0.01)); accept
+                root.set-normalized(root.normalized
+                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
-                root.set-normalized(root.normalized - (e.modifiers.shift ? 0.002 : 0.01)); accept
+                root.set-normalized(root.normalized
+                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
             } else { reject }
         }
     }
@@ -334,17 +341,18 @@ export component ParameterFader inherits Rectangle {
                     if (e.kind == PointerEventKind.down) {
                         fader-keyboard.focus();
                         root.pressed-normalized = root.normalized;
-                        root.fine-drag = e.modifiers.shift;
+                        root.fine-drag = e.modifiers.control || e.modifiers.shift;
                         if (!root.fine-drag) { root.set-normalized(self.mouse-x / self.width); }
                     } else if (e.kind == PointerEventKind.move && self.pressed) {
                         root.set-normalized(root.fine-drag
-                            ? root.pressed-normalized + (self.mouse-x - self.pressed-x) / 600px
+                            ? root.pressed-normalized + (self.mouse-x - self.pressed-x) / 5000px
                             : self.mouse-x / self.width);
                     }
                 }
                 double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
                 scroll-event(e) => {
-                    root.set-normalized(root.normalized - e.delta-y / (e.modifiers.shift ? 2400px : 600px)); accept
+                    root.set-normalized(root.normalized
+                        - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px)); accept
                 }
             }
         }
@@ -384,17 +392,18 @@ export component ParameterFader inherits Rectangle {
                     if (e.kind == PointerEventKind.down) {
                         fader-keyboard.focus();
                         root.pressed-normalized = root.normalized;
-                        root.fine-drag = e.modifiers.shift;
+                        root.fine-drag = e.modifiers.control || e.modifiers.shift;
                         if (!root.fine-drag) { root.set-normalized(1 - self.mouse-y / self.height); }
                     } else if (e.kind == PointerEventKind.move && self.pressed) {
                         root.set-normalized(root.fine-drag
-                            ? root.pressed-normalized + (self.pressed-y - self.mouse-y) / 600px
+                            ? root.pressed-normalized + (self.pressed-y - self.mouse-y) / 5000px
                             : 1 - self.mouse-y / self.height);
                     }
                 }
                 double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
                 scroll-event(e) => {
-                    root.set-normalized(root.normalized - e.delta-y / (e.modifiers.shift ? 2400px : 600px)); accept
+                    root.set-normalized(root.normalized
+                        - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px)); accept
                 }
             }
         }
@@ -403,9 +412,11 @@ export component ParameterFader inherits Rectangle {
         enabled: root.enabled;
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
-                root.set-normalized(root.normalized + (e.modifiers.shift ? 0.002 : 0.01)); accept
+                root.set-normalized(root.normalized
+                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
-                root.set-normalized(root.normalized - (e.modifiers.shift ? 0.002 : 0.01)); accept
+                root.set-normalized(root.normalized
+                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
             } else { reject }
         }
     }

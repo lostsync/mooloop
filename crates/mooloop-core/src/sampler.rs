@@ -32,6 +32,16 @@ impl LoopMode {
 pub struct SamplerParams {
     /// Play start point as a fraction of the sample length.
     pub start: f32,
+    /// Play end point as a fraction of the sample length.
+    pub end: f32,
+    /// Play the selected region backwards.
+    pub reverse: bool,
+    /// Root MIDI note used for keyboard tracking.
+    pub root_note: u8,
+    /// Coarse tuning offset in semitones.
+    pub tune_semitones: f32,
+    /// Fine tuning offset in cents.
+    pub tune_cents: f32,
     /// Loop start point as a fraction.
     pub loop_start: f32,
     /// Loop end point as a fraction.
@@ -47,8 +57,12 @@ pub struct SamplerParams {
     pub release: f32,
     /// Low-pass cutoff on a perceptual `[0, 1]` scale. `1` bypasses it.
     pub filter_cutoff: f32,
+    /// Low-pass resonance in `[0, 1]`.
+    pub filter_resonance: f32,
     /// Bipolar filter envelope depth in `[-1, 1]` (up to six octaves).
     pub filter_env_amount: f32,
+    /// Soft saturation drive in `[0, 1]`. `0` bypasses it.
+    pub drive: f32,
     /// Bit-depth reduction amount in `[0, 1]`. `0` bypasses it.
     pub bit_reduction: f32,
     /// Sample-rate reduction amount in `[0, 1]`. `0` bypasses it.
@@ -59,6 +73,11 @@ impl Default for SamplerParams {
     fn default() -> Self {
         Self {
             start: 0.0,
+            end: 1.0,
+            reverse: false,
+            root_note: 60,
+            tune_semitones: 0.0,
+            tune_cents: 0.0,
             loop_start: 0.0,
             loop_end: 1.0,
             loop_mode: LoopMode::Off,
@@ -67,7 +86,9 @@ impl Default for SamplerParams {
             sustain: 1.0,
             release: 0.05,
             filter_cutoff: 1.0,
+            filter_resonance: 0.0,
             filter_env_amount: 0.0,
+            drive: 0.0,
             bit_reduction: 0.0,
             rate_reduction: 0.0,
         }

@@ -1,7 +1,7 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
-    ParameterFader, PeakMeter, SectionLabel as DesignSectionLabel,
+    ParameterKnob, PeakMeter, SectionLabel as DesignSectionLabel,
     StereoPeakMeter, ToolButton, MuteButton as DesignMuteButton
 } from "controls.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
@@ -11,6 +11,7 @@ export { ControlGallery } from "gallery.slint";
 // One step cell used in the step-grid models.
 struct StepCell {
     active: bool,
+    velocity: int,
 }
 
 // One monophonic note slot for the selected channel's piano roll.
@@ -30,9 +31,56 @@ struct ChannelRow {
 }
 
 component FlatButton inherits ToolButton { }
-component Fader inherits ParameterFader { }
 component SectionLabel inherits DesignSectionLabel { }
 component MuteButton inherits DesignMuteButton { }
+
+component WaveformMarker inherits Rectangle {
+    in property <string> marker-label;
+    in property <color> marker-color;
+    in property <float> value;
+    in property <length> editor-width;
+    in property <bool> label-at-bottom;
+    callback moved(float);
+
+    width: 1px;
+    background: transparent;
+    accessible-role: slider;
+    accessible-label: root.marker-label + " marker";
+    accessible-value: round(root.value * 1000) / 10 + "%";
+
+    Rectangle {
+        width: 1px;
+        height: parent.height;
+        background: root.marker-color;
+    }
+    Rectangle {
+        x: clamp(-6px, -root.x, root.editor-width - root.x - 13px);
+        y: root.label-at-bottom ? parent.height - 18px : 2px;
+        width: 13px;
+        height: 16px;
+        border-radius: 2px;
+        background: root.marker-color;
+        Text {
+            text: root.marker-label;
+            color: Theme.background;
+            font-size: 8px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    marker-touch := TouchArea {
+        x: -7px;
+        width: 15px;
+        mouse-cursor: ew-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down || (e.kind == PointerEventKind.move && self.pressed)) {
+                root.moved(clamp((root.x + self.x + self.mouse-x) / max(1px, root.editor-width), 0, 1));
+            }
+        }
+    }
+    Tooltip { text: @markdown("Drag the **\{root.marker-label}** marker"); }
+}
 
 export component MainWindow inherits Window {
     title: "mooloop";
@@ -70,6 +118,8 @@ export component MainWindow inherits Window {
     in-out property <[NoteCell]> notes;
 
     callback step-clicked(int, int);       // channel, step
+    callback step-removed(int, int);       // channel, step
+    callback step-velocity-edited(int, int, float); // channel, step, normalised velocity
     callback channel-selected(int);
     callback channel-muted(int);
     callback add-channel-clicked();
@@ -84,27 +134,40 @@ export component MainWindow inherits Window {
     in-out property <int> selected-velocity;
     property <int> piano-low-note: 36;
     property <int> piano-high-note: 84;
-    property <length> piano-row-height: 4px;
+    property <length> piano-row-height: 5px;
+    property <length> piano-step-width: 32px;
 
     callback piano-note-edited(int, int);   // step, MIDI note
+    callback piano-note-moved(int, int, int); // source step, destination step, MIDI note
+    callback piano-note-removed(int);       // step
     callback velocity-edited(int, float);   // step, normalised value
     callback selected-note-changed(int);
     callback selected-velocity-changed(int);
 
-    // ---- sampler params of the selected channel (normalised 0..1) ----
+    // ---- sampler params of the selected channel ----
     in-out property <float> attack;
     in-out property <float> decay;
     in-out property <float> sustain;
     in-out property <float> release;
     in-out property <float> start-pos;
+    in-out property <float> end-pos: 1;
     in-out property <float> loop-start;
     in-out property <float> loop-end;
+    in-out property <bool> reverse-playback;
+    in-out property <int> root-note: 60;
+    in-out property <float> tune-semitones;
+    in-out property <float> tune-cents;
     in-out property <float> filter-cutoff;
+    in-out property <float> filter-resonance;
     in-out property <float> filter-env;
+    in-out property <float> sampler-drive;
     in-out property <float> bit-reduction;
     in-out property <float> rate-reduction;
     in-out property <int>   loop-mode;     // 0=Off 1=Fwd 2=Pong
     in-out property <string> sample-name;
+    in-out property <string> sample-description;
+    in-out property <float> sample-duration;
+    in-out property <int> audio-sample-rate: 48000;
     in-out property <string> selected-channel-name;
     in-out property <[float]> waveform;
     in-out property <bool> can-previous-sample;
@@ -115,11 +178,18 @@ export component MainWindow inherits Window {
     callback sustain-changed(float);
     callback release-changed(float);
     callback start-pos-changed(float);
+    callback end-pos-changed(float);
     callback loop-start-changed(float);
     callback loop-end-changed(float);
+    callback reverse-playback-changed(bool);
+    callback root-note-changed(int);
+    callback tune-semitones-changed(float);
+    callback tune-cents-changed(float);
     callback loop-mode-changed(int);
     callback filter-cutoff-changed(float);
+    callback filter-resonance-changed(float);
     callback filter-env-changed(float);
+    callback sampler-drive-changed(float);
     callback bit-reduction-changed(float);
     callback rate-reduction-changed(float);
     callback load-sample-clicked();
@@ -342,12 +412,41 @@ export component MainWindow inherits Window {
                             border-radius: 2px;
                             border-width: root.playing && root.current-step == i ? 1px : 0px;
                             border-color: Theme.text;
-                            background: cell.active
-                                ? Theme.accent
-                                : (mod(i, 4) == 0 ? Theme.surface-active : Theme.surface-raised);
-                            TouchArea {
+                            background: mod(i, 4) == 0 ? Theme.surface-active : Theme.surface-raised;
+                            Rectangle {
+                                visible: cell.active;
+                                y: parent.height - self.height;
+                                width: parent.width;
+                                height: max(3px, parent.height * cell.velocity / 127);
+                                border-radius: 2px;
+                                background: Theme.accent;
+                                opacity: 0.55 + 0.45 * cell.velocity / 127;
+                            }
+                            step-touch := TouchArea {
+                                property <bool> velocity-drag;
                                 mouse-cursor: pointer;
-                                clicked => { root.step-clicked(ch, i); }
+                                pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.down) {
+                                        if (e.button == PointerEventButton.right) {
+                                            root.step-removed(ch, i);
+                                        } else if (e.button == PointerEventButton.left) {
+                                            self.velocity-drag = e.modifiers.control;
+                                            if (self.velocity-drag) {
+                                                root.step-velocity-edited(ch, i,
+                                                    clamp(1 - self.mouse-y / self.height, 0, 1));
+                                            } else {
+                                                root.step-clicked(ch, i);
+                                            }
+                                        }
+                                    } else if (e.kind == PointerEventKind.move
+                                        && self.pressed && self.velocity-drag) {
+                                        root.step-velocity-edited(ch, i,
+                                            clamp(1 - self.mouse-y / self.height, 0, 1));
+                                    } else if (e.kind == PointerEventKind.up) {
+                                        self.velocity-drag = false;
+                                    }
+                                }
+                                Tooltip { text: @markdown("Click to toggle. **Ctrl-drag** velocity. **Right-click** to clear."); }
                             }
                         }
                     }
@@ -379,7 +478,7 @@ export component MainWindow inherits Window {
 
         // ===== Bottom dock: sampler and note editors =====
         Rectangle {
-            height: 340px;
+            height: 410px;
             background: Theme.panel;
 
             VerticalLayout {
@@ -418,201 +517,334 @@ export component MainWindow inherits Window {
                 if root.editor-page == 0 : Rectangle {
                     vertical-stretch: 1;
                     VerticalLayout {
-                        padding: 6px;
-                        spacing: 5px;
+                        spacing: 0px;
 
-                        HorizontalLayout {
-                            height: 26px;
-                            spacing: 3px;
-                            FlatButton {
-                                text: "‹";
-                                tooltip: "Previous WAV in this folder";
-                                enabled: root.can-previous-sample;
-                                min-width: 28px;
-                                max-width: 28px;
-                                clicked => { root.previous-sample-clicked(); }
+                        Rectangle {
+                            height: 34px;
+                            background: Theme.surface-raised;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                padding-top: 4px;
+                                padding-bottom: 4px;
+                                spacing: 3px;
+                                FlatButton {
+                                    text: "‹";
+                                    tooltip: "Previous WAV in this folder";
+                                    enabled: root.can-previous-sample;
+                                    min-width: 28px; max-width: 28px;
+                                    clicked => { root.previous-sample-clicked(); }
+                                }
+                                FlatButton {
+                                    text: "⌕";
+                                    tooltip: "Choose a WAV file";
+                                    min-width: 28px; max-width: 28px;
+                                    clicked => { root.load-sample-clicked(); }
+                                }
+                                FlatButton {
+                                    text: "›";
+                                    tooltip: "Next WAV in this folder";
+                                    enabled: root.can-next-sample;
+                                    min-width: 28px; max-width: 28px;
+                                    clicked => { root.next-sample-clicked(); }
+                                }
+                                Rectangle { width: 5px; }
+                                VerticalLayout {
+                                    min-width: 180px;
+                                    horizontal-stretch: 1;
+                                    spacing: 0px;
+                                    Text {
+                                        text: root.sample-name;
+                                        color: Theme.text;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: root.sample-description;
+                                        color: Theme.text-faint;
+                                        font-size: 8px;
+                                        overflow: elide;
+                                    }
+                                }
+                                Text { text: "ROOT"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                                SpinBox {
+                                    value <=> root.root-note;
+                                    minimum: 0; maximum: 127; step-size: 1;
+                                    width: 62px; height: 24px;
+                                    edited(value) => { root.root-note-changed(value); }
+                                    Tooltip { text: @markdown("MIDI root note for original sample pitch"); }
+                                }
+                                FlatButton {
+                                    text: "↤";
+                                    tooltip: "Reverse playback";
+                                    active: root.reverse-playback;
+                                    min-width: 30px; max-width: 30px;
+                                    clicked => {
+                                        root.reverse-playback = !root.reverse-playback;
+                                        root.reverse-playback-changed(root.reverse-playback);
+                                    }
+                                }
+                                Rectangle { width: 6px; }
+                                Text { text: "LOOP"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                                FlatButton {
+                                    text: "—"; tooltip: "Loop off"; active: root.loop-mode == 0;
+                                    min-width: 30px; max-width: 30px;
+                                    clicked => { root.loop-mode = 0; root.loop-mode-changed(0); }
+                                }
+                                FlatButton {
+                                    text: "↻"; tooltip: "Forward loop"; active: root.loop-mode == 1;
+                                    min-width: 30px; max-width: 30px;
+                                    clicked => { root.loop-mode = 1; root.loop-mode-changed(1); }
+                                }
+                                FlatButton {
+                                    text: "↔"; tooltip: "Ping-pong loop"; active: root.loop-mode == 2;
+                                    min-width: 30px; max-width: 30px;
+                                    clicked => { root.loop-mode = 2; root.loop-mode-changed(2); }
+                                }
                             }
-                            FlatButton {
-                                text: "…";
-                                tooltip: "Choose a WAV file";
-                                min-width: 28px;
-                                max-width: 28px;
-                                clicked => { root.load-sample-clicked(); }
-                            }
-                            FlatButton {
-                                text: "›";
-                                tooltip: "Next WAV in this folder";
-                                enabled: root.can-next-sample;
-                                min-width: 28px;
-                                max-width: 28px;
-                                clicked => { root.next-sample-clicked(); }
-                            }
-                            Text {
-                                text: root.sample-name;
-                                color: Theme.text;
-                                font-size: 11px;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                            }
-                            Rectangle { horizontal-stretch: 1; }
                         }
 
                         waveform-view := Rectangle {
-                            height: 96px;
-                            background: Theme.surface-raised;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            border-radius: 3px;
+                            vertical-stretch: 1;
+                            min-height: 130px;
+                            background: Theme.surface;
+                            clip: true;
 
+                            // Shade audio outside the selected playback region.
                             Rectangle {
-                                x: 0px;
+                                width: clamp(root.start-pos, 0, 1) * parent.width;
+                                height: parent.height;
+                                background: Theme.background;
+                                opacity: 0.68;
+                            }
+                            Rectangle {
+                                x: clamp(root.end-pos, 0, 1) * parent.width;
+                                width: parent.width - self.x;
+                                height: parent.height;
+                                background: Theme.background;
+                                opacity: 0.68;
+                            }
+                            if root.loop-mode != 0 : Rectangle {
+                                x: clamp(root.loop-start, root.start-pos, root.end-pos) * parent.width;
+                                width: max(1px, (clamp(root.loop-end, root.start-pos, root.end-pos)
+                                    - clamp(root.loop-start, root.start-pos, root.end-pos)) * parent.width);
+                                height: parent.height;
+                                background: Theme.accent-active;
+                                opacity: 0.32;
+                            }
+
+                            for tick in 9 : Rectangle {
+                                x: tick * parent.width / 8;
+                                width: 1px;
+                                height: parent.height;
+                                background: Theme.border;
+                                opacity: mod(tick, 2) == 0 ? 0.8 : 0.35;
+                            }
+                            for tick in 9 : Text {
+                                visible: mod(tick, 2) == 0;
+                                x: clamp(tick * parent.width / 8 - 22px, 3px, parent.width - 47px);
+                                y: 3px;
+                                width: 44px;
+                                text: round(root.sample-duration * tick / 8 * 1000) / 1000 + "s";
+                                color: Theme.text-faint;
+                                font-size: 8px;
+                                horizontal-alignment: center;
+                            }
+                            Rectangle {
                                 y: parent.height / 2;
                                 width: parent.width;
                                 height: 1px;
                                 background: Theme.border;
                             }
-
                             for amplitude[index] in root.waveform : Rectangle {
-                                x: index * parent.width / root.waveform.length;
+                                x: index * parent.width / max(1, root.waveform.length);
                                 y: (parent.height - self.height) / 2;
-                                width: max(1px, parent.width / root.waveform.length);
-                                height: max(1px, amplitude * (parent.height - 12px));
+                                width: max(1px, parent.width / max(1, root.waveform.length));
+                                height: max(1px, amplitude * (parent.height - 22px));
                                 background: Theme.text-muted;
                             }
 
-                            Rectangle {
+                            WaveformMarker {
                                 x: clamp(root.start-pos, 0, 1) * (parent.width - 1px);
-                                width: 1px;
-                                height: parent.height;
-                                background: Theme.accent;
+                                height: parent.height; editor-width: parent.width;
+                                marker-label: "S"; marker-color: Theme.accent;
+                                moved(v) => {
+                                    root.start-pos = min(v, root.end-pos - 0.001);
+                                    root.start-pos-changed(root.start-pos);
+                                    if (root.loop-start < root.start-pos) {
+                                        root.loop-start = root.start-pos;
+                                        root.loop-start-changed(root.loop-start);
+                                    }
+                                    if (root.loop-end < root.loop-start + 0.001) {
+                                        root.loop-end = min(root.end-pos, root.loop-start + 0.001);
+                                        root.loop-end-changed(root.loop-end);
+                                    }
+                                }
                             }
-                            Rectangle {
+                            WaveformMarker {
+                                x: clamp(root.end-pos, 0, 1) * (parent.width - 1px);
+                                height: parent.height; editor-width: parent.width;
+                                marker-label: "E"; marker-color: Theme.accent; label-at-bottom: true;
+                                moved(v) => {
+                                    root.end-pos = max(v, root.start-pos + 0.001);
+                                    root.end-pos-changed(root.end-pos);
+                                    if (root.loop-end > root.end-pos) {
+                                        root.loop-end = root.end-pos;
+                                        root.loop-end-changed(root.loop-end);
+                                    }
+                                    if (root.loop-start > root.loop-end - 0.001) {
+                                        root.loop-start = max(root.start-pos, root.loop-end - 0.001);
+                                        root.loop-start-changed(root.loop-start);
+                                    }
+                                }
+                            }
+                            WaveformMarker {
                                 x: clamp(root.loop-start, 0, 1) * (parent.width - 1px);
-                                width: 1px;
-                                height: parent.height;
-                                background: root.loop-mode == 0 ? Theme.text-faint : #38bdf8;
+                                height: parent.height; editor-width: parent.width;
+                                marker-label: "L"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning;
+                                label-at-bottom: true;
+                                moved(v) => {
+                                    root.loop-start = clamp(v, root.start-pos, root.loop-end - 0.001);
+                                    root.loop-start-changed(root.loop-start);
+                                }
                             }
-                            Rectangle {
+                            WaveformMarker {
                                 x: clamp(root.loop-end, 0, 1) * (parent.width - 1px);
-                                width: 1px;
-                                height: parent.height;
-                                background: root.loop-mode == 0 ? Theme.text-faint : #38bdf8;
+                                height: parent.height; editor-width: parent.width;
+                                marker-label: "R"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning;
+                                moved(v) => {
+                                    root.loop-end = clamp(v, root.loop-start + 0.001, root.end-pos);
+                                    root.loop-end-changed(root.loop-end);
+                                }
                             }
                         }
 
-                        HorizontalLayout {
-                            spacing: 20px;
-                            alignment: start;
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border;
+                        }
 
-                            VerticalLayout {
-                                width: 220px;
+                        Rectangle {
+                            height: 168px;
+                            background: Theme.panel;
+                            HorizontalLayout {
+                                padding: 6px;
                                 spacing: 3px;
-                                SectionLabel { text: "AMPLITUDE ENVELOPE"; }
-                                Fader {
-                                    label: "A";
-                                    tooltip: "Attack";
-                                    value <=> root.attack;
-                                    changed(v) => { root.attack-changed(v); }
-                                }
-                                Fader {
-                                    label: "D";
-                                    tooltip: "Decay";
-                                    value <=> root.decay;
-                                    changed(v) => { root.decay-changed(v); }
-                                }
-                                Fader {
-                                    label: "S";
-                                    tooltip: "Sustain";
-                                    value <=> root.sustain;
-                                    changed(v) => { root.sustain-changed(v); }
-                                }
-                                Fader {
-                                    label: "R";
-                                    tooltip: "Release";
-                                    value <=> root.release;
-                                    changed(v) => { root.release-changed(v); }
-                                }
-                            }
+                                alignment: start;
 
-                            VerticalLayout {
-                                width: 220px;
-                                spacing: 3px;
-                                SectionLabel { text: "PLAYBACK / LOOP"; }
-                                Fader {
-                                    label: "Start";
-                                    tooltip: "Sample start";
-                                    value <=> root.start-pos;
-                                    changed(v) => { root.start-pos-changed(v); }
-                                }
-                                Fader {
-                                    label: "Loop A";
-                                    tooltip: "Loop start";
-                                    value <=> root.loop-start;
-                                    changed(v) => { root.loop-start-changed(v); }
-                                }
-                                Fader {
-                                    label: "Loop B";
-                                    tooltip: "Loop end";
-                                    value <=> root.loop-end;
-                                    changed(v) => { root.loop-end-changed(v); }
-                                }
-                                HorizontalLayout {
-                                    spacing: 3px;
-                                    FlatButton {
-                                        text: "Off";
-                                        tooltip: "Disable sample looping";
-                                        active: root.loop-mode == 0;
-                                        clicked => { root.loop-mode-changed(0); }
-                                    }
-                                    FlatButton {
-                                        text: "Fwd";
-                                        tooltip: "Loop sample forward";
-                                        active: root.loop-mode == 1;
-                                        clicked => { root.loop-mode-changed(1); }
-                                    }
-                                    FlatButton {
-                                        text: "Pong";
-                                        tooltip: "Loop sample forward and backward";
-                                        active: root.loop-mode == 2;
-                                        clicked => { root.loop-mode-changed(2); }
+                                VerticalLayout {
+                                    width: 148px; spacing: 3px;
+                                    SectionLabel { text: "TUNE"; }
+                                    HorizontalLayout {
+                                        spacing: 0px;
+                                        ParameterKnob {
+                                            label: "Coarse"; tooltip: "Coarse tuning in semitones";
+                                            value <=> root.tune-semitones;
+                                            minimum: -24; maximum: 24; default-value: 0; step: 1;
+                                            value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
+                                            changed(v) => { root.tune-semitones-changed(v); }
+                                        }
+                                        ParameterKnob {
+                                            label: "Fine"; tooltip: "Fine tuning in cents";
+                                            value <=> root.tune-cents;
+                                            minimum: -100; maximum: 100; default-value: 0; step: 1;
+                                            value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
+                                            changed(v) => { root.tune-cents-changed(v); }
+                                        }
                                     }
                                 }
-                            }
+                                Rectangle { width: 1px; height: 142px; background: Theme.border; }
 
-                            VerticalLayout {
-                                width: 220px;
-                                spacing: 3px;
-                                SectionLabel { text: "FILTER / LO-FI"; }
-                                Fader {
-                                    label: "Cut";
-                                    tooltip: "Low-pass filter cutoff";
-                                    value <=> root.filter-cutoff;
-                                    changed(v) => { root.filter-cutoff-changed(v); }
+                                VerticalLayout {
+                                    width: 292px; spacing: 3px;
+                                    SectionLabel { text: "FILTER"; }
+                                    HorizontalLayout {
+                                        spacing: 1px;
+                                        ParameterKnob {
+                                            label: "Cutoff"; tooltip: "Low-pass filter cutoff";
+                                            value <=> root.filter-cutoff; default-value: 1;
+                                            value-text: root.filter-cutoff >= 0.999 ? "Open"
+                                                : round(20 * pow(root.audio-sample-rate * 0.45 / 20,
+                                                    root.filter-cutoff)) + " Hz";
+                                            changed(v) => { root.filter-cutoff-changed(v); }
+                                        }
+                                        ParameterKnob {
+                                            label: "Reso"; tooltip: "Filter resonance";
+                                            value <=> root.filter-resonance; default-value: 0;
+                                            value-text: round(root.filter-resonance * 100) + "%";
+                                            changed(v) => { root.filter-resonance-changed(v); }
+                                        }
+                                        ParameterKnob {
+                                            label: "Env"; tooltip: "Bipolar amplitude-envelope modulation of cutoff";
+                                            value <=> root.filter-env; default-value: 0.5; fill: Theme.warning;
+                                            value-text: (round((root.filter-env * 2 - 1) * 100) > 0 ? "+" : "")
+                                                + round((root.filter-env * 2 - 1) * 100) + "%";
+                                            changed(v) => { root.filter-env-changed(v); }
+                                        }
+                                        ParameterKnob {
+                                            label: "Drive"; tooltip: "Pre-filter soft saturation";
+                                            value <=> root.sampler-drive; default-value: 0; fill: Theme.warning;
+                                            value-text: round(root.sampler-drive * 100) + "%";
+                                            changed(v) => { root.sampler-drive-changed(v); }
+                                        }
+                                    }
                                 }
-                                Fader {
-                                    label: "Env";
-                                    tooltip: "Bipolar amplitude-envelope modulation of filter cutoff";
-                                    value <=> root.filter-env;
-                                    fill: #38bdf8;
-                                    changed(v) => { root.filter-env-changed(v); }
-                                }
-                                Fader {
-                                    label: "Bits";
-                                    tooltip: "Bit-depth reduction";
-                                    value <=> root.bit-reduction;
-                                    fill: #f59e0b;
-                                    changed(v) => { root.bit-reduction-changed(v); }
-                                }
-                                Fader {
-                                    label: "Rate";
-                                    tooltip: "Sample-rate reduction";
-                                    value <=> root.rate-reduction;
-                                    fill: #f59e0b;
-                                    changed(v) => { root.rate-reduction-changed(v); }
-                                }
-                            }
+                                Rectangle { width: 1px; height: 142px; background: Theme.border; }
 
-                            Rectangle { horizontal-stretch: 1; }
+                                VerticalLayout {
+                                    width: 292px; spacing: 3px;
+                                    SectionLabel { text: "AMP ENVELOPE"; }
+                                    HorizontalLayout {
+                                        spacing: 1px;
+                                        ParameterKnob {
+                                            label: "Attack"; tooltip: "Amplitude attack";
+                                            value <=> root.attack; default-value: 0;
+                                            value-text: round(root.attack * 5000) + " ms";
+                                            changed(v) => { root.attack-changed(v); }
+                                        }
+                                        ParameterKnob {
+                                            label: "Decay"; tooltip: "Amplitude decay";
+                                            value <=> root.decay; default-value: 0.05;
+                                            value-text: round(root.decay * 5000) + " ms";
+                                            changed(v) => { root.decay-changed(v); }
+                                        }
+                                        ParameterKnob {
+                                            label: "Sustain"; tooltip: "Amplitude sustain level";
+                                            value <=> root.sustain; default-value: 1;
+                                            value-text: round(root.sustain * 100) + "%";
+                                            changed(v) => { root.sustain-changed(v); }
+                                        }
+                                        ParameterKnob {
+                                            label: "Release"; tooltip: "Amplitude release";
+                                            value <=> root.release; default-value: 0.01;
+                                            value-text: round(root.release * 5000) + " ms";
+                                            changed(v) => { root.release-changed(v); }
+                                        }
+                                    }
+                                }
+                                Rectangle { width: 1px; height: 142px; background: Theme.border; }
+
+                                VerticalLayout {
+                                    width: 148px; spacing: 3px;
+                                    SectionLabel { text: "LO-FI"; }
+                                    HorizontalLayout {
+                                        spacing: 0px;
+                                        ParameterKnob {
+                                            label: "Bits"; tooltip: "Bit-depth reduction";
+                                            value <=> root.bit-reduction; default-value: 0; fill: Theme.warning;
+                                            value-text: round(16 - root.bit-reduction * 12) + " bit";
+                                            changed(v) => { root.bit-reduction-changed(v); }
+                                        }
+                                        ParameterKnob {
+                                            label: "Rate"; tooltip: "Sample-rate reduction";
+                                            value <=> root.rate-reduction; default-value: 0; fill: Theme.warning;
+                                            value-text: "÷" + round(1 + root.rate-reduction * 31);
+                                            changed(v) => { root.rate-reduction-changed(v); }
+                                        }
+                                    }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
                         }
                     }
                 }
@@ -677,6 +909,32 @@ export component MainWindow inherits Window {
                                     Tooltip { text: @markdown("Parameter lane"); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
+                                Text { text: "↔"; color: Theme.text-faint; vertical-alignment: center; }
+                                FlatButton {
+                                    text: "−"; tooltip: "Zoom time out";
+                                    min-width: 26px; max-width: 26px;
+                                    enabled: root.piano-step-width > 20px;
+                                    clicked => { root.piano-step-width = max(20px, root.piano-step-width - 4px); }
+                                }
+                                FlatButton {
+                                    text: "+"; tooltip: "Zoom time in";
+                                    min-width: 26px; max-width: 26px;
+                                    enabled: root.piano-step-width < 72px;
+                                    clicked => { root.piano-step-width = min(72px, root.piano-step-width + 4px); }
+                                }
+                                Text { text: "↕"; color: Theme.text-faint; vertical-alignment: center; }
+                                FlatButton {
+                                    text: "−"; tooltip: "Zoom pitch out";
+                                    min-width: 26px; max-width: 26px;
+                                    enabled: root.piano-row-height > 5px;
+                                    clicked => { root.piano-row-height = max(5px, root.piano-row-height - 1px); }
+                                }
+                                FlatButton {
+                                    text: "+"; tooltip: "Zoom pitch in";
+                                    min-width: 26px; max-width: 26px;
+                                    enabled: root.piano-row-height < 16px;
+                                    clicked => { root.piano-row-height = min(16px, root.piano-row-height + 1px); }
+                                }
                             }
                         }
 
@@ -686,27 +944,33 @@ export component MainWindow inherits Window {
                             Rectangle {
                                 width: 46px;
                                 background: Theme.panel;
-                                for key in 49 : Rectangle {
-                                    y: key * root.piano-row-height;
-                                    height: root.piano-row-height;
+                                clip: true;
+                                Rectangle {
+                                    y: -piano-scroll.viewport-y;
                                     width: parent.width;
-                                    property <int> note-number: root.piano-high-note - key;
-                                    background: (mod(note-number, 12) == 1
-                                        || mod(note-number, 12) == 3
-                                        || mod(note-number, 12) == 6
-                                        || mod(note-number, 12) == 8
-                                        || mod(note-number, 12) == 10)
-                                        ? Theme.panel : Theme.surface;
-                                    if mod(note-number, 12) == 0 : Text {
-                                        text: "C" + (floor(note-number / 12) - 1);
-                                        color: Theme.text-muted;
-                                        font-size: 7px;
-                                        vertical-alignment: center;
-                                        x: 3px;
+                                    height: 49 * root.piano-row-height;
+                                    for key in 49 : Rectangle {
+                                        y: key * root.piano-row-height;
+                                        height: root.piano-row-height;
+                                        width: parent.width;
+                                        property <int> note-number: root.piano-high-note - key;
+                                        background: (mod(note-number, 12) == 1
+                                            || mod(note-number, 12) == 3
+                                            || mod(note-number, 12) == 6
+                                            || mod(note-number, 12) == 8
+                                            || mod(note-number, 12) == 10)
+                                            ? Theme.panel : Theme.surface;
+                                        if mod(note-number, 12) == 0 : Text {
+                                            text: "C" + (floor(note-number / 12) - 1);
+                                            color: Theme.text-muted;
+                                            font-size: min(9px, root.piano-row-height - 1px);
+                                            vertical-alignment: center;
+                                            x: 3px;
+                                        }
                                     }
                                 }
                                 Text {
-                                    y: 199px;
+                                    y: 49 * root.piano-row-height - piano-scroll.viewport-y;
                                     height: 17px;
                                     text: "LANE";
                                     color: Theme.text-faint;
@@ -715,7 +979,7 @@ export component MainWindow inherits Window {
                                     vertical-alignment: center;
                                 }
                                 Text {
-                                    y: 216px;
+                                    y: 49 * root.piano-row-height + 17px - piano-scroll.viewport-y;
                                     height: 52px;
                                     text: "VEL";
                                     color: Theme.text-muted;
@@ -725,17 +989,19 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            ScrollView {
+                            piano-scroll := ScrollView {
                                 horizontal-stretch: 1;
-                                viewport-width: max(self.visible-width, root.notes.length * 27px);
-                                viewport-height: 268px;
+                                viewport-width: max(self.visible-width,
+                                    root.notes.length * root.piano-step-width);
+                                viewport-height: max(self.visible-height,
+                                    49 * root.piano-row-height + 72px);
 
                                 VerticalLayout {
                                     spacing: 0px;
 
                                     Rectangle {
-                                        width: root.notes.length * 27px;
-                                        height: 196px;
+                                        width: root.notes.length * root.piano-step-width;
+                                        height: 49 * root.piano-row-height;
                                         background: Theme.surface;
 
                                         for key in 49 : Rectangle {
@@ -752,11 +1018,12 @@ export component MainWindow inherits Window {
                                         }
 
                                         for cell[i] in root.notes : Rectangle {
-                                            x: i * 27px;
-                                            width: 24px;
+                                            x: i * root.piano-step-width;
+                                            width: root.piano-step-width;
                                             height: parent.height;
                                             background: transparent;
                                             Rectangle {
+                                                x: 0px;
                                                 width: 1px;
                                                 height: parent.height;
                                                 background: mod(i, 4) == 0 ? Theme.text-faint : Theme.border;
@@ -764,26 +1031,44 @@ export component MainWindow inherits Window {
                                             Rectangle {
                                                 visible: cell.active;
                                                 y: (root.piano-high-note - cell.note) * root.piano-row-height;
-                                                width: parent.width;
+                                                x: 1px;
+                                                width: parent.width - 1px;
                                                 height: root.piano-row-height;
                                                 background: cell.selected ? Theme.focus : Theme.accent;
+                                                opacity: 0.55 + 0.45 * cell.velocity / 127;
                                                 border-width: cell.selected ? 1px : 0px;
                                                 border-color: Theme.text;
                                             }
                                             TouchArea {
+                                                property <bool> dragging-note;
                                                 mouse-cursor: crosshair;
                                                 pointer-event(e) => {
+                                                    let note = clamp(
+                                                        root.piano-high-note
+                                                            - floor(self.mouse-y / root.piano-row-height),
+                                                        root.piano-low-note,
+                                                        root.piano-high-note
+                                                    );
                                                     if (e.kind == PointerEventKind.down
-                                                        || (e.kind == PointerEventKind.move && self.pressed)) {
+                                                        && e.button == PointerEventButton.right) {
+                                                        if (cell.active && cell.note == note) {
+                                                            root.piano-note-removed(i);
+                                                        }
+                                                    } else if (e.kind == PointerEventKind.down
+                                                        && e.button == PointerEventButton.left) {
+                                                        self.dragging-note = true;
                                                         root.piano-note-edited(
                                                             i,
-                                                            clamp(
-                                                                root.piano-high-note
-                                                                    - floor(self.mouse-y / root.piano-row-height),
-                                                                root.piano-low-note,
-                                                                root.piano-high-note
-                                                            )
+                                                            note
                                                         );
+                                                    } else if (e.kind == PointerEventKind.move
+                                                        && self.pressed && self.dragging-note) {
+                                                        let destination = clamp(i
+                                                            + floor(self.mouse-x / root.piano-step-width),
+                                                            0, root.notes.length - 1);
+                                                        root.piano-note-moved(i, destination, note);
+                                                    } else if (e.kind == PointerEventKind.up) {
+                                                        self.dragging-note = false;
                                                     }
                                                 }
                                             }
@@ -791,7 +1076,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     Rectangle {
-                                        width: root.notes.length * 27px;
+                                        width: root.notes.length * root.piano-step-width;
                                         height: 17px;
                                         background: Theme.panel;
                                         Text {
@@ -804,12 +1089,12 @@ export component MainWindow inherits Window {
                                     }
 
                                     Rectangle {
-                                        width: root.notes.length * 27px;
+                                        width: root.notes.length * root.piano-step-width;
                                         height: 55px;
                                         background: Theme.surface;
                                         for cell[i] in root.notes : Rectangle {
-                                            x: i * 27px;
-                                            width: 24px;
+                                            x: i * root.piano-step-width;
+                                            width: root.piano-step-width;
                                             height: parent.height;
                                             border-width: cell.selected ? 1px : 0px;
                                             border-color: Theme.text-muted;
@@ -824,8 +1109,9 @@ export component MainWindow inherits Window {
                                             TouchArea {
                                                 mouse-cursor: crosshair;
                                                 pointer-event(e) => {
-                                                    if (e.kind == PointerEventKind.down
-                                                        || (e.kind == PointerEventKind.move && self.pressed)) {
+                                                    if (e.button == PointerEventButton.left
+                                                        && (e.kind == PointerEventKind.down
+                                                        || (e.kind == PointerEventKind.move && self.pressed))) {
                                                         root.velocity-edited(
                                                             i,
                                                             clamp(1 - self.mouse-y / self.height, 0, 1)
