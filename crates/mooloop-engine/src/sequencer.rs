@@ -5,9 +5,9 @@
 //! scheduling and edits never allocate on the audio thread.
 
 use mooloop_core::{
-    NoteEvent, NoteId, Pattern, PatternPlacement, PlaybackMode, Ppq, DEFAULT_NOTE_DURATION_TICKS,
-    MAX_CHANNELS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, TICKS_PER_BAR,
-    TICKS_PER_STEP,
+    NoteEvent, NoteId, Pattern, PatternPlacement, PlaybackMode, Ppq, Project,
+    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, MAX_CHANNELS, MAX_PATTERN_STEPS,
+    MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{Event, EventList, TimedEvent};
 
@@ -124,6 +124,47 @@ impl Sequencer {
         self.active_channels = n.min(MAX_CHANNELS);
     }
 
+    /// Replace musical state without growing any realtime-owned allocation.
+    pub fn load_project(&mut self, project: &Project) {
+        self.active_patterns = project.pattern_lengths.len().clamp(1, self.patterns.len());
+        self.active_channels = project.channels.len().min(MAX_CHANNELS);
+        self.current = (project.current_pattern as usize).min(self.active_patterns - 1);
+        self.playback_mode = project.playback_mode;
+        self.playlist.clear();
+        self.playlist.extend(
+            project
+                .playlist
+                .iter()
+                .copied()
+                .take(self.playlist.capacity()),
+        );
+        self.playlist.sort_unstable();
+
+        for pattern in &mut self.patterns {
+            pattern.set_length_steps(DEFAULT_STEPS as usize);
+            for channel in &mut pattern.channels {
+                channel.clear();
+            }
+        }
+        for (pattern_index, length) in project.pattern_lengths.iter().enumerate() {
+            self.patterns[pattern_index].set_length_steps(*length as usize);
+        }
+        for (channel_index, channel) in project.channels.iter().enumerate() {
+            for (pattern_index, notes) in
+                channel.notes.iter().enumerate().take(self.active_patterns)
+            {
+                let lane = &mut self.patterns[pattern_index].channels[channel_index];
+                for note in notes.iter().copied() {
+                    let _ = lane.upsert_note(note);
+                }
+            }
+        }
+    }
+
+    pub fn pattern_length_ticks(&self, pattern: usize) -> Option<u32> {
+        (pattern < self.active_patterns).then(|| self.patterns[pattern].length_ticks())
+    }
+
     pub fn upsert_note(&mut self, pattern: usize, channel: usize, note: NoteEvent) -> bool {
         (pattern < self.active_patterns)
             .then(|| &mut self.patterns[pattern])
@@ -195,6 +236,148 @@ impl Sequencer {
                 self.schedule_song(start_tick, end_tick, frames, ticks_per_sample, events)
             }
         }
+    }
+
+    /// Schedule a finite pass without wrapping at the pattern/song boundary.
+    pub fn schedule_once(
+        &self,
+        start_tick: f64,
+        end_tick: f64,
+        frames: usize,
+        ticks_per_sample: f64,
+        events: &mut [EventList],
+    ) {
+        if frames == 0 || end_tick <= start_tick || ticks_per_sample <= 0.0 {
+            return;
+        }
+        match self.playback_mode {
+            PlaybackMode::Pattern => {
+                let Some(pattern) = self.patterns.get(self.current) else {
+                    return;
+                };
+                let pattern_ticks = pattern.length_ticks();
+                for (channel_index, event_list) in
+                    events.iter_mut().enumerate().take(self.active_channels)
+                {
+                    let Some(channel) = pattern.channel(channel_index) else {
+                        continue;
+                    };
+                    for note in channel
+                        .notes()
+                        .iter()
+                        .copied()
+                        .filter(|note| note.start_tick < pattern_ticks)
+                    {
+                        Self::schedule_edge_once(
+                            note,
+                            note.start_tick,
+                            false,
+                            0,
+                            start_tick,
+                            end_tick,
+                            frames,
+                            ticks_per_sample,
+                            event_list,
+                        );
+                        Self::schedule_edge_once(
+                            note,
+                            note.end_tick(),
+                            true,
+                            0,
+                            start_tick,
+                            end_tick,
+                            frames,
+                            ticks_per_sample,
+                            event_list,
+                        );
+                    }
+                }
+            }
+            PlaybackMode::Song => {
+                for placement in &self.playlist {
+                    let pattern_index = placement.pattern as usize;
+                    if pattern_index >= self.active_patterns {
+                        continue;
+                    }
+                    let pattern = &self.patterns[pattern_index];
+                    let pattern_ticks = pattern.length_ticks();
+                    let instance = u64::from(placement.pattern) * u64::from(MAX_PLAYLIST_TICKS)
+                        + u64::from(placement.start_tick);
+                    for (channel_index, event_list) in
+                        events.iter_mut().enumerate().take(self.active_channels)
+                    {
+                        let Some(channel) = pattern.channel(channel_index) else {
+                            continue;
+                        };
+                        for note in channel
+                            .notes()
+                            .iter()
+                            .copied()
+                            .filter(|note| note.start_tick < pattern_ticks)
+                        {
+                            Self::schedule_edge_once(
+                                note,
+                                placement.start_tick.saturating_add(note.start_tick),
+                                false,
+                                instance,
+                                start_tick,
+                                end_tick,
+                                frames,
+                                ticks_per_sample,
+                                event_list,
+                            );
+                            Self::schedule_edge_once(
+                                note,
+                                placement.start_tick.saturating_add(note.end_tick()),
+                                true,
+                                instance,
+                                start_tick,
+                                end_tick,
+                                frames,
+                                ticks_per_sample,
+                                event_list,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn schedule_edge_once(
+        note: NoteEvent,
+        edge_tick: u32,
+        is_note_off: bool,
+        instance: u64,
+        start_tick: f64,
+        end_tick: f64,
+        frames: usize,
+        ticks_per_sample: f64,
+        event_list: &mut EventList,
+    ) {
+        let tick = f64::from(edge_tick);
+        if tick + BOUNDARY_EPS < start_tick || tick >= end_tick {
+            return;
+        }
+        let offset = ((tick - start_tick) / ticks_per_sample).round() as i64;
+        let offset = offset.clamp(0, frames as i64 - 1) as u32;
+        let id = (instance << 32) | u64::from(note.id);
+        event_list.push_ordered(TimedEvent {
+            offset,
+            event: if is_note_off {
+                Event::NoteOff {
+                    id,
+                    note: note.note,
+                }
+            } else {
+                Event::NoteOn {
+                    id,
+                    note: note.note,
+                    velocity: note.velocity,
+                }
+            },
+        });
     }
 
     fn schedule_pattern(

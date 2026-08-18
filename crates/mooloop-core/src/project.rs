@@ -22,19 +22,10 @@ impl Default for SampleReference {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SamplerState {
     pub params: SamplerParams,
     pub sample: SampleReference,
-}
-
-impl Default for SamplerState {
-    fn default() -> Self {
-        Self {
-            params: SamplerParams::default(),
-            sample: SampleReference::default(),
-        }
-    }
 }
 
 /// Tagged now so later synth variants can join the v1 envelope additively.

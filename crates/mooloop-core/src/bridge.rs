@@ -73,6 +73,9 @@ pub enum EngineCommand {
     },
     /// Replace a channel's sampler parameter set.
     SetChannelSamplerParams { channel: u8, params: SamplerParams },
+    /// Import the latest project snapshot published through the engine's
+    /// out-of-band ArcSwap slot into preallocated realtime storage.
+    InstallProject,
 }
 
 /// audio -> GUI. Pushed sparingly (a few times per block at most) and drained

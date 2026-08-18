@@ -11,3 +11,8 @@ mooloop-dsp = { workspace = true }
 jack = { workspace = true }
 rtrb = { workspace = true }
 arc-swap = "1"
+hound = "3"
+mp3lame-encoder = "0.2.4"
+
+[dev-dependencies]
+tempfile = "3"

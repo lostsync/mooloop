@@ -134,6 +134,10 @@ impl ChannelPattern {
         Some(self.notes.remove(index))
     }
 
+    pub fn clear(&mut self) {
+        self.notes.clear();
+    }
+
     pub fn notes_in_step(&self, step: usize) -> impl Iterator<Item = &NoteEvent> {
         let start = (step as u32).saturating_mul(TICKS_PER_STEP);
         let end = start.saturating_add(TICKS_PER_STEP);

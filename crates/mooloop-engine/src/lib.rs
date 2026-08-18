@@ -21,10 +21,17 @@ use mooloop_dsp::SampleData;
 use rtrb::{Consumer, Producer};
 
 mod graph;
+mod offline;
+mod render;
 mod sequencer;
 mod transport;
 
 use graph::{AsyncClient, Graph};
+
+pub use offline::{
+    ExportError, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, RenderSummary,
+    WavEncoding,
+};
 
 const QUEUE_CAPACITY: usize = 1024;
 const CLIENT_NAME: &str = "mooloop";
@@ -86,6 +93,9 @@ impl Engine {
         );
 
         let xrun_count = Arc::new(AtomicU64::new(0));
+        let project_slot = Arc::new(ArcSwapOption::from(Some(Arc::new(
+            mooloop_core::Project::default(),
+        ))));
         let io = graph::GraphIo {
             out_l,
             out_r,
@@ -96,6 +106,7 @@ impl Engine {
             sample_rate,
             io,
             sample_slots.clone(),
+            project_slot.clone(),
             SamplerParams::default(),
             xrun_count.clone(),
         );
@@ -127,6 +138,8 @@ impl Engine {
                 cmd_tx,
                 evt_rx,
                 sample_slots,
+                project_slot,
+                sample_rate,
             },
         ))
     }
@@ -138,6 +151,8 @@ pub struct EngineHandle {
     cmd_tx: Producer<EngineCommand>,
     evt_rx: Consumer<EngineEvent>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
+    project_slot: Arc<ArcSwapOption<mooloop_core::Project>>,
+    sample_rate: u32,
 }
 
 impl EngineHandle {
@@ -163,6 +178,24 @@ impl EngineHandle {
         if let Some(slot) = self.sample_slots.get(channel) {
             slot.store(Some(sample));
         }
+    }
+
+    pub fn clear_sample(&self, channel: usize) {
+        if let Some(slot) = self.sample_slots.get(channel) {
+            slot.store(None);
+        }
+    }
+
+    /// Publish a validated project snapshot and import it on the next block.
+    /// The ArcSwap slot retains the allocation so it cannot be freed on the
+    /// realtime thread when the callback finishes copying bounded data.
+    pub fn install_project(&mut self, project: Arc<mooloop_core::Project>) {
+        self.project_slot.store(Some(project));
+        self.send(EngineCommand::InstallProject);
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
     }
 
     /// Clone the currently-published sample pointer for non-realtime display
