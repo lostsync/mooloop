@@ -1003,6 +1003,7 @@ export component MainWindow inherits Window {
                                     viewport-height: max(self.visible-height,
                                         49 * root.piano-row-height);
                                     Rectangle {
+                                        x: 0px;
                                         width: root.notes.length * root.piano-step-width;
                                         height: 49 * root.piano-row-height;
                                         background: Theme.surface;
