@@ -58,8 +58,14 @@ fn pos(p: (f32, f32)) -> LogicalPosition {
 fn click_at(window: &slint::Window, p: (f32, f32)) {
     let position = pos(p);
     window.dispatch_event(WindowEvent::PointerMoved { position });
-    window.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
-    window.dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
 }
 
 fn harness() -> ClickHarness {
@@ -77,7 +83,11 @@ fn tool_button_fires_on_the_first_click() {
     });
 
     click_at(ui.window(), BUTTON_CENTER);
-    assert_eq!(clicks.get(), 1, "first click on a ToolButton must fire `clicked`");
+    assert_eq!(
+        clicks.get(),
+        1,
+        "first click on a ToolButton must fire `clicked`"
+    );
 
     click_at(ui.window(), BUTTON_CENTER);
     assert_eq!(clicks.get(), 2, "subsequent clicks must keep working");
@@ -92,10 +102,16 @@ fn knob_responds_to_the_first_drag() {
     // Press and drag upwards with no prior "focusing" click.
     let start = pos(KNOB_DIAL);
     window.dispatch_event(WindowEvent::PointerMoved { position: start });
-    window.dispatch_event(WindowEvent::PointerPressed { position: start, button: PointerEventButton::Left });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: start,
+        button: PointerEventButton::Left,
+    });
     let end = LogicalPosition::new(start.x, start.y - 40.0);
     window.dispatch_event(WindowEvent::PointerMoved { position: end });
-    window.dispatch_event(WindowEvent::PointerReleased { position: end, button: PointerEventButton::Left });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: end,
+        button: PointerEventButton::Left,
+    });
 
     assert!(
         ui.get_knob_value() > before,

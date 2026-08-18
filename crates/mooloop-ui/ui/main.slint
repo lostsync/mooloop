@@ -172,6 +172,10 @@ export component MainWindow inherits Window {
     in-out property <float> bit-reduction;
     in-out property <float> rate-reduction;
     in-out property <int>   loop-mode;     // 0=Off 1=Fwd 2=Pong
+    in-out property <int> voice-mode;       // 0=One Shot 1=Gate
+    in-out property <int> sampler-polyphony: 1;
+    in-out property <int> retrigger-mode;   // 0=Restart 1=Layer
+    in-out property <int> choke-group;
     in-out property <string> sample-name;
     in-out property <string> sample-description;
     in-out property <float> sample-duration;
@@ -194,6 +198,10 @@ export component MainWindow inherits Window {
     callback tune-semitones-changed(float);
     callback tune-cents-changed(float);
     callback loop-mode-changed(int);
+    callback voice-mode-changed(int);
+    callback sampler-polyphony-changed(int);
+    callback retrigger-mode-changed(int);
+    callback choke-group-changed(int);
     callback filter-cutoff-changed(float);
     callback filter-resonance-changed(float);
     callback filter-env-changed(float);
@@ -766,7 +774,63 @@ export component MainWindow inherits Window {
                                 Rectangle { width: 1px; height: 142px; background: Theme.border; }
 
                                 VerticalLayout {
-                                    width: 292px; spacing: 3px;
+                                    width: 200px; spacing: 5px;
+                                    SectionLabel { text: "VOICE"; }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        VerticalLayout {
+                                            spacing: 2px;
+                                            Text { text: "MODE"; color: Theme.text-faint; font-size: 8px; }
+                                            ComboBox {
+                                                model: ["One Shot", "Gate"];
+                                                current-index <=> root.voice-mode;
+                                                width: 105px; height: 24px;
+                                                selected(value) => { root.voice-mode-changed(self.current-index); }
+                                                Tooltip { text: @markdown("**One Shot** plays the region or exits a loop into its tail. **Gate** follows note length and envelope release."); }
+                                            }
+                                        }
+                                        VerticalLayout {
+                                            spacing: 2px;
+                                            Text { text: "VOICES"; color: Theme.text-faint; font-size: 8px; }
+                                            SpinBox {
+                                                value <=> root.sampler-polyphony;
+                                                minimum: 1; maximum: 16; step-size: 1;
+                                                width: 62px; height: 24px;
+                                                edited(value) => { root.sampler-polyphony-changed(value); }
+                                                Tooltip { text: @markdown("Maximum simultaneous sample voices"); }
+                                            }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        VerticalLayout {
+                                            spacing: 2px;
+                                            Text { text: "RETRIGGER"; color: Theme.text-faint; font-size: 8px; }
+                                            ComboBox {
+                                                model: ["Restart", "Layer"];
+                                                current-index <=> root.retrigger-mode;
+                                                width: 105px; height: 24px;
+                                                selected(value) => { root.retrigger-mode-changed(self.current-index); }
+                                                Tooltip { text: @markdown("**Restart** replaces a matching pitch. **Layer** stacks repeated notes."); }
+                                            }
+                                        }
+                                        VerticalLayout {
+                                            spacing: 2px;
+                                            Text { text: "CHOKE"; color: Theme.text-faint; font-size: 8px; }
+                                            SpinBox {
+                                                value <=> root.choke-group;
+                                                minimum: 0; maximum: 16; step-size: 1;
+                                                width: 62px; height: 24px;
+                                                edited(value) => { root.choke-group-changed(value); }
+                                                Tooltip { text: @markdown("Matching non-zero groups choke each other. **0** is off."); }
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle { width: 1px; height: 142px; background: Theme.border; }
+
+                                VerticalLayout {
+                                    width: 260px; spacing: 3px;
                                     SectionLabel { text: "FILTER"; }
                                     HorizontalLayout {
                                         spacing: 1px;
@@ -802,7 +866,7 @@ export component MainWindow inherits Window {
                                 Rectangle { width: 1px; height: 142px; background: Theme.border; }
 
                                 VerticalLayout {
-                                    width: 292px; spacing: 3px;
+                                    width: 260px; spacing: 3px;
                                     SectionLabel { text: "AMP ENVELOPE"; }
                                     HorizontalLayout {
                                         spacing: 1px;

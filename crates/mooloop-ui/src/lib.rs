@@ -13,9 +13,9 @@ slint::include_modules!();
 
 use meter::MeterBallistics;
 use mooloop_core::{
-    EngineCommand, EngineEvent, LoopMode, NoteEvent, NoteId, Ppq, SamplerParams,
-    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS,
-    TICKS_PER_64TH, TICKS_PER_STEP,
+    EngineCommand, EngineEvent, LoopMode, NoteEvent, NoteId, Ppq, RetriggerMode, SamplerParams,
+    VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, MAX_CHANNELS, MAX_PATTERNS,
+    MAX_PATTERN_STEPS, TICKS_PER_64TH, TICKS_PER_STEP,
 };
 use mooloop_dsp::SampleData;
 use mooloop_engine::EngineHandle;
@@ -145,6 +145,22 @@ fn loop_mode_from_int(i: i32) -> LoopMode {
         1 => LoopMode::Forward,
         2 => LoopMode::Pingpong,
         _ => LoopMode::Off,
+    }
+}
+
+fn voice_mode_from_int(i: i32) -> VoiceMode {
+    if i == 1 {
+        VoiceMode::Gate
+    } else {
+        VoiceMode::OneShot
+    }
+}
+
+fn retrigger_mode_from_int(i: i32) -> RetriggerMode {
+    if i == 1 {
+        RetriggerMode::Layer
+    } else {
+        RetriggerMode::Restart
     }
 }
 
@@ -294,6 +310,16 @@ impl UiState {
             LoopMode::Forward => 1,
             LoopMode::Pingpong => 2,
         });
+        window.set_voice_mode(match p.voice_mode {
+            VoiceMode::OneShot => 0,
+            VoiceMode::Gate => 1,
+        });
+        window.set_sampler_polyphony(p.polyphony as i32);
+        window.set_retrigger_mode(match p.retrigger_mode {
+            RetriggerMode::Restart => 0,
+            RetriggerMode::Layer => 1,
+        });
+        window.set_choke_group(p.choke_group as i32);
         window.set_filter_cutoff(p.filter_cutoff);
         window.set_filter_resonance(p.filter_resonance);
         window.set_filter_env((p.filter_env_amount + 1.0) * 0.5);
@@ -1158,6 +1184,66 @@ impl AppUi {
             });
         }
 
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_voice_mode_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.params.voice_mode = voice_mode_from_int(value);
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params: channel.params,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_sampler_polyphony_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.params.polyphony = value.clamp(1, 16) as u8;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params: channel.params,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_retrigger_mode_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.params.retrigger_mode = retrigger_mode_from_int(value);
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params: channel.params,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_choke_group_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.params.choke_group = value.clamp(0, 16) as u8;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params: channel.params,
+                });
+            });
+        }
+
         // --- Sample loading via zenity + hound (selected channel) ---
         // The dialog + decode run on a worker thread so the UI stays
         // responsive (a blocking dialog makes the OS mark the app frozen and
@@ -1348,7 +1434,11 @@ impl AppUi {
                 w.invoke_piano_note_resized(5, 12);
                 w.invoke_velocity_edited(5, 0.35);
                 w.invoke_piano_note_removed(5);
-                w.set_editor_page(1);
+                w.invoke_voice_mode_changed(1);
+                w.invoke_sampler_polyphony_changed(4);
+                w.invoke_retrigger_mode_changed(1);
+                w.invoke_choke_group_changed(1);
+                w.set_editor_page(0);
                 w.invoke_play_clicked();
             });
             let stats = stats.clone();
@@ -1358,7 +1448,7 @@ impl AppUi {
                 println!("commands forwarded by pump : {forwarded}");
                 println!("saw playing=true on window : {saw_playing}");
                 println!("nonzero metering seen     : {max_peak:.4}");
-                let ok = saw_playing && forwarded >= 17;
+                let ok = saw_playing && forwarded >= 21;
                 println!(
                     "RESULT: {}",
                     if ok {

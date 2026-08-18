@@ -24,7 +24,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - A sampler editor with waveform, WAV loading and sibling navigation, trim,
   reverse, root note, coarse/fine tune, loop region and mode, ADSR, low-pass
   filter with envelope depth and resonance, drive, bit reduction, and rate
-  reduction.
+  reduction. Voice controls cover one-shot/gated playback, 1-16 voices,
+  restart/layer retriggering, and 16 cross-channel choke groups.
 - Runtime appearance presets, custom accent persistence, shared audio controls,
   tooltips, and master peak-meter ballistics.
 
@@ -37,7 +38,7 @@ UI commands -> rtrb queue -> transport + sequencer
                          timed events/channel
                                   |
                                   v
-sample slot -> monophonic sampler -> empty effect vector -> gain/pan/mute
+sample slot -> bounded sampler voices -> empty effect vector -> gain/pan/mute
                                                            |
                                                            v
                                                     master stereo bus
@@ -73,11 +74,12 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 - Probability, microtiming controls, ties, and parameter locks are not yet
   implemented. Note starts and lengths otherwise retain PPQ precision.
-- NoteOn and NoteOff events are sample-accurate and deterministically ordered,
-  but the sampler has not yet gained the full Phase 2 voice-mode surface.
-- The sampler has one voice. A new note cuts and retriggers the previous one.
-- There are no choke groups, voice modes, or explicit one-shot versus gated
-  behavior.
+- NoteOn, NoteOff, and choke events are sample-accurate and deterministically
+  ordered. One-shot loops exit into their remaining sample tail; gated loops
+  release through the amplitude envelope.
+- Sampler voice allocation is fixed-capacity and deterministic: restart reuses
+  the oldest matching pitch, layer mode overlaps notes, and overflow steals
+  the oldest voice.
 
 ### Transport And Arrangement
 
@@ -124,8 +126,8 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 1. Define a canonical `Project` model before playlist, undo, persistence, and
    rendering create four competing state representations.
-2. Complete sampler polyphony and voice modes on top of the tick-addressed
-   event contract before adding synth polyphony or broad automation.
+2. Add probability and explicit microtiming controls without weakening the
+   tick-addressed event contract before broad automation.
 3. Separate the render graph from the JACK adapter so realtime and offline
    rendering execute the same DSP path.
 4. Define fixed-capacity device and routing edits before populating the empty
