@@ -14,6 +14,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   constant-power stereo pan.
 - Eight patterns with independent logical lengths from 1 to 256 steps. Hidden
   steps survive shortening and re-extending a pattern.
+- Pattern and Song transport modes. The playlist shows pattern rows on a
+  bar-scale timeline, supports layered pattern instances, and snaps placement
+  starts to half bars. Clip width follows each pattern's natural length.
 - Tick-addressed notes with stable IDs, start, duration, MIDI pitch, and
   velocity. Starts snap to 64ths in the piano roll while retaining PPQ tick
   precision internally.
@@ -33,7 +36,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 ## Current Audio Path
 
 ```text
-UI commands -> rtrb queue -> transport + sequencer
+UI commands -> rtrb queue -> transport + pattern/song sequencer
                                   |
                                   v
                          timed events/channel
@@ -84,10 +87,11 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 ### Transport And Arrangement
 
-- There is only pattern transport. The absolute clock advances continuously
-  and the sequencer wraps step lookup modulo the current pattern length.
-- There is no playlist, Song mode, song loop, time-signature model, swing,
-  groove, or per-channel timing offset.
+- Pattern mode loops the selected pattern. Song mode layers playlist placements
+  on the shared absolute clock and loops at the bar after the furthest clip end.
+- Playlist starts currently snap to half bars and are bounded to a 64-bar start
+  grid. There is no clip dragging, explicit song loop range, time-signature
+  model, swing, groove, or per-channel timing offset.
 
 ### State And Persistence
 

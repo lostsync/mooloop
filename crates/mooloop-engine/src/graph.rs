@@ -175,12 +175,21 @@ impl Graph {
             EngineCommand::Stop => self.transport.stop(),
             EngineCommand::SetTempo(bpm) => self.transport.set_tempo(bpm),
             EngineCommand::SetCurrentPattern(p) => self.sequencer.set_current_pattern(p as usize),
+            EngineCommand::SetPlaybackMode(mode) => self.sequencer.set_playback_mode(mode),
             EngineCommand::SetPatternLength {
                 pattern,
                 length_steps,
             } => self
                 .sequencer
                 .set_pattern_length(pattern as usize, length_steps as usize),
+            EngineCommand::SetPlaylistPlacement {
+                pattern,
+                start_tick,
+                on,
+            } => {
+                self.sequencer
+                    .set_playlist_placement(pattern as usize, start_tick, on);
+            }
             EngineCommand::AddChannel => {
                 let n = self.sequencer.active_channels() + 1;
                 self.sequencer.set_active_channels(n);

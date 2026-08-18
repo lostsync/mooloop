@@ -5,7 +5,8 @@
 //! scheduling and edits never allocate on the audio thread.
 
 use mooloop_core::{
-    NoteEvent, NoteId, Pattern, Ppq, DEFAULT_NOTE_DURATION_TICKS, MAX_CHANNELS, MAX_PATTERN_STEPS,
+    NoteEvent, NoteId, Pattern, PatternPlacement, PlaybackMode, Ppq, DEFAULT_NOTE_DURATION_TICKS,
+    MAX_CHANNELS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, TICKS_PER_BAR,
     TICKS_PER_STEP,
 };
 use mooloop_dsp::{Event, EventList, TimedEvent};
@@ -16,6 +17,8 @@ pub struct Sequencer {
     patterns: Vec<Pattern>,
     current: usize,
     active_channels: usize,
+    playback_mode: PlaybackMode,
+    playlist: Vec<PatternPlacement>,
 }
 
 impl Sequencer {
@@ -32,6 +35,8 @@ impl Sequencer {
             patterns,
             current: 0,
             active_channels: initial_channels.min(MAX_CHANNELS),
+            playback_mode: PlaybackMode::Pattern,
+            playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
         }
     }
 
@@ -45,6 +50,48 @@ impl Sequencer {
         if let Some(pattern) = self.patterns.get_mut(pattern) {
             pattern.set_length_steps(length_steps);
         }
+    }
+
+    pub fn set_playback_mode(&mut self, mode: PlaybackMode) {
+        self.playback_mode = mode;
+    }
+
+    pub fn set_playlist_placement(&mut self, pattern: usize, start_tick: u32, on: bool) -> bool {
+        if self.patterns.get(pattern).is_none() {
+            return false;
+        }
+        if start_tick >= MAX_PLAYLIST_TICKS {
+            return false;
+        }
+        let placement = PatternPlacement::new(pattern as u8, start_tick);
+        let position = self.playlist.iter().position(|item| *item == placement);
+        match (on, position) {
+            (true, None) if self.playlist.len() < self.playlist.capacity() => {
+                self.playlist.push(placement);
+                self.playlist.sort_unstable();
+                true
+            }
+            (false, Some(index)) => {
+                self.playlist.remove(index);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn song_length_ticks(&self) -> u32 {
+        let content_end = self
+            .playlist
+            .iter()
+            .filter_map(|placement| {
+                self.patterns
+                    .get(placement.pattern as usize)
+                    .map(|pattern| placement.start_tick.saturating_add(pattern.length_ticks()))
+            })
+            .max()
+            .unwrap_or(TICKS_PER_BAR)
+            .max(TICKS_PER_BAR);
+        content_end.div_ceil(TICKS_PER_BAR) * TICKS_PER_BAR
     }
 
     pub fn active_channels(&self) -> usize {
@@ -118,13 +165,28 @@ impl Sequencer {
         {
             return;
         }
+        match self.playback_mode {
+            PlaybackMode::Pattern => {
+                self.schedule_pattern(start_tick, end_tick, frames, ticks_per_sample, events)
+            }
+            PlaybackMode::Song => {
+                self.schedule_song(start_tick, end_tick, frames, ticks_per_sample, events)
+            }
+        }
+    }
+
+    fn schedule_pattern(
+        &self,
+        start_tick: f64,
+        end_tick: f64,
+        frames: usize,
+        ticks_per_sample: f64,
+        events: &mut [EventList],
+    ) {
         let Some(pattern) = self.patterns.get(self.current) else {
             return;
         };
         let pattern_ticks = pattern.length_ticks();
-        if pattern_ticks == 0 {
-            return;
-        }
 
         for (channel_index, event_list) in events.iter_mut().enumerate().take(self.active_channels)
         {
@@ -137,22 +199,26 @@ impl Sequencer {
                 .copied()
                 .filter(|note| note.start_tick < pattern_ticks)
             {
-                self.schedule_note_edge(
+                Self::schedule_note_edge(
                     note,
                     note.start_tick,
                     false,
                     pattern_ticks,
+                    1,
+                    0,
                     start_tick,
                     end_tick,
                     frames,
                     ticks_per_sample,
                     event_list,
                 );
-                self.schedule_note_edge(
+                Self::schedule_note_edge(
                     note,
                     note.end_tick(),
                     true,
                     pattern_ticks,
+                    1,
+                    0,
                     start_tick,
                     end_tick,
                     frames,
@@ -163,20 +229,81 @@ impl Sequencer {
         }
     }
 
+    fn schedule_song(
+        &self,
+        start_tick: f64,
+        end_tick: f64,
+        frames: usize,
+        ticks_per_sample: f64,
+        events: &mut [EventList],
+    ) {
+        let song_ticks = self.song_length_ticks();
+        let instance_stride = MAX_PLAYLIST_TICKS as u64 * self.patterns.len() as u64;
+        for placement in &self.playlist {
+            let Some(pattern) = self.patterns.get(placement.pattern as usize) else {
+                continue;
+            };
+            let instance_offset = placement.pattern as u64 * MAX_PLAYLIST_TICKS as u64
+                + u64::from(placement.start_tick);
+            let pattern_ticks = pattern.length_ticks();
+            for (channel_index, event_list) in
+                events.iter_mut().enumerate().take(self.active_channels)
+            {
+                let Some(channel) = pattern.channel(channel_index) else {
+                    continue;
+                };
+                for note in channel
+                    .notes()
+                    .iter()
+                    .copied()
+                    .filter(|note| note.start_tick < pattern_ticks)
+                {
+                    Self::schedule_note_edge(
+                        note,
+                        placement.start_tick.saturating_add(note.start_tick),
+                        false,
+                        song_ticks,
+                        instance_stride,
+                        instance_offset,
+                        start_tick,
+                        end_tick,
+                        frames,
+                        ticks_per_sample,
+                        event_list,
+                    );
+                    Self::schedule_note_edge(
+                        note,
+                        placement.start_tick.saturating_add(note.end_tick()),
+                        true,
+                        song_ticks,
+                        instance_stride,
+                        instance_offset,
+                        start_tick,
+                        end_tick,
+                        frames,
+                        ticks_per_sample,
+                        event_list,
+                    );
+                }
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn schedule_note_edge(
-        &self,
         note: NoteEvent,
         edge_tick: u32,
         is_note_off: bool,
-        pattern_ticks: u32,
+        period_ticks: u32,
+        instance_stride: u64,
+        instance_offset: u64,
         start_tick: f64,
         end_tick: f64,
         frames: usize,
         ticks_per_sample: f64,
         event_list: &mut EventList,
     ) {
-        let period = f64::from(pattern_ticks);
+        let period = f64::from(period_ticks);
         let edge = f64::from(edge_tick);
         let mut cycle = ((start_tick - edge - BOUNDARY_EPS) / period).ceil() as i64;
         cycle = cycle.max(0);
@@ -186,7 +313,10 @@ impl Sequencer {
             if absolute_tick + BOUNDARY_EPS >= start_tick {
                 let offset = ((absolute_tick - start_tick) / ticks_per_sample).round() as i64;
                 let offset = offset.clamp(0, frames as i64 - 1) as u32;
-                let voice_id = ((cycle as u64) << 32) | u64::from(note.id);
+                let instance = (cycle as u64)
+                    .wrapping_mul(instance_stride)
+                    .wrapping_add(instance_offset);
+                let voice_id = (instance << 32) | u64::from(note.id);
                 let event = if is_note_off {
                     Event::NoteOff {
                         id: voice_id,
@@ -210,7 +340,7 @@ impl Sequencer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{ticks_per_sample, TICKS_PER_64TH};
+    use mooloop_core::{ticks_per_sample, PLAYLIST_SNAP_TICKS, TICKS_PER_64TH};
 
     fn schedule_range(sequencer: &Sequencer, start_tick: f64, end_tick: f64) -> Vec<TimedEvent> {
         let ticks_per_sample = ticks_per_sample(120.0, 48_000, Ppq::DEFAULT);
@@ -315,5 +445,75 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn playlist_placements_are_bounded_and_idempotent() {
+        let mut sequencer = Sequencer::new(1, 2, 16, Ppq::DEFAULT);
+        assert!(sequencer.set_playlist_placement(1, PLAYLIST_SNAP_TICKS, true));
+        assert!(!sequencer.set_playlist_placement(1, PLAYLIST_SNAP_TICKS, true));
+        assert!(!sequencer.set_playlist_placement(2, 0, true));
+        assert!(!sequencer.set_playlist_placement(0, MAX_PLAYLIST_TICKS, true));
+        assert!(sequencer.set_playlist_placement(1, PLAYLIST_SNAP_TICKS, false));
+        assert!(!sequencer.set_playlist_placement(1, PLAYLIST_SNAP_TICKS, false));
+    }
+
+    #[test]
+    fn song_mode_layers_patterns_at_the_same_position() {
+        let mut sequencer = Sequencer::new(1, 2, 16, Ppq::DEFAULT);
+        assert!(sequencer.upsert_note(0, 0, NoteEvent::new(1, 0, 12, 60, 100)));
+        assert!(sequencer.upsert_note(1, 0, NoteEvent::new(1, 0, 12, 72, 90)));
+        assert!(sequencer.set_playlist_placement(0, 0, true));
+        assert!(sequencer.set_playlist_placement(1, 0, true));
+        sequencer.set_playback_mode(PlaybackMode::Song);
+
+        let events = schedule_range(&sequencer, 0.0, 2.0);
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event.event, Event::NoteOn { note: 60, .. })));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event.event, Event::NoteOn { note: 72, .. })));
+        let ids: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event.event {
+                Event::NoteOn { id, .. } => Some(id),
+                _ => None,
+            })
+            .collect();
+        assert_ne!(ids[0], ids[1], "layered placements need distinct voice IDs");
+    }
+
+    #[test]
+    fn song_placement_can_start_on_a_half_bar() {
+        let mut sequencer = Sequencer::new(1, 1, 16, Ppq::DEFAULT);
+        sequencer.set_step(0, 0, 0, true, 60, 100);
+        assert!(sequencer.set_playlist_placement(0, PLAYLIST_SNAP_TICKS, true));
+        sequencer.set_playback_mode(PlaybackMode::Song);
+
+        assert!(schedule_range(&sequencer, 0.0, 2.0).is_empty());
+        let events = schedule_range(
+            &sequencer,
+            f64::from(PLAYLIST_SNAP_TICKS),
+            f64::from(PLAYLIST_SNAP_TICKS + 2),
+        );
+        assert_eq!(events[0].offset, 0);
+        assert!(matches!(events[0].event, Event::NoteOn { .. }));
+    }
+
+    #[test]
+    fn song_loop_follows_the_longest_pattern_placement() {
+        let mut sequencer = Sequencer::new(1, 1, 16, Ppq::DEFAULT);
+        sequencer.set_pattern_length(0, 32);
+        sequencer.set_step(0, 0, 0, true, 60, 100);
+        assert!(sequencer.set_playlist_placement(0, 0, true));
+        sequencer.set_playback_mode(PlaybackMode::Song);
+        assert_eq!(sequencer.song_length_ticks(), 32 * TICKS_PER_STEP);
+
+        let wrap = f64::from(sequencer.song_length_ticks());
+        let events = schedule_range(&sequencer, wrap, wrap + 2.0);
+        assert_eq!(events[0].offset, 0);
+        assert!(matches!(events[0].event, Event::NoteOn { .. }));
     }
 }

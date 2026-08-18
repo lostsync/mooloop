@@ -13,9 +13,10 @@ slint::include_modules!();
 
 use meter::MeterBallistics;
 use mooloop_core::{
-    EngineCommand, EngineEvent, LoopMode, NoteEvent, NoteId, Ppq, RetriggerMode, SamplerParams,
-    VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, MAX_CHANNELS, MAX_PATTERNS,
-    MAX_PATTERN_STEPS, TICKS_PER_64TH, TICKS_PER_STEP,
+    EngineCommand, EngineEvent, LoopMode, NoteEvent, NoteId, PatternPlacement, PlaybackMode, Ppq,
+    RetriggerMode, SamplerParams, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
+    MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
+    MAX_PLAYLIST_TICKS, PLAYLIST_SNAP_TICKS, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::SampleData;
 use mooloop_engine::EngineHandle;
@@ -212,11 +213,14 @@ struct UiState {
     rows: Rc<VecModel<ChannelRow>>,
     step_models: Vec<Rc<VecModel<StepCell>>>,
     note_model: Rc<VecModel<NoteCell>>,
+    playlist_model: Rc<VecModel<PlaylistClip>>,
     waveform_model: Rc<VecModel<f32>>,
     default_waveform: Vec<f32>,
     default_sample_description: String,
     default_sample_duration: f32,
     pattern_lengths: Vec<usize>,
+    playlist: Vec<PatternPlacement>,
+    song_mode: bool,
     current_pattern: usize,
     selected: usize,
     selected_note_id: Option<NoteId>,
@@ -251,6 +255,55 @@ impl UiState {
     fn refresh_rack_cell(&self, channel: usize, step: usize) {
         let notes = &self.channels[channel].notes[self.current_pattern];
         self.step_models[channel].set_row_data(step, rack_cell(notes, step));
+    }
+
+    fn song_length_ticks(&self) -> u32 {
+        let content_end = self
+            .playlist
+            .iter()
+            .filter_map(|placement| {
+                self.pattern_lengths
+                    .get(placement.pattern as usize)
+                    .map(|steps| {
+                        placement
+                            .start_tick
+                            .saturating_add(*steps as u32 * TICKS_PER_STEP)
+                    })
+            })
+            .max()
+            .unwrap_or(TICKS_PER_BAR)
+            .max(TICKS_PER_BAR);
+        content_end.div_ceil(TICKS_PER_BAR) * TICKS_PER_BAR
+    }
+
+    fn sync_playlist(&self, window: &MainWindow) {
+        let clips: Vec<PlaylistClip> = self
+            .playlist
+            .iter()
+            .filter_map(|placement| {
+                self.pattern_lengths
+                    .get(placement.pattern as usize)
+                    .map(|length| PlaylistClip {
+                        pattern: placement.pattern as i32,
+                        start_half_bar: (placement.start_tick / PLAYLIST_SNAP_TICKS) as i32,
+                        length_steps: *length as i32,
+                    })
+            })
+            .collect();
+        self.playlist_model.set_vec(clips);
+        let song_length = self.song_length_ticks();
+        window.set_playlist_song_length_ticks(song_length as i32);
+        window.set_playlist_bars(song_length.div_ceil(TICKS_PER_BAR).max(MAX_PLAYLIST_BARS) as i32);
+    }
+
+    fn placement_covering(&self, pattern: usize, tick: u32) -> Option<PatternPlacement> {
+        self.playlist.iter().copied().find(|placement| {
+            if placement.pattern as usize != pattern {
+                return false;
+            }
+            let length = self.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+            tick >= placement.start_tick && tick < placement.start_tick.saturating_add(length)
+        })
     }
 
     fn refresh_note_editor(&self, window: &MainWindow) {
@@ -460,6 +513,7 @@ impl AppUi {
             .collect();
         let step_model = Rc::new(VecModel::from(first_steps));
         let note_model = Rc::new(VecModel::from(Vec::<NoteCell>::new()));
+        let playlist_model = Rc::new(VecModel::from(Vec::<PlaylistClip>::new()));
         let row = ChannelRow {
             name: first.name.as_str().into(),
             muted: false,
@@ -472,6 +526,7 @@ impl AppUi {
         let waveform_model = Rc::new(VecModel::from(first.waveform.clone()));
         window.set_channels(ModelRc::from(rows_model.clone()));
         window.set_notes(ModelRc::from(note_model.clone()));
+        window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
         window.set_waveform(ModelRc::from(waveform_model.clone()));
 
         let state = Rc::new(RefCell::new(UiState {
@@ -479,16 +534,20 @@ impl AppUi {
             rows: rows_model,
             step_models: vec![step_model],
             note_model,
+            playlist_model,
             waveform_model,
             default_waveform,
             default_sample_description,
             default_sample_duration,
             pattern_lengths: vec![DEFAULT_STEPS as usize; MAX_PATTERNS],
+            playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
+            song_mode: false,
             current_pattern: 0,
             selected: 0,
             selected_note_id: None,
         }));
         state.borrow().refresh_editor(&window);
+        state.borrow().sync_playlist(&window);
 
         // --- Command channel from UI closures to the pump ---
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<EngineCommand>();
@@ -508,8 +567,27 @@ impl AppUi {
                 dbg_log("UI: stop clicked, queuing Stop");
                 if let Some(window) = weak.upgrade() {
                     window.set_playing(false);
+                    window.set_playlist_position_ticks(0);
                 }
                 let _ = tx.send(EngineCommand::Stop);
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_playback_mode_changed(move |song_mode| {
+                st.borrow_mut().song_mode = song_mode;
+                if let Some(window) = weak.upgrade() {
+                    window.set_song_mode(song_mode);
+                }
+                let mode = if song_mode {
+                    PlaybackMode::Song
+                } else {
+                    PlaybackMode::Pattern
+                };
+                let _ = tx.send(EngineCommand::SetPlaybackMode(mode));
             });
         }
         {
@@ -590,10 +668,78 @@ impl AppUi {
                 if let Some(w) = weak.upgrade() {
                     w.set_pattern_length(length as i32);
                     st.refresh_note_editor(&w);
+                    st.sync_playlist(&w);
                 }
                 let _ = tx.send(EngineCommand::SetPatternLength {
                     pattern: pattern as u8,
                     length_steps: length as u16,
+                });
+            });
+        }
+
+        // Playlist placement starts snap to half bars. Clip duration always
+        // follows the referenced pattern's current logical length.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_playlist_placement_added(move |pattern, half_bar| {
+                let pattern = pattern.clamp(0, MAX_PATTERNS as i32 - 1) as usize;
+                let start_tick = (half_bar.max(0) as u32).saturating_mul(PLAYLIST_SNAP_TICKS);
+                let mut st = st.borrow_mut();
+                if start_tick >= MAX_PLAYLIST_TICKS || st.playlist.len() >= MAX_PLAYLIST_PLACEMENTS
+                {
+                    return;
+                }
+                let end_tick =
+                    start_tick.saturating_add(st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP);
+                let overlaps = st.playlist.iter().any(|placement| {
+                    if placement.pattern as usize != pattern {
+                        return false;
+                    }
+                    let existing_end = placement
+                        .start_tick
+                        .saturating_add(st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP);
+                    start_tick < existing_end && placement.start_tick < end_tick
+                });
+                if overlaps {
+                    return;
+                }
+                let placement = PatternPlacement::new(pattern as u8, start_tick);
+                st.playlist.push(placement);
+                st.playlist.sort_unstable();
+                if let Some(window) = weak.upgrade() {
+                    st.sync_playlist(&window);
+                }
+                let _ = tx.send(EngineCommand::SetPlaylistPlacement {
+                    pattern: pattern as u8,
+                    start_tick,
+                    on: true,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_playlist_placement_removed(move |pattern, half_bar| {
+                let pattern = pattern.clamp(0, MAX_PATTERNS as i32 - 1) as usize;
+                let tick = (half_bar.max(0) as u32).saturating_mul(PLAYLIST_SNAP_TICKS);
+                let mut st = st.borrow_mut();
+                let Some(placement) = st.placement_covering(pattern, tick) else {
+                    return;
+                };
+                let Some(index) = st.playlist.iter().position(|item| *item == placement) else {
+                    return;
+                };
+                st.playlist.remove(index);
+                if let Some(window) = weak.upgrade() {
+                    st.sync_playlist(&window);
+                }
+                let _ = tx.send(EngineCommand::SetPlaylistPlacement {
+                    pattern: placement.pattern,
+                    start_tick: placement.start_tick,
+                    on: false,
                 });
             });
         }
@@ -1427,6 +1573,10 @@ impl AppUi {
                             let length = st.pattern_lengths[st.current_pattern] as u64;
                             let ticks_per_step = (Ppq::DEFAULT.ticks_per_beat() / 4) as u64;
                             w.set_current_step(((tick / ticks_per_step) % length) as i32);
+                            if st.song_mode {
+                                let song_length = u64::from(st.song_length_ticks());
+                                w.set_playlist_position_ticks((tick % song_length) as i32);
+                            }
                         }
                         EngineEvent::Metering { peak_l, peak_r } => {
                             block_peak_l = block_peak_l.max(peak_l.max(0.0));
@@ -1488,6 +1638,12 @@ impl AppUi {
                 w.invoke_choke_group_changed(1);
                 w.invoke_channel_volume_changed(0, 0.65);
                 w.invoke_channel_pan_changed(0, -0.25);
+                w.invoke_playlist_placement_added(0, 0);
+                w.invoke_playlist_placement_added(1, 1);
+                w.invoke_playlist_placement_added(1, 4);
+                w.invoke_playlist_placement_removed(1, 4);
+                w.set_song_mode(true);
+                w.invoke_playback_mode_changed(true);
                 w.set_editor_page(0);
                 w.invoke_play_clicked();
             });
@@ -1498,7 +1654,7 @@ impl AppUi {
                 println!("commands forwarded by pump : {forwarded}");
                 println!("saw playing=true on window : {saw_playing}");
                 println!("nonzero metering seen     : {max_peak:.4}");
-                let ok = saw_playing && forwarded >= 23;
+                let ok = saw_playing && forwarded >= 28;
                 println!(
                     "RESULT: {}",
                     if ok {

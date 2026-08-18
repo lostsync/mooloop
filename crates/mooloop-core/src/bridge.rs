@@ -10,7 +10,7 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::sampler::SamplerParams;
-use crate::{NoteEvent, NoteId};
+use crate::{NoteEvent, NoteId, PlaybackMode};
 
 /// GUI -> audio. Drained at the top of each process callback.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -25,9 +25,17 @@ pub enum EngineCommand {
     SetTempo(f64),
     /// Select which pattern the transport loops (live-switchable).
     SetCurrentPattern(u8),
+    /// Switch transport scheduling between the selected pattern and playlist.
+    SetPlaybackMode(PlaybackMode),
     /// Set one pattern's logical length. Storage is pre-allocated, so this is
     /// a bounded mutation on the realtime thread.
     SetPatternLength { pattern: u8, length_steps: u16 },
+    /// Add or remove one pattern placement on the absolute song timeline.
+    SetPlaylistPlacement {
+        pattern: u8,
+        start_tick: u32,
+        on: bool,
+    },
     /// Grow the channel pool's active region by one (appends a channel).
     AddChannel,
     /// Shrink the channel pool's active region by one (removes the last

@@ -19,4 +19,4 @@ slint-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
-i-slint-backend-testing = "1.17"
+i-slint-backend-testing = { version = "1.17", features = ["renderer-software"] }
