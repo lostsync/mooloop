@@ -1,9 +1,11 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
-    ParameterFader, ParameterKnob, PeakMeter, SectionLabel as DesignSectionLabel,
+    MiniKnob, ParameterFader, ParameterKnob, PeakMeter, SectionLabel as DesignSectionLabel,
     StereoPeakMeter, ToolButton, MuteButton as DesignMuteButton
 } from "controls.slint";
+import { MasterMeter } from "meters.slint";
+import { EnvelopeEditor } from "envelope.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
 export { Theme }
 export { ControlGallery } from "gallery.slint";
@@ -434,7 +436,8 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                StereoPeakMeter {
+                MasterMeter {
+                    width: 210px;
                     left-db: root.meter-l-db;
                     right-db: root.meter-r-db;
                     held-left-db: root.meter-l-held-db;
@@ -499,34 +502,28 @@ export component MainWindow inherits Window {
                         clicked => { root.channel-muted(ch); }
                     }
 
-                    ParameterFader {
-                        label: "V";
-                        tooltip: "Channel volume: " + round(row.volume * 100) + "%";
+                    // Volume and pan are knobs here, not faders: the rack row
+                    // is for steps, and a pair of 22px knobs costs a fifth of
+                    // the width a labelled fader did. Names and values live in
+                    // the tooltips.
+                    MiniKnob {
+                        label: "Volume";
                         value: row.volume;
                         default-value: 0.8;
-                        width: 76px;
-                        min-height: 18px;
-                        label-width: 12px;
-                        track-min-width: 56px;
-                        layout-spacing: 4px;
+                        value-text: round(row.volume * 100) + "%";
                         changed(v) => { root.channel-volume-changed(ch, v); }
                     }
 
-                    ParameterFader {
-                        label: "P";
-                        tooltip: "Channel pan: " + (abs(row.pan) < 0.01 ? "Center"
-                            : row.pan < 0 ? "L " + round(abs(row.pan) * 100)
-                            : "R " + round(row.pan * 100));
+                    MiniKnob {
+                        label: "Pan";
                         value: row.pan;
                         minimum: -1;
                         maximum: 1;
                         default-value: 0;
                         bipolar: true;
-                        width: 76px;
-                        min-height: 18px;
-                        label-width: 12px;
-                        track-min-width: 56px;
-                        layout-spacing: 4px;
+                        value-text: abs(row.pan) < 0.01 ? "Center"
+                            : row.pan < 0 ? "L " + round(abs(row.pan) * 100)
+                            : "R " + round(row.pan * 100);
                         changed(v) => { root.channel-pan-changed(ch, v); }
                     }
 
@@ -1192,6 +1189,24 @@ export component MainWindow inherits Window {
                                 VerticalLayout {
                                     width: 230px; spacing: 3px;
                                     SectionLabel { text: "AMP ENVELOPE"; }
+                                    // The graph and the knobs edit the same
+                                    // properties: drag the shape to find it,
+                                    // use a knob when a number matters.
+                                    EnvelopeEditor {
+                                        height: 56px;
+                                        attack <=> root.attack;
+                                        decay <=> root.decay;
+                                        sustain <=> root.sustain;
+                                        release <=> root.release;
+                                        attack-text: round(root.attack * 5000) + " ms";
+                                        decay-text: round(root.decay * 5000) + " ms";
+                                        sustain-text: round(root.sustain * 100) + "%";
+                                        release-text: round(root.release * 5000) + " ms";
+                                        attack-changed(v) => { root.attack-changed(v); }
+                                        decay-changed(v) => { root.decay-changed(v); }
+                                        sustain-changed(v) => { root.sustain-changed(v); }
+                                        release-changed(v) => { root.release-changed(v); }
+                                    }
                                     HorizontalLayout {
                                         spacing: 1px;
                                         ParameterKnob {

@@ -30,18 +30,27 @@ export component EnvelopeEditor inherits Rectangle {
     private property <float> stage-span: 0.28;
     private property <float> sustain-span: 0.16;
 
-    private property <float> attack-x: root.attack * root.stage-span;
-    private property <float> decay-x: root.attack-x + root.decay * root.stage-span;
+    // Stage times are linear over their whole range, so musically ordinary
+    // values (a 3 ms attack, a 125 ms release against a 5 s maximum) all land
+    // in the first percent and the shape collapses into the left edge. The
+    // plot warps the time axis so the useful range gets useful width. This is
+    // display only: the values handed back are untouched.
+    in property <float> time-curve: 0.5;
+    pure function warp(v: float) -> float { return pow(clamp(v, 0, 1), root.time-curve); }
+    pure function unwarp(d: float) -> float { return pow(clamp(d, 0, 1), 1 / root.time-curve); }
+
+    private property <float> attack-x: root.warp(root.attack) * root.stage-span;
+    private property <float> decay-x: root.attack-x + root.warp(root.decay) * root.stage-span;
     private property <float> sustain-x: root.decay-x + root.sustain-span;
-    private property <float> release-x: root.sustain-x + root.release * root.stage-span;
+    private property <float> release-x: root.sustain-x + root.warp(root.release) * root.stage-span;
     // y is inverted: 0 is full level at the top of the plot.
     private property <float> sustain-y: 1 - clamp(root.sustain, 0, 1);
 
     private property <length> handle-size: 9px;
     private property <int> active-handle: -1;
 
-    min-width: 200px;
-    min-height: 96px;
+    min-width: 120px;
+    min-height: 48px;
     border-radius: 3px;
     background: Theme.panel;
     border-width: 1px;
@@ -50,11 +59,11 @@ export component EnvelopeEditor inherits Rectangle {
     accessible-role: none;
 
     function drag-attack(delta: float) {
-        let next = clamp(root.attack + delta, 0, 1);
+        let next = root.unwarp(root.warp(root.attack) + delta);
         if (next != root.attack) { root.attack = next; root.attack-changed(next); }
     }
     function drag-decay(delta: float) {
-        let next = clamp(root.decay + delta, 0, 1);
+        let next = root.unwarp(root.warp(root.decay) + delta);
         if (next != root.decay) { root.decay = next; root.decay-changed(next); }
     }
     function drag-sustain(delta: float) {
@@ -62,7 +71,7 @@ export component EnvelopeEditor inherits Rectangle {
         if (next != root.sustain) { root.sustain = next; root.sustain-changed(next); }
     }
     function drag-release(delta: float) {
-        let next = clamp(root.release + delta, 0, 1);
+        let next = root.unwarp(root.warp(root.release) + delta);
         if (next != root.release) { root.release = next; root.release-changed(next); }
     }
 

@@ -35,6 +35,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   restart/layer retriggering, and 16 cross-channel choke groups.
 - Runtime appearance presets, custom accent persistence, shared audio controls,
   tooltips, and master peak-meter ballistics.
+- A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
+  bipolar mode (`controls.slint`), LED-segment metering with scales, latching
+  clip indicators, gain-reduction and correlation meters (`meters.slint`), and a
+  draggable graphical ADSR (`envelope.slint`). `cargo run -p mooloop-ui --example
+  control-gallery` shows every control; set `MOOLOOP_GALLERY_SNAPSHOT` and
+  `MOOLOOP_GALLERY_SIZE` to capture it headlessly.
+- Some widgets exist ahead of the features that will use them: gain reduction and
+  correlation have no audio behind them yet, and solo is a button style only.
 
 ## Current Audio Path
 
@@ -107,7 +115,8 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 ### Mixing, Routing, And Effects
 
-- Channel mute, volume, and pan are exposed. Metering is master-only.
+- Channel mute, volume, and pan are exposed, as compact knobs in the rack row.
+  Metering is master-only; per-channel meters are drawn but unfed.
 - The channel effect vector is empty and there is no realtime-safe graph edit
   protocol for inserting or reordering devices.
 - There are no sends, returns, groups, sidechains, external inputs, or routing

@@ -80,10 +80,21 @@ fn render_playlist_snapshot() {
     assert_eq!(pixel(159, 450), clip_color);
     assert_ne!(pixel(160, 450), clip_color);
 
-    let low_velocity_fill = pixel(301, 73).to_vec();
-    assert_eq!(pixel(323, 73), low_velocity_fill);
-    assert_ne!(pixel(324, 73), low_velocity_fill);
-    assert_ne!(pixel(301, 59), pixel(328, 59));
+    // The step grid starts after the rack row's name, mute and the volume/pan
+    // knobs, so these x coordinates move whenever that prefix is resized. The
+    // first cell spans 192..=215 and the second 219..=242 at 24px per cell.
+    const FIRST_CELL_X: usize = 193;
+    const FIRST_CELL_LAST_X: usize = 215;
+    const CELL_GAP_X: usize = 216;
+    const SECOND_CELL_X: usize = 220;
+
+    // A step's fill spans the whole cell and stops at the gap after it.
+    let low_velocity_fill = pixel(FIRST_CELL_X, 73).to_vec();
+    assert_eq!(pixel(FIRST_CELL_LAST_X, 73), low_velocity_fill);
+    assert_ne!(pixel(CELL_GAP_X, 73), low_velocity_fill);
+    // Velocity 42 and velocity 100 reach different heights, so the two cells
+    // differ on a row that only the taller one fills.
+    assert_ne!(pixel(FIRST_CELL_X, 59), pixel(SECOND_CELL_X, 59));
 
     let added = Rc::new(Cell::new(None));
     ui.on_playlist_placement_added({
