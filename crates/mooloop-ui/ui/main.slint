@@ -944,61 +944,64 @@ export component MainWindow inherits Window {
                             Rectangle {
                                 width: 46px;
                                 background: Theme.panel;
-                                clip: true;
-                                Rectangle {
-                                    y: -piano-scroll.viewport-y;
-                                    width: parent.width;
-                                    height: 49 * root.piano-row-height;
-                                    for key in 49 : Rectangle {
-                                        y: key * root.piano-row-height;
-                                        height: root.piano-row-height;
-                                        width: parent.width;
-                                        property <int> note-number: root.piano-high-note - key;
-                                        background: (mod(note-number, 12) == 1
-                                            || mod(note-number, 12) == 3
-                                            || mod(note-number, 12) == 6
-                                            || mod(note-number, 12) == 8
-                                            || mod(note-number, 12) == 10)
-                                            ? Theme.panel : Theme.surface;
-                                        if mod(note-number, 12) == 0 : Text {
-                                            text: "C" + (floor(note-number / 12) - 1);
-                                            color: Theme.text-muted;
-                                            font-size: min(9px, root.piano-row-height - 1px);
-                                            vertical-alignment: center;
-                                            x: 3px;
+                                VerticalLayout {
+                                    spacing: 0px;
+                                    Rectangle {
+                                        vertical-stretch: 1;
+                                        clip: true;
+                                        Rectangle {
+                                            y: -piano-scroll.viewport-y;
+                                            width: parent.width;
+                                            height: 49 * root.piano-row-height;
+                                            for key in 49 : Rectangle {
+                                                y: key * root.piano-row-height;
+                                                height: root.piano-row-height;
+                                                width: parent.width;
+                                                property <int> note-number: root.piano-high-note - key;
+                                                background: (mod(note-number, 12) == 1
+                                                    || mod(note-number, 12) == 3
+                                                    || mod(note-number, 12) == 6
+                                                    || mod(note-number, 12) == 8
+                                                    || mod(note-number, 12) == 10)
+                                                    ? Theme.panel : Theme.surface;
+                                                if mod(note-number, 12) == 0 : Text {
+                                                    text: "C" + (floor(note-number / 12) - 1);
+                                                    color: Theme.text-muted;
+                                                    font-size: min(9px, root.piano-row-height - 1px);
+                                                    vertical-alignment: center;
+                                                    x: 3px;
+                                                }
+                                            }
                                         }
                                     }
-                                }
-                                Text {
-                                    y: 49 * root.piano-row-height - piano-scroll.viewport-y;
-                                    height: 17px;
-                                    text: "LANE";
-                                    color: Theme.text-faint;
-                                    font-size: 8px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    y: 49 * root.piano-row-height + 17px - piano-scroll.viewport-y;
-                                    height: 52px;
-                                    text: "VEL";
-                                    color: Theme.text-muted;
-                                    font-size: 8px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
+                                    Text {
+                                        height: 17px;
+                                        text: "LANE";
+                                        color: Theme.text-faint;
+                                        font-size: 8px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        height: 55px;
+                                        text: "VEL";
+                                        color: Theme.text-muted;
+                                        font-size: 8px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
 
-                            piano-scroll := ScrollView {
-                                horizontal-stretch: 1;
-                                viewport-width: max(self.visible-width,
-                                    root.notes.length * root.piano-step-width);
-                                viewport-height: max(self.visible-height,
-                                    49 * root.piano-row-height + 72px);
-
-                                VerticalLayout {
-                                    spacing: 0px;
-
+                            VerticalLayout {
+                                spacing: 0px;
+                                piano-scroll := ScrollView {
+                                    vertical-stretch: 1;
+                                    horizontal-stretch: 1;
+                                    viewport-width: max(self.visible-width,
+                                        root.notes.length * root.piano-step-width);
+                                    viewport-height: max(self.visible-height,
+                                        49 * root.piano-row-height);
                                     Rectangle {
                                         width: root.notes.length * root.piano-step-width;
                                         height: 49 * root.piano-row-height;
@@ -1074,24 +1077,29 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                     }
+                                }
 
-                                    Rectangle {
-                                        width: root.notes.length * root.piano-step-width;
-                                        height: 17px;
-                                        background: Theme.panel;
-                                        Text {
-                                            text: "Velocity";
-                                            color: Theme.text-faint;
-                                            font-size: 8px;
-                                            x: 4px;
-                                            vertical-alignment: center;
-                                        }
+                                Rectangle {
+                                    height: 17px;
+                                    background: Theme.panel;
+                                    Text {
+                                        text: "Velocity";
+                                        color: Theme.text-faint;
+                                        font-size: 8px;
+                                        x: 4px;
+                                        vertical-alignment: center;
                                     }
+                                }
 
+                                Rectangle {
+                                    height: 55px;
+                                    background: Theme.surface;
+                                    clip: true;
                                     Rectangle {
+                                        x: -piano-scroll.viewport-x;
                                         width: root.notes.length * root.piano-step-width;
-                                        height: 55px;
-                                        background: Theme.surface;
+                                        height: parent.height;
+                                        background: transparent;
                                         for cell[i] in root.notes : Rectangle {
                                             x: i * root.piano-step-width;
                                             width: root.piano-step-width;
