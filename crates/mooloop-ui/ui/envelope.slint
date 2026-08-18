@@ -1,0 +1,239 @@
+import { Theme } from "theme.slint";
+
+// Graphical ADSR editor.
+//
+// Every stage is normalised 0..1, matching the sampler's parameter model, so
+// this draws shape rather than absolute time: the caller supplies the formatted
+// text for each stage. Horizontal space is divided into fixed budgets per stage
+// (attack, decay, a constant sustain plateau, release) so that dragging one
+// handle never reflows the others - the shape stays readable while editing.
+export component EnvelopeEditor inherits Rectangle {
+    in-out property <float> attack;
+    in-out property <float> decay;
+    in-out property <float> sustain: 1.0;
+    in-out property <float> release;
+    in property <bool> enabled: true;
+    in property <color> fill: Theme.accent;
+    // Formatted values, shown while dragging the matching handle.
+    in property <string> attack-text;
+    in property <string> decay-text;
+    in property <string> sustain-text;
+    in property <string> release-text;
+
+    callback attack-changed(float);
+    callback decay-changed(float);
+    callback sustain-changed(float);
+    callback release-changed(float);
+
+    // Width budget per stage, as a fraction of the plot. The sustain plateau is
+    // constant because sustain is a level, not a duration.
+    private property <float> stage-span: 0.28;
+    private property <float> sustain-span: 0.16;
+
+    private property <float> attack-x: root.attack * root.stage-span;
+    private property <float> decay-x: root.attack-x + root.decay * root.stage-span;
+    private property <float> sustain-x: root.decay-x + root.sustain-span;
+    private property <float> release-x: root.sustain-x + root.release * root.stage-span;
+    // y is inverted: 0 is full level at the top of the plot.
+    private property <float> sustain-y: 1 - clamp(root.sustain, 0, 1);
+
+    private property <length> handle-size: 9px;
+    private property <int> active-handle: -1;
+
+    min-width: 200px;
+    min-height: 96px;
+    border-radius: 3px;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    accessible-role: none;
+
+    function drag-attack(delta: float) {
+        let next = clamp(root.attack + delta, 0, 1);
+        if (next != root.attack) { root.attack = next; root.attack-changed(next); }
+    }
+    function drag-decay(delta: float) {
+        let next = clamp(root.decay + delta, 0, 1);
+        if (next != root.decay) { root.decay = next; root.decay-changed(next); }
+    }
+    function drag-sustain(delta: float) {
+        let next = clamp(root.sustain + delta, 0, 1);
+        if (next != root.sustain) { root.sustain = next; root.sustain-changed(next); }
+    }
+    function drag-release(delta: float) {
+        let next = clamp(root.release + delta, 0, 1);
+        if (next != root.release) { root.release = next; root.release-changed(next); }
+    }
+
+    plot := Rectangle {
+        x: 8px;
+        y: 8px;
+        width: parent.width - 16px;
+        height: parent.height - 16px;
+
+        // Level guides at 25/50/75%.
+        for line[i] in [0.25, 0.5, 0.75] : Rectangle {
+            y: parent.height * line;
+            width: parent.width;
+            height: 1px;
+            background: Theme.border;
+            opacity: 0.35;
+        }
+
+        // Path scales its viewbox uniformly, so a fixed 100x100 viewbox would
+        // letterbox the curve inside a non-square plot and drift away from the
+        // handles. Expressing the viewbox in the plot's own pixel dimensions
+        // keeps path space and layout space identical at any aspect ratio.
+        property <float> plot-w: self.width / 1px;
+        property <float> plot-h: self.height / 1px;
+        property <string> outline: "M 0 \{self.plot-h}"
+            + " L \{root.attack-x * self.plot-w} 0"
+            + " L \{root.decay-x * self.plot-w} \{root.sustain-y * self.plot-h}"
+            + " L \{root.sustain-x * self.plot-w} \{root.sustain-y * self.plot-h}"
+            + " L \{root.release-x * self.plot-w} \{self.plot-h}";
+
+        // Filled body of the envelope.
+        Path {
+            width: 100%;
+            height: 100%;
+            viewbox-width: parent.plot-w;
+            viewbox-height: parent.plot-h;
+            commands: parent.outline + " Z";
+            fill: root.enabled ? root.fill.with-alpha(0.16) : Theme.text-faint.with-alpha(0.12);
+        }
+
+        // Outline, drawn separately so the ramps stay crisp over the fill.
+        Path {
+            width: 100%;
+            height: 100%;
+            viewbox-width: parent.plot-w;
+            viewbox-height: parent.plot-h;
+            commands: parent.outline;
+            stroke: root.enabled ? root.fill : Theme.text-faint;
+            stroke-width: 2px;
+            fill: transparent;
+        }
+
+        // Sustain plateau marker, so the constant-width segment is legible as
+        // "held" rather than as another timed stage.
+        Rectangle {
+            x: parent.width * root.decay-x;
+            y: parent.height * root.sustain-y;
+            width: parent.width * root.sustain-span;
+            height: 1px;
+            background: root.enabled ? root.fill : Theme.text-faint;
+            opacity: 0.9;
+        }
+
+        // --- Handles -------------------------------------------------------
+        // Each handle drags in the same units as its stage budget, so a full
+        // sweep of the budget is a full 0..1 sweep of the parameter.
+
+        attack-handle := Rectangle {
+            x: parent.width * root.attack-x - root.handle-size / 2;
+            y: -root.handle-size / 2;
+            width: root.handle-size;
+            height: root.handle-size;
+            border-radius: self.width / 2;
+            background: root.active-handle == 0 ? Theme.focus : root.fill;
+            border-width: 1px;
+            border-color: Theme.background;
+            TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: ew-resize;
+                width: parent.width + 10px;
+                height: parent.height + 10px;
+                x: -5px;
+                y: -5px;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) { root.active-handle = 0; }
+                    else if (e.kind == PointerEventKind.up) { root.active-handle = -1; }
+                }
+                moved => {
+                    root.drag-attack((self.mouse-x - self.pressed-x)
+                        / (plot.width * root.stage-span));
+                }
+            }
+        }
+
+        decay-handle := Rectangle {
+            x: parent.width * root.decay-x - root.handle-size / 2;
+            y: parent.height * root.sustain-y - root.handle-size / 2;
+            width: root.handle-size;
+            height: root.handle-size;
+            border-radius: self.width / 2;
+            background: root.active-handle == 1 ? Theme.focus : root.fill;
+            border-width: 1px;
+            border-color: Theme.background;
+            TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: move;
+                width: parent.width + 10px;
+                height: parent.height + 10px;
+                x: -5px;
+                y: -5px;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) { root.active-handle = 1; }
+                    else if (e.kind == PointerEventKind.up) { root.active-handle = -1; }
+                }
+                // This handle owns two parameters: decay time on x, sustain
+                // level on y, which is how the corner actually behaves.
+                moved => {
+                    root.drag-decay((self.mouse-x - self.pressed-x)
+                        / (plot.width * root.stage-span));
+                    root.drag-sustain((self.pressed-y - self.mouse-y) / plot.height);
+                }
+            }
+        }
+
+        release-handle := Rectangle {
+            x: parent.width * root.release-x - root.handle-size / 2;
+            y: parent.height - root.handle-size / 2;
+            width: root.handle-size;
+            height: root.handle-size;
+            border-radius: self.width / 2;
+            background: root.active-handle == 2 ? Theme.focus : root.fill;
+            border-width: 1px;
+            border-color: Theme.background;
+            TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: ew-resize;
+                width: parent.width + 10px;
+                height: parent.height + 10px;
+                x: -5px;
+                y: -5px;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) { root.active-handle = 2; }
+                    else if (e.kind == PointerEventKind.up) { root.active-handle = -1; }
+                }
+                moved => {
+                    root.drag-release((self.mouse-x - self.pressed-x)
+                        / (plot.width * root.stage-span));
+                }
+            }
+        }
+    }
+
+    // Readout for the stage being dragged. Kept in one place rather than four
+    // permanent labels so the plot stays uncluttered at rack sizes.
+    if root.active-handle >= 0 : Rectangle {
+        x: 6px;
+        y: 6px;
+        width: readout.preferred-width + 10px;
+        height: 15px;
+        border-radius: 2px;
+        background: Theme.surface;
+        readout := Text {
+            text: root.active-handle == 0 ? "A " + root.attack-text
+                : root.active-handle == 1 ? "D " + root.decay-text + "  S " + root.sustain-text
+                : "R " + root.release-text;
+            color: Theme.text;
+            font-size: 9px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: 100%;
+            height: 100%;
+        }
+    }
+}

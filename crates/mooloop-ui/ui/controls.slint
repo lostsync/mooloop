@@ -9,6 +9,7 @@ export component ToolButton inherits Rectangle {
     in property <bool> active;
     in property <bool> enabled: true;
     in property <color> text-color: Theme.text;
+    in property <color> active-color: Theme.accent-active;
     callback clicked;
 
     min-width: 44px;
@@ -20,7 +21,7 @@ export component ToolButton inherits Rectangle {
         ? Theme.surface
         : tap.pressed
             ? Theme.surface-active
-            : root.active ? Theme.accent-active : Theme.surface-raised;
+            : root.active ? root.active-color : Theme.surface-raised;
     accessible-role: button;
     accessible-label: root.tooltip;
     forward-focus: button-keyboard;
@@ -127,6 +128,96 @@ export component ValueReadout inherits Rectangle {
     }
 }
 
+// Shared knob visual: a value arc around a raised cap, plus a pointer dot.
+// Purely presentational - callers overlay their own TouchArea via `@children`
+// so that the knob, the mini knob, and future modulation rings can all share
+// one look without duplicating interaction code.
+component KnobFace inherits Rectangle {
+    in property <float> normalized;
+    in property <bool> bipolar;
+    in property <bool> enabled: true;
+    in property <bool> focused;
+    in property <bool> hovered;
+    in property <color> fill: Theme.accent;
+    in property <length> diameter: 44px;
+
+    // The arc sweeps 270 degrees, from 7:30 round to 4:30, matching the
+    // pointer dot below. Geometry is expressed in a 100x100 viewbox so a
+    // single set of numbers works at every diameter.
+    private property <float> clamped: clamp(root.normalized, 0, 1);
+    private property <angle> value-angle: -135deg + root.clamped * 270deg;
+    private property <angle> origin-angle: root.bipolar ? 0deg : -135deg;
+    private property <color> active-fill: root.enabled ? root.fill : Theme.text-faint;
+
+    width: root.diameter;
+    height: root.diameter;
+
+    pure function arc-x(a: angle) -> float { return 50 + 40 * sin(a); }
+    pure function arc-y(a: angle) -> float { return 50 - 40 * cos(a); }
+
+    // Unswept track, so the control still reads as a knob at rest.
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M \{root.arc-x(-135deg)} \{root.arc-y(-135deg)} A 40 40 0 1 1 \{root.arc-x(135deg)} \{root.arc-y(135deg)}";
+        stroke: Theme.border;
+        stroke-width: root.diameter * 0.09;
+        fill: transparent;
+    }
+
+    // Value arc. Bipolar knobs grow outward from 12 o'clock in whichever
+    // direction the value sits, so "no modulation" reads as an empty ring.
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        visible: root.bipolar ? abs(root.clamped - 0.5) > 0.002 : root.clamped > 0.002;
+        commands: "M \{root.arc-x(root.origin-angle)} \{root.arc-y(root.origin-angle)} A 40 40 0 "
+            + (!root.bipolar && root.clamped > 0.6667 ? 1 : 0) + " "
+            + (root.bipolar && root.clamped < 0.5 ? 0 : 1) + " "
+            + root.arc-x(root.value-angle) + " " + root.arc-y(root.value-angle);
+        stroke: root.active-fill;
+        stroke-width: root.diameter * 0.09;
+        fill: transparent;
+    }
+
+    // Raised cap.
+    Rectangle {
+        x: parent.width * 0.16;
+        y: parent.height * 0.16;
+        width: parent.width * 0.68;
+        height: parent.height * 0.68;
+        border-radius: self.width / 2;
+        background: Theme.surface-raised;
+        border-width: root.focused || root.hovered ? 2px : 1px;
+        border-color: root.focused ? Theme.focus : root.hovered ? Theme.text-faint : Theme.border;
+    }
+
+    // Pointer dot.
+    Rectangle {
+        width: root.diameter * 0.12;
+        height: self.width;
+        x: parent.width * (50 + 21 * sin(root.value-angle)) / 100 - self.width / 2;
+        y: parent.height * (50 - 21 * cos(root.value-angle)) / 100 - self.height / 2;
+        border-radius: self.width / 2;
+        background: root.active-fill;
+    }
+
+    // Centre tick marks the bipolar origin so centre is findable by eye.
+    if root.bipolar : Rectangle {
+        x: parent.width / 2 - self.width / 2;
+        y: parent.height * 0.02;
+        width: 1px;
+        height: parent.height * 0.08;
+        background: Theme.text-faint;
+    }
+
+    @children
+}
+
 export component ParameterKnob inherits Rectangle {
     in property <string> label;
     in property <string> tooltip: root.label;
@@ -138,13 +229,14 @@ export component ParameterKnob inherits Rectangle {
     in property <float> step: 0;
     in property <ValueScale> scale: ValueScale.linear;
     in property <bool> enabled: true;
+    in property <bool> bipolar;
+    in property <length> diameter: 44px;
     in property <color> fill: Theme.accent;
     callback changed(float);
 
     private property <float> pressed-normalized;
     private property <bool> fine-drag;
     private property <float> normalized: root.normalized-value(root.value);
-    private property <angle> indicator-angle: (-135deg + root.normalized * 270deg);
 
     width: 56px;
     height: 80px;
@@ -186,22 +278,14 @@ export component ParameterKnob inherits Rectangle {
         spacing: 3px;
         alignment: center;
 
-        knob-face := Rectangle {
-            width: 44px;
-            height: 44px;
-            border-radius: 22px;
-            border-width: knob-touch.has-hover || keyboard.has-focus ? 2px : 1px;
-            border-color: keyboard.has-focus ? Theme.focus : Theme.border;
-            background: Theme.surface-raised;
-
-            Rectangle {
-                x: parent.width / 2 - 3px + sin(root.indicator-angle) * 15px;
-                y: parent.height / 2 - 3px - cos(root.indicator-angle) * 15px;
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
-                background: root.enabled ? root.fill : Theme.text-faint;
-            }
+        knob-face := KnobFace {
+            diameter: root.diameter;
+            normalized: root.normalized;
+            bipolar: root.bipolar;
+            enabled: root.enabled;
+            fill: root.fill;
+            focused: keyboard.has-focus;
+            hovered: knob-touch.has-hover;
 
             knob-touch := TouchArea {
                 enabled: root.enabled;
@@ -507,9 +591,343 @@ export component MuteButton inherits ToolButton {
     text: "M";
     tooltip: "Mute channel";
     active: root.muted;
+    active-color: Theme.destructive-active;
     text-color: root.muted ? #fecaca : Theme.text-faint;
     min-width: 18px;
     max-width: 18px;
     min-height: 18px;
     max-height: 18px;
+}
+
+// Compact knob for dense rows (a rack channel, a step inspector) where a
+// labelled ParameterKnob would not fit. Name and value live in the tooltip
+// instead of taking layout space.
+export component MiniKnob inherits Rectangle {
+    in property <string> label;
+    in property <string> value-text;
+    in-out property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> default-value: root.minimum;
+    in property <float> step: 0;
+    in property <ValueScale> scale: ValueScale.linear;
+    in property <bool> enabled: true;
+    in property <bool> bipolar;
+    in property <length> diameter: 22px;
+    in property <color> fill: Theme.accent;
+    callback changed(float);
+
+    private property <float> pressed-normalized;
+    private property <bool> fine-drag;
+    private property <float> normalized: root.normalized-value(root.value);
+
+    width: root.diameter;
+    height: root.diameter;
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: root.value-text;
+    forward-focus: mini-keyboard;
+
+    pure function normalized-value(v: float) -> float {
+        if (root.maximum <= root.minimum) { return 0; }
+        if (root.scale == ValueScale.logarithmic && root.minimum > 0 && root.maximum > 0) {
+            return clamp(ln(clamp(v, root.minimum, root.maximum) / root.minimum)
+                / ln(root.maximum / root.minimum), 0, 1);
+        }
+        return clamp((v - root.minimum) / (root.maximum - root.minimum), 0, 1);
+    }
+
+    pure function value-at(n: float) -> float {
+        let position = clamp(n, 0, 1);
+        if (root.scale == ValueScale.logarithmic && root.minimum > 0 && root.maximum > 0) {
+            return root.minimum * pow(root.maximum / root.minimum, position);
+        }
+        return root.minimum + position * (root.maximum - root.minimum);
+    }
+
+    function set-normalized(n: float) {
+        let raw = root.value-at(n);
+        let quantized = root.step > 0
+            ? root.minimum + round((raw - root.minimum) / root.step) * root.step
+            : raw;
+        let next = clamp(quantized, root.minimum, root.maximum);
+        if (next != root.value) {
+            root.value = next;
+            root.changed(next);
+        }
+    }
+
+    KnobFace {
+        diameter: root.diameter;
+        normalized: root.normalized;
+        bipolar: root.bipolar;
+        enabled: root.enabled;
+        fill: root.fill;
+        focused: mini-keyboard.has-focus;
+        hovered: mini-touch.has-hover;
+
+        mini-touch := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: ns-resize;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    mini-keyboard.focus();
+                    root.pressed-normalized = root.normalized;
+                    root.fine-drag = e.modifiers.control || e.modifiers.shift;
+                } else if (e.kind == PointerEventKind.move && self.pressed) {
+                    root.set-normalized(root.pressed-normalized
+                        + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                }
+            }
+            double-clicked => {
+                root.value = clamp(root.default-value, root.minimum, root.maximum);
+                root.changed(root.value);
+            }
+            scroll-event(e) => {
+                root.set-normalized(root.normalized
+                    - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
+                accept
+            }
+        }
+    }
+
+    mini-keyboard := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
+                root.set-normalized(root.normalized
+                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+            } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
+                root.set-normalized(root.normalized
+                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+            } else { reject }
+        }
+    }
+
+    Tooltip { text: @markdown("**\{root.label}** \{root.value-text}"); }
+}
+
+// Small round status light. Not interactive - use it for activity, sync, and
+// record-armed state.
+export component LedIndicator inherits Rectangle {
+    in property <bool> on;
+    in property <color> led-color: Theme.accent;
+    in property <length> diameter: 8px;
+    in property <string> tooltip;
+
+    width: root.diameter;
+    height: root.diameter;
+    border-radius: self.width / 2;
+    background: root.on ? root.led-color : root.led-color.with-alpha(0.16);
+    border-width: 1px;
+    border-color: root.on ? root.led-color.brighter(0.4) : Theme.border;
+
+    if root.tooltip != "" : Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
+// Square glyph button, for toolbar affordances that carry a symbol rather
+// than a word.
+export component IconButton inherits ToolButton {
+    in property <length> size: 26px;
+    min-width: root.size;
+    max-width: root.size;
+    min-height: root.size;
+    max-height: root.size;
+}
+
+// Transport button. `role` tints the active state: play goes green, record
+// goes red, everything else uses the theme accent.
+export component TransportButton inherits Rectangle {
+    in property <string> text;
+    in property <string> tooltip: root.text;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    in property <string> role: "default";
+    callback clicked;
+
+    private property <color> role-color: root.role == "record" ? Theme.destructive
+        : root.role == "play" ? Theme.meter-safe : Theme.accent;
+
+    min-width: 34px;
+    min-height: 26px;
+    border-radius: 3px;
+    border-width: transport-touch.has-hover && root.enabled ? 1px : 0px;
+    border-color: root.role-color;
+    background: !root.enabled
+        ? Theme.surface
+        : transport-touch.pressed
+            ? Theme.surface-active
+            : root.active ? root.role-color.with-alpha(0.28) : Theme.surface-raised;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+
+    Text {
+        text: root.text;
+        color: !root.enabled ? Theme.text-faint : root.active ? root.role-color : Theme.text;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    transport-touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+
+    Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
+// Solo, sized and shaped to sit next to MuteButton in a rack row.
+export component SoloButton inherits ToolButton {
+    in property <bool> soloed;
+    text: "S";
+    tooltip: "Solo channel";
+    active: root.soloed;
+    active-color: #78500a;
+    text-color: root.soloed ? #fde68a : Theme.text-faint;
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
+}
+
+// Mixer-style fader with a real cap and travel ticks, for channel strips.
+// ParameterFader stays the right choice for inline parameter rows; this is
+// the one that should look like a console.
+export component MixerFader inherits Rectangle {
+    in property <string> tooltip: "Level";
+    in-out property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> default-value: 0.8;
+    in property <float> step: 0;
+    in property <bool> enabled: true;
+    in property <string> value-text;
+    in property <color> fill: Theme.accent;
+    callback changed(float);
+
+    private property <float> normalized: root.maximum <= root.minimum
+        ? 0 : clamp((root.value - root.minimum) / (root.maximum - root.minimum), 0, 1);
+    private property <float> pressed-normalized;
+    private property <bool> fine-drag;
+    private property <length> cap-height: 16px;
+
+    width: 30px;
+    min-height: 100px;
+    accessible-role: slider;
+    accessible-label: root.tooltip;
+    accessible-value: root.value-text;
+    forward-focus: mixer-keyboard;
+
+    function set-normalized(n: float) {
+        let raw = root.minimum + clamp(n, 0, 1) * (root.maximum - root.minimum);
+        let quantized = root.step > 0
+            ? root.minimum + round((raw - root.minimum) / root.step) * root.step
+            : raw;
+        let next = clamp(quantized, root.minimum, root.maximum);
+        if (next != root.value) {
+            root.value = next;
+            root.changed(next);
+        }
+    }
+
+    travel := Rectangle {
+        width: 100%;
+        height: 100%;
+
+        // Travel ticks down the left, so throw is readable without a scale.
+        for i in 5 : Rectangle {
+            x: 2px;
+            y: (parent.height - root.cap-height) * i / 4 + root.cap-height / 2;
+            width: i == 0 || i == 4 ? 6px : 4px;
+            height: 1px;
+            background: Theme.text-faint;
+        }
+
+        // Slot.
+        Rectangle {
+            x: (parent.width - 4px) / 2 + 4px;
+            y: root.cap-height / 2;
+            width: 4px;
+            height: parent.height - root.cap-height;
+            border-radius: 2px;
+            background: Theme.background;
+            border-width: 1px;
+            border-color: Theme.border;
+        }
+
+        // Filled travel below the cap.
+        Rectangle {
+            x: (parent.width - 4px) / 2 + 4px;
+            y: root.cap-height / 2 + (parent.height - root.cap-height) * (1 - root.normalized);
+            width: 4px;
+            height: (parent.height - root.cap-height) * root.normalized;
+            border-radius: 2px;
+            background: root.enabled ? root.fill : Theme.text-faint;
+        }
+
+        // Cap.
+        Rectangle {
+            x: (parent.width - 18px) / 2 + 4px;
+            y: (parent.height - root.cap-height) * (1 - root.normalized);
+            width: 18px;
+            height: root.cap-height;
+            border-radius: 2px;
+            background: mixer-touch.pressed ? Theme.surface-active : Theme.surface-raised;
+            border-width: mixer-keyboard.has-focus || mixer-touch.has-hover ? 2px : 1px;
+            border-color: mixer-keyboard.has-focus ? Theme.focus : Theme.border;
+            // Grip line on the cap marks the exact value position.
+            Rectangle {
+                y: (parent.height - 2px) / 2;
+                width: parent.width - 6px;
+                x: 3px;
+                height: 2px;
+                background: root.enabled ? root.fill : Theme.text-faint;
+            }
+        }
+
+        mixer-touch := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: ns-resize;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    mixer-keyboard.focus();
+                    root.pressed-normalized = root.normalized;
+                    root.fine-drag = e.modifiers.control || e.modifiers.shift;
+                } else if (e.kind == PointerEventKind.move && self.pressed) {
+                    // Always relative: grabbing a cap should never jump the
+                    // level, which is the one thing a mixer fader must not do.
+                    root.set-normalized(root.pressed-normalized
+                        + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 4000px : (parent.height - root.cap-height)));
+                }
+            }
+            double-clicked => {
+                root.value = clamp(root.default-value, root.minimum, root.maximum);
+                root.changed(root.value);
+            }
+            scroll-event(e) => {
+                root.set-normalized(root.normalized
+                    - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
+                accept
+            }
+        }
+    }
+
+    mixer-keyboard := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
+                root.set-normalized(root.normalized
+                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+            } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
+                root.set-normalized(root.normalized
+                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+            } else { reject }
+        }
+    }
+
+    Tooltip { text: @markdown("**\{root.tooltip}** \{root.value-text}"); }
 }

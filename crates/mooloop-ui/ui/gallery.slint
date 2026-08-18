@@ -1,9 +1,15 @@
 import { HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
-    AudioOrientation, ParameterFader, ParameterKnob, PeakMeter, SectionLabel,
-    SegmentedControl, StereoPeakMeter, ToggleButton, ToolButton, ValueScale, ValueReadout
+    AudioOrientation, IconButton, LedIndicator, MiniKnob, MixerFader, MuteButton,
+    ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl, SoloButton,
+    StereoPeakMeter, ToggleButton, ToolButton, TransportButton, ValueScale, ValueReadout
 } from "controls.slint";
+import {
+    ChannelMeter, ClipIndicator, CorrelationMeter, GainReductionMeter, MasterMeter,
+    MeterScale, SegmentedMeter
+} from "meters.slint";
+import { EnvelopeEditor } from "envelope.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
 
 export component ControlGallery inherits Window {
@@ -19,6 +25,17 @@ export component ControlGallery inherits Window {
     in-out property <int> gallery-preset;
     in-out property <bool> gallery-dialog-open;
     in-out property <string> gallery-accent: "#84CC16";
+    in-out property <float> bipolar-value: 0.5;
+    in-out property <float> mini-volume: 0.8;
+    in-out property <float> mini-pan: 0;
+    in-out property <float> env-attack: 0.12;
+    in-out property <float> env-decay: 0.3;
+    in-out property <float> env-sustain: 0.6;
+    in-out property <float> env-release: 0.25;
+    in-out property <float> reduction-db: 6;
+    in-out property <float> correlation: 0.7;
+    in-out property <bool> transport-playing;
+    in-out property <bool> transport-armed;
 
     function use-preset(preset: int) {
         root.gallery-preset = preset;
@@ -71,7 +88,7 @@ export component ControlGallery inherits Window {
 
         ScrollView {
             viewport-width: self.visible-width;
-            viewport-height: 650px;
+            viewport-height: 1560px;
             VerticalBox {
                 padding: 18px;
                 spacing: 18px;
@@ -163,6 +180,212 @@ export component ControlGallery inherits Window {
                         options: ["Mono", "Stereo", "M/S"];
                         selected-index <=> root.segment;
                     }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "BIPOLAR AND COMPACT KNOBS"; }
+                HorizontalBox {
+                    spacing: 20px;
+                    alignment: start;
+                    ParameterKnob {
+                        label: "ENV AMT"; tooltip: "Bipolar modulation depth";
+                        value <=> root.bipolar-value; default-value: 0.5;
+                        bipolar: true; fill: Theme.warning;
+                        value-text: (round((root.bipolar-value * 2 - 1) * 100) > 0 ? "+" : "")
+                            + round((root.bipolar-value * 2 - 1) * 100) + "%";
+                    }
+                    ParameterKnob {
+                        label: "LARGE"; tooltip: "A knob at a bigger diameter";
+                        diameter: 60px; width: 68px;
+                        value <=> root.linear-value; default-value: 0.5;
+                        value-text: round(root.linear-value * 100) + "%";
+                    }
+                    VerticalBox {
+                        alignment: center;
+                        spacing: 6px;
+                        SectionLabel { text: "MINI (RACK ROW)"; }
+                        HorizontalBox {
+                            spacing: 8px;
+                            alignment: start;
+                            MiniKnob {
+                                label: "Volume"; value <=> root.mini-volume; default-value: 0.8;
+                                value-text: round(root.mini-volume * 100) + "%";
+                            }
+                            MiniKnob {
+                                label: "Pan"; value <=> root.mini-pan;
+                                minimum: -1; maximum: 1; default-value: 0; bipolar: true;
+                                value-text: abs(root.mini-pan) < 0.01 ? "Center"
+                                    : root.mini-pan < 0 ? "L " + round(abs(root.mini-pan) * 100)
+                                    : "R " + round(root.mini-pan * 100);
+                            }
+                            MiniKnob {
+                                label: "Send"; diameter: 28px;
+                                value <=> root.linear-value; fill: Theme.warning;
+                                value-text: round(root.linear-value * 100) + "%";
+                            }
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "ENVELOPE"; }
+                HorizontalBox {
+                    spacing: 20px;
+                    alignment: start;
+                    EnvelopeEditor {
+                        width: 340px;
+                        height: 130px;
+                        attack <=> root.env-attack;
+                        decay <=> root.env-decay;
+                        sustain <=> root.env-sustain;
+                        release <=> root.env-release;
+                        attack-text: round(root.env-attack * 5000) + " ms";
+                        decay-text: round(root.env-decay * 5000) + " ms";
+                        sustain-text: round(root.env-sustain * 100) + "%";
+                        release-text: round(root.env-release * 5000) + " ms";
+                    }
+                    VerticalBox {
+                        alignment: start;
+                        spacing: 4px;
+                        SectionLabel { text: "DRAG THE HANDLES"; }
+                        Text {
+                            text: "Attack sets the peak, the middle handle sets decay and\nsustain together, and the last handle sets release.";
+                            color: Theme.text-muted;
+                            font-size: 10px;
+                        }
+                        EnvelopeEditor {
+                            width: 200px;
+                            height: 80px;
+                            enabled: false;
+                            attack: 0.05; decay: 0.5; sustain: 0.2; release: 0.6;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "METERING"; }
+                HorizontalBox {
+                    spacing: 26px;
+                    alignment: start;
+
+                    VerticalBox {
+                        alignment: start;
+                        spacing: 8px;
+                        SectionLabel { text: "MASTER"; }
+                        MasterMeter {
+                            width: 240px;
+                            left-db: root.meter-value;
+                            right-db: root.meter-value - 3;
+                            held-left-db: max(root.meter-value, -3);
+                            held-right-db: max(root.meter-value - 3, -6);
+                            left-clipping: root.meter-value >= 0;
+                        }
+                        SectionLabel { text: "CORRELATION"; }
+                        CorrelationMeter { width: 200px; correlation: root.correlation; }
+                        ParameterFader {
+                            label: "PHASE"; value <=> root.correlation;
+                            minimum: -1; maximum: 1; default-value: 1; bipolar: true;
+                            width: 240px;
+                        }
+                        SectionLabel { text: "GAIN REDUCTION"; }
+                        GainReductionMeter { width: 200px; reduction-db: root.reduction-db; }
+                        ParameterFader {
+                            label: "GR"; value <=> root.reduction-db;
+                            minimum: 0; maximum: 24; default-value: 0;
+                            width: 240px;
+                        }
+                    }
+
+                    VerticalBox {
+                        alignment: start;
+                        spacing: 8px;
+                        SectionLabel { text: "SEGMENTED"; }
+                        HorizontalBox {
+                            spacing: 10px;
+                            alignment: start;
+                            SegmentedMeter {
+                                width: 12px; height: 150px;
+                                level-db: root.meter-value;
+                                held-db: max(root.meter-value, -3);
+                            }
+                            MeterScale { width: 24px; height: 150px; }
+                            ChannelMeter {
+                                height: 150px;
+                                left-db: root.meter-value;
+                                right-db: root.meter-value - 6;
+                                held-left-db: max(root.meter-value, -3);
+                                held-right-db: max(root.meter-value - 6, -9);
+                                clipping: root.meter-value >= -1;
+                            }
+                            MasterMeter {
+                                height: 150px;
+                                orientation: AudioOrientation.vertical;
+                                left-db: root.meter-value;
+                                right-db: root.meter-value - 3;
+                                held-left-db: max(root.meter-value, -3);
+                                held-right-db: max(root.meter-value - 3, -6);
+                                left-clipping: root.meter-value >= 0;
+                            }
+                        }
+                    }
+
+                    VerticalBox {
+                        alignment: start;
+                        spacing: 8px;
+                        width: 200px;
+                        SectionLabel { text: "MIXER STRIP"; }
+                        HorizontalBox {
+                            spacing: 8px;
+                            alignment: start;
+                            MixerFader {
+                                height: 150px;
+                                value <=> root.linear-value;
+                                value-text: round(root.linear-value * 100) + "%";
+                            }
+                            ChannelMeter {
+                                height: 150px;
+                                left-db: root.meter-value;
+                                right-db: root.meter-value - 6;
+                                held-left-db: max(root.meter-value, -3);
+                                held-right-db: max(root.meter-value - 6, -9);
+                            }
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "TRANSPORT, STATE AND INDICATORS"; }
+                HorizontalBox {
+                    spacing: 10px;
+                    alignment: start;
+                    TransportButton {
+                        text: "\u{25b6}"; tooltip: "Play"; role: "play";
+                        active: root.transport-playing;
+                        clicked => { root.transport-playing = !root.transport-playing; }
+                    }
+                    TransportButton { text: "\u{25a0}"; tooltip: "Stop"; }
+                    TransportButton {
+                        text: "\u{25cf}"; tooltip: "Record"; role: "record";
+                        active: root.transport-armed;
+                        clicked => { root.transport-armed = !root.transport-armed; }
+                    }
+                    IconButton { text: "\u{2699}"; tooltip: "Settings"; }
+                    IconButton { text: "+"; tooltip: "Add channel"; }
+                    MuteButton { muted: true; }
+                    SoloButton { soloed: true; }
+                    MuteButton { }
+                    SoloButton { }
+                    VerticalBox {
+                        alignment: center;
+                        spacing: 4px;
+                        LedIndicator { on: root.transport-playing; tooltip: "Running"; }
+                        LedIndicator { on: root.transport-armed; led-color: Theme.destructive; tooltip: "Armed"; }
+                    }
+                    ClipIndicator { clipping: root.meter-value >= 0; }
                     Rectangle { horizontal-stretch: 1; }
                 }
             }

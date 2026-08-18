@@ -1,0 +1,371 @@
+import { Theme } from "theme.slint";
+import { AudioOrientation } from "controls.slint";
+
+// Metering family.
+//
+// All of these take dBFS directly and share one scale convention: `minimum-db`
+// at the bottom, 0 dBFS at the top, linear in dB. Ballistics (attack, decay,
+// peak hold, clip latch) belong to the audio side in `meter.rs`; these
+// components only draw what they are handed.
+
+// Shared dB -> 0..1 mapping, exposed so a scale and its meter cannot drift.
+export global MeterScaleMath {
+    public pure function normalize(db: float, minimum-db: float) -> float {
+        return clamp((db - minimum-db) / (0 - minimum-db), 0, 1);
+    }
+}
+
+// Tick marks with dB labels, to sit alongside a meter.
+export component MeterScale inherits Rectangle {
+    in property <float> minimum-db: -60;
+    in property <[float]> ticks: [0, -6, -12, -18, -24, -36, -48];
+    in property <AudioOrientation> orientation: AudioOrientation.vertical;
+    in property <bool> show-labels: true;
+
+    min-width: root.orientation == AudioOrientation.vertical ? (root.show-labels ? 22px : 5px) : 40px;
+    min-height: root.orientation == AudioOrientation.vertical ? 40px : (root.show-labels ? 14px : 5px);
+
+    if root.orientation == AudioOrientation.vertical : Rectangle {
+        for db in root.ticks : Rectangle {
+            y: parent.height * (1 - MeterScaleMath.normalize(db, root.minimum-db));
+            width: parent.width;
+            height: 1px;
+            Rectangle {
+                width: 4px;
+                height: 1px;
+                background: Theme.text-faint;
+            }
+            if root.show-labels : Text {
+                x: 6px;
+                y: -5px;
+                text: db == 0 ? "0" : db;
+                color: Theme.text-faint;
+                font-size: 8px;
+            }
+        }
+    }
+
+    if root.orientation == AudioOrientation.horizontal : Rectangle {
+        for db in root.ticks : Rectangle {
+            x: parent.width * MeterScaleMath.normalize(db, root.minimum-db);
+            width: 1px;
+            height: parent.height;
+            Rectangle {
+                width: 1px;
+                height: 4px;
+                background: Theme.text-faint;
+            }
+            if root.show-labels : Text {
+                x: -8px;
+                y: 5px;
+                text: db == 0 ? "0" : db;
+                color: Theme.text-faint;
+                font-size: 8px;
+                width: 16px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
+
+// LED-segment peak meter. Segments are coloured by where they sit on the
+// scale, not by the current level, so the meter reads like hardware: the top
+// of the range is always red whether or not it is lit.
+export component SegmentedMeter inherits Rectangle {
+    in property <float> level-db: -60;
+    in property <float> held-db: -60;
+    in property <float> minimum-db: -60;
+    in property <float> warning-db: -12;
+    in property <float> hot-db: -3;
+    in property <bool> clipping;
+    in property <int> segments: 22;
+    in property <AudioOrientation> orientation: AudioOrientation.vertical;
+
+    private property <float> level-normalized: MeterScaleMath.normalize(root.level-db, root.minimum-db);
+    private property <float> held-normalized: MeterScaleMath.normalize(root.held-db, root.minimum-db);
+    // Index of the segment carrying the peak-hold marker, or -1 when idle.
+    private property <int> held-index: root.held-db <= root.minimum-db
+        ? -1 : min(root.segments - 1, floor(root.held-normalized * root.segments));
+
+    min-width: root.orientation == AudioOrientation.vertical ? 9px : 60px;
+    min-height: root.orientation == AudioOrientation.vertical ? 60px : 9px;
+    background: Theme.background;
+    border-radius: 2px;
+    clip: true;
+
+    // Colour for the segment at index i, by its own position on the scale.
+    pure function segment-color(i: int) -> color {
+        let db = root.minimum-db + (i + 0.5) / root.segments * (0 - root.minimum-db);
+        return db >= root.hot-db ? Theme.meter-clip
+            : db >= root.warning-db ? Theme.meter-warning : Theme.meter-safe;
+    }
+    pure function segment-lit(i: int) -> bool {
+        return root.level-normalized * root.segments > i;
+    }
+
+    if root.orientation == AudioOrientation.vertical : Rectangle {
+        for i in root.segments : Rectangle {
+            property <bool> lit: root.segment-lit(i);
+            property <bool> peak: i == root.held-index;
+            x: 1px;
+            y: parent.height * (1 - (i + 1) / root.segments) + 1px;
+            width: parent.width - 2px;
+            height: parent.height / root.segments - 1px;
+            border-radius: 1px;
+            background: self.lit || self.peak
+                ? root.segment-color(i)
+                : root.segment-color(i).with-alpha(0.13);
+            // The held segment stays bright even as the level falls away.
+            opacity: self.peak && !self.lit ? 0.85 : 1.0;
+        }
+    }
+
+    if root.orientation == AudioOrientation.horizontal : Rectangle {
+        for i in root.segments : Rectangle {
+            property <bool> lit: root.segment-lit(i);
+            property <bool> peak: i == root.held-index;
+            x: parent.width * i / root.segments + 1px;
+            y: 1px;
+            width: parent.width / root.segments - 1px;
+            height: parent.height - 2px;
+            border-radius: 1px;
+            background: self.lit || self.peak
+                ? root.segment-color(i)
+                : root.segment-color(i).with-alpha(0.13);
+            opacity: self.peak && !self.lit ? 0.85 : 1.0;
+        }
+    }
+}
+
+// Latching clip light. Clicking it clears the latch, which is the behaviour
+// every engineer already expects from a clip indicator.
+export component ClipIndicator inherits Rectangle {
+    in property <bool> clipping;
+    callback reset();
+
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    background: root.clipping ? Theme.meter-clip : Theme.meter-clip.with-alpha(0.15);
+    accessible-role: button;
+    accessible-label: "Clip indicator";
+
+    TouchArea {
+        mouse-cursor: root.clipping ? pointer : default;
+        clicked => { root.reset(); }
+    }
+    Tooltip { text: @markdown("Clipped. Click to clear."); }
+}
+
+// Narrow stereo meter for a channel strip: two segment columns, a shared clip
+// light, and no scale. Sized to sit beside a fader.
+export component ChannelMeter inherits Rectangle {
+    in property <float> left-db: -60;
+    in property <float> right-db: -60;
+    in property <float> held-left-db: -60;
+    in property <float> held-right-db: -60;
+    in property <bool> clipping;
+    in property <int> segments: 18;
+    callback clip-reset();
+
+    width: 22px;
+    min-height: 70px;
+
+    VerticalLayout {
+        spacing: 2px;
+        ClipIndicator {
+            width: 22px;
+            height: 5px;
+            clipping: root.clipping;
+            reset => { root.clip-reset(); }
+        }
+        HorizontalLayout {
+            spacing: 2px;
+            vertical-stretch: 1;
+            SegmentedMeter {
+                width: 10px;
+                segments: root.segments;
+                level-db: root.left-db;
+                held-db: root.held-left-db;
+            }
+            SegmentedMeter {
+                width: 10px;
+                segments: root.segments;
+                level-db: root.right-db;
+                held-db: root.held-right-db;
+            }
+        }
+    }
+}
+
+// Master meter: stereo segments with a labelled scale between them and a
+// numeric peak readout, for the transport bar or a master strip.
+export component MasterMeter inherits Rectangle {
+    in property <float> left-db: -60;
+    in property <float> right-db: -60;
+    in property <float> held-left-db: -60;
+    in property <float> held-right-db: -60;
+    in property <bool> left-clipping;
+    in property <bool> right-clipping;
+    in property <float> minimum-db: -60;
+    in property <int> segments: 26;
+    in property <AudioOrientation> orientation: AudioOrientation.horizontal;
+    in property <bool> show-readout: true;
+    callback clip-reset();
+
+    private property <float> peak-db: max(root.held-left-db, root.held-right-db);
+
+    min-width: root.orientation == AudioOrientation.horizontal ? 150px : 54px;
+    min-height: root.orientation == AudioOrientation.horizontal ? 26px : 90px;
+
+    if root.orientation == AudioOrientation.horizontal : HorizontalLayout {
+        spacing: 4px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            SegmentedMeter {
+                height: 6px;
+                segments: root.segments;
+                minimum-db: root.minimum-db;
+                orientation: AudioOrientation.horizontal;
+                level-db: root.left-db;
+                held-db: root.held-left-db;
+            }
+            SegmentedMeter {
+                height: 6px;
+                segments: root.segments;
+                minimum-db: root.minimum-db;
+                orientation: AudioOrientation.horizontal;
+                level-db: root.right-db;
+                held-db: root.held-right-db;
+            }
+            MeterScale {
+                height: 11px;
+                minimum-db: root.minimum-db;
+                orientation: AudioOrientation.horizontal;
+                ticks: [0, -12, -24, -36, -48];
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            ClipIndicator {
+                clipping: root.left-clipping || root.right-clipping;
+                reset => { root.clip-reset(); }
+            }
+        }
+        if root.show-readout : Text {
+            width: 34px;
+            text: root.peak-db <= root.minimum-db ? "-inf" : round(root.peak-db * 10) / 10;
+            color: root.left-clipping || root.right-clipping ? Theme.meter-clip : Theme.text-muted;
+            font-size: 9px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+
+    if root.orientation == AudioOrientation.vertical : HorizontalLayout {
+        spacing: 2px;
+        alignment: center;
+        VerticalLayout {
+            spacing: 2px;
+            ClipIndicator {
+                width: 22px;
+                height: 5px;
+                clipping: root.left-clipping || root.right-clipping;
+                reset => { root.clip-reset(); }
+            }
+            HorizontalLayout {
+                spacing: 2px;
+                vertical-stretch: 1;
+                SegmentedMeter {
+                    width: 10px;
+                    segments: root.segments;
+                    minimum-db: root.minimum-db;
+                    level-db: root.left-db;
+                    held-db: root.held-left-db;
+                }
+                SegmentedMeter {
+                    width: 10px;
+                    segments: root.segments;
+                    minimum-db: root.minimum-db;
+                    level-db: root.right-db;
+                    held-db: root.held-right-db;
+                }
+            }
+        }
+        MeterScale { width: 20px; minimum-db: root.minimum-db; }
+    }
+}
+
+// Gain-reduction meter. `reduction-db` is a positive amount of reduction and
+// the bar grows downward from 0, opposite to a level meter, so the two are
+// never confused at a glance.
+export component GainReductionMeter inherits Rectangle {
+    in property <float> reduction-db: 0;
+    in property <float> range-db: 24;
+    in property <AudioOrientation> orientation: AudioOrientation.horizontal;
+
+    private property <float> normalized: clamp(root.reduction-db / root.range-db, 0, 1);
+
+    min-width: root.orientation == AudioOrientation.horizontal ? 80px : 9px;
+    min-height: root.orientation == AudioOrientation.horizontal ? 9px : 60px;
+    background: Theme.background;
+    border-radius: 2px;
+    clip: true;
+
+    if root.orientation == AudioOrientation.horizontal : Rectangle {
+        x: parent.width * (1 - root.normalized);
+        width: parent.width * root.normalized;
+        height: parent.height;
+        background: Theme.warning;
+    }
+    if root.orientation == AudioOrientation.vertical : Rectangle {
+        width: parent.width;
+        height: parent.height * root.normalized;
+        background: Theme.warning;
+    }
+    Tooltip { text: @markdown("Gain reduction"); }
+}
+
+// Stereo correlation, -1 (out of phase) to +1 (mono). The bar runs from the
+// centre so that a healthy wide-but-compatible mix sits right of centre.
+export component CorrelationMeter inherits Rectangle {
+    in property <float> correlation: 1;
+    private property <float> clamped: clamp(root.correlation, -1, 1);
+
+    min-width: 90px;
+    min-height: 14px;
+
+    VerticalLayout {
+        spacing: 1px;
+        Rectangle {
+            height: 7px;
+            background: Theme.background;
+            border-radius: 2px;
+            clip: true;
+            Rectangle {
+                x: root.clamped >= 0 ? parent.width / 2 : parent.width / 2 * (1 + root.clamped);
+                width: parent.width / 2 * abs(root.clamped);
+                height: parent.height;
+                background: root.clamped < 0 ? Theme.meter-clip
+                    : root.clamped < 0.3 ? Theme.meter-warning : Theme.meter-safe;
+            }
+            // Centre reference.
+            Rectangle {
+                x: parent.width / 2;
+                width: 1px;
+                height: parent.height;
+                background: Theme.text-faint;
+            }
+        }
+        HorizontalLayout {
+            Text { text: "-1"; color: Theme.text-faint; font-size: 8px; }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: "0"; color: Theme.text-faint; font-size: 8px; }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: "+1"; color: Theme.text-faint; font-size: 8px; }
+        }
+    }
+    Tooltip { text: @markdown("Stereo correlation"); }
+}
