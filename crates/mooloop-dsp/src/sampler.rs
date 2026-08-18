@@ -456,7 +456,7 @@ impl AudioNode for Sampler {
             let off = (ev.offset as usize).min(frames).max(pos);
             self.render_range(bus, pos, off);
             match ev.event {
-                Event::NoteOn { note, velocity } => self.trigger(note, velocity),
+                Event::NoteOn { note, velocity, .. } => self.trigger(note, velocity),
                 Event::NoteOff { .. } => self.voice.env.release(),
                 Event::ParamValue { .. } => {}
             }
@@ -517,6 +517,7 @@ mod tests {
         events.push(TimedEvent {
             offset: k as u32,
             event: Event::NoteOn {
+                id: 0,
                 note: 60,
                 velocity: 127,
             },
@@ -549,6 +550,7 @@ mod tests {
             events.push(TimedEvent {
                 offset: 0,
                 event: Event::NoteOn {
+                    id: 0,
                     note,
                     velocity: 127,
                 },
@@ -578,6 +580,7 @@ mod tests {
             events.push(TimedEvent {
                 offset: 0,
                 event: Event::NoteOn {
+                    id: 0,
                     note: 60,
                     velocity: 127,
                 },
@@ -605,6 +608,7 @@ mod tests {
         events.push(TimedEvent {
             offset: 0,
             event: Event::NoteOn {
+                id: 0,
                 note: 60,
                 velocity: 127,
             },
@@ -629,6 +633,7 @@ mod tests {
         events.push(TimedEvent {
             offset: 0,
             event: Event::NoteOn {
+                id: 0,
                 note: 60,
                 velocity: 127,
             },
@@ -687,6 +692,7 @@ mod tests {
         events.push(TimedEvent {
             offset: 0,
             event: Event::NoteOn {
+                id: 0,
                 note: 60,
                 velocity: 127,
             },
@@ -784,6 +790,7 @@ mod tests {
         events.push(TimedEvent {
             offset: 0,
             event: Event::NoteOn {
+                id: 0,
                 note: 60,
                 velocity: 127,
             },

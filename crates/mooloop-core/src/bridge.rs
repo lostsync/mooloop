@@ -10,6 +10,7 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::sampler::SamplerParams;
+use crate::{NoteEvent, NoteId};
 
 /// GUI -> audio. Drained at the top of each process callback.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,6 +44,18 @@ pub enum EngineCommand {
         on: bool,
         note: u8,
         velocity: u8,
+    },
+    /// Insert or replace a tick-addressed note by stable ID.
+    UpsertNote {
+        pattern: u8,
+        channel: u8,
+        note: NoteEvent,
+    },
+    /// Remove a tick-addressed note by stable ID.
+    RemoveNote {
+        pattern: u8,
+        channel: u8,
+        id: NoteId,
     },
     /// Replace a channel's sampler parameter set.
     SetChannelSamplerParams { channel: u8, params: SamplerParams },

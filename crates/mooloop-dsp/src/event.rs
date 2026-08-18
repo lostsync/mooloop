@@ -15,11 +15,21 @@
 /// mechanics (automation params, MPE, etc. slot in here).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    /// MIDI note number 0..=127, velocity 0..=127.
-    NoteOn { note: u8, velocity: u8 },
-    NoteOff { note: u8 },
+    /// `id` pairs note-on/off across overlapping notes of the same pitch.
+    NoteOn {
+        id: u64,
+        note: u8,
+        velocity: u8,
+    },
+    NoteOff {
+        id: u64,
+        note: u8,
+    },
     /// Generic parameter automation point. `id` is node-defined.
-    ParamValue { id: u32, value: f32 },
+    ParamValue {
+        id: u32,
+        value: f32,
+    },
 }
 
 /// One event and its position inside the current block.
@@ -44,7 +54,7 @@ impl EventList {
     pub const fn empty() -> Self {
         const DUMMY: TimedEvent = TimedEvent {
             offset: 0,
-            event: Event::NoteOff { note: 0 },
+            event: Event::NoteOff { id: 0, note: 0 },
         };
         Self {
             buf: [DUMMY; MAX_EVENTS],
@@ -67,6 +77,23 @@ impl EventList {
         true
     }
 
+    /// Insert by sample offset with deterministic ordering at equal offsets:
+    /// note-offs, parameter changes, then note-ons. This lets a retrigger end
+    /// the old voice before starting the new one without allocating a sort
+    /// buffer on the realtime thread.
+    pub fn push_ordered(&mut self, event: TimedEvent) -> bool {
+        if self.len == MAX_EVENTS {
+            return false;
+        }
+        let key = event_sort_key(&event);
+        let index =
+            self.buf[..self.len].partition_point(|existing| event_sort_key(existing) <= key);
+        self.buf.copy_within(index..self.len, index + 1);
+        self.buf[index] = event;
+        self.len += 1;
+        true
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -80,6 +107,15 @@ impl EventList {
     }
 }
 
+fn event_sort_key(event: &TimedEvent) -> (u32, u8) {
+    let priority = match event.event {
+        Event::NoteOff { .. } => 0,
+        Event::ParamValue { .. } => 1,
+        Event::NoteOn { .. } => 2,
+    };
+    (event.offset, priority)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +127,7 @@ mod tests {
             assert!(list.push(TimedEvent {
                 offset: i * 10,
                 event: Event::NoteOn {
+                    id: u64::from(i),
                     note: 60 + i as u8,
                     velocity: 100,
                 },
@@ -109,13 +146,34 @@ mod tests {
         for _ in 0..MAX_EVENTS {
             assert!(list.push(TimedEvent {
                 offset: 0,
-                event: Event::NoteOff { note: 0 },
+                event: Event::NoteOff { id: 0, note: 0 },
             }));
         }
         assert!(!list.push(TimedEvent {
             offset: 0,
-            event: Event::NoteOff { note: 0 },
+            event: Event::NoteOff { id: 0, note: 0 },
         }));
         assert_eq!(list.len(), MAX_EVENTS);
+    }
+
+    #[test]
+    fn ordered_insert_puts_note_off_before_retrigger() {
+        let mut list = EventList::empty();
+        assert!(list.push_ordered(TimedEvent {
+            offset: 12,
+            event: Event::NoteOn {
+                id: 2,
+                note: 60,
+                velocity: 100
+            },
+        }));
+        assert!(list.push_ordered(TimedEvent {
+            offset: 12,
+            event: Event::NoteOff { id: 1, note: 60 },
+        }));
+        assert!(matches!(
+            list.iter().next().unwrap().event,
+            Event::NoteOff { id: 1, .. }
+        ));
     }
 }

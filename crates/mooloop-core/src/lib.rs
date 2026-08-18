@@ -11,6 +11,9 @@ pub mod time;
 
 pub use bridge::{EngineCommand, EngineEvent};
 pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_PATTERNS};
-pub use pattern::{ChannelPattern, Pattern, Step, DEFAULT_STEPS, MAX_PATTERN_STEPS};
+pub use pattern::{
+    ChannelPattern, NoteEvent, NoteId, Pattern, Step, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
+    MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, TICKS_PER_64TH, TICKS_PER_STEP,
+};
 pub use sampler::{clamp01, LoopMode, SamplerParams};
 pub use time::{ticks_per_sample, Ppq, Samples, Ticks};

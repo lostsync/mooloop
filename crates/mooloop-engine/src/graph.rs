@@ -170,6 +170,22 @@ impl Graph {
                 note,
                 velocity,
             ),
+            EngineCommand::UpsertNote {
+                pattern,
+                channel,
+                note,
+            } => {
+                self.sequencer
+                    .upsert_note(pattern as usize, channel as usize, note);
+            }
+            EngineCommand::RemoveNote {
+                pattern,
+                channel,
+                id,
+            } => {
+                self.sequencer
+                    .remove_note(pattern as usize, channel as usize, id);
+            }
             EngineCommand::SetChannelSamplerParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.instrument.set_params(params);
