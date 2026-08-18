@@ -460,8 +460,12 @@ impl AppUi {
         }
         {
             let tx = cmd_tx.clone();
+            let weak = window.as_weak();
             window.on_stop_clicked(move || {
                 dbg_log("UI: stop clicked, queuing Stop");
+                if let Some(window) = weak.upgrade() {
+                    window.set_playing(false);
+                }
                 let _ = tx.send(EngineCommand::Stop);
             });
         }
@@ -481,6 +485,9 @@ impl AppUi {
                 } else {
                     "UI: toggle-play -> Play"
                 });
+                if let Some(window) = weak.upgrade() {
+                    window.set_playing(!playing);
+                }
                 let _ = tx.send(if playing {
                     EngineCommand::Pause
                 } else {

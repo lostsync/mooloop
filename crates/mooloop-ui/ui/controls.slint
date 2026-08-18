@@ -36,12 +36,7 @@ export component ToolButton inherits Rectangle {
     tap := TouchArea {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
-        pointer-event(e) => {
-            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
-                button-keyboard.focus();
-                root.clicked();
-            }
-        }
+        clicked => { root.clicked(); }
     }
 
     button-keyboard := FocusScope {
