@@ -54,10 +54,17 @@ the actual events.
 
 ### Channels As Instruments And Memory
 
-A channel combines a sound source, a working audio buffer, playback voices,
-processing, and a mixer output. Patterns can address notes, source parameters,
-buffer record/play heads, and effects through the same event and parameter
-system.
+A channel combines a sound source, a continuously written working audio
+buffer, playback heads, processing, and a mixer output. In the ordinary state,
+the read head follows the write head and the stage behaves like a transparent
+bridge between source generation and downstream DSP. Patterns can make that
+head jump into recent history, change direction or rate, repeat a window, or
+otherwise treat every generated source as sampled material in realtime.
+
+Controls operate on PCM sample frames, not opaque encoded file bytes. The
+source already has to produce discrete samples for the audio graph; the working
+buffer keeps those samples addressable after the current process block would
+normally be discarded.
 
 This is the proposed differentiator. It is still a product hypothesis and must
 pass the spike in `BUFFER_ENGINE.md` before the whole architecture is committed
@@ -71,8 +78,8 @@ groovebox sampler.
 
 Synths are sound sources that participate in the same channel and buffer model.
 The first synths should be chosen because they create useful material for
-capture and manipulation, not to fill out a conventional workstation feature
-matrix.
+continuous capture and manipulation, not to fill out a conventional workstation
+feature matrix.
 
 ### One Automation Language
 

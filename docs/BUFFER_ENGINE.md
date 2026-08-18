@@ -6,18 +6,34 @@ engine contract.
 ## Thesis
 
 Each channel owns musical audio memory, not merely an input instrument and an
-output mixer strip. A sound source can write into a bounded working buffer;
-sequenced playback heads can immediately read regions of that buffer; parameter
-events can move record and playback behavior with the same precision as notes.
+output mixer strip. Every sound source continuously writes its generated PCM
+frames into a bounded circular working buffer before downstream channel DSP.
+One or more read heads immediately turn that recent history back into the live
+channel signal. Parameter events can move those heads with the same precision
+as notes.
+
+In normal operation, a read head follows the write head at a defined minimal
+latency, so the stage behaves like a transparent connection. It becomes an
+instrument when the head detaches: it can jump backward, reverse, change rate,
+repeat a window, hold, scrub, or return to live following. Everything is
+therefore sampled while it is generated without requiring a separate record
+gesture.
 
 This should make a short loop of actions possible without stopping transport:
 
 ```text
-play -> catch -> retrigger -> offset -> reverse -> overwrite -> repeat
+play -> hear live -> jump into history -> reverse -> repeat -> return live
 ```
 
-The point is not automatic freezing. The point is that retained audio is a
-normal, visible part of the channel's state and can participate in composition.
+The point is not automatic freezing or conventional render-to-sample. The point
+is that short-term retained audio is the ordinary bridge between generation and
+processing, and its read behavior can participate in composition.
+
+The existing engine already renders instruments into an `f32` stereo bus for
+each JACK block. That scratch bus is cleared on the next callback, so it only
+contains the present. The proposed stage extends the lifetime of those same
+sample frames in a circular buffer. It does not add a vector-to-bitmap
+conversion or manipulate encoded WAV bytes.
 
 ## Adjacent Ideas
 
@@ -32,8 +48,8 @@ The ingredients are established:
   for tracker-style manipulation.
 
 Mooloop should not claim to invent realtime resampling. The narrower product
-hypothesis is that source, retained buffer, sequencer, parameter lanes, and
-channel routing can be one coherent everyday workflow instead of separate
+hypothesis is that an always-running source buffer, sequencer, parameter lanes,
+and channel DSP can be one coherent everyday workflow instead of separate
 record, render, edit, and reload modes.
 
 Primary references:
@@ -49,68 +65,68 @@ Primary references:
 ```text
 timed events
     |
-    +-> source instrument -> source bus ----+----> source monitor
-                                           |
-                                           +----> record head
-                                                     |
-                                                     v
-                                              working buffer
-                                                     |
-timed events --------------------------------> buffer voice(s)
-                                                     |
-source monitor + buffer voices ----------------------+
-                                                     v
-                                              insert chain
-                                                     v
-                                                strip mix
+    +-> source instrument -> write head -> circular working buffer
+                                                   |
+timed events -------------------------------> read head(s)
+                                                   |
+                                                   v
+                                            downstream DSP
+                                                   |
+                                                   v
+                                               strip mix
 ```
 
-The source and buffer paths are distinct even when they share a channel. A
-monitor mode makes their relationship explicit:
-
-- `Source`: hear the generator while retaining or recording audio.
-- `Buffer`: hear only playback heads reading retained audio.
-- `Layer`: hear both intentionally.
-
-This avoids accidental feedback and makes capture state understandable.
+The default read mode is `Follow`: the primary read head tracks newly written
+samples and the channel sounds live. A manipulation temporarily changes that
+relationship. `Jump`, `Loop`, `Reverse`, `Rate`, `Hold`, and `Return Live` are
+read-head behaviors, not file-editing modes. An explicit bypass may remain as a
+safety comparison, but a Source/Buffer monitor switch is not the core design.
 
 ## Working Buffer Semantics
 
-The first implementation should have one fixed-capacity stereo buffer per
-spiked channel, allocated off the audio thread. Capacity is a project or engine
-budget, not an unbounded user allocation.
+The first implementation should have one fixed-capacity stereo circular buffer
+on one spiked channel, allocated off the audio thread. Capacity is a project or
+engine budget, not an unbounded user allocation. The write head advances while
+the source renders and wraps without user intervention.
 
 Required state:
 
-- Empty, armed, recording, and retained states.
-- A visible write head and one visible playback region.
-- Capture start and length in musical ticks, with a free-time option deferred.
-- Explicit source tap. The spike starts pre-insert; later post-insert capture
-  must be a deliberate routing choice.
-- Defined behavior when a read head reaches a region being written. The spike
-  should forbid ambiguous overlap or specify a one-block-old read snapshot.
-- Clear, replace, and snapshot operations that never free large memory on the
-  realtime thread.
+- A visible write head, read head, history span, and active read window.
+- Follow state versus detached/manipulated state.
+- Read offset behind the write head, region length, direction, and rate.
+- A sample-accurate `Return Live` operation.
+- Defined behavior when a read head reaches the write head. The spike should
+  keep a small protected distance or read a defined prior sample.
+- Optional freeze, clear, and snapshot operations that never free large memory
+  on the realtime thread.
+- An explicit buffer placement. The spike sits immediately after the source
+  and before channel inserts; later feedback or post-insert buffering must be a
+  deliberate routing design.
 
-The buffer contents are working audio. Saving a project writes retained buffers
-as project-owned WAV assets and references them from the text project file.
+The rolling history is working audio and need not all become a project asset.
+If an arrangement depends on a frozen or detached region, project save writes a
+coherent snapshot as a project-owned WAV asset and references it from the text
+project file.
 
 ## Sequencer Contract
 
-Notes and parameter events may target either the source or buffer playback
-voice. The first buffer voice needs:
+Notes continue to target the source. Parameter events control the buffer stage
+and its read heads. A future channel may also trigger buffer regions as pitched
+voices, but the first proof is manipulation of the continuously running signal.
 
-- Region start and end.
-- Playback rate or pitch.
+The first read head needs:
+
+- Follow or detached state.
+- Offset behind the write head and window length.
+- Playback rate.
 - Forward and reverse direction.
-- One-shot and loop behavior.
-- Velocity or gain.
-- Note duration and release behavior.
+- One-shot, loop, hold, and return-live behavior.
+- Gain and short crossfades at discontinuities.
 
-The shared parameter system should later expose record enable, write position,
-feedback/overdub amount, region selection, read offset, rate, direction, and
-loop boundaries. Buffer-specific lanes must not become a second automation
-engine.
+The shared parameter system should later expose read offset, window length,
+rate, direction, repeat, hold, return-live, freeze, and possibly write feedback
+or overwrite behavior. Buffer-specific lanes must not become a second
+automation engine.
 
 ## Realtime And Memory Constraints
 
@@ -127,13 +143,14 @@ engine.
 
 Build the spike on one channel before changing every strip:
 
-1. Capture one beat or bar from the current channel source while transport
-   runs.
-2. Switch explicitly between Source, Buffer, and Layer monitoring.
-3. Trigger the retained region from the existing note/event pipeline.
-4. Sequence region offset, playback rate, and reverse.
-5. Clear or recapture without stopping transport.
-6. Save and reload the retained audio with a minimal project document.
+1. Continuously write the current channel source into a short stereo ring.
+2. Pass live audio through a following read head with no surprising coloration
+   or timing shift.
+3. Detach the head and sequence read offset, window length, rate, reverse, and
+   return-live actions.
+4. Crossfade discontinuities enough to prevent accidental clicks while still
+   allowing intentionally abrupt edits.
+5. Freeze a useful window and restore it with a minimal project document.
 
 Use the existing sampler as the first source if that reduces implementation
 risk. A small percussion generator can follow only if it is needed to prove
@@ -141,18 +158,20 @@ that generated audio and retained audio form a useful loop.
 
 ## Success Test
 
-Keep the design only if a user can make an audible source, capture it, and turn
-it into a recognizably different rhythmic part in under a minute, without file
-dialogs or leaving the pattern workflow.
+Keep the design only if a user can make an audible source and turn its rolling
+recent history into a recognizably different rhythmic part in under a minute,
+without arming a recorder, opening file dialogs, or leaving the pattern
+workflow.
 
 It must also pass these engineering tests:
 
 - No allocation, locks, I/O, or large-object destruction in the JACK callback.
-- Deterministic capture boundaries across varying block sizes.
-- Defined results for transport stop, recapture, tempo change, and project
-  reload.
-- Buffer contents and monitor mode are always visible.
+- Deterministic write/read-head behavior across varying block sizes.
+- Defined results for wraparound, read/write proximity, transport stop, tempo
+  change, and project reload.
+- Buffer history and head states are always visible.
 
-Reject or revise the thesis if the result is merely a slower version of
-render-to-sample, if users cannot tell which signal is audible, or if persistence
-and memory costs dominate the musical benefit.
+Reject or revise the thesis if the normal Follow state cannot behave like a
+trustworthy source-to-DSP bridge, if manipulation is merely a slower version of
+a stutter effect, or if persistence and memory costs dominate the musical
+benefit.

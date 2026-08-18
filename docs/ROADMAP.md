@@ -89,12 +89,12 @@ looper, destructive audio editor, or large synth suite during this phase.
 
 Exit criteria:
 
-- A running channel can capture a musically timed region without stopping
-  transport.
-- The captured region can immediately be retriggered, offset, pitched,
-  reversed, and resequenced.
-- Buffer state is understandable, undoable or resettable, persistable, and
-  realtime safe.
+- A running channel continuously retains a bounded span of source audio without
+  a record gesture or transport stop.
+- A following read head behaves like a trustworthy live bridge, then can jump,
+  loop, change rate, reverse, and return live under sequencer control.
+- Head and history state are understandable, resettable, persistable when
+  musically required, and realtime safe.
 - The workflow produces something materially faster or different than manual
   bounce-to-sample. If it does not, revise or reject the thesis.
 
@@ -111,7 +111,8 @@ Scope:
 - Realtime-safe fixed-capacity insert editing, bypass, ordering, and state.
 - A small authored initial effect set: filter, delay, saturation/color, and
   utility dynamics or EQ only where the signal flow needs them.
-- Buffer capture tap points explicitly account for pre/post insert placement.
+- Buffer placement explicitly accounts for pre/post insert signal flow and any
+  future feedback path.
 
 Exit criteria:
 
