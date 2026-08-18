@@ -1,0 +1,487 @@
+//! A percussive synth: kicks, snares, and hats generated per trigger, with no
+//! sample data involved. It slots into a channel exactly like the sampler —
+//! same `AudioNode` trait, same segment-based, sample-accurate event
+//! handling.
+//!
+//! One channel plays one [`DrumMode`] at a time, matching the
+//! one-sound-per-channel groovebox model. Knobs for the other modes are
+//! retained in [`DrumSynthParams`] so switching modes never loses settings.
+//!
+//! Voices are a small fixed pool: each trigger grabs a free voice or steals
+//! the oldest, like the sampler's bounded voice allocation. Drums are
+//! one-shot by nature; note-offs are ignored and `Choke` fast-fades every
+//! ringing voice.
+
+use crate::bus::StereoBus;
+use crate::env::ExpDecay;
+use crate::event::{Event, EventList};
+use crate::filter::{apply_drive, OnePoleHp};
+use crate::node::{AudioNode, ProcessContext};
+use crate::osc::{Noise, Osc};
+use mooloop_core::{DrumMode, DrumSynthParams, OscWave, MAX_DRUM_VOICES};
+
+/// Fast fade used for chokes and transport stops (seconds). The coefficient
+/// is scaled so the fade effectively completes within this window rather than
+/// treating it as a single time constant.
+const CHOKE_DECAY_S: f32 = 0.005;
+
+/// Time constants needed for an exponential decay to fall below audibility.
+const DECAY_TAIL_CONSTANTS: f32 = 9.2;
+
+/// Beater click duration for the kick (seconds).
+const CLICK_S: f32 = 0.003;
+
+/// The two detuned square frequencies (Hz, before keyboard tracking) that
+/// give the hat its metallic edge.
+const HAT_METAL_A_HZ: f32 = 587.33;
+const HAT_METAL_B_HZ: f32 = 845.07;
+
+/// One independently enveloped drum hit.
+struct DrumVoice {
+    active: bool,
+    age: u64,
+    mode: DrumMode,
+    amp_env: ExpDecay,
+    noise_env: ExpDecay,
+    sweep_env: ExpDecay,
+    body_osc: Osc,
+    metal_osc_a: Osc,
+    metal_osc_b: Osc,
+    hp: OnePoleHp,
+    noise: Noise,
+    /// Keyboard tracking multiplier resolved at trigger time.
+    pitch_factor: f32,
+    velocity_amp: f32,
+    click_remaining: u32,
+    click_total: u32,
+}
+
+impl DrumVoice {
+    fn new(seed: u32) -> Self {
+        Self {
+            active: false,
+            age: 0,
+            mode: DrumMode::Kick,
+            amp_env: ExpDecay::new(),
+            noise_env: ExpDecay::new(),
+            sweep_env: ExpDecay::new(),
+            body_osc: Osc::new(),
+            metal_osc_a: Osc::new(),
+            metal_osc_b: Osc::new(),
+            hp: OnePoleHp::new(),
+            noise: Noise::new(seed),
+            pitch_factor: 1.0,
+            velocity_amp: 0.0,
+            click_remaining: 0,
+            click_total: 1,
+        }
+    }
+
+    fn choke(&mut self, sample_rate: u32) {
+        let coeff = (-DECAY_TAIL_CONSTANTS / (CHOKE_DECAY_S * sample_rate as f32)).exp();
+        self.amp_env.set_coeff(coeff);
+        self.noise_env.set_coeff(coeff);
+        self.click_remaining = 0;
+    }
+}
+
+/// The drum synth node.
+pub struct DrumSynth {
+    params: DrumSynthParams,
+    sample_rate: u32,
+    voices: [DrumVoice; MAX_DRUM_VOICES as usize],
+    next_age: u64,
+}
+
+impl DrumSynth {
+    pub fn new(params: DrumSynthParams, sample_rate: u32) -> Self {
+        let voices = std::array::from_fn(|index| DrumVoice::new(0x9E37_79B9 + index as u32));
+        Self {
+            params,
+            sample_rate,
+            voices,
+            next_age: 1,
+        }
+    }
+
+    /// Replace the parameter set. Called from the RT command drain.
+    pub fn set_params(&mut self, params: DrumSynthParams) {
+        self.params = params;
+    }
+
+    fn select_voice(&self) -> usize {
+        if let Some(index) = self.voices.iter().position(|voice| !voice.active) {
+            return index;
+        }
+        self.voices
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, voice)| voice.age)
+            .map(|(index, _)| index)
+            .unwrap_or(0)
+    }
+
+    fn trigger(&mut self, note: u8, velocity: u8) {
+        let params = self.params;
+        let sr = self.sample_rate;
+        let index = self.select_voice();
+        let age = self.next_age;
+        self.next_age = self.next_age.wrapping_add(1).max(1);
+
+        // Keyboard tracking relative to middle C, plus the tune knob.
+        let semitones = f32::from(note.min(127)) - 60.0 + params.tune_semitones.clamp(-48.0, 48.0);
+        let voice = &mut self.voices[index];
+        voice.active = true;
+        voice.age = age;
+        voice.mode = params.mode;
+        voice.pitch_factor = 2.0_f32.powf(semitones / 12.0);
+        voice.velocity_amp = f32::from(velocity) / 127.0;
+        voice.body_osc.reset();
+        voice.metal_osc_a.reset();
+        voice.metal_osc_b.reset();
+        voice.amp_env.set_time(params.decay, sr);
+        voice.amp_env.trigger();
+        match params.mode {
+            DrumMode::Kick => {
+                voice.sweep_env.set_time(params.kick_sweep, sr);
+                voice.sweep_env.trigger();
+                voice.noise_env.set_coeff(0.0);
+                voice.click_total = (CLICK_S * sr as f32).max(1.0) as u32;
+                voice.click_remaining = voice.click_total;
+            }
+            DrumMode::Snare => {
+                voice.noise_env.set_time(params.snare_noise_decay, sr);
+                voice.noise_env.trigger();
+                voice.click_remaining = 0;
+            }
+            DrumMode::Hat => {
+                voice.hp.set_cutoff(params.hat_hp_hz, sr);
+                voice.noise_env.set_coeff(0.0);
+                voice.click_remaining = 0;
+            }
+        }
+    }
+
+    fn choke(&mut self) {
+        let sr = self.sample_rate;
+        for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+            voice.choke(sr);
+        }
+    }
+
+    /// Render one sample of one voice. Mono by design; the channel pan/gain
+    /// stage places it in the stereo field.
+    fn render_sample(params: DrumSynthParams, sample_rate: u32, voice: &mut DrumVoice) -> f32 {
+        voice.amp_env.advance();
+        voice.noise_env.advance();
+        let amp = voice.velocity_amp;
+        let out = match voice.mode {
+            DrumMode::Kick => {
+                voice.sweep_env.advance();
+                let sweep = voice.sweep_env.level();
+                let end_hz = params.kick_end_hz.max(1.0);
+                let ratio = (params.kick_start_hz.max(1.0) / end_hz).max(1.0);
+                let freq = end_hz * ratio.powf(sweep) * voice.pitch_factor;
+                let body = voice.body_osc.next_sample(freq, OscWave::Sine, 0.5, sample_rate);
+                let click = if voice.click_remaining > 0 {
+                    voice.click_remaining -= 1;
+                    let fade = voice.click_remaining as f32 / voice.click_total as f32;
+                    voice.noise.next_sample() * params.kick_click * fade
+                } else {
+                    0.0
+                };
+                (body + click) * voice.amp_env.level() * amp
+            }
+            DrumMode::Snare => {
+                let freq = params.snare_tone_hz * voice.pitch_factor;
+                let body = voice.body_osc.next_sample(freq, OscWave::Sine, 0.5, sample_rate)
+                    * voice.amp_env.level();
+                let noise = voice.noise.next_sample() * voice.noise_env.level();
+                let mix = params.snare_noise_mix.clamp(0.0, 1.0);
+                ((1.0 - mix) * body + mix * noise) * amp
+            }
+            DrumMode::Hat => {
+                let metal = (voice.metal_osc_a.next_sample(
+                    HAT_METAL_A_HZ * voice.pitch_factor,
+                    OscWave::Pulse,
+                    0.5,
+                    sample_rate,
+                ) + voice.metal_osc_b.next_sample(
+                    HAT_METAL_B_HZ * voice.pitch_factor,
+                    OscWave::Pulse,
+                    0.5,
+                    sample_rate,
+                )) * 0.5;
+                let metallic = params.hat_metallic.clamp(0.0, 1.0);
+                let source = metallic * metal + (1.0 - metallic) * voice.noise.next_sample();
+                voice.hp.next_sample(source) * voice.amp_env.level() * amp
+            }
+        };
+        apply_drive(out, params.drive)
+    }
+
+    fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        let params = self.params;
+        let sample_rate = self.sample_rate;
+        for voice in &mut self.voices {
+            if !voice.active {
+                continue;
+            }
+            for i in start..end {
+                let sample = Self::render_sample(params, sample_rate, voice);
+                bus.l[i] += sample;
+                bus.r[i] += sample;
+                if voice.amp_env.is_idle() && voice.noise_env.is_idle() {
+                    voice.active = false;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+impl AudioNode for DrumSynth {
+    fn process(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        _events_out: Option<&mut EventList>,
+    ) {
+        let frames = ctx.frames.min(bus.capacity());
+
+        if !ctx.playing {
+            self.choke();
+        }
+
+        // Split the block at event offsets: render, apply event, repeat.
+        let mut pos = 0usize;
+        for ev in events_in.iter() {
+            let off = (ev.offset as usize).min(frames).max(pos);
+            self.render_range(bus, pos, off);
+            match ev.event {
+                Event::NoteOn { note, velocity, .. } => self.trigger(note, velocity),
+                // Drums are one-shot; note-offs end nothing.
+                Event::NoteOff { .. } => {}
+                Event::Choke => self.choke(),
+                Event::ParamValue { .. } => {}
+            }
+            pos = off;
+        }
+        self.render_range(bus, pos, frames);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::TimedEvent;
+
+    fn make_synth(sr: u32, params: DrumSynthParams) -> DrumSynth {
+        DrumSynth::new(params, sr)
+    }
+
+    fn ctx(frames: usize, sr: u32) -> ProcessContext {
+        ProcessContext {
+            sample_rate: sr,
+            frames,
+            playing: true,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        }
+    }
+
+    fn note_on(offset: u32, note: u8) -> TimedEvent {
+        TimedEvent {
+            offset,
+            event: Event::NoteOn {
+                id: 0,
+                note,
+                velocity: 127,
+            },
+        }
+    }
+
+    #[test]
+    fn idle_is_silent() {
+        let sr = 48_000;
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        let mut bus = StereoBus::with_capacity(256);
+        synth.process(&ctx(256, sr), &mut bus, &EventList::empty(), None);
+        assert_eq!(bus.peak(256), (0.0, 0.0));
+    }
+
+    #[test]
+    fn note_on_at_offset_is_sample_accurate() {
+        let sr = 48_000;
+        let frames = 512;
+        let k = 200usize;
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on(k as u32, 60));
+
+        synth.process(&ctx(frames, sr), &mut bus, &events, None);
+
+        assert!(bus.l[..k].iter().all(|s| *s == 0.0));
+        assert!(bus.l[k..].iter().any(|s| s.abs() > 0.01));
+    }
+
+    #[test]
+    fn every_mode_makes_sound_and_terminates() {
+        let sr = 48_000;
+        for mode in DrumMode::all() {
+            let params = DrumSynthParams::preset(mode);
+            let mut synth = make_synth(sr, params);
+            let mut bus = StereoBus::with_capacity(sr as usize);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 60));
+            synth.process(&ctx(sr as usize, sr), &mut bus, &events, None);
+            let (pl, pr) = bus.peak(sr as usize);
+            assert!(pl > 0.05, "{mode:?} too quiet: {pl}");
+            assert_eq!(pl, pr, "{mode:?} should render mono");
+            // Exponential decays idle after ~9.2 time constants; the longest
+            // default is the kick at 0.35 s. Four seconds covers everything.
+            let mut bus = StereoBus::with_capacity(sr as usize);
+            for _ in 0..3 {
+                bus.clear(sr as usize);
+                synth.process(&ctx(sr as usize, sr), &mut bus, &EventList::empty(), None);
+            }
+            assert!(
+                synth.voices.iter().all(|voice| !voice.active),
+                "{mode:?} still ringing"
+            );
+        }
+    }
+
+    #[test]
+    fn kick_decays_after_the_hit() {
+        let sr = 48_000;
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        let mut bus = StereoBus::with_capacity(sr as usize);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60));
+        synth.process(&ctx(sr as usize, sr), &mut bus, &events, None);
+        let first_peak = bus.l[..2400]
+            .iter()
+            .fold(0.0_f32, |peak, s| peak.max(s.abs()));
+        let late_peak = bus.l[24000..]
+            .iter()
+            .fold(0.0_f32, |peak, s| peak.max(s.abs()));
+        assert!(first_peak > 0.5);
+        assert!(late_peak < first_peak * 0.2);
+    }
+
+    #[test]
+    fn note_off_does_not_stop_a_hit() {
+        let sr = 48_000;
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        let mut bus = StereoBus::with_capacity(512);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60));
+        events.push(TimedEvent {
+            offset: 64,
+            event: Event::NoteOff { id: 0, note: 60 },
+        });
+        synth.process(&ctx(512, sr), &mut bus, &events, None);
+        assert!(synth.voices[0].active);
+        assert!(bus.l[128..].iter().any(|s| s.abs() > 0.01));
+    }
+
+    #[test]
+    fn choke_silences_quickly() {
+        let sr = 48_000;
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        let mut bus = StereoBus::with_capacity(4096);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60));
+        events.push(TimedEvent {
+            offset: 100,
+            event: Event::Choke,
+        });
+        synth.process(&ctx(4096, sr), &mut bus, &events, None);
+        // The 5 ms fade completes shortly after the choke at offset 100.
+        assert!(bus.l[1000..].iter().all(|s| s.abs() < 0.001));
+        assert!(synth.voices.iter().all(|voice| !voice.active));
+    }
+
+    #[test]
+    fn stopping_transport_chokes_ringing_voices() {
+        let sr = 48_000;
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        let mut bus = StereoBus::with_capacity(64);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60));
+        synth.process(&ctx(64, sr), &mut bus, &events, None);
+
+        let mut stopped = ctx(64, sr);
+        stopped.playing = false;
+        synth.process(&stopped, &mut bus, &EventList::empty(), None);
+
+        let mut bus = StereoBus::with_capacity(4096);
+        synth.process(&ctx(4096, sr), &mut bus, &EventList::empty(), None);
+        assert!(synth.voices.iter().all(|voice| !voice.active));
+    }
+
+    #[test]
+    fn voice_pool_overflow_steals_the_oldest() {
+        let sr = 48_000;
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        for _ in 0..MAX_DRUM_VOICES + 4 {
+            synth.trigger(60, 100);
+        }
+        assert!(synth.voices.iter().all(|voice| voice.active));
+        // Ages are unique and dense: the oldest voices were stolen.
+        let mut ages: Vec<u64> = synth.voices.iter().map(|voice| voice.age).collect();
+        ages.sort_unstable();
+        assert_eq!(ages, (5..=MAX_DRUM_VOICES as u64 + 4).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn midi_note_shifts_kick_pitch() {
+        let sr = 48_000;
+        let period_of = |note: u8| {
+            let params = DrumSynthParams {
+                kick_sweep: 10.0, // effectively no sweep; isolates tracking
+                decay: 0.5,
+                ..DrumSynthParams::default()
+            };
+            let mut synth = make_synth(sr, params);
+            let mut bus = StereoBus::with_capacity(4096);
+            let mut events = EventList::empty();
+            events.push(note_on(0, note));
+            synth.process(&ctx(4096, sr), &mut bus, &events, None);
+            // Count upward zero crossings in a steady region.
+            let mut crossings = 0u32;
+            for window in bus.l[480..2400].windows(2) {
+                if window[0] <= 0.0 && window[1] > 0.0 {
+                    crossings += 1;
+                }
+            }
+            crossings
+        };
+        let low = period_of(48);
+        let high = period_of(60);
+        // One octave up doubles the frequency: kick_end 48 Hz * 2 vs 4x from
+        // middle C... exact ratio is what matters, not the absolute value.
+        assert_eq!(high, low * 2);
+    }
+
+    #[test]
+    fn drive_stays_bounded() {
+        let sr = 48_000;
+        let params = DrumSynthParams {
+            drive: 1.0,
+            kick_click: 1.0,
+            ..DrumSynthParams::default()
+        };
+        let mut synth = make_synth(sr, params);
+        let mut bus = StereoBus::with_capacity(2048);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60));
+        synth.process(&ctx(2048, sr), &mut bus, &events, None);
+        let (pl, _) = bus.peak(2048);
+        assert!(pl <= 1.0);
+    }
+}

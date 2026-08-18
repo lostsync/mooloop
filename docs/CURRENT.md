@@ -73,6 +73,9 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 ## Useful Foundations
 
 - `AudioNode` provides one in-place DSP interface for instruments and effects.
+- `DrumSynth` (kick/snare/hat) and `MonoSynth` (three-oscillator, mono, glide)
+  implement that interface with parameters in `mooloop-core`, but are not yet
+  wired into channels, the bridge, or the UI.
 - `EventList` carries fixed-capacity, sample-timed NoteOn, NoteOff, and generic
   ParamValue events.
 - `StereoBus` ownership is centralized in the graph, leaving room for sends,
@@ -81,7 +84,8 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
   64th notes and triplet grids.
 - Pattern and channel capacity are bounded for realtime safety.
 - DSP tests cover sampler pitch, trim, loops, envelopes, filter behavior,
-  reverse playback, and lo-fi stages.
+  reverse playback, and lo-fi stages, plus drum synth and mono synth voice,
+  envelope, glide, and filter behavior.
 
 ## Important Limitations
 
