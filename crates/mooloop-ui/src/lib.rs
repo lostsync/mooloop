@@ -64,6 +64,8 @@ fn sync_appearance_properties(window: &MainWindow, appearance: &AppearanceSettin
 struct ChannelState {
     name: String,
     muted: bool,
+    volume: f32,
+    pan: f32,
     params: SamplerParams,
     sample_name: String,
     sample_description: String,
@@ -86,6 +88,8 @@ impl ChannelState {
         Self {
             name: format!("Sampler {}", index + 1),
             muted: false,
+            volume: 0.8,
+            pan: 0.0,
             params: SamplerParams::default(),
             sample_name: "default kick".into(),
             sample_description: default_description,
@@ -225,6 +229,8 @@ impl UiState {
             if let Some(mut row) = self.rows.row_data(i) {
                 row.selected = i == self.selected;
                 row.muted = ch.muted;
+                row.volume = ch.volume;
+                row.pan = ch.pan;
                 row.name = ch.name.as_str().into();
                 self.rows.set_row_data(i, row);
             }
@@ -457,6 +463,8 @@ impl AppUi {
         let row = ChannelRow {
             name: first.name.as_str().into(),
             muted: false,
+            volume: first.volume,
+            pan: first.pan,
             selected: true,
             steps: ModelRc::from(step_model.clone()),
         };
@@ -998,6 +1006,44 @@ impl AppUi {
             });
         }
 
+        // Channel output level and pan.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_channel_volume_changed(move |ch, volume| {
+                let ch = ch as usize;
+                let mut st = st.borrow_mut();
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                channel.volume = volume.clamp(0.0, 1.0);
+                let volume = channel.volume;
+                st.sync_row_flags();
+                let _ = tx.send(EngineCommand::SetChannelVolume {
+                    channel: ch as u8,
+                    volume,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_channel_pan_changed(move |ch, pan| {
+                let ch = ch as usize;
+                let mut st = st.borrow_mut();
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                channel.pan = pan.clamp(-1.0, 1.0);
+                let pan = channel.pan;
+                st.sync_row_flags();
+                let _ = tx.send(EngineCommand::SetChannelPan {
+                    channel: ch as u8,
+                    pan,
+                });
+            });
+        }
+
         // Add / remove channels.
         {
             let tx = cmd_tx.clone();
@@ -1022,6 +1068,8 @@ impl AppUi {
                 let row = ChannelRow {
                     name: ch.name.as_str().into(),
                     muted: false,
+                    volume: ch.volume,
+                    pan: ch.pan,
                     selected: false,
                     steps: ModelRc::from(model.clone()),
                 };
@@ -1438,6 +1486,8 @@ impl AppUi {
                 w.invoke_sampler_polyphony_changed(4);
                 w.invoke_retrigger_mode_changed(1);
                 w.invoke_choke_group_changed(1);
+                w.invoke_channel_volume_changed(0, 0.65);
+                w.invoke_channel_pan_changed(0, -0.25);
                 w.set_editor_page(0);
                 w.invoke_play_clicked();
             });
@@ -1448,7 +1498,7 @@ impl AppUi {
                 println!("commands forwarded by pump : {forwarded}");
                 println!("saw playing=true on window : {saw_playing}");
                 println!("nonzero metering seen     : {max_peak:.4}");
-                let ok = saw_playing && forwarded >= 21;
+                let ok = saw_playing && forwarded >= 23;
                 println!(
                     "RESULT: {}",
                     if ok {

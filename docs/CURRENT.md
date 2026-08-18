@@ -10,7 +10,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - One application window with transport, eight pattern selectors, tempo,
   master peak meters, channel rack, and a lower editor.
 - Up to 16 channels. The UI starts with one sampler channel and can append or
-  remove channels.
+  remove channels. Every rack row exposes mute, output volume, and
+  constant-power stereo pan.
 - Eight patterns with independent logical lengths from 1 to 256 steps. Hidden
   steps survive shortening and re-extending a pattern.
 - Tick-addressed notes with stable IDs, start, duration, MIDI pitch, and
@@ -98,8 +99,7 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 ### Mixing, Routing, And Effects
 
-- Channel gain and pan exist internally but have no complete command/UI path.
-- Only channel mute is exposed. Metering is master-only.
+- Channel mute, volume, and pan are exposed. Metering is master-only.
 - The channel effect vector is empty and there is no realtime-safe graph edit
   protocol for inserting or reordering devices.
 - There are no sends, returns, groups, sidechains, external inputs, or routing

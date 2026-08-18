@@ -18,7 +18,7 @@ Scope:
   narrow-window issues.
 - Establish consistent right-click removal and keyboard navigation.
 - Finish sampler voice controls that do not require the new event model.
-- Add per-channel volume, pan, and meters through the existing strip.
+- Add per-channel meters through the existing strip; volume and pan are exposed.
 - Keep the UI control gallery as the interaction contract.
 
 Exit criteria:

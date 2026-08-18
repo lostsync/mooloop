@@ -104,6 +104,14 @@ impl ChannelStrip {
             muted: false,
         }
     }
+
+    fn set_volume(&mut self, volume: f32) {
+        self.gain = volume.clamp(0.0, 1.0);
+    }
+
+    fn set_pan(&mut self, pan: f32) {
+        self.pan = pan.clamp(-1.0, 1.0);
+    }
 }
 
 pub(crate) struct Graph {
@@ -184,6 +192,16 @@ impl Graph {
             EngineCommand::SetChannelMuted { channel, muted } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.muted = muted;
+                }
+            }
+            EngineCommand::SetChannelVolume { channel, volume } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.set_volume(volume);
+                }
+            }
+            EngineCommand::SetChannelPan { channel, pan } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.set_pan(pan);
                 }
             }
             EngineCommand::SetStep {
@@ -351,6 +369,25 @@ pub(crate) type AsyncClient = jack::AsyncClient<Notifications, Graph>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_strip() -> ChannelStrip {
+        let slot = Arc::new(arc_swap::ArcSwapOption::empty());
+        ChannelStrip::new(Sampler::new(slot, SamplerParams::default(), 48_000))
+    }
+
+    #[test]
+    fn channel_output_controls_are_bounded() {
+        let mut strip = test_strip();
+        strip.set_volume(2.0);
+        strip.set_pan(-2.0);
+        assert_eq!(strip.gain, 1.0);
+        assert_eq!(strip.pan, -1.0);
+
+        strip.set_volume(-1.0);
+        strip.set_pan(2.0);
+        assert_eq!(strip.gain, 0.0);
+        assert_eq!(strip.pan, 1.0);
+    }
 
     #[test]
     fn matching_choke_group_receives_sample_timed_choke() {

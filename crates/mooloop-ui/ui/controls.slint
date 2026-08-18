@@ -263,6 +263,10 @@ export component ParameterFader inherits Rectangle {
     in property <ValueScale> scale: ValueScale.linear;
     in property <AudioOrientation> orientation: AudioOrientation.horizontal;
     in property <bool> enabled: true;
+    in property <bool> bipolar;
+    in property <length> label-width: 34px;
+    in property <length> track-min-width: 112px;
+    in property <length> layout-spacing: 6px;
     in property <color> fill: Theme.accent;
     in property <color> text-color: Theme.text-muted;
     callback changed(float);
@@ -308,18 +312,18 @@ export component ParameterFader inherits Rectangle {
     }
 
     if root.orientation == AudioOrientation.horizontal : HorizontalLayout {
-        spacing: 6px;
+        spacing: root.layout-spacing;
         alignment: start;
         Text {
             text: root.label;
             color: root.text-color;
             font-size: 10px;
             vertical-alignment: center;
-            width: 34px;
+            width: root.label-width;
         }
         horizontal-track := Rectangle {
             horizontal-stretch: 1;
-            min-width: 112px;
+            min-width: root.track-min-width;
             vertical-stretch: 1;
             Rectangle {
                 y: (parent.height - root.track-height) / 2;
@@ -329,11 +333,21 @@ export component ParameterFader inherits Rectangle {
                 border-radius: root.track-height / 2;
             }
             Rectangle {
+                x: root.bipolar ? parent.width * min(root.normalized, 0.5) : 0px;
                 y: (parent.height - root.track-height) / 2;
                 height: root.track-height;
-                width: parent.width * root.normalized;
+                width: root.bipolar
+                    ? parent.width * abs(root.normalized - 0.5)
+                    : parent.width * root.normalized;
                 background: root.enabled ? root.fill : Theme.text-faint;
                 border-radius: root.track-height / 2;
+            }
+            if root.bipolar : Rectangle {
+                x: parent.width / 2;
+                y: (parent.height - root.track-height) / 2 - 2px;
+                width: 1px;
+                height: root.track-height + 4px;
+                background: Theme.text-faint;
             }
             TouchArea {
                 enabled: root.enabled;

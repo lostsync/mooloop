@@ -35,6 +35,10 @@ pub enum EngineCommand {
     RemoveChannel,
     /// Mute/unmute a channel.
     SetChannelMuted { channel: u8, muted: bool },
+    /// Set a channel's linear output volume in [0, 1].
+    SetChannelVolume { channel: u8, volume: f32 },
+    /// Set a channel's stereo pan in [-1, 1].
+    SetChannelPan { channel: u8, pan: f32 },
     /// Toggle or set a step. Addresses the pattern bank so edits to
     /// non-playing patterns take effect when selected.
     SetStep {

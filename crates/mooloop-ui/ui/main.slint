@@ -1,7 +1,7 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
-    ParameterKnob, PeakMeter, SectionLabel as DesignSectionLabel,
+    ParameterFader, ParameterKnob, PeakMeter, SectionLabel as DesignSectionLabel,
     StereoPeakMeter, ToolButton, MuteButton as DesignMuteButton
 } from "controls.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
@@ -29,6 +29,8 @@ struct NoteCell {
 struct ChannelRow {
     name: string,
     muted: bool,
+    volume: float,
+    pan: float,
     selected: bool,
     steps: [StepCell],
 }
@@ -125,6 +127,8 @@ export component MainWindow inherits Window {
     callback step-velocity-edited(int, int, float); // channel, step, normalised velocity
     callback channel-selected(int);
     callback channel-muted(int);
+    callback channel-volume-changed(int, float);
+    callback channel-pan-changed(int, float);
     callback add-channel-clicked();
     callback remove-channel-clicked();
     callback pattern-selected(int);
@@ -382,7 +386,7 @@ export component MainWindow inherits Window {
         // ===== Channel rack: one step-grid row per channel =====
         ScrollView {
             vertical-stretch: 1;
-            viewport-width: max(self.visible-width, 142px + root.pattern-length * 27px);
+            viewport-width: max(self.visible-width, 300px + root.pattern-length * 27px);
             viewport-height: max(self.visible-height, root.channels.length * 32px + 48px);
 
             VerticalBox {
@@ -417,6 +421,37 @@ export component MainWindow inherits Window {
                     MuteButton {
                         muted: row.muted;
                         clicked => { root.channel-muted(ch); }
+                    }
+
+                    ParameterFader {
+                        label: "V";
+                        tooltip: "Channel volume: " + round(row.volume * 100) + "%";
+                        value: row.volume;
+                        default-value: 0.8;
+                        width: 76px;
+                        min-height: 18px;
+                        label-width: 12px;
+                        track-min-width: 56px;
+                        layout-spacing: 4px;
+                        changed(v) => { root.channel-volume-changed(ch, v); }
+                    }
+
+                    ParameterFader {
+                        label: "P";
+                        tooltip: "Channel pan: " + (abs(row.pan) < 0.01 ? "Center"
+                            : row.pan < 0 ? "L " + round(abs(row.pan) * 100)
+                            : "R " + round(row.pan * 100));
+                        value: row.pan;
+                        minimum: -1;
+                        maximum: 1;
+                        default-value: 0;
+                        bipolar: true;
+                        width: 76px;
+                        min-height: 18px;
+                        label-width: 12px;
+                        track-min-width: 56px;
+                        layout-spacing: 4px;
+                        changed(v) => { root.channel-pan-changed(ch, v); }
                     }
 
                     // Beat grouping remains visible at any pattern length.

@@ -23,13 +23,14 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 slint::slint! {
-    import { ToolButton, ParameterKnob } from "../ui/controls.slint";
+    import { ParameterFader, ParameterKnob, ToolButton } from "../ui/controls.slint";
 
     export component ClickHarness inherits Window {
         width: 200px;
         height: 200px;
         callback button-clicked;
         in-out property <float> knob-value: 0.5;
+        in-out property <float> fader-value: 0.5;
 
         ToolButton {
             x: 0px; y: 0px; width: 100px; height: 40px;
@@ -43,12 +44,20 @@ slint::slint! {
             value <=> root.knob-value;
             changed(v) => { root.knob-value = v; }
         }
+
+        ParameterFader {
+            x: 0px; y: 170px;
+            label: "Vol";
+            value <=> root.fader-value;
+            changed(v) => { root.fader-value = v; }
+        }
     }
 }
 
 const BUTTON_CENTER: (f32, f32) = (50.0, 20.0);
 /// Inside the knob dial itself, which sits above the label and readout.
 const KNOB_DIAL: (f32, f32) = (28.0, 82.0);
+const FADER_TRACK: (f32, f32) = (150.0, 181.0);
 
 fn pos(p: (f32, f32)) -> LogicalPosition {
     LogicalPosition::new(p.0, p.1)
@@ -117,5 +126,19 @@ fn knob_responds_to_the_first_drag() {
         ui.get_knob_value() > before,
         "dragging a knob must change its value on the first press (was {before}, now {})",
         ui.get_knob_value()
+    );
+}
+
+#[test]
+fn fader_responds_to_the_first_click() {
+    let ui = harness();
+    let before = ui.get_fader_value();
+
+    click_at(ui.window(), FADER_TRACK);
+
+    assert!(
+        ui.get_fader_value() > before,
+        "clicking a fader must change its value on the first press (was {before}, now {})",
+        ui.get_fader_value()
     );
 }
