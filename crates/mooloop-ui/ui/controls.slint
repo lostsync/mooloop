@@ -36,11 +36,16 @@ export component ToolButton inherits Rectangle {
     tap := TouchArea {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
-        clicked => { root.clicked(); }
+        clicked => { button-keyboard.focus(); root.clicked(); }
     }
 
+    // focus-on-click must stay off: a FocusScope that doesn't yet have focus
+    // swallows the press that would focus it, so the first click on a control
+    // would only highlight it and never reach `tap`. The TouchArea above takes
+    // focus explicitly instead.
     button-keyboard := FocusScope {
         enabled: root.enabled;
+        focus-on-click: false;
         key-pressed(e) => {
             if (e.text == " " || e.text == "\n") { root.clicked(); accept } else { reject }
         }
@@ -232,6 +237,7 @@ export component ParameterKnob inherits Rectangle {
     }
 
     keyboard := FocusScope {
+        focus-on-click: false;
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
                 root.set-normalized(root.normalized
@@ -405,6 +411,7 @@ export component ParameterFader inherits Rectangle {
     }
     fader-keyboard := FocusScope {
         enabled: root.enabled;
+        focus-on-click: false;
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
                 root.set-normalized(root.normalized

@@ -2873,6 +2873,7 @@ name = "mooloop-ui"
 version = "0.1.0"
 dependencies = [
  "hound",
+ "i-slint-backend-testing",
  "mooloop-core",
  "mooloop-dsp",
  "mooloop-engine",
