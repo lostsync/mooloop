@@ -146,8 +146,8 @@ export component ParameterKnob inherits Rectangle {
     private property <float> normalized: root.normalized-value(root.value);
     private property <angle> indicator-angle: (-135deg + root.normalized * 270deg);
 
-    width: 72px;
-    height: 94px;
+    width: 56px;
+    height: 80px;
     accessible-role: slider;
     accessible-label: root.tooltip;
     accessible-value: root.value-text;
@@ -187,16 +187,16 @@ export component ParameterKnob inherits Rectangle {
         alignment: center;
 
         knob-face := Rectangle {
-            width: 58px;
-            height: 58px;
-            border-radius: 29px;
+            width: 44px;
+            height: 44px;
+            border-radius: 22px;
             border-width: knob-touch.has-hover || keyboard.has-focus ? 2px : 1px;
             border-color: keyboard.has-focus ? Theme.focus : Theme.border;
             background: Theme.surface-raised;
 
             Rectangle {
-                x: parent.width / 2 - 3px + sin(root.indicator-angle) * 19px;
-                y: parent.height / 2 - 3px - cos(root.indicator-angle) * 19px;
+                x: parent.width / 2 - 3px + sin(root.indicator-angle) * 15px;
+                y: parent.height / 2 - 3px - cos(root.indicator-angle) * 15px;
                 width: 6px;
                 height: 6px;
                 border-radius: 3px;

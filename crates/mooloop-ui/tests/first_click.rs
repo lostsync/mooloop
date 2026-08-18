@@ -38,7 +38,7 @@ slint::slint! {
         }
 
         ParameterKnob {
-            x: 0px; y: 60px; width: 100px; height: 100px;
+            x: 0px; y: 60px;
             label: "Cutoff";
             value <=> root.knob-value;
             changed(v) => { root.knob-value = v; }
@@ -48,7 +48,7 @@ slint::slint! {
 
 const BUTTON_CENTER: (f32, f32) = (50.0, 20.0);
 /// Inside the knob dial itself, which sits above the label and readout.
-const KNOB_DIAL: (f32, f32) = (50.0, 85.0);
+const KNOB_DIAL: (f32, f32) = (28.0, 82.0);
 
 fn pos(p: (f32, f32)) -> LogicalPosition {
     LogicalPosition::new(p.0, p.1)
