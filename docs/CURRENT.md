@@ -48,6 +48,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   restart/layer retriggering, and 16 cross-channel choke groups.
 - Runtime appearance presets, custom accent persistence, shared audio controls,
   tooltips, and master peak-meter ballistics.
+- A File menu for song, kit, and selected-channel save/load. Song documents use
+  versioned directory bundles with an inspectable TOML manifest and optional
+  copied WAV assets. Missing or corrupt samples warn and load as silent slots.
+- Offline export of exactly one selected-pattern pass in Pattern mode or one
+  derived playlist pass in Song mode, followed by a configurable 0-30 second
+  release tail. Outputs are 24-bit PCM WAV, 32-bit float WAV, or 192/256/320
+  kbps MP3.
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
   bipolar mode (`controls.slint`), LED-segment metering with scales, latching
   clip indicators, gain-reduction and correlation meters (`meters.slint`), and a
@@ -62,7 +69,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 ## Current Audio Path
 
 ```text
-UI commands -> rtrb queue -> transport + pattern/song sequencer
+UI commands -> rtrb queue -> shared render state -> transport + sequencer
                                   |
                                   v
                          timed events/channel
@@ -78,9 +85,10 @@ sample slot -> bounded sampler voices -> empty effect vector -> gain/pan/mute
 ```
 
 The engine preallocates channel strips, pattern storage, event lists, and audio
-buses. The JACK callback drains fixed-size commands, advances transport,
-schedules events at sample offsets, renders each active strip, and publishes
-position and master peak events.
+buses. A JACK-independent render state owns transport, scheduling, instruments,
+effects, mixing, and metering. The JACK adapter drains fixed-size commands into
+that state and publishes position and master peak events; offline export drives
+the same render path without JACK ports.
 
 WAV decode, waveform construction, and directory scanning occur off the audio
 thread. A decoded sample is published through an `ArcSwapOption` slot.
@@ -126,11 +134,14 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 ### State And Persistence
 
-- The UI-side `UiState` is the editable source of truth and mirrors mutations
-  to the engine. It is not a durable project model.
-- There is no project, kit, undo, autosave, recovery, or missing-sample relink
-  format.
-- Several useful core model types are not yet the canonical application state.
+- `mooloop_core::Project` is the canonical serializable snapshot shared by the
+  UI, realtime engine installation, persistence, and offline renderer. The
+  live UI still owns incremental edits and produces snapshots for these paths.
+- Songs, kits, and channel presets use the v1 bundle contract documented in
+  `PROJECT_FORMAT.md`. Saves stage and replace bundles atomically; embedded and
+  referenced asset policies are available per save.
+- Missing samples are recoverable by loading a replacement WAV, but there is no
+  dedicated path-search/relink dialog, undo, autosave, or crash recovery yet.
 
 ### Mixing, Routing, And Effects
 
@@ -145,8 +156,10 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 - Samples are immutable loaded assets. Channels do not yet record their own
   output into working audio memory.
-- The realtime graph is coupled to JACK's process callback and ports. There is
-  no offline render driver or WAV/MP3 export.
+- The render graph is independent of JACK and supports finite offline passes.
+  WAV uses the active JACK sample rate; MP3 renders at 48 kHz through an
+  in-process LAME encoder. Stem/bus export and realtime-vs-offline null testing
+  are not implemented.
 - Replaced sample lifetimes need a deliberate deferred-reclamation design so
   the last large sample allocation can never be freed on the realtime thread.
 
@@ -160,17 +173,13 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 
 ## Architecture Risks To Resolve Early
 
-1. Define a canonical `Project` model before playlist, undo, persistence, and
-   rendering create four competing state representations.
-2. Add probability and explicit microtiming controls without weakening the
+1. Add probability and explicit microtiming controls without weakening the
    tick-addressed event contract before broad automation.
-3. Separate the render graph from the JACK adapter so realtime and offline
-   rendering execute the same DSP path.
-4. Define fixed-capacity device and routing edits before populating the empty
+2. Define fixed-capacity device and routing edits before populating the empty
    effects vector.
-5. Budget channel buffer memory and specify read/write collision behavior
+3. Budget channel buffer memory and specify read/write collision behavior
    before buffers become part of every strip.
-6. Add deferred reclamation for replaced samples, graphs, and future buffers.
+4. Add deferred reclamation for replaced samples, graphs, and future buffers.
 
 ## Verification Commands
 

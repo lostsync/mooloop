@@ -68,6 +68,17 @@ Scope:
 - Swing and groove features built on explicit timing displacement.
 - Extract the render graph from JACK and render offline to WAV.
 
+Implemented foundation:
+
+- The canonical project snapshot, atomic v1 song/kit/channel bundles, optional
+  embedded WAV assets, missing-sample warnings, and transactional loading.
+- A JACK-independent shared render state with one-pass WAV and MP3 export plus
+  a fixed configurable release tail.
+
+Remaining work in this phase includes autosave/recovery, undo, richer missing-
+sample relinking, pattern management, playlist manipulation, explicit loop
+ranges, swing/groove, and realtime/offline comparison tolerances.
+
 Different pattern lengths:
 
 A placement has a start time and references a pattern. Its default duration is
@@ -142,7 +153,7 @@ Scope:
 - MIDI input/output and controller mapping.
 - Plugin hosting.
 - Multiple time signatures and tempo maps.
-- Stem export and compressed delivery formats.
+- Stem and bus export.
 - Groove extraction from audio.
 - A text or algebraic pattern view.
 - Platform support beyond Linux.
