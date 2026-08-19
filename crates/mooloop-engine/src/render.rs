@@ -4,18 +4,22 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    ChannelSource, EngineCommand, Project, SamplerParams, DEFAULT_STEPS, MAX_CHANNELS,
+    ChannelSource, DeviceKind, DrumSynthParams, EngineCommand, MonoSynthParams, Project,
+    SamplerParams, DEFAULT_STEPS, MAX_CHANNELS,
 };
 use mooloop_dsp::{
-    pan_gains, AudioNode, Event, EventList, ProcessContext, SampleData, Sampler, StereoBus,
-    TimedEvent, MAX_BLOCK_SIZE,
+    pan_gains, AudioNode, DrumSynth, Event, EventList, MonoSynth, ProcessContext, SampleData,
+    Sampler, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
 };
 
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
 
 struct ChannelStrip {
-    instrument: Sampler,
+    sampler: Sampler,
+    drum_synth: DrumSynth,
+    mono_synth: MonoSynth,
+    active_source: DeviceKind,
     effects: Vec<Box<dyn AudioNode + Send>>,
     bus: StereoBus,
     gain: f32,
@@ -24,9 +28,12 @@ struct ChannelStrip {
 }
 
 impl ChannelStrip {
-    fn new(instrument: Sampler) -> Self {
+    fn new(sample_slot: Arc<ArcSwapOption<SampleData>>, sample_rate: u32) -> Self {
         Self {
-            instrument,
+            sampler: Sampler::new(sample_slot, SamplerParams::default(), sample_rate),
+            drum_synth: DrumSynth::new(DrumSynthParams::default(), sample_rate),
+            mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
+            active_source: DeviceKind::Sampler,
             effects: Vec::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             gain: 0.8,
@@ -41,6 +48,52 @@ impl ChannelStrip {
 
     fn set_pan(&mut self, pan: f32) {
         self.pan = pan.clamp(-1.0, 1.0);
+    }
+
+    fn reset_sources_to_defaults(&mut self, source: DeviceKind) {
+        self.sampler.reset();
+        self.drum_synth.reset();
+        self.mono_synth.reset();
+        self.sampler.set_params(SamplerParams::default());
+        self.drum_synth.set_params(DrumSynthParams::default());
+        self.mono_synth.set_params(MonoSynthParams::default());
+        self.active_source = source;
+    }
+
+    fn reset_slot(&mut self, source: DeviceKind) {
+        self.reset_sources_to_defaults(source);
+        self.gain = 0.8;
+        self.pan = 0.0;
+        self.muted = false;
+    }
+
+    fn load_source(&mut self, source: &ChannelSource) {
+        self.reset_sources_to_defaults(source.kind());
+        match source {
+            ChannelSource::Sampler(state) => self.sampler.set_params(state.params),
+            ChannelSource::DrumSynth(state) => self.drum_synth.set_params(state.params),
+            ChannelSource::MonoSynth(state) => self.mono_synth.set_params(state.params),
+        }
+    }
+
+    fn choke_group(&self) -> u8 {
+        match self.active_source {
+            DeviceKind::Sampler => self.sampler.choke_group(),
+            DeviceKind::DrumSynth => self.drum_synth.choke_group(),
+            DeviceKind::MonoSynth => 0,
+        }
+    }
+
+    fn process(&mut self, context: &ProcessContext, events: &EventList) {
+        match self.active_source {
+            DeviceKind::Sampler => self.sampler.process(context, &mut self.bus, events, None),
+            DeviceKind::DrumSynth => self
+                .drum_synth
+                .process(context, &mut self.bus, events, None),
+            DeviceKind::MonoSynth => self
+                .mono_synth
+                .process(context, &mut self.bus, events, None),
+        }
     }
 }
 
@@ -94,14 +147,10 @@ pub(crate) struct RenderState {
 }
 
 impl RenderState {
-    pub fn new(
-        sample_rate: u32,
-        sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
-        initial_params: SamplerParams,
-    ) -> Self {
+    pub fn new(sample_rate: u32, sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>) -> Self {
         let strips = sample_slots
             .iter()
-            .map(|slot| ChannelStrip::new(Sampler::new(slot.clone(), initial_params, sample_rate)))
+            .map(|slot| ChannelStrip::new(slot.clone(), sample_rate))
             .collect();
         Self {
             transport: Transport::new(sample_rate),
@@ -125,18 +174,24 @@ impl RenderState {
                 .map(|index| {
                     let sample = samples.get(index).cloned().flatten().or_else(|| {
                         project.channels.get(index).and_then(|channel| {
-                            matches!(
-                                channel.setup.sampler_state().sample,
-                                mooloop_core::SampleReference::Builtin { .. }
-                            )
-                            .then(|| fallback.clone())
+                            match &channel.setup.source {
+                                ChannelSource::Sampler(state)
+                                    if matches!(
+                                        state.sample,
+                                        mooloop_core::SampleReference::Builtin { .. }
+                                    ) =>
+                                {
+                                    Some(fallback.clone())
+                                }
+                                _ => None,
+                            }
                         })
                     });
                     Arc::new(ArcSwapOption::from(sample))
                 })
                 .collect(),
         );
-        let mut state = Self::new(sample_rate, slots, SamplerParams::default());
+        let mut state = Self::new(sample_rate, slots);
         state.load_project(project);
         state
     }
@@ -147,17 +202,12 @@ impl RenderState {
         self.sequencer.load_project(project);
         for (index, strip) in self.strips.iter_mut().enumerate() {
             if let Some(channel) = project.channels.get(index) {
+                strip.load_source(&channel.setup.source);
                 strip.muted = channel.setup.channel.muted;
                 strip.set_volume(channel.setup.channel.volume);
                 strip.set_pan(channel.setup.channel.pan);
-                match &channel.setup.source {
-                    ChannelSource::Sampler(sampler) => strip.instrument.set_params(sampler.params),
-                }
             } else {
-                strip.muted = false;
-                strip.set_volume(0.8);
-                strip.set_pan(0.0);
-                strip.instrument.set_params(SamplerParams::default());
+                strip.reset_slot(DeviceKind::Sampler);
             }
         }
     }
@@ -189,13 +239,20 @@ impl RenderState {
                 self.sequencer
                     .set_playlist_placement(pattern as usize, start_tick, on);
             }
-            EngineCommand::AddChannel => {
-                self.sequencer
-                    .set_active_channels(self.sequencer.active_channels() + 1);
+            EngineCommand::AddChannel { source } => {
+                let channel = self.sequencer.active_channels();
+                if let Some(strip) = self.strips.get_mut(channel) {
+                    strip.reset_slot(source);
+                    self.sequencer.clear_channel(channel);
+                    self.sequencer.set_active_channels(channel + 1);
+                }
             }
             EngineCommand::RemoveChannel => {
-                self.sequencer
-                    .set_active_channels(self.sequencer.active_channels().saturating_sub(1));
+                let active = self.sequencer.active_channels();
+                if let Some(channel) = active.checked_sub(1) {
+                    self.strips[channel].reset_slot(DeviceKind::Sampler);
+                    self.sequencer.set_active_channels(channel);
+                }
             }
             EngineCommand::SetChannelMuted { channel, muted } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
@@ -245,7 +302,22 @@ impl RenderState {
             }
             EngineCommand::SetChannelSamplerParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.instrument.set_params(params);
+                    strip.sampler.set_params(params);
+                }
+            }
+            EngineCommand::SetChannelSource { channel, source } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.reset_sources_to_defaults(source);
+                }
+            }
+            EngineCommand::SetChannelDrumSynthParams { channel, params } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.drum_synth.set_params(params);
+                }
+            }
+            EngineCommand::SetChannelMonoSynthParams { channel, params } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.mono_synth.set_params(params);
                 }
             }
             EngineCommand::InstallProject { .. } => {}
@@ -295,7 +367,7 @@ impl RenderState {
                 .take(self.sequencer.active_channels())
             {
                 if !strip.muted {
-                    choke_groups[index] = strip.instrument.choke_group();
+                    choke_groups[index] = strip.choke_group();
                 }
             }
             inject_choke_events(
@@ -323,9 +395,7 @@ impl RenderState {
                 continue;
             }
             strip.bus.clear(frames);
-            strip
-                .instrument
-                .process(&context, &mut strip.bus, &self.events[index], None);
+            strip.process(&context, &self.events[index]);
             for effect in &mut strip.effects {
                 effect.process(&context, &mut strip.bus, &self.empty_events, None);
             }
@@ -373,10 +443,11 @@ impl RenderState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mooloop_core::{NoteEvent, ProjectChannel};
 
     fn test_strip() -> ChannelStrip {
         let slot = Arc::new(ArcSwapOption::empty());
-        ChannelStrip::new(Sampler::new(slot, SamplerParams::default(), 48_000))
+        ChannelStrip::new(slot, 48_000)
     }
 
     #[test]
@@ -445,5 +516,91 @@ mod tests {
         let render = RenderState::from_project(48_000, &project, &[]);
         assert_eq!(render.pattern_length_ticks(0), Some(32 * 24));
         assert!((render.ticks_per_sample() - (173.0 * 96.0 / 60.0 / 48_000.0)).abs() < 1e-12);
+    }
+
+    fn synth_project(channel: ProjectChannel) -> Project {
+        let mut project = Project {
+            channels: vec![channel],
+            ..Project::default()
+        };
+        project.channels[0].notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
+        project
+    }
+
+    #[test]
+    fn synth_sources_render_without_sample_data() {
+        for channel in [
+            ProjectChannel::drum_synth(0, 1),
+            ProjectChannel::mono_synth(0, 1),
+        ] {
+            let project = synth_project(channel);
+            let mut render = RenderState::from_project(48_000, &project, &[]);
+            render.play();
+            let report = render.process_block(512);
+            assert!(report.peak_l > 0.001, "synth source was silent");
+        }
+    }
+
+    #[test]
+    fn source_switch_resets_inactive_voice_state() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        assert!(render.process_block(256).peak_l > 0.001);
+
+        render.apply_command(EngineCommand::SetChannelSource {
+            channel: 0,
+            source: DeviceKind::MonoSynth,
+        });
+        render.process_block(256);
+        render.apply_command(EngineCommand::SetChannelSource {
+            channel: 0,
+            source: DeviceKind::Sampler,
+        });
+        assert_eq!(render.process_block(256).peak_l, 0.0);
+    }
+
+    #[test]
+    fn readding_a_channel_resets_its_preallocated_slot() {
+        let mut render = RenderState::from_project(48_000, &Project::default(), &[]);
+        render.apply_command(EngineCommand::AddChannel {
+            source: DeviceKind::DrumSynth,
+        });
+        render.apply_command(EngineCommand::SetStep {
+            pattern: 0,
+            channel: 1,
+            step: 0,
+            on: true,
+            note: 60,
+            velocity: 127,
+        });
+        render.play();
+        assert!(render.process_block(256).peak_l > 0.001);
+
+        render.apply_command(EngineCommand::RemoveChannel);
+        render.apply_command(EngineCommand::AddChannel {
+            source: DeviceKind::DrumSynth,
+        });
+        render.apply_command(EngineCommand::Stop);
+        render.apply_command(EngineCommand::Play);
+        assert_eq!(render.process_block(256).peak_l, 0.0);
+    }
+
+    #[test]
+    fn mixed_source_project_renders_all_preallocated_nodes() {
+        let mut project = Project {
+            channels: vec![
+                ProjectChannel::sampler(0, 1),
+                ProjectChannel::drum_synth(1, 1),
+                ProjectChannel::mono_synth(2, 1),
+            ],
+            ..Project::default()
+        };
+        for (index, channel) in project.channels.iter_mut().enumerate() {
+            channel.notes[0].push(NoteEvent::new(index as u32 + 1, 0, 96, 60, 127));
+        }
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        assert!(render.process_block(512).peak_l > 0.01);
     }
 }

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use jack::{AudioOut, Client, ClientOptions};
-use mooloop_core::{EngineCommand, EngineEvent, SamplerParams, MAX_CHANNELS};
+use mooloop_core::{EngineCommand, EngineEvent, MAX_CHANNELS};
 use mooloop_dsp::SampleData;
 use rtrb::{Consumer, Producer};
 
@@ -107,7 +107,6 @@ impl Engine {
             io,
             sample_slots.clone(),
             project_slot.clone(),
-            SamplerParams::default(),
             xrun_count.clone(),
         );
 

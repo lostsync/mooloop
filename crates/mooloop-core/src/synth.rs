@@ -6,7 +6,8 @@ pub const MAX_DRUM_VOICES: u8 = 8;
 
 /// Which drum sound a `DrumSynth` channel produces. One mode per channel,
 /// matching the one-sound-per-channel groovebox model the sampler uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DrumMode {
     #[default]
     Kick,
@@ -31,9 +32,11 @@ impl DrumMode {
 /// All drum synth parameters, in the units the DSP and UI share. Knobs that
 /// belong to other modes are inert but retained, so switching modes never
 /// loses an authored setting.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DrumSynthParams {
     pub mode: DrumMode,
+    /// `0` disables choking; matching non-zero groups choke each other.
+    pub choke_group: u8,
     /// Master decay of the amplitude envelope (seconds).
     pub decay: f32,
     /// Keyboard tracking: semitone offset from MIDI note 60 applied to the
@@ -71,6 +74,7 @@ impl Default for DrumSynthParams {
     fn default() -> Self {
         Self {
             mode: DrumMode::Kick,
+            choke_group: 0,
             decay: 0.35,
             tune_semitones: 0.0,
             drive: 0.0,
@@ -109,7 +113,8 @@ impl DrumSynthParams {
 }
 
 /// Oscillator waveform for the mono synth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OscWave {
     Sine,
     Triangle,
@@ -120,7 +125,12 @@ pub enum OscWave {
 
 impl OscWave {
     pub fn all() -> [OscWave; 4] {
-        [OscWave::Sine, OscWave::Triangle, OscWave::Saw, OscWave::Pulse]
+        [
+            OscWave::Sine,
+            OscWave::Triangle,
+            OscWave::Saw,
+            OscWave::Pulse,
+        ]
     }
 
     pub fn label(self) -> &'static str {
@@ -134,7 +144,7 @@ impl OscWave {
 }
 
 /// One mono synth oscillator's contribution.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OscParams {
     pub wave: OscWave,
     /// Coarse pitch offset in semitones.
@@ -163,7 +173,7 @@ impl Default for OscParams {
 /// oscillators into one low-pass filter with a shared ADSR, mono voice with
 /// glide. Note duration and note-off semantics are honored (gate), per the
 /// project's event-model-first rule.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MonoSynthParams {
     pub osc: [OscParams; 3],
     /// Portamento time (seconds). `0` is instant pitch changes.

@@ -63,12 +63,9 @@ pub struct MonoSynth {
 impl MonoSynth {
     pub fn new(params: MonoSynthParams, sample_rate: u32) -> Self {
         let mut voice = MonoVoice::new(sample_rate);
-        voice.env.configure(
-            params.attack,
-            params.decay,
-            params.sustain,
-            params.release,
-        );
+        voice
+            .env
+            .configure(params.attack, params.decay, params.sustain, params.release);
         Self {
             params,
             sample_rate,
@@ -79,12 +76,25 @@ impl MonoSynth {
     /// Replace the parameter set. Called from the RT command drain.
     pub fn set_params(&mut self, params: MonoSynthParams) {
         self.params = params;
+        self.voice
+            .env
+            .configure(params.attack, params.decay, params.sustain, params.release);
+    }
+
+    /// Immediately invalidate the active voice and return every oscillator
+    /// and filter to its initial state.
+    pub fn reset(&mut self) {
+        self.voice = MonoVoice::new(self.sample_rate);
         self.voice.env.configure(
-            params.attack,
-            params.decay,
-            params.sustain,
-            params.release,
+            self.params.attack,
+            self.params.decay,
+            self.params.sustain,
+            self.params.release,
         );
+    }
+
+    pub fn choke(&mut self) {
+        self.release_all();
     }
 
     fn note_on(&mut self, event_id: u64, note: u8, velocity: u8) {
@@ -165,21 +175,20 @@ impl MonoSynth {
             let cutoff = params.filter_cutoff.clamp(0.0, 1.0);
             let env_amount = params.filter_env_amount.clamp(-1.0, 1.0);
             let resonance = params.filter_resonance.clamp(0.0, 1.0);
-            let filtered = if cutoff >= 0.999
-                && env_amount.abs() <= f32::EPSILON
-                && resonance <= f32::EPSILON
-            {
-                mix
-            } else {
-                let max_hz = sr as f32 * 0.45;
-                let base_hz = 20.0 * (max_hz / 20.0).powf(cutoff);
-                let cutoff_hz =
-                    (base_hz * 2.0_f32.powf(voice.env.level() * env_amount * 6.0))
+            let filtered =
+                if cutoff >= 0.999 && env_amount.abs() <= f32::EPSILON && resonance <= f32::EPSILON
+                {
+                    mix
+                } else {
+                    let max_hz = sr as f32 * 0.45;
+                    let base_hz = 20.0 * (max_hz / 20.0).powf(cutoff);
+                    let cutoff_hz = (base_hz * 2.0_f32.powf(voice.env.level() * env_amount * 6.0))
                         .clamp(20.0, max_hz);
-                voice.filter.next_sample(mix, cutoff_hz, resonance, sr)
-            };
+                    voice.filter.next_sample(mix, cutoff_hz, resonance, sr)
+                };
 
-            let sample = apply_drive(filtered, params.drive) * voice.env.level() * voice.velocity_amp;
+            let sample =
+                apply_drive(filtered, params.drive) * voice.env.level() * voice.velocity_amp;
             bus.l[i] += sample;
             bus.r[i] += sample;
         }

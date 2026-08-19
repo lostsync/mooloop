@@ -124,6 +124,16 @@ impl Sequencer {
         self.active_channels = n.min(MAX_CHANNELS);
     }
 
+    /// Clear one preallocated channel lane across the full pattern bank.
+    pub fn clear_channel(&mut self, channel: usize) {
+        if channel >= MAX_CHANNELS {
+            return;
+        }
+        for pattern in &mut self.patterns {
+            pattern.channels[channel].clear();
+        }
+    }
+
     /// Replace musical state without growing any realtime-owned allocation.
     pub fn load_project(&mut self, project: &Project) {
         self.active_patterns = project.pattern_lengths.len().clamp(1, self.patterns.len());

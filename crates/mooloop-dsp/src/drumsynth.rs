@@ -18,7 +18,7 @@ use crate::event::{Event, EventList};
 use crate::filter::{apply_drive, OnePoleHp};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{Noise, Osc};
-use mooloop_core::{DrumMode, DrumSynthParams, OscWave, MAX_DRUM_VOICES};
+use mooloop_core::{DrumMode, DrumSynthParams, OscWave, MAX_CHOKE_GROUP, MAX_DRUM_VOICES};
 
 /// Fast fade used for chokes and transport stops (seconds). The coefficient
 /// is scaled so the fade effectively completes within this window rather than
@@ -83,6 +83,24 @@ impl DrumVoice {
         self.noise_env.set_coeff(coeff);
         self.click_remaining = 0;
     }
+
+    fn reset(&mut self, seed: u32) {
+        self.active = false;
+        self.age = 0;
+        self.mode = DrumMode::Kick;
+        self.amp_env = ExpDecay::new();
+        self.noise_env = ExpDecay::new();
+        self.sweep_env = ExpDecay::new();
+        self.body_osc.reset();
+        self.metal_osc_a.reset();
+        self.metal_osc_b.reset();
+        self.hp.reset();
+        self.noise.reset(seed);
+        self.pitch_factor = 1.0;
+        self.velocity_amp = 0.0;
+        self.click_remaining = 0;
+        self.click_total = 1;
+    }
 }
 
 /// The drum synth node.
@@ -94,7 +112,8 @@ pub struct DrumSynth {
 }
 
 impl DrumSynth {
-    pub fn new(params: DrumSynthParams, sample_rate: u32) -> Self {
+    pub fn new(mut params: DrumSynthParams, sample_rate: u32) -> Self {
+        params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
         let voices = std::array::from_fn(|index| DrumVoice::new(0x9E37_79B9 + index as u32));
         Self {
             params,
@@ -105,8 +124,21 @@ impl DrumSynth {
     }
 
     /// Replace the parameter set. Called from the RT command drain.
-    pub fn set_params(&mut self, params: DrumSynthParams) {
+    pub fn set_params(&mut self, mut params: DrumSynthParams) {
+        params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
         self.params = params;
+    }
+
+    pub fn choke_group(&self) -> u8 {
+        self.params.choke_group
+    }
+
+    /// Immediately invalidate all active voices.
+    pub fn reset(&mut self) {
+        for (index, voice) in self.voices.iter_mut().enumerate() {
+            voice.reset(0x9E37_79B9 + index as u32);
+        }
+        self.next_age = 1;
     }
 
     fn select_voice(&self) -> usize {
@@ -162,7 +194,7 @@ impl DrumSynth {
         }
     }
 
-    fn choke(&mut self) {
+    pub fn choke(&mut self) {
         let sr = self.sample_rate;
         for voice in self.voices.iter_mut().filter(|voice| voice.active) {
             voice.choke(sr);
@@ -182,7 +214,9 @@ impl DrumSynth {
                 let end_hz = params.kick_end_hz.max(1.0);
                 let ratio = (params.kick_start_hz.max(1.0) / end_hz).max(1.0);
                 let freq = end_hz * ratio.powf(sweep) * voice.pitch_factor;
-                let body = voice.body_osc.next_sample(freq, OscWave::Sine, 0.5, sample_rate);
+                let body = voice
+                    .body_osc
+                    .next_sample(freq, OscWave::Sine, 0.5, sample_rate);
                 let click = if voice.click_remaining > 0 {
                     voice.click_remaining -= 1;
                     let fade = voice.click_remaining as f32 / voice.click_total as f32;
@@ -194,7 +228,9 @@ impl DrumSynth {
             }
             DrumMode::Snare => {
                 let freq = params.snare_tone_hz * voice.pitch_factor;
-                let body = voice.body_osc.next_sample(freq, OscWave::Sine, 0.5, sample_rate)
+                let body = voice
+                    .body_osc
+                    .next_sample(freq, OscWave::Sine, 0.5, sample_rate)
                     * voice.amp_env.level();
                 let noise = voice.noise.next_sample() * voice.noise_env.level();
                 let mix = params.snare_noise_mix.clamp(0.0, 1.0);

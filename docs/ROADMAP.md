@@ -148,6 +148,15 @@ Scope:
 - External input, internal routing, groups, sends, and selected resampling
   sources as the graph model permits.
 
+Implemented foundation:
+
+- DrumSynth and MonoSynth are selectable channel sources with complete editors,
+  project/preset persistence, realtime playback, and offline rendering.
+- New songs start from a randomized kick/snare/closed-hat/open-hat kit.
+
+Remaining work in this phase is source-to-buffer workflow, external/internal
+routing, groups, sends, and resampling-source selection.
+
 ## Later, Not Scheduled
 
 - MIDI input/output and controller mapping.

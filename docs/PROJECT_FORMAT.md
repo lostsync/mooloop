@@ -42,8 +42,9 @@ asset_mode = "embedded" # "embedded" or "referenced"
 ```
 
 Readers reject unknown format versions and document types before installing
-any state. Version 1 is fixed at PPQ 96 and 4/4. Additional tagged source types
-can be added in a later format without changing the sampler representation.
+any state. Version 1 is fixed at PPQ 96 and 4/4. Its tagged source envelope
+supports sampler, drum synth, and mono synth states without changing the
+sampler representation.
 
 `asset_mode` records the requested save policy. Each file sample also carries
 its own `embedded` flag because a referenced save may retain a bundle-owned
@@ -94,6 +95,22 @@ a pattern is lossless. The sampler state also contains every field in
 `SamplerParams`: voice/retrigger/choke settings, trim, reverse, root and tune,
 loop settings, ADSR, filter, drive, bit reduction, and rate reduction.
 
+Generated sources use the same tagged envelope and store their complete
+parameter sets without an asset reference:
+
+```toml
+[document.channels.setup.source]
+type = "drum_synth"
+
+[document.channels.setup.source.state.params]
+mode = "hat"
+choke_group = 1
+decay = 0.05
+```
+
+`mono_synth` uses the same `state.params` envelope for its oscillator,
+envelope, filter, glide, and drive fields.
+
 ## Kit And Channel Documents
 
 A kit document contains `document.channels`, an array of channel setups. It
@@ -101,9 +118,11 @@ does not contain notes, patterns, playlist placements, tempo, or transport
 state. Loading a kit replaces the rack setup and retains note lanes for channel
 indices that remain present; removing populated channels requires confirmation.
 
-A channel document is one channel setup directly under `[document]`. Loading
-it replaces the selected channel's mixer, source, sampler parameters, and
-sample while retaining that channel's notes.
+A channel document is one reusable instrument preset directly under
+`[document]`. Loading it replaces the selected channel's mixer and source state
+while retaining that channel's notes. Sampler presets include parameters and a
+sample reference; drum and mono synth presets include their generator
+parameters and require no audio asset.
 
 ## Sample References
 

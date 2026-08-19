@@ -218,6 +218,27 @@ impl Voice {
             active: false,
         }
     }
+
+    /// Clear audible voice state while retaining the sample handle. Keeping
+    /// that `Arc` avoids moving a potentially large sample deallocation onto
+    /// the realtime thread when a channel changes source.
+    fn reset(&mut self, params: SamplerParams, sample_rate: u32) {
+        self.event_id = 0;
+        self.midi_note = 60;
+        self.age = 0;
+        self.play_pos = 0.0;
+        self.playback_rate = 1.0;
+        self.direction = 1.0;
+        self.env = AdsrEnv::new(sample_rate);
+        self.env.configure(params);
+        self.velocity_amp = 0.0;
+        self.filter_low = [0.0, 0.0];
+        self.filter_band = [0.0, 0.0];
+        self.held_frame = [0.0, 0.0];
+        self.hold_remaining = 0;
+        self.loop_enabled = false;
+        self.active = false;
+    }
 }
 
 /// The sampler node.
@@ -267,6 +288,15 @@ impl Sampler {
 
     pub fn choke_group(&self) -> u8 {
         self.params.choke_group
+    }
+
+    /// Immediately invalidate all active voices. Sample handles remain owned
+    /// by their slots/voices so resetting is allocation- and drop-free.
+    pub fn reset(&mut self) {
+        for voice in &mut self.voices {
+            voice.reset(self.params, self.sample_rate);
+        }
+        self.next_age = 1;
     }
 
     fn voice_limit(&self) -> usize {
@@ -360,7 +390,7 @@ impl Sampler {
         }
     }
 
-    fn choke(&mut self) {
+    pub fn choke(&mut self) {
         for voice in self.voices.iter_mut().filter(|voice| voice.active) {
             voice.loop_enabled = false;
             voice.env.release_with(CHOKE_RELEASE_S);

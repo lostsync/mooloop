@@ -26,7 +26,13 @@ impl Osc {
 
     /// Advance one sample at `freq_hz` and return the waveform value in
     /// `[-1, 1]`. `pulse_width` only applies to [`OscWave::Pulse`].
-    pub fn next_sample(&mut self, freq_hz: f32, wave: OscWave, pulse_width: f32, sample_rate: u32) -> f32 {
+    pub fn next_sample(
+        &mut self,
+        freq_hz: f32,
+        wave: OscWave,
+        pulse_width: f32,
+        sample_rate: u32,
+    ) -> f32 {
         let sr = sample_rate as f32;
         let freq = freq_hz.clamp(0.01, sr * 0.45);
         let dt = freq / sr;
@@ -75,9 +81,11 @@ pub struct Noise {
 
 impl Noise {
     pub fn new(seed: u32) -> Self {
-        Self {
-            state: seed.max(1),
-        }
+        Self { state: seed.max(1) }
+    }
+
+    pub fn reset(&mut self, seed: u32) {
+        self.state = seed.max(1);
     }
 
     /// Next white-noise sample in `[-1, 1]`.

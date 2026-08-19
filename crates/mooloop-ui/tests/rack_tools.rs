@@ -212,7 +212,12 @@ fn a_drag_past_the_end_of_the_row_stays_in_range() {
 
     // Well past the last cell: the grid must clamp rather than report a step
     // that does not exist in the model.
-    drag(ui.window(), step_x(6), step_x(STEPS) + 400.0, PointerEventButton::Left);
+    drag(
+        ui.window(),
+        step_x(6),
+        step_x(STEPS) + 400.0,
+        PointerEventButton::Left,
+    );
 
     let painted = painted.borrow();
     assert!(

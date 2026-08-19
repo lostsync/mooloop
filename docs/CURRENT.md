@@ -19,9 +19,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   2-4 even hits), and Stretch (drag a step sideways to set note length). The
   whole run of steps shares one hit area, because a per-cell one cannot follow
   a drag past the cell the press landed in.
-- Up to 16 channels. The UI starts with one sampler channel and can append or
-  remove channels. Every rack row exposes mute, output volume, and
-  constant-power stereo pan.
+- Up to 16 channels. A new song starts with a lightly randomized four-channel
+  drum kit (kick, snare, closed hat, and open hat); creating another new song
+  generates a new variation. Channels can use the sampler, drum synth, or mono
+  synth and every rack row exposes mute, output volume, and constant-power
+  stereo pan.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.
@@ -46,6 +48,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   filter with envelope depth and resonance, drive, bit reduction, and rate
   reduction. Voice controls cover one-shot/gated playback, 1-16 voices,
   restart/layer retriggering, and 16 cross-channel choke groups.
+- A source editor that can add or replace sampler, drum synth, and mono synth
+  instruments without changing the channel's notes or mixer state. The drum
+  editor exposes kick, snare, and hat synthesis controls; the mono editor
+  exposes three oscillators, glide, ADSR, filter, and drive. Closed and open
+  hats share a choke group in the generated starter kit.
 - Runtime appearance presets, custom accent persistence, shared audio controls,
   tooltips, and master peak-meter ballistics.
 - A File menu for song, kit, and selected-channel save/load. Song documents use
@@ -75,7 +82,7 @@ UI commands -> rtrb queue -> shared render state -> transport + sequencer
                          timed events/channel
                                   |
                                   v
-sample slot -> bounded sampler voices -> empty effect vector -> gain/pan/mute
+selected source (sampler / drum synth / mono synth) -> empty effect vector -> gain/pan/mute
                                                            |
                                                            v
                                                     master stereo bus
@@ -90,15 +97,16 @@ effects, mixing, and metering. The JACK adapter drains fixed-size commands into
 that state and publishes position and master peak events; offline export drives
 the same render path without JACK ports.
 
-WAV decode, waveform construction, and directory scanning occur off the audio
-thread. A decoded sample is published through an `ArcSwapOption` slot.
+Every strip preallocates all three source nodes and switches its active source
+without allocating in the callback. WAV decode, waveform construction, and
+directory scanning occur off the audio thread. A decoded sample is published
+through an `ArcSwapOption` slot.
 
 ## Useful Foundations
 
 - `AudioNode` provides one in-place DSP interface for instruments and effects.
 - `DrumSynth` (kick/snare/hat) and `MonoSynth` (three-oscillator, mono, glide)
-  implement that interface with parameters in `mooloop-core`, but are not yet
-  wired into channels, the bridge, or the UI.
+  use the same timed note path as the sampler in realtime and offline renders.
 - `EventList` carries fixed-capacity, sample-timed NoteOn, NoteOff, and generic
   ParamValue events.
 - `StereoBus` ownership is centralized in the graph, leaving room for sends,
@@ -140,6 +148,9 @@ thread. A decoded sample is published through an `ArcSwapOption` slot.
 - Songs, kits, and channel presets use the v1 bundle contract documented in
   `PROJECT_FORMAT.md`. Saves stage and replace bundles atomically; embedded and
   referenced asset policies are available per save.
+- Channel presets are instrument presets for sampler and generated sources;
+  sampler presets may carry a referenced or embedded WAV while synth presets
+  contain only inspectable parameter state.
 - Missing samples are recoverable by loading a replacement WAV, but there is no
   dedicated path-search/relink dialog, undo, autosave, or crash recovery yet.
 

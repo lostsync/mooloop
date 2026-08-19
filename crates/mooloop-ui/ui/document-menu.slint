@@ -24,6 +24,7 @@ component MenuRow inherits Rectangle {
 export component DocumentMenu inherits Rectangle {
     in-out property <bool> embed-assets: true;
     in property <bool> busy;
+    callback new-song;
     callback open-song;
     callback save-song;
     callback save-song-as;
@@ -53,7 +54,7 @@ export component DocumentMenu inherits Rectangle {
         x: 0;
         y: root.height + 2px;
         width: 190px;
-        height: 228px;
+        height: 252px;
         close-policy: close-on-click;
         Rectangle {
             background: Theme.surface;
@@ -63,14 +64,16 @@ export component DocumentMenu inherits Rectangle {
             VerticalLayout {
                 padding: 4px;
                 spacing: 0px;
+                MenuRow { text: "New Song"; selected => { menu.close(); root.new-song(); } }
+                Rectangle { height: 1px; background: Theme.border; }
                 MenuRow { text: "Open Song..."; selected => { menu.close(); root.open-song(); } }
                 MenuRow { text: "Save Song"; selected => { menu.close(); root.save-song(); } }
                 MenuRow { text: "Save Song As..."; selected => { menu.close(); root.save-song-as(); } }
                 Rectangle { height: 1px; background: Theme.border; }
                 MenuRow { text: "Load Kit..."; selected => { menu.close(); root.load-kit(); } }
                 MenuRow { text: "Save Kit..."; selected => { menu.close(); root.save-kit(); } }
-                MenuRow { text: "Load Channel..."; selected => { menu.close(); root.load-channel(); } }
-                MenuRow { text: "Save Channel..."; selected => { menu.close(); root.save-channel(); } }
+                MenuRow { text: "Load Instrument..."; selected => { menu.close(); root.load-channel(); } }
+                MenuRow { text: "Save Instrument..."; selected => { menu.close(); root.save-channel(); } }
                 Rectangle { height: 1px; background: Theme.border; }
                 MenuRow { text: "Export Audio..."; selected => { menu.close(); root.export-audio(); } }
                 CheckBox {

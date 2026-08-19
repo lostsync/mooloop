@@ -6,7 +6,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwapOption;
 use jack::ProcessHandler;
 use jack::{AudioOut, Client, Control, Port, ProcessScope};
-use mooloop_core::{EngineCommand, EngineEvent, Project, SamplerParams};
+use mooloop_core::{EngineCommand, EngineEvent, Project};
 use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
 use rtrb::Consumer;
 
@@ -36,11 +36,10 @@ impl Graph {
         io: GraphIo,
         sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
         project_slot: Arc<ArcSwapOption<Project>>,
-        initial_params: SamplerParams,
         xrun_count: Arc<AtomicU64>,
     ) -> Self {
         Self {
-            render: RenderState::new(sample_rate, sample_slots, initial_params),
+            render: RenderState::new(sample_rate, sample_slots),
             out_l: io.out_l,
             out_r: io.out_r,
             cmd_rx: io.cmd_rx,

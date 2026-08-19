@@ -9,8 +9,9 @@
 //! Channel/pattern indices are bounded by `MAX_CHANNELS`/`MAX_PATTERNS`; the
 //! engine pre-allocates pools at startup so these commands only mutate.
 
-use crate::sampler::SamplerParams;
-use crate::{NoteEvent, NoteId, PlaybackMode};
+use crate::{
+    DeviceKind, DrumSynthParams, MonoSynthParams, NoteEvent, NoteId, PlaybackMode, SamplerParams,
+};
 
 /// GUI -> audio. Drained at the top of each process callback.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,7 +40,7 @@ pub enum EngineCommand {
         on: bool,
     },
     /// Grow the channel pool's active region by one (appends a channel).
-    AddChannel,
+    AddChannel { source: DeviceKind },
     /// Shrink the channel pool's active region by one (removes the last
     /// channel). Kept last-index-only so existing indices stay valid.
     RemoveChannel,
@@ -73,6 +74,18 @@ pub enum EngineCommand {
     },
     /// Replace a channel's sampler parameter set.
     SetChannelSamplerParams { channel: u8, params: SamplerParams },
+    /// Replace a channel's sound source while retaining its mixer strip.
+    SetChannelSource { channel: u8, source: DeviceKind },
+    /// Replace a channel's drum synth parameter set.
+    SetChannelDrumSynthParams {
+        channel: u8,
+        params: DrumSynthParams,
+    },
+    /// Replace a channel's mono synth parameter set.
+    SetChannelMonoSynthParams {
+        channel: u8,
+        params: MonoSynthParams,
+    },
     /// Import the latest project snapshot published through the engine's
     /// out-of-band ArcSwap slot into preallocated realtime storage.
     InstallProject { generation: u64 },

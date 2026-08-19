@@ -281,7 +281,7 @@ fn render_mp3(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{NoteEvent, PatternPlacement};
+    use mooloop_core::{NoteEvent, PatternPlacement, ProjectChannel};
     use tempfile::tempdir;
 
     fn audible_project() -> Project {
@@ -355,5 +355,35 @@ mod tests {
         assert!(bytes
             .windows(2)
             .any(|pair| pair[0] == 0xff && pair[1] & 0xe0 == 0xe0));
+    }
+
+    #[test]
+    fn synth_project_renders_offline_without_samples() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("drum-synth.wav");
+        let mut project = Project {
+            channels: vec![ProjectChannel::drum_synth(0, 1)],
+            ..Project::default()
+        };
+        project.channels[0].notes[0].push(NoteEvent::new(1, 0, 24, 60, 127));
+
+        OfflineRenderer::render(
+            &project,
+            &[],
+            48_000,
+            &ExportSpec {
+                path: path.clone(),
+                scope: RenderScope::Pattern { index: 0 },
+                tail_seconds: 0.0,
+                format: ExportFormat::Wav(WavEncoding::Float32),
+            },
+        )
+        .unwrap();
+
+        let mut reader = hound::WavReader::open(path).unwrap();
+        assert!(reader
+            .samples::<f32>()
+            .map(Result::unwrap)
+            .any(|sample| sample.abs() > 0.001));
     }
 }

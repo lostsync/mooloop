@@ -13,8 +13,9 @@ slint::include_modules!();
 
 use meter::MeterBallistics;
 use mooloop_core::{
-    Channel, ChannelSetup, ChannelSource, DeviceKind, EngineCommand, EngineEvent, Kit, LoopMode,
-    NoteEvent, NoteId, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
+    Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState,
+    EngineCommand, EngineEvent, Kit, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
+    OscWave, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
     SampleReference, SamplerParams, SamplerState, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
     MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -29,7 +30,9 @@ use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerM
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const PUMP_INTERVAL_MS: u64 = 8;
 const INITIAL_BPM: i32 = 120;
@@ -68,10 +71,13 @@ fn sync_appearance_properties(window: &MainWindow, appearance: &AppearanceSettin
 /// UI-side state for one channel. `notes` is the pattern bank.
 struct ChannelState {
     name: String,
+    kind: DeviceKind,
     muted: bool,
     volume: f32,
     pan: f32,
     params: SamplerParams,
+    drum_params: DrumSynthParams,
+    mono_params: MonoSynthParams,
     sample_name: String,
     sample_description: String,
     sample_duration: f32,
@@ -94,10 +100,13 @@ impl ChannelState {
     ) -> Self {
         Self {
             name: format!("Sampler {}", index + 1),
+            kind: DeviceKind::Sampler,
             muted: false,
             volume: 0.8,
             pan: 0.0,
             params: SamplerParams::default(),
+            drum_params: DrumSynthParams::default(),
+            mono_params: MonoSynthParams::default(),
             sample_name: "default kick".into(),
             sample_description: default_description,
             sample_duration: default_duration,
@@ -137,6 +146,7 @@ struct LoadedSample {
 /// Result of a background sample load, delivered to the pump.
 struct LoadResult {
     channel: usize,
+    source_revision: u64,
     /// `None` = dialog cancelled; `Some(Err)` = decode failed.
     result: Option<Result<LoadedSample, String>>,
 }
@@ -148,12 +158,13 @@ struct ResolvedDocument {
 
 enum DocumentResult {
     Cancelled,
+    NewSong(Project),
     SavedSong {
         path: PathBuf,
         mode: AssetMode,
         revision: u64,
         report: SaveReport,
-        sample_references: Vec<SampleReference>,
+        sample_references: Vec<Option<SampleReference>>,
     },
     SavedOther {
         label: &'static str,
@@ -168,6 +179,18 @@ enum DocumentResult {
         path: PathBuf,
     },
     Failed(String),
+}
+
+fn fresh_starter_seed() -> u64 {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(1);
+    let clock = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    clock
+        ^ SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
 #[derive(Clone, Copy)]
@@ -210,6 +233,56 @@ fn retrigger_mode_from_int(i: i32) -> RetriggerMode {
         RetriggerMode::Layer
     } else {
         RetriggerMode::Restart
+    }
+}
+
+fn device_kind_from_int(value: i32) -> DeviceKind {
+    match value {
+        1 => DeviceKind::DrumSynth,
+        2 => DeviceKind::MonoSynth,
+        _ => DeviceKind::Sampler,
+    }
+}
+
+fn device_kind_to_int(kind: DeviceKind) -> i32 {
+    match kind {
+        DeviceKind::Sampler => 0,
+        DeviceKind::DrumSynth => 1,
+        DeviceKind::MonoSynth => 2,
+    }
+}
+
+fn drum_mode_from_int(value: i32) -> DrumMode {
+    match value {
+        1 => DrumMode::Snare,
+        2 => DrumMode::Hat,
+        _ => DrumMode::Kick,
+    }
+}
+
+fn drum_mode_to_int(mode: DrumMode) -> i32 {
+    match mode {
+        DrumMode::Kick => 0,
+        DrumMode::Snare => 1,
+        DrumMode::Hat => 2,
+    }
+}
+
+fn osc_wave_from_int(value: i32) -> OscWave {
+    match value {
+        0 => OscWave::Sine,
+        1 => OscWave::Triangle,
+        3 => OscWave::Pulse,
+        _ => OscWave::Saw,
+    }
+}
+
+fn osc_wave_to_int(wave: OscWave) -> i32 {
+    match wave {
+        OscWave::Sine => 0,
+        OscWave::Triangle => 1,
+        OscWave::Saw => 2,
+        OscWave::Pulse => 3,
     }
 }
 
@@ -286,35 +359,101 @@ struct UiState {
     bundle_path: Option<PathBuf>,
     dirty: bool,
     revision: u64,
+    source_revision: u64,
 }
 
 impl UiState {
+    fn reset_channel_source(&mut self, index: usize, kind: DeviceKind) {
+        let default_waveform = self.default_waveform.clone();
+        let default_description = self.default_sample_description.clone();
+        let default_duration = self.default_sample_duration;
+        let Some(channel) = self.channels.get_mut(index) else {
+            return;
+        };
+        self.source_revision = self.source_revision.wrapping_add(1);
+        channel.kind = kind;
+        channel.name = match kind {
+            DeviceKind::Sampler => format!("Sampler {}", index + 1),
+            DeviceKind::DrumSynth => format!("Drum {}", index + 1),
+            DeviceKind::MonoSynth => format!("Mono {}", index + 1),
+        };
+        match kind {
+            DeviceKind::Sampler => {
+                channel.params = SamplerParams::default();
+                channel.sample_name = "default kick".into();
+                channel.sample_description = default_description;
+                channel.sample_duration = default_duration;
+                channel.sample_path = None;
+                channel.sample_embedded = false;
+                channel.sample_data = None;
+                channel.waveform = default_waveform;
+                channel.can_previous_sample = false;
+                channel.can_next_sample = false;
+            }
+            DeviceKind::DrumSynth => {
+                channel.drum_params = DrumSynthParams::default();
+                channel.sample_name.clear();
+                channel.sample_description.clear();
+                channel.sample_duration = 0.0;
+                channel.sample_path = None;
+                channel.sample_embedded = false;
+                channel.sample_data = None;
+                channel.waveform.clear();
+                channel.can_previous_sample = false;
+                channel.can_next_sample = false;
+            }
+            DeviceKind::MonoSynth => {
+                channel.mono_params = MonoSynthParams::default();
+                channel.sample_name.clear();
+                channel.sample_description.clear();
+                channel.sample_duration = 0.0;
+                channel.sample_path = None;
+                channel.sample_embedded = false;
+                channel.sample_data = None;
+                channel.waveform.clear();
+                channel.can_previous_sample = false;
+                channel.can_next_sample = false;
+            }
+        }
+    }
+
     fn project_snapshot(&self, bpm: i32) -> Project {
         let channels = self
             .channels
             .iter()
             .map(|channel| {
-                let sample = channel
-                    .sample_path
-                    .as_ref()
-                    .map(|path| SampleReference::File {
-                        path: path.clone(),
-                        embedded: channel.sample_embedded,
-                    })
-                    .unwrap_or_default();
+                let source = match channel.kind {
+                    DeviceKind::Sampler => {
+                        let sample = channel
+                            .sample_path
+                            .as_ref()
+                            .map(|path| SampleReference::File {
+                                path: path.clone(),
+                                embedded: channel.sample_embedded,
+                            })
+                            .unwrap_or_default();
+                        ChannelSource::Sampler(SamplerState {
+                            params: channel.params,
+                            sample,
+                        })
+                    }
+                    DeviceKind::DrumSynth => ChannelSource::DrumSynth(DrumSynthState {
+                        params: channel.drum_params,
+                    }),
+                    DeviceKind::MonoSynth => ChannelSource::MonoSynth(MonoSynthState {
+                        params: channel.mono_params,
+                    }),
+                };
                 ProjectChannel {
                     setup: ChannelSetup {
                         channel: Channel {
                             name: channel.name.clone(),
-                            kind: DeviceKind::Sampler,
+                            kind: channel.kind,
                             muted: channel.muted,
                             volume: channel.volume,
                             pan: channel.pan,
                         },
-                        source: ChannelSource::Sampler(SamplerState {
-                            params: channel.params,
-                            sample,
-                        }),
+                        source,
                     },
                     notes: channel.notes.clone(),
                     next_note_id: channel.next_note_id,
@@ -345,7 +484,11 @@ impl UiState {
     fn sample_snapshots(&self) -> Vec<Option<Arc<SampleData>>> {
         self.channels
             .iter()
-            .map(|channel| channel.sample_data.clone())
+            .map(|channel| {
+                (channel.kind == DeviceKind::Sampler)
+                    .then(|| channel.sample_data.clone())
+                    .flatten()
+            })
             .collect()
     }
 
@@ -355,30 +498,52 @@ impl UiState {
         samples: &[Option<Arc<SampleData>>],
         window: &MainWindow,
     ) {
+        self.source_revision = self.source_revision.wrapping_add(1);
         let channels = project
             .channels
             .iter()
             .enumerate()
             .map(|(index, project_channel)| {
                 let setup = &project_channel.setup;
-                let ChannelSource::Sampler(sampler) = &setup.source;
-                let sample = samples.get(index).cloned().flatten();
-                let (sample_path, embedded) = match &sampler.sample {
-                    SampleReference::Builtin { .. } => (None, false),
-                    SampleReference::File { path, embedded } => (Some(path.clone()), *embedded),
+                let (sampler, drum_params, mono_params) = match &setup.source {
+                    ChannelSource::Sampler(sampler) => (
+                        Some(sampler),
+                        DrumSynthParams::default(),
+                        MonoSynthParams::default(),
+                    ),
+                    ChannelSource::DrumSynth(drum) => {
+                        (None, drum.params, MonoSynthParams::default())
+                    }
+                    ChannelSource::MonoSynth(mono) => {
+                        (None, DrumSynthParams::default(), mono.params)
+                    }
+                };
+                let sample = sampler
+                    .is_some()
+                    .then(|| samples.get(index).cloned().flatten())
+                    .flatten();
+                let (sample_path, embedded) = match sampler.map(|state| &state.sample) {
+                    Some(SampleReference::File { path, embedded }) => {
+                        (Some(path.clone()), *embedded)
+                    }
+                    Some(SampleReference::Builtin { .. }) | None => (None, false),
                 };
                 let missing = sample_path.is_some() && sample.is_none();
-                let sample_name = sample_path
-                    .as_ref()
-                    .and_then(|path| path.file_name())
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("default kick")
-                    .to_string();
+                let sample_name = if sampler.is_some() {
+                    sample_path
+                        .as_ref()
+                        .and_then(|path| path.file_name())
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("default kick")
+                        .to_string()
+                } else {
+                    String::new()
+                };
                 let waveform = sample
                     .as_ref()
                     .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))
                     .unwrap_or_else(|| {
-                        if sample_path.is_none() {
+                        if sampler.is_some() && sample_path.is_none() {
                             self.default_waveform.clone()
                         } else {
                             Vec::new()
@@ -390,8 +555,10 @@ impl UiState {
                     .unwrap_or_else(|| {
                         if missing {
                             "Missing sample - load a WAV to relink".into()
-                        } else {
+                        } else if sampler.is_some() {
                             self.default_sample_description.clone()
+                        } else {
+                            String::new()
                         }
                     });
                 let duration = sample
@@ -400,8 +567,10 @@ impl UiState {
                     .unwrap_or_else(|| {
                         if missing {
                             0.0
-                        } else {
+                        } else if sampler.is_some() {
                             self.default_sample_duration
+                        } else {
+                            0.0
                         }
                     });
                 let (can_previous, can_next) = sample_path
@@ -417,10 +586,13 @@ impl UiState {
                     .unwrap_or((false, false));
                 ChannelState {
                     name: setup.channel.name.clone(),
+                    kind: setup.channel.kind,
                     muted: setup.channel.muted,
                     volume: setup.channel.volume,
                     pan: setup.channel.pan,
-                    params: sampler.params,
+                    params: sampler.map(|state| state.params).unwrap_or_default(),
+                    drum_params,
+                    mono_params,
                     sample_name,
                     sample_description: description,
                     sample_duration: duration,
@@ -441,6 +613,7 @@ impl UiState {
             .iter()
             .map(|length| *length as usize)
             .collect();
+        self.pattern_names = vec![String::new(); self.pattern_lengths.len()];
         self.playlist = project.playlist.clone();
         self.song_mode = project.playback_mode == PlaybackMode::Song;
         self.current_pattern = project.current_pattern as usize;
@@ -642,7 +815,48 @@ impl UiState {
             return;
         };
         let p = &ch.params;
+        let drum = ch.drum_params;
+        let mono = ch.mono_params;
         window.set_selected_channel_name(ch.name.as_str().into());
+        window.set_source_kind(device_kind_to_int(ch.kind));
+        window.set_drum_mode(drum_mode_to_int(drum.mode));
+        window.set_drum_decay(drum.decay);
+        window.set_drum_tune_semitones(drum.tune_semitones);
+        window.set_drum_drive(drum.drive);
+        window.set_drum_choke_group(drum.choke_group as i32);
+        window.set_drum_kick_start_hz(drum.kick_start_hz);
+        window.set_drum_kick_end_hz(drum.kick_end_hz);
+        window.set_drum_kick_sweep(drum.kick_sweep);
+        window.set_drum_kick_click(drum.kick_click);
+        window.set_drum_snare_tone_hz(drum.snare_tone_hz);
+        window.set_drum_snare_noise_mix(drum.snare_noise_mix);
+        window.set_drum_snare_noise_decay(drum.snare_noise_decay);
+        window.set_drum_hat_hp_hz(drum.hat_hp_hz);
+        window.set_drum_hat_metallic(drum.hat_metallic);
+        window.set_mono_osc1_wave(osc_wave_to_int(mono.osc[0].wave));
+        window.set_mono_osc1_semitones(mono.osc[0].semitones);
+        window.set_mono_osc1_cents(mono.osc[0].cents);
+        window.set_mono_osc1_level(mono.osc[0].level);
+        window.set_mono_osc1_pulse_width(mono.osc[0].pulse_width);
+        window.set_mono_osc2_wave(osc_wave_to_int(mono.osc[1].wave));
+        window.set_mono_osc2_semitones(mono.osc[1].semitones);
+        window.set_mono_osc2_cents(mono.osc[1].cents);
+        window.set_mono_osc2_level(mono.osc[1].level);
+        window.set_mono_osc2_pulse_width(mono.osc[1].pulse_width);
+        window.set_mono_osc3_wave(osc_wave_to_int(mono.osc[2].wave));
+        window.set_mono_osc3_semitones(mono.osc[2].semitones);
+        window.set_mono_osc3_cents(mono.osc[2].cents);
+        window.set_mono_osc3_level(mono.osc[2].level);
+        window.set_mono_osc3_pulse_width(mono.osc[2].pulse_width);
+        window.set_mono_glide(mono.glide);
+        window.set_mono_attack(mono.attack);
+        window.set_mono_decay(mono.decay);
+        window.set_mono_sustain(mono.sustain);
+        window.set_mono_release(mono.release);
+        window.set_mono_filter_cutoff(mono.filter_cutoff);
+        window.set_mono_filter_resonance(mono.filter_resonance);
+        window.set_mono_filter_env(mono.filter_env_amount);
+        window.set_mono_drive(mono.drive);
         window.set_sample_name(ch.sample_name.as_str().into());
         window.set_sample_description(ch.sample_description.as_str().into());
         window.set_sample_duration(ch.sample_duration);
@@ -851,14 +1065,46 @@ impl AppUi {
             bundle_path: None,
             dirty: false,
             revision: 0,
+            source_revision: 0,
         }));
+        let starter = Project::starter_kit(fresh_starter_seed());
+        let starter_samples = vec![None; starter.channels.len()];
+        install_project_in_ui(
+            &mut handle,
+            default_sample.as_ref(),
+            &state,
+            &window,
+            &starter,
+            &starter_samples,
+        );
         state.borrow().update_document_title(&window);
-        state.borrow().refresh_editor(&window);
-        state.borrow().sync_playlist(&window);
         state.borrow().sync_pattern_menu(&window);
 
         let (document_tx, document_rx) = std::sync::mpsc::channel::<DocumentResult>();
         let export_sample_rate = handle.sample_rate();
+
+        {
+            let st = state.clone();
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            window.on_new_song(move || {
+                let dirty = st.borrow().dirty;
+                if let Some(window) = weak.upgrade() {
+                    window.set_document_busy(true);
+                    window.set_status_message("Creating new song...".into());
+                }
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    if dirty && !confirm_via_zenity("Discard unsaved song changes?") {
+                        let _ = tx.send(DocumentResult::Cancelled);
+                        return;
+                    }
+                    let _ = tx.send(DocumentResult::NewSong(Project::starter_kit(
+                        fresh_starter_seed(),
+                    )));
+                });
+            });
+        }
 
         {
             let st = state.clone();
@@ -935,7 +1181,11 @@ impl AppUi {
                                 sample_references: saved
                                     .channels
                                     .into_iter()
-                                    .map(|channel| channel.setup.sampler_state().sample.clone())
+                                    .map(|channel| match channel.setup.source {
+                                        ChannelSource::Sampler(sampler) => Some(sampler.sample),
+                                        ChannelSource::DrumSynth(_)
+                                        | ChannelSource::MonoSynth(_) => None,
+                                    })
                                     .collect(),
                             })
                         })
@@ -1134,6 +1384,9 @@ impl AppUi {
 
         // --- Command channel from UI closures to the pump ---
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<EngineCommand>();
+        // Sample slots are published out-of-band, so source replacement asks
+        // the pump (which owns the EngineHandle) to restore the built-in sample.
+        let (sample_reset_tx, sample_reset_rx) = std::sync::mpsc::channel::<usize>();
 
         // Transport callbacks.
         {
@@ -2025,11 +2278,39 @@ impl AppUi {
             });
         }
 
-        // Add / remove channels.
+        // Add, replace, or remove channel sources.
         {
             let tx = cmd_tx.clone();
+            let reset_tx = sample_reset_tx.clone();
             let st = state.clone();
-            window.on_add_channel_clicked(move || {
+            let weak = window.as_weak();
+            window.on_channel_source_changed(move |value| {
+                let source = device_kind_from_int(value);
+                let mut st = st.borrow_mut();
+                let channel = st.selected;
+                if st.channels[channel].kind == source {
+                    return;
+                }
+                st.reset_channel_source(channel, source);
+                st.selected_note_id = None;
+                st.sync_row_flags();
+                if let Some(window) = weak.upgrade() {
+                    st.refresh_editor(&window);
+                }
+                let _ = reset_tx.send(channel);
+                let _ = tx.send(EngineCommand::SetChannelSource {
+                    channel: channel as u8,
+                    source,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let reset_tx = sample_reset_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_add_channel_clicked(move |value| {
+                let source = device_kind_from_int(value);
                 let mut st = st.borrow_mut();
                 if st.channels.len() >= MAX_CHANNELS {
                     return;
@@ -2047,18 +2328,28 @@ impl AppUi {
                     .map(|step| rack_cell(&ch.notes[st.current_pattern], step))
                     .collect();
                 let model = Rc::new(VecModel::from(cells));
+                st.channels.push(ch);
+                st.reset_channel_source(index, source);
+                st.selected = index;
+                st.selected_note_id = None;
+                let ch = &st.channels[index];
                 let row = ChannelRow {
                     name: ch.name.as_str().into(),
                     muted: false,
                     volume: ch.volume,
                     pan: ch.pan,
-                    selected: false,
+                    selected: true,
                     steps: ModelRc::from(model.clone()),
                 };
                 st.rows.push(row);
                 st.step_models.push(model);
-                st.channels.push(ch);
-                let _ = tx.send(EngineCommand::AddChannel);
+                st.sync_row_flags();
+                if let Some(window) = weak.upgrade() {
+                    window.set_selected_channel(index as i32);
+                    st.refresh_editor(&window);
+                }
+                let _ = reset_tx.send(index);
+                let _ = tx.send(EngineCommand::AddChannel { source });
             });
         }
         {
@@ -2074,6 +2365,7 @@ impl AppUi {
                 st.channels.pop();
                 st.step_models.pop();
                 st.rows.remove(st.rows.row_count() - 1);
+                st.source_revision = st.source_revision.wrapping_add(1);
                 if st.selected >= st.channels.len() {
                     st.selected = st.channels.len() - 1;
                     st.selected_note_id = None;
@@ -2274,6 +2566,141 @@ impl AppUi {
             });
         }
 
+        macro_rules! wire_drum_param {
+            ($callback:ident, $field:ident) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value: f32| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    channel.drum_params.$field = value;
+                    let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
+                        channel: channel_index as u8,
+                        params: channel.drum_params,
+                    });
+                });
+            }};
+        }
+
+        wire_drum_param!(on_drum_decay_changed, decay);
+        wire_drum_param!(on_drum_tune_semitones_changed, tune_semitones);
+        wire_drum_param!(on_drum_drive_changed, drive);
+        wire_drum_param!(on_drum_kick_start_hz_changed, kick_start_hz);
+        wire_drum_param!(on_drum_kick_end_hz_changed, kick_end_hz);
+        wire_drum_param!(on_drum_kick_sweep_changed, kick_sweep);
+        wire_drum_param!(on_drum_kick_click_changed, kick_click);
+        wire_drum_param!(on_drum_snare_tone_hz_changed, snare_tone_hz);
+        wire_drum_param!(on_drum_snare_noise_mix_changed, snare_noise_mix);
+        wire_drum_param!(on_drum_snare_noise_decay_changed, snare_noise_decay);
+        wire_drum_param!(on_drum_hat_hp_hz_changed, hat_hp_hz);
+        wire_drum_param!(on_drum_hat_metallic_changed, hat_metallic);
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_drum_mode_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.drum_params.mode = drum_mode_from_int(value);
+                let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
+                    channel: channel_index as u8,
+                    params: channel.drum_params,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_drum_choke_group_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.drum_params.choke_group = value.clamp(0, 16) as u8;
+                let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
+                    channel: channel_index as u8,
+                    params: channel.drum_params,
+                });
+            });
+        }
+
+        macro_rules! wire_mono_param {
+            ($callback:ident, $field:ident) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value: f32| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    channel.mono_params.$field = value;
+                    let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
+                        channel: channel_index as u8,
+                        params: channel.mono_params,
+                    });
+                });
+            }};
+        }
+
+        wire_mono_param!(on_mono_glide_changed, glide);
+        wire_mono_param!(on_mono_attack_changed, attack);
+        wire_mono_param!(on_mono_decay_changed, decay);
+        wire_mono_param!(on_mono_sustain_changed, sustain);
+        wire_mono_param!(on_mono_release_changed, release);
+        wire_mono_param!(on_mono_filter_cutoff_changed, filter_cutoff);
+        wire_mono_param!(on_mono_filter_resonance_changed, filter_resonance);
+        wire_mono_param!(on_mono_filter_env_changed, filter_env_amount);
+        wire_mono_param!(on_mono_drive_changed, drive);
+
+        macro_rules! wire_mono_osc_float {
+            ($callback:ident, $index:expr, $field:ident) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value: f32| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    channel.mono_params.osc[$index].$field = value;
+                    let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
+                        channel: channel_index as u8,
+                        params: channel.mono_params,
+                    });
+                });
+            }};
+        }
+        macro_rules! wire_mono_osc_wave {
+            ($callback:ident, $index:expr) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    channel.mono_params.osc[$index].wave = osc_wave_from_int(value);
+                    let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
+                        channel: channel_index as u8,
+                        params: channel.mono_params,
+                    });
+                });
+            }};
+        }
+
+        wire_mono_osc_wave!(on_mono_osc1_wave_changed, 0);
+        wire_mono_osc_float!(on_mono_osc1_semitones_changed, 0, semitones);
+        wire_mono_osc_float!(on_mono_osc1_cents_changed, 0, cents);
+        wire_mono_osc_float!(on_mono_osc1_level_changed, 0, level);
+        wire_mono_osc_float!(on_mono_osc1_pulse_width_changed, 0, pulse_width);
+        wire_mono_osc_wave!(on_mono_osc2_wave_changed, 1);
+        wire_mono_osc_float!(on_mono_osc2_semitones_changed, 1, semitones);
+        wire_mono_osc_float!(on_mono_osc2_cents_changed, 1, cents);
+        wire_mono_osc_float!(on_mono_osc2_level_changed, 1, level);
+        wire_mono_osc_float!(on_mono_osc2_pulse_width_changed, 1, pulse_width);
+        wire_mono_osc_wave!(on_mono_osc3_wave_changed, 2);
+        wire_mono_osc_float!(on_mono_osc3_semitones_changed, 2, semitones);
+        wire_mono_osc_float!(on_mono_osc3_cents_changed, 2, cents);
+        wire_mono_osc_float!(on_mono_osc3_level_changed, 2, level);
+        wire_mono_osc_float!(on_mono_osc3_pulse_width_changed, 2, pulse_width);
+
         // --- Sample loading via zenity + hound (selected channel) ---
         // The dialog + decode run on a worker thread so the UI stays
         // responsive (a blocking dialog makes the OS mark the app frozen and
@@ -2284,12 +2711,19 @@ impl AppUi {
             let st = state.clone();
             let load_tx = load_tx.clone();
             window.on_load_sample_clicked(move || {
-                let channel = st.borrow().selected;
+                let (channel, source_revision) = {
+                    let st = st.borrow();
+                    (st.selected, st.source_revision)
+                };
                 let tx = load_tx.clone();
                 dbg_log(&format!("UI: loading sample for channel {channel}"));
                 std::thread::spawn(move || {
                     let result = pick_wav_via_zenity().map(|path| load_sample_at_path(&path));
-                    let _ = tx.send(LoadResult { channel, result });
+                    let _ = tx.send(LoadResult {
+                        channel,
+                        source_revision,
+                        result,
+                    });
                 });
             });
         }
@@ -2297,9 +2731,13 @@ impl AppUi {
             let st = state.clone();
             let load_tx = load_tx.clone();
             window.on_previous_sample_clicked(move || {
-                let (channel, path) = {
+                let (channel, source_revision, path) = {
                     let st = st.borrow();
-                    (st.selected, st.channels[st.selected].sample_path.clone())
+                    (
+                        st.selected,
+                        st.source_revision,
+                        st.channels[st.selected].sample_path.clone(),
+                    )
                 };
                 let Some(path) = path else { return };
                 let tx = load_tx.clone();
@@ -2309,7 +2747,11 @@ impl AppUi {
                         Ok(None) => None,
                         Err(error) => Some(Err(error)),
                     };
-                    let _ = tx.send(LoadResult { channel, result });
+                    let _ = tx.send(LoadResult {
+                        channel,
+                        source_revision,
+                        result,
+                    });
                 });
             });
         }
@@ -2317,9 +2759,13 @@ impl AppUi {
             let st = state.clone();
             let load_tx = load_tx.clone();
             window.on_next_sample_clicked(move || {
-                let (channel, path) = {
+                let (channel, source_revision, path) = {
                     let st = st.borrow();
-                    (st.selected, st.channels[st.selected].sample_path.clone())
+                    (
+                        st.selected,
+                        st.source_revision,
+                        st.channels[st.selected].sample_path.clone(),
+                    )
                 };
                 let Some(path) = path else { return };
                 let tx = load_tx.clone();
@@ -2329,7 +2775,11 @@ impl AppUi {
                         Ok(None) => None,
                         Err(error) => Some(Err(error)),
                     };
-                    let _ = tx.send(LoadResult { channel, result });
+                    let _ = tx.send(LoadResult {
+                        channel,
+                        source_revision,
+                        result,
+                    });
                 });
             });
         }
@@ -2358,6 +2808,23 @@ impl AppUi {
                     match result {
                         DocumentResult::Cancelled => {
                             window.set_status_message("".into());
+                        }
+                        DocumentResult::NewSong(project) => {
+                            let samples = vec![None; project.channels.len()];
+                            install_project_in_ui(
+                                &mut handle,
+                                default_sample_for_pump.as_ref(),
+                                &st,
+                                &window,
+                                &project,
+                                &samples,
+                            );
+                            let mut state = st.borrow_mut();
+                            state.bundle_path = None;
+                            state.dirty = false;
+                            state.revision = state.revision.wrapping_add(1);
+                            state.update_document_title(&window);
+                            window.set_status_message("New randomized kit".into());
                         }
                         DocumentResult::SavedSong {
                             path,
@@ -2512,6 +2979,17 @@ impl AppUi {
                     }
                 }
                 while let Ok(load) = load_rx.try_recv() {
+                    let still_current = {
+                        let st = st.borrow();
+                        load.source_revision == st.source_revision
+                            && st
+                                .channels
+                                .get(load.channel)
+                                .is_some_and(|channel| channel.kind == DeviceKind::Sampler)
+                    };
+                    if !still_current {
+                        continue;
+                    }
                     let Some(loaded) = (match load.result {
                         Some(Ok(loaded)) => Some(loaded),
                         Some(Err(e)) => {
@@ -2552,6 +3030,13 @@ impl AppUi {
                             st.refresh_editor(&w);
                             st.update_document_title(&w);
                         }
+                    }
+                }
+                while let Ok(channel) = sample_reset_rx.try_recv() {
+                    if let Some(sample) = default_sample_for_pump.as_ref() {
+                        handle.load_sample(channel, sample.clone());
+                    } else {
+                        handle.clear_sample(channel);
                     }
                 }
                 let mut forwarded = 0usize;
@@ -2648,7 +3133,7 @@ impl AppUi {
                 }
                 // Pattern 1: off-beat ghost notes; channel 1 on pattern 0.
                 w.invoke_add_pattern_clicked();
-                w.invoke_add_channel_clicked();
+                w.invoke_add_channel_clicked(0);
                 w.invoke_step_clicked(1, 2);
                 w.invoke_pattern_selected(0);
                 w.invoke_pattern_length_changed(32);
@@ -2719,18 +3204,19 @@ fn asset_mode_from_window(window: &MainWindow) -> AssetMode {
 
 fn apply_sample_references(
     channels: &mut [ChannelState],
-    references: impl IntoIterator<Item = SampleReference>,
+    references: impl IntoIterator<Item = Option<SampleReference>>,
 ) {
     for (channel, sample) in channels.iter_mut().zip(references) {
         match sample {
-            SampleReference::Builtin { .. } => {
+            Some(SampleReference::Builtin { .. }) => {
                 channel.sample_path = None;
                 channel.sample_embedded = false;
             }
-            SampleReference::File { path, embedded } => {
+            Some(SampleReference::File { path, embedded }) => {
                 channel.sample_path = Some(path);
                 channel.sample_embedded = embedded;
             }
+            None => {}
         }
     }
 }
@@ -2763,16 +3249,21 @@ fn install_project_in_ui(
     samples: &[Option<Arc<SampleData>>],
 ) {
     for index in 0..MAX_CHANNELS {
-        let sample = samples.get(index).cloned().flatten().or_else(|| {
-            project.channels.get(index).and_then(|channel| {
-                matches!(
-                    channel.setup.sampler_state().sample,
-                    SampleReference::Builtin { .. }
-                )
-                .then(|| default_sample.cloned())
-                .flatten()
-            })
-        });
+        let sample = project
+            .channels
+            .get(index)
+            .and_then(|channel| match &channel.setup.source {
+                ChannelSource::Sampler(sampler) => {
+                    samples.get(index).cloned().flatten().or_else(|| {
+                        matches!(sampler.sample, SampleReference::Builtin { .. })
+                            .then(|| default_sample.cloned())
+                            .flatten()
+                    })
+                }
+                ChannelSource::DrumSynth(_) | ChannelSource::MonoSynth(_) => {
+                    default_sample.cloned()
+                }
+            });
         if let Some(sample) = sample {
             handle.load_sample(index, sample);
         } else {
@@ -2791,22 +3282,29 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
         LoadedDocument::Song(project) => project
             .channels
             .iter()
-            .map(|channel| channel.setup.sampler_state().sample.clone())
+            .map(|channel| match &channel.setup.source {
+                ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
+                ChannelSource::DrumSynth(_) | ChannelSource::MonoSynth(_) => None,
+            })
             .collect::<Vec<_>>(),
         LoadedDocument::Kit(kit) => kit
             .channels
             .iter()
-            .map(|channel| channel.sampler_state().sample.clone())
+            .map(|channel| match &channel.source {
+                ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
+                ChannelSource::DrumSynth(_) | ChannelSource::MonoSynth(_) => None,
+            })
             .collect(),
-        LoadedDocument::Channel(channel) => {
-            vec![channel.sampler_state().sample.clone()]
-        }
+        LoadedDocument::Channel(channel) => vec![match &channel.source {
+            ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
+            ChannelSource::DrumSynth(_) | ChannelSource::MonoSynth(_) => None,
+        }],
     };
     let mut samples = Vec::with_capacity(sample_references.len());
     for (channel, reference) in sample_references.into_iter().enumerate() {
         match reference {
-            SampleReference::Builtin { .. } => samples.push(None),
-            SampleReference::File { path, .. } if path.is_file() => match decode_wav(&path) {
+            None | Some(SampleReference::Builtin { .. }) => samples.push(None),
+            Some(SampleReference::File { path, .. }) if path.is_file() => match decode_wav(&path) {
                 Ok(sample) => samples.push(Some(sample)),
                 Err(error) => {
                     report.warnings.push(AssetWarning {
@@ -2817,7 +3315,7 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
                     samples.push(None);
                 }
             },
-            SampleReference::File { .. } => samples.push(None),
+            Some(SampleReference::File { .. }) => samples.push(None),
         }
     }
     Ok(ResolvedDocument { report, samples })
@@ -3201,10 +3699,10 @@ mod tests {
 
         apply_sample_references(
             std::slice::from_mut(&mut channel),
-            [SampleReference::File {
+            [Some(SampleReference::File {
                 path: PathBuf::from("/songs/beat.mooloop/samples/00-source.wav"),
                 embedded: true,
-            }],
+            })],
         );
 
         assert_eq!(

@@ -9,11 +9,13 @@ pub const MAX_CHANNELS: usize = 16;
 /// `u8`, so 256 is the complete addressable bank rather than a UI limit.
 pub const MAX_PATTERNS: usize = u8::MAX as usize + 1;
 
-/// Instrument kind for a channel. More kinds arrive with Phase 4.
+/// Instrument kind for a channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceKind {
     Sampler,
+    DrumSynth,
+    MonoSynth,
 }
 
 /// One mixer channel.

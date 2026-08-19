@@ -25,7 +25,13 @@ impl Svf {
 
     /// Process one sample. `cutoff_hz` is clamped to a safe range;
     /// `resonance` in `[0, 1]` approaches self-oscillation at the top.
-    pub fn next_sample(&mut self, input: f32, cutoff_hz: f32, resonance: f32, sample_rate: u32) -> f32 {
+    pub fn next_sample(
+        &mut self,
+        input: f32,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> f32 {
         let sr = sample_rate as f32;
         let cutoff = cutoff_hz.clamp(20.0, sr * 0.45);
         let g = (core::f32::consts::PI * cutoff / sr).tan();
@@ -68,6 +74,11 @@ impl OnePoleHp {
     pub fn set_cutoff(&mut self, cutoff_hz: f32, sample_rate: u32) {
         let cutoff = cutoff_hz.clamp(10.0, sample_rate as f32 * 0.45);
         self.coeff = (-core::f32::consts::TAU * cutoff / sample_rate as f32).exp();
+    }
+
+    pub fn reset(&mut self) {
+        self.prev_in = 0.0;
+        self.prev_out = 0.0;
     }
 
     pub fn next_sample(&mut self, input: f32) -> f32 {

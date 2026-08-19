@@ -7,9 +7,10 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooloop_core::{
-    ChannelSetup, ChannelSource, Kit, Project, SampleReference, SamplerParams, MAX_CHANNELS,
-    MAX_CHOKE_GROUP, MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS, MAX_PATTERN_STEPS,
-    MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SAMPLER_VOICES, TICKS_PER_STEP,
+    ChannelSetup, ChannelSource, DrumSynthParams, Kit, MonoSynthParams, Project, SampleReference,
+    SamplerParams, MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS,
+    MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SAMPLER_VOICES,
+    TICKS_PER_STEP,
 };
 use serde::{Deserialize, Serialize};
 
@@ -233,7 +234,9 @@ fn prepare_setup_asset(
     copied: &mut HashMap<PathBuf, PathBuf>,
     warnings: &mut Vec<AssetWarning>,
 ) -> Result<(), Error> {
-    let ChannelSource::Sampler(sampler) = &mut setup.source;
+    let ChannelSource::Sampler(sampler) = &mut setup.source else {
+        return Ok(());
+    };
     let SampleReference::File { path, embedded } = &mut sampler.sample else {
         return Ok(());
     };
@@ -394,7 +397,9 @@ fn resolve_setup_asset(
     setup: &mut ChannelSetup,
     warnings: &mut Vec<AssetWarning>,
 ) -> Result<(), Error> {
-    let ChannelSource::Sampler(sampler) = &mut setup.source;
+    let ChannelSource::Sampler(sampler) = &mut setup.source else {
+        return Ok(());
+    };
     let SampleReference::File { path, embedded } = &mut sampler.sample else {
         return Ok(());
     };
@@ -528,11 +533,69 @@ fn validate_setups(setups: &[ChannelSetup]) -> Result<(), Error> {
                 "channel {index} has invalid mixer values"
             )));
         }
+        if channel.kind != setup.source.kind() {
+            return Err(Error::Invalid(format!(
+                "channel {index} kind does not match its source"
+            )));
+        }
         match &setup.source {
             ChannelSource::Sampler(sampler) => validate_sampler(index, sampler.params)?,
+            ChannelSource::DrumSynth(synth) => validate_drum_synth(index, synth.params)?,
+            ChannelSource::MonoSynth(synth) => validate_mono_synth(index, synth.params)?,
         }
     }
     Ok(())
+}
+
+fn validate_drum_synth(channel: usize, params: DrumSynthParams) -> Result<(), Error> {
+    let valid = params.choke_group <= MAX_CHOKE_GROUP
+        && in_range(params.decay, 0.0, 10.0)
+        && in_range(params.tune_semitones, -48.0, 48.0)
+        && in_range(params.drive, 0.0, 1.0)
+        && in_range(params.kick_start_hz, 20.0, 20_000.0)
+        && in_range(params.kick_end_hz, 20.0, 20_000.0)
+        && in_range(params.kick_sweep, 0.0, 10.0)
+        && in_range(params.kick_click, 0.0, 1.0)
+        && in_range(params.snare_tone_hz, 20.0, 20_000.0)
+        && in_range(params.snare_noise_mix, 0.0, 1.0)
+        && in_range(params.snare_noise_decay, 0.0, 10.0)
+        && in_range(params.hat_hp_hz, 20.0, 20_000.0)
+        && in_range(params.hat_metallic, 0.0, 1.0);
+    if !valid {
+        return Err(Error::Invalid(format!(
+            "channel {channel} has invalid drum synth parameters"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_mono_synth(channel: usize, params: MonoSynthParams) -> Result<(), Error> {
+    let oscillators_valid = params.osc.iter().all(|osc| {
+        in_range(osc.semitones, -48.0, 48.0)
+            && in_range(osc.cents, -100.0, 100.0)
+            && in_range(osc.level, 0.0, 1.0)
+            && in_range(osc.pulse_width, 0.05, 0.95)
+    });
+    let valid = oscillators_valid
+        && in_range(params.glide, 0.0, 10.0)
+        && in_range(params.attack, 0.0, 10.0)
+        && in_range(params.decay, 0.0, 10.0)
+        && in_range(params.sustain, 0.0, 1.0)
+        && in_range(params.release, 0.0, 10.0)
+        && in_range(params.filter_cutoff, 0.0, 1.0)
+        && in_range(params.filter_resonance, 0.0, 1.0)
+        && in_range(params.filter_env_amount, -1.0, 1.0)
+        && in_range(params.drive, 0.0, 1.0);
+    if !valid {
+        return Err(Error::Invalid(format!(
+            "channel {channel} has invalid mono synth parameters"
+        )));
+    }
+    Ok(())
+}
+
+fn in_range(value: f32, min: f32, max: f32) -> bool {
+    value.is_finite() && (min..=max).contains(&value)
 }
 
 fn validate_sampler(channel: usize, params: SamplerParams) -> Result<(), Error> {
@@ -614,7 +677,7 @@ mod tests {
         let mut project = Project::default();
         project.channels.push(project.channels[0].clone());
         for channel in &mut project.channels {
-            channel.setup.sampler_state_mut().sample = SampleReference::File {
+            channel.setup.sampler_state_mut().unwrap().sample = SampleReference::File {
                 path: source.clone(),
                 embedded: false,
             };
@@ -626,8 +689,8 @@ mod tests {
         let LoadedDocument::Song(project) = loaded.document else {
             panic!("expected song")
         };
-        let first = &project.channels[0].setup.sampler_state().sample;
-        let second = &project.channels[1].setup.sampler_state().sample;
+        let first = &project.channels[0].setup.sampler_state().unwrap().sample;
+        let second = &project.channels[1].setup.sampler_state().unwrap().sample;
         assert_eq!(first, second);
     }
 
@@ -638,7 +701,11 @@ mod tests {
         fs::write(&source, b"wav bytes").unwrap();
         let bundle = temp.path().join("song.mooloop");
         let mut project = Project::default();
-        project.channels[0].setup.sampler_state_mut().sample = SampleReference::File {
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::File {
             path: source.clone(),
             embedded: false,
         };
@@ -654,8 +721,11 @@ mod tests {
         let LoadedDocument::Song(saved_again) = load_bundle(&bundle).unwrap().document else {
             panic!("expected song")
         };
-        let SampleReference::File { path, embedded } =
-            &saved_again.channels[0].setup.sampler_state().sample
+        let SampleReference::File { path, embedded } = &saved_again.channels[0]
+            .setup
+            .sampler_state()
+            .unwrap()
+            .sample
         else {
             panic!("expected file sample")
         };
@@ -670,8 +740,8 @@ mod tests {
         setup.channel.muted = true;
         setup.channel.volume = 0.42;
         setup.channel.pan = -0.25;
-        setup.sampler_state_mut().params.reverse = true;
-        setup.sampler_state_mut().params.choke_group = 3;
+        setup.sampler_state_mut().unwrap().params.reverse = true;
+        setup.sampler_state_mut().unwrap().params.choke_group = 3;
         let kit = Kit {
             channels: vec![setup.clone()],
         };
@@ -693,7 +763,11 @@ mod tests {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("song.mooloop");
         let mut project = Project::default();
-        project.channels[0].setup.sampler_state_mut().sample = SampleReference::File {
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::File {
             path: temp.path().join("gone.wav"),
             embedded: false,
         };
@@ -709,7 +783,11 @@ mod tests {
         let bundle = temp.path().join("song.mooloop");
         fs::create_dir(&bundle).unwrap();
         let mut project = Project::default();
-        project.channels[0].setup.sampler_state_mut().sample = SampleReference::File {
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::File {
             path: PathBuf::from("../escape.wav"),
             embedded: true,
         };
@@ -741,5 +819,148 @@ mod tests {
             load_bundle(&bundle),
             Err(Error::UnsupportedVersion(99))
         ));
+    }
+
+    #[test]
+    fn synth_sources_round_trip_without_sample_assets() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("starter.mooloop");
+        let project = Project::starter_kit(7);
+
+        let report = save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        assert!(report.warnings.is_empty());
+        assert!(!bundle.join("samples").exists());
+        let manifest = fs::read_to_string(bundle.join(MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("type = \"drum_synth\""));
+        assert_eq!(
+            load_bundle(&bundle).unwrap().document,
+            LoadedDocument::Song(project)
+        );
+    }
+
+    #[test]
+    fn sampler_drum_and_mono_sources_round_trip_for_kit_and_channel() {
+        let temp = tempdir().unwrap();
+        let kit = Kit {
+            channels: vec![
+                ChannelSetup::sampler("Sample"),
+                ChannelSetup::drum_synth("Drum"),
+                ChannelSetup::mono_synth("Mono"),
+            ],
+        };
+        let kit_path = temp.path().join("mixed.mooloop-kit");
+        save_kit(&kit_path, &kit, AssetMode::Embedded).unwrap();
+        assert!(!kit_path.join("samples").exists());
+        assert_eq!(
+            load_bundle(&kit_path).unwrap().document,
+            LoadedDocument::Kit(kit)
+        );
+
+        let channel = ChannelSetup::mono_synth("Bass");
+        let channel_path = temp.path().join("bass.mooloop-channel");
+        save_channel(&channel_path, &channel, AssetMode::Embedded).unwrap();
+        assert!(!channel_path.join("samples").exists());
+        assert_eq!(
+            load_bundle(&channel_path).unwrap().document,
+            LoadedDocument::Channel(channel)
+        );
+    }
+
+    #[test]
+    fn legacy_sampler_source_shape_remains_loadable() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("legacy.mooloop");
+        fs::create_dir(&bundle).unwrap();
+        fs::write(
+            bundle.join(MANIFEST_FILE),
+            r#"format_version = 1
+document_type = "song"
+asset_mode = "embedded"
+
+[document]
+bpm = 120
+ppq = 96
+beats_per_bar = 4
+playback_mode = "pattern"
+current_pattern = 0
+selected_channel = 0
+pattern_lengths = [16]
+playlist = []
+
+[[document.channels]]
+notes = [[]]
+next_note_id = 1
+
+[document.channels.setup.channel]
+name = "Sampler 1"
+kind = "sampler"
+muted = false
+volume = 0.8
+pan = 0.0
+
+[document.channels.setup.source]
+type = "sampler"
+
+[document.channels.setup.source.state.params]
+voice_mode = "one_shot"
+polyphony = 1
+retrigger_mode = "restart"
+choke_group = 0
+start = 0.0
+end = 1.0
+reverse = false
+root_note = 60
+tune_semitones = 0.0
+tune_cents = 0.0
+loop_start = 0.0
+loop_end = 1.0
+loop_mode = "off"
+attack = 0.001
+decay = 0.25
+sustain = 1.0
+release = 0.05
+filter_cutoff = 1.0
+filter_resonance = 0.0
+filter_env_amount = 0.0
+drive = 0.0
+bit_reduction = 0.0
+rate_reduction = 0.0
+
+[document.channels.setup.source.state.sample]
+kind = "builtin"
+id = "default_kick"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_bundle(&bundle).unwrap().document,
+            LoadedDocument::Song(Project::default())
+        );
+    }
+
+    #[test]
+    fn rejects_mismatched_or_invalid_synth_sources() {
+        let mut project = Project::starter_kit(1);
+        project.channels[0].setup.channel.kind = mooloop_core::DeviceKind::Sampler;
+        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+
+        let mut project = Project::starter_kit(1);
+        project.channels[0]
+            .setup
+            .drum_synth_state_mut()
+            .unwrap()
+            .params
+            .choke_group = MAX_CHOKE_GROUP + 1;
+        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1);
+        project.channels[0]
+            .setup
+            .mono_synth_state_mut()
+            .unwrap()
+            .params
+            .filter_cutoff = f32::NAN;
+        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
     }
 }

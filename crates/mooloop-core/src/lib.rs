@@ -23,8 +23,8 @@ pub use playlist::{
     STEPS_PER_BAR, TICKS_PER_BAR,
 };
 pub use project::{
-    ChannelPreset, ChannelSetup, ChannelSource, Kit, Project, ProjectChannel, SampleReference,
-    SamplerState,
+    ChannelPreset, ChannelSetup, ChannelSource, DrumSynthState, Kit, MonoSynthState, Project,
+    ProjectChannel, SampleReference, SamplerState,
 };
 pub use sampler::{
     clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,
