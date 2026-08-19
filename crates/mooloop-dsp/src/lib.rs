@@ -6,7 +6,8 @@
 //! - [`sampler`]: the sample-playback instrument.
 //! - [`drumsynth`]: the percussive synth (kick / snare / hat).
 //! - [`monosynth`]: the three-oscillator mono synth.
-//! - [`env`], [`osc`], [`filter`]: building blocks shared by the synths.
+//! - [`env`], [`osc`], [`lfo`], [`filter`], [`smooth`]: building blocks shared
+//!   by the synths.
 //!
 //! The synths implement `AudioNode` but are not yet wired into channels or
 //! the UI; that integration is a later step. Effects (Filter, Delay) arrive
@@ -17,10 +18,12 @@ pub mod drumsynth;
 pub mod env;
 pub mod event;
 pub mod filter;
+pub mod lfo;
 pub mod monosynth;
 pub mod node;
 pub mod osc;
 pub mod sampler;
+pub mod smooth;
 
 pub use bus::{pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use drumsynth::DrumSynth;

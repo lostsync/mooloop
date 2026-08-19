@@ -594,7 +594,12 @@ fn validate_mono_synth(channel: usize, params: MonoSynthParams) -> Result<(), Er
         && in_range(params.filter_cutoff, 0.0, 1.0)
         && in_range(params.filter_resonance, 0.0, 1.0)
         && in_range(params.filter_env_amount, -1.0, 1.0)
-        && in_range(params.drive, 0.0, 1.0);
+        && in_range(params.drive, 0.0, 1.0)
+        && in_range(params.lfo.rate_hz, 0.0, 20.0)
+        && in_range(params.lfo.to_pitch, -24.0, 24.0)
+        && in_range(params.lfo.to_filter, -4.0, 4.0)
+        && in_range(params.lfo.to_pulse_width, -0.45, 0.45)
+        && in_range(params.lfo.to_amp, 0.0, 1.0);
     if !valid {
         return Err(Error::Invalid(format!(
             "channel {channel} has invalid mono synth parameters"
@@ -982,5 +987,24 @@ id = "default_kick"
             .params
             .filter_cutoff = f32::NAN;
         assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1);
+        project.channels[0]
+            .setup
+            .mono_synth_state_mut()
+            .unwrap()
+            .params
+            .lfo
+            .rate_hz = 400.0;
+        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn mono_synth_params_without_an_lfo_table_keep_the_default_lfo() {
+        let written = toml::to_string(&MonoSynthParams::default()).unwrap();
+        let (before_lfo, _) = written.split_once("[lfo]").unwrap();
+        let loaded: MonoSynthParams = toml::from_str(before_lfo).unwrap();
+        assert_eq!(loaded, MonoSynthParams::default());
     }
 }

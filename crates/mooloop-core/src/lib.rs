@@ -30,5 +30,8 @@ pub use project::{
 pub use sampler::{
     clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,
 };
-pub use synth::{DrumMode, DrumSynthParams, MonoSynthParams, OscParams, OscWave, MAX_DRUM_VOICES};
+pub use synth::{
+    DrumMode, DrumSynthParams, LfoParams, LfoWave, MonoSynthParams, OscParams, OscWave,
+    MAX_DRUM_VOICES,
+};
 pub use time::{ticks_per_sample, Ppq, Samples, Ticks};

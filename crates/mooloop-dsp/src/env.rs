@@ -55,9 +55,16 @@ impl Adsr {
         self.release_s = release_s.max(MIN_STAGE_S);
     }
 
+    /// Start the attack stage. The level is deliberately *not* reset to zero:
+    /// a note that arrives while the previous one is still sounding (a
+    /// retrigger, or a new note over the tail of a release) would otherwise
+    /// step the output straight to silence for one sample, which is an
+    /// audible click. Attacking from wherever the envelope already is keeps
+    /// the amplitude continuous; from idle the level is already zero, so a
+    /// fresh note behaves exactly as before.
     pub fn note_on(&mut self) {
         self.stage = AdsrStage::Attack;
-        self.level = 0.0;
+        self.level = self.level.clamp(0.0, 1.0);
     }
 
     /// Enter release from the current level.

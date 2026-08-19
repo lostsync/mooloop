@@ -169,6 +169,77 @@ impl Default for OscParams {
     }
 }
 
+/// Mono synth LFO waveform. Bipolar shapes start at zero so a retriggered
+/// LFO never steps the modulation at the note boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LfoWave {
+    #[default]
+    Sine,
+    Triangle,
+    Saw,
+    Square,
+    /// Sample and hold: one random value per cycle.
+    Random,
+}
+
+impl LfoWave {
+    pub fn all() -> [LfoWave; 5] {
+        [
+            LfoWave::Sine,
+            LfoWave::Triangle,
+            LfoWave::Saw,
+            LfoWave::Square,
+            LfoWave::Random,
+        ]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LfoWave::Sine => "Sine",
+            LfoWave::Triangle => "Tri",
+            LfoWave::Saw => "Saw",
+            LfoWave::Square => "Square",
+            LfoWave::Random => "S&H",
+        }
+    }
+}
+
+/// The mono synth's single LFO. One shared shape with a depth per
+/// destination, so no destination selector is needed and several targets can
+/// move together.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LfoParams {
+    pub wave: LfoWave,
+    /// Rate in Hz, `[0.01, 20]`.
+    pub rate_hz: f32,
+    /// Restart the LFO phase on every note-on. Off is free running.
+    pub retrigger: bool,
+    /// Pitch depth in semitones, bipolar, `[-24, 24]`.
+    pub to_pitch: f32,
+    /// Filter cutoff depth in octaves, bipolar, `[-4, 4]`.
+    pub to_filter: f32,
+    /// Pulse width depth, bipolar, `[-0.45, 0.45]`; added to every
+    /// oscillator's own width.
+    pub to_pulse_width: f32,
+    /// Tremolo depth in `[0, 1]`. Modulates downward from unity gain.
+    pub to_amp: f32,
+}
+
+impl Default for LfoParams {
+    fn default() -> Self {
+        Self {
+            wave: LfoWave::Sine,
+            rate_hz: 5.0,
+            retrigger: false,
+            to_pitch: 0.0,
+            to_filter: 0.0,
+            to_pulse_width: 0.0,
+            to_amp: 0.0,
+        }
+    }
+}
+
 /// All mono synth parameters, in the units the DSP and UI share. Three
 /// oscillators into one low-pass filter with a shared ADSR, mono voice with
 /// glide. Note duration and note-off semantics are honored (gate), per the
@@ -194,6 +265,10 @@ pub struct MonoSynthParams {
     pub filter_env_amount: f32,
     /// Soft saturation drive in `[0, 1]`. `0` bypasses it.
     pub drive: f32,
+    /// One LFO into pitch, filter, pulse width, and amplitude. Defaulted on
+    /// load so manifests written before the LFO existed stay readable.
+    #[serde(default)]
+    pub lfo: LfoParams,
 }
 
 impl Default for MonoSynthParams {
@@ -226,6 +301,7 @@ impl Default for MonoSynthParams {
             filter_resonance: 0.0,
             filter_env_amount: 0.0,
             drive: 0.0,
+            lfo: LfoParams::default(),
         }
     }
 }
