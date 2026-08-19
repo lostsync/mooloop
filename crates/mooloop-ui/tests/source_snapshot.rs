@@ -73,3 +73,36 @@ fn render_drum_and_mono_source_editors() {
     assert!(narrow.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&narrow, "MOOLOOP_MONO_SOURCE_NARROW_SNAPSHOT");
 }
+
+#[test]
+fn render_sampler_source_editor() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .expect("initialize headless renderer");
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_pattern_length(16);
+    ui.set_selected_channel_name(SharedString::from("Kick"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(0);
+    ui.set_sample_name(SharedString::from("kick_808.wav"));
+    ui.set_sample_description(SharedString::from("48kHz / 16-bit / mono"));
+    ui.set_sample_duration(1.2);
+    ui.set_can_previous_sample(true);
+    ui.set_can_next_sample(true);
+    ui.set_waveform(ModelRc::from(Rc::new(VecModel::from(vec![
+        0.2, 0.6, 0.9, 0.4, 0.3, 0.7, 0.5, 0.1,
+    ]))));
+
+    let snapshot = ui.window().take_snapshot().unwrap();
+    assert_eq!((snapshot.width(), snapshot.height()), (960, 760));
+    assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&snapshot, "MOOLOOP_SAMPLER_SOURCE_SNAPSHOT");
+}

@@ -5,6 +5,11 @@ export enum AudioOrientation { horizontal, vertical }
 
 export component ToolButton inherits Rectangle {
     in property <string> text;
+    // Line-art icon on a 16x16 grid, drawn instead of a glyph when set (see
+    // ToolIcons in toolbar.slint for the precedent: text glyphs resolve
+    // through font fallback and arrive at inconsistent weights, Path icons
+    // stay one family). Empty string keeps the plain-text behavior.
+    in property <string> icon: "";
     in property <string> tooltip: root.text;
     in property <bool> active;
     in property <bool> enabled: true;
@@ -26,12 +31,24 @@ export component ToolButton inherits Rectangle {
     accessible-label: root.tooltip;
     forward-focus: button-keyboard;
 
-    Text {
+    if root.icon == "" : Text {
         text: root.text;
         color: root.enabled ? root.text-color : Theme.text-faint;
         horizontal-alignment: center;
         vertical-alignment: center;
         font-size: 11px;
+    }
+    if root.icon != "" : Path {
+        width: 16px;
+        height: 16px;
+        x: (parent.width - 16px) / 2;
+        y: (parent.height - 16px) / 2;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        commands: root.icon;
+        stroke: root.enabled ? root.text-color : Theme.text-faint;
+        stroke-width: 1.3px;
+        fill: transparent;
     }
 
     tap := TouchArea {

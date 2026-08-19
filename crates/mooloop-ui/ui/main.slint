@@ -71,6 +71,47 @@ component FlatButton inherits ToolButton { }
 component SectionLabel inherits DesignSectionLabel { }
 component MuteButton inherits DesignMuteButton { }
 
+// Sample-editor transport icons, drawn as line art on a shared 16x16 grid
+// (same rationale as ToolIcons in toolbar.slint: the previous `‹ › ⌕ ↤ — ↻ ↔`
+// text glyphs resolved through font fallback at inconsistent weights and
+// sizes).
+global SamplerIcons {
+    out property <string> previous: "M 10 3 L 5 8 L 10 13";
+    out property <string> next: "M 6 3 L 11 8 L 6 13";
+    out property <string> search:
+        "M 10 6 A 4 4 0 1 1 2 6 A 4 4 0 1 1 10 6 Z M 9.2 9.2 L 13.5 13.5";
+    out property <string> reverse: "M 12 3 L 12 13 M 12 8 L 4.5 8 M 7.3 5 L 4.3 8 L 7.3 11";
+    out property <string> loop-off: "M 4 8 L 12 8";
+    out property <string> loop-forward: "M 8 3 A 5 5 0 1 1 3 8 M 3 8 L 3 4.5 M 3 8 L 6.3 9";
+    out property <string> loop-pingpong:
+        "M 3 8 L 13 8 M 3 8 L 6.2 5 M 3 8 L 6.2 11 M 13 8 L 9.8 5 M 13 8 L 9.8 11";
+}
+
+// Label-over-control pairing used repeatedly in the VOICE section. A plain
+// Text element's line box is taller than its glyphs, so a VerticalLayout
+// with the label as one child leaves a visible gap above the control even
+// with a small `spacing`; fixing the label's own height closes it, and
+// factoring the pairing here keeps that fix in one place.
+component LabelledField inherits VerticalLayout {
+    in property <string> label;
+    spacing: 1px;
+    Text {
+        text: root.label;
+        color: Theme.text-faint;
+        font-size: 8px;
+        height: 9px;
+        vertical-alignment: bottom;
+    }
+    @children
+}
+
+// Hairline separator between the sampler editor's parameter groups.
+component SectionDivider inherits Rectangle {
+    width: 1px;
+    height: 142px;
+    background: Theme.border;
+}
+
 component WaveformMarker inherits Rectangle {
     in property <string> marker-label;
     in property <color> marker-color;
@@ -1491,20 +1532,20 @@ export component MainWindow inherits Window {
                                 padding-bottom: 4px;
                                 spacing: 3px;
                                 FlatButton {
-                                    text: "‹";
+                                    icon: SamplerIcons.previous;
                                     tooltip: "Previous WAV in this folder";
                                     enabled: root.can-previous-sample;
                                     min-width: 28px; max-width: 28px;
                                     clicked => { root.previous-sample-clicked(); }
                                 }
                                 FlatButton {
-                                    text: "⌕";
+                                    icon: SamplerIcons.search;
                                     tooltip: "Choose a WAV file";
                                     min-width: 28px; max-width: 28px;
                                     clicked => { root.load-sample-clicked(); }
                                 }
                                 FlatButton {
-                                    text: "›";
+                                    icon: SamplerIcons.next;
                                     tooltip: "Next WAV in this folder";
                                     enabled: root.can-next-sample;
                                     min-width: 28px; max-width: 28px;
@@ -1537,10 +1578,10 @@ export component MainWindow inherits Window {
                                     Tooltip { text: @markdown("MIDI root note for original sample pitch"); }
                                 }
                                 FlatButton {
-                                    text: "↤";
+                                    icon: SamplerIcons.reverse;
                                     tooltip: "Reverse playback";
                                     active: root.reverse-playback;
-                                    min-width: 30px; max-width: 30px;
+                                    min-width: 28px; max-width: 28px;
                                     clicked => {
                                         root.reverse-playback = !root.reverse-playback;
                                         root.reverse-playback-changed(root.reverse-playback);
@@ -1549,18 +1590,18 @@ export component MainWindow inherits Window {
                                 Rectangle { width: 6px; }
                                 Text { text: "LOOP"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
                                 FlatButton {
-                                    text: "—"; tooltip: "Loop off"; active: root.loop-mode == 0;
-                                    min-width: 30px; max-width: 30px;
+                                    icon: SamplerIcons.loop-off; tooltip: "Loop off"; active: root.loop-mode == 0;
+                                    min-width: 28px; max-width: 28px;
                                     clicked => { root.loop-mode = 0; root.loop-mode-changed(0); }
                                 }
                                 FlatButton {
-                                    text: "↻"; tooltip: "Forward loop"; active: root.loop-mode == 1;
-                                    min-width: 30px; max-width: 30px;
+                                    icon: SamplerIcons.loop-forward; tooltip: "Forward loop"; active: root.loop-mode == 1;
+                                    min-width: 28px; max-width: 28px;
                                     clicked => { root.loop-mode = 1; root.loop-mode-changed(1); }
                                 }
                                 FlatButton {
-                                    text: "↔"; tooltip: "Ping-pong loop"; active: root.loop-mode == 2;
-                                    min-width: 30px; max-width: 30px;
+                                    icon: SamplerIcons.loop-pingpong; tooltip: "Ping-pong loop"; active: root.loop-mode == 2;
+                                    min-width: 28px; max-width: 28px;
                                     clicked => { root.loop-mode = 2; root.loop-mode-changed(2); }
                                 }
                             }
@@ -1715,16 +1756,15 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                Rectangle { width: 1px; height: 142px; background: Theme.border; }
+                                SectionDivider {}
 
                                 VerticalLayout {
-                                    width: 180px; spacing: 5px;
+                                    width: 180px; spacing: 3px;
                                     SectionLabel { text: "VOICE"; }
                                     HorizontalLayout {
                                         spacing: 4px;
-                                        VerticalLayout {
-                                            spacing: 2px;
-                                            Text { text: "MODE"; color: Theme.text-faint; font-size: 8px; }
+                                        LabelledField {
+                                            label: "MODE";
                                             ComboBox {
                                                 model: ["One Shot", "Gate"];
                                                 current-index <=> root.voice-mode;
@@ -1733,9 +1773,8 @@ export component MainWindow inherits Window {
                                                 Tooltip { text: @markdown("**One Shot** plays the region or exits a loop into its tail. **Gate** follows note length and envelope release."); }
                                             }
                                         }
-                                        VerticalLayout {
-                                            spacing: 2px;
-                                            Text { text: "VOICES"; color: Theme.text-faint; font-size: 8px; }
+                                        LabelledField {
+                                            label: "VOICES";
                                             SpinBox {
                                                 value <=> root.sampler-polyphony;
                                                 minimum: 1; maximum: 16; step-size: 1;
@@ -1747,9 +1786,8 @@ export component MainWindow inherits Window {
                                     }
                                     HorizontalLayout {
                                         spacing: 4px;
-                                        VerticalLayout {
-                                            spacing: 2px;
-                                            Text { text: "RETRIGGER"; color: Theme.text-faint; font-size: 8px; }
+                                        LabelledField {
+                                            label: "RETRIGGER";
                                             ComboBox {
                                                 model: ["Restart", "Layer"];
                                                 current-index <=> root.retrigger-mode;
@@ -1758,9 +1796,8 @@ export component MainWindow inherits Window {
                                                 Tooltip { text: @markdown("**Restart** replaces a matching pitch. **Layer** stacks repeated notes."); }
                                             }
                                         }
-                                        VerticalLayout {
-                                            spacing: 2px;
-                                            Text { text: "CHOKE"; color: Theme.text-faint; font-size: 8px; }
+                                        LabelledField {
+                                            label: "CHOKE";
                                             SpinBox {
                                                 value <=> root.choke-group;
                                                 minimum: 0; maximum: 16; step-size: 1;
@@ -1771,7 +1808,7 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                Rectangle { width: 1px; height: 142px; background: Theme.border; }
+                                SectionDivider {}
 
                                 VerticalLayout {
                                     width: 230px; spacing: 3px;
@@ -1807,7 +1844,7 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                Rectangle { width: 1px; height: 142px; background: Theme.border; }
+                                SectionDivider {}
 
                                 VerticalLayout {
                                     width: 230px; spacing: 3px;
@@ -1858,7 +1895,7 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                Rectangle { width: 1px; height: 142px; background: Theme.border; }
+                                SectionDivider {}
 
                                 VerticalLayout {
                                     width: 116px; spacing: 3px;
