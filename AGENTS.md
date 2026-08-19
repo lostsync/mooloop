@@ -109,14 +109,40 @@ uncommitted changes are, get them into a proper branch/commit (asking if
 their intent is unclear), and only then start new work in its own
 worktree.
 
-## Running the app / taking screenshots
+## Checking the UI / taking screenshots
 
-Adam runs Hyprland and is often using the machine while an agent works.
-There is a dedicated headless Wayland output named `agent` (workspace
-`agent`, bound to it) set up specifically so agents can run and screenshot
-the UI without ever appearing on Adam's real screens or stealing focus.
-Always use it instead of running the GUI on whatever workspace happens to
-be active.
+**Prefer headless software rendering.** It needs no compositor, no focus, no
+window, and it keeps working while the screen is locked. It is also
+deterministic and pixel-exact, so the same command can back a visual check and
+a test assertion. Reach for the live app only when you actually need the
+running instrument — real audio, JACK, or hand-driven interaction.
+
+Slint's default GPU backend cannot do this: `take_snapshot` fails with "not
+supported by this FemtoVG backend". Force the software renderer with
+`SLINT_BACKEND=winit-software`.
+
+- **Every control, on its own:**
+  ```
+  SLINT_BACKEND=winit-software MOOLOOP_GALLERY_SNAPSHOT=/tmp/gallery.ppm \
+    MOOLOOP_GALLERY_SIZE=1000x1800 cargo run -p mooloop-ui --example control-gallery
+  ```
+  `MOOLOOP_GALLERY_SIZE` exists because the gallery is taller than a window;
+  without it you capture only the top.
+- **The real `MainWindow`:** the playlist snapshot test renders it headlessly
+  and will dump what it rendered:
+  ```
+  MOOLOOP_PLAYLIST_SNAPSHOT=/tmp/window.ppm cargo test -p mooloop-ui --test playlist_snapshot
+  ```
+  This is also how to find pixel coordinates when a snapshot assertion moves:
+  render, probe the pixels, then update the constants.
+- **Convert for viewing:** `magick /tmp/whatever.ppm /tmp/whatever.png`
+
+### Running the live app
+
+Adam runs Hyprland and is often using the machine while an agent works. There
+is a dedicated headless Wayland output named `agent` (workspace `agent`, bound
+to it) so the GUI never appears on his real screens or steals focus. Use it
+instead of whatever workspace happens to be active.
 
 - **Launch the app on it:**
   `hyprctl dispatch exec '[workspace name:agent] <command>'`
@@ -138,11 +164,16 @@ be active.
   `hyprctl dispatch closewindow address:<addr>` (get `<addr>` from
   `hyprctl clients -j`), or just kill the process.
 
+**If `grim` returns only wallpaper while the window is mapped and the process
+is alive, the lock screen is engaged.** Nothing is broken and the app is fine;
+the compositor just is not painting that output. Don't debug it, and don't go
+recreating the output — switch to software rendering above, which is immune.
+
 If you need to click or type into the window (`ydotool`, no `wtype`
 installed), know that input goes wherever keyboard/pointer focus currently
 is — briefly focusing the agent window will steal Adam's input focus even
 though nothing changes on screen. Keep such interactions short and don't
 leave the agent workspace focused when you're done.
 
-If the `agent` output is ever missing (e.g. after a compositor crash before
-a full re-login), recreate it: `hyprctl output create headless agent`.
+If the `agent` output is genuinely missing (e.g. after a compositor crash
+before a full re-login), recreate it: `hyprctl output create headless agent`.
