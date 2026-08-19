@@ -93,11 +93,12 @@ fn render_playlist_snapshot() {
     const FIRST_CELL_LAST_X: usize = 215;
     const CELL_GAP_X: usize = 216;
     const SECOND_CELL_X: usize = 220;
-    // Likewise these y values track the toolbar's height, since the rack sits
-    // directly beneath it. FILL_Y crosses both cells' fills; VELOCITY_Y is high
-    // enough that only the louder step reaches it.
-    const FILL_Y: usize = 101;
-    const VELOCITY_Y: usize = 87;
+    // Likewise these y values track the combined height of the menu bar and
+    // toolbar, since the rack sits directly beneath them. FILL_Y crosses both
+    // cells' fills; VELOCITY_Y is high enough that only the louder step
+    // reaches it.
+    const FILL_Y: usize = 127;
+    const VELOCITY_Y: usize = 113;
     // Cell one covers all four 64ths but is struck only on the first, so its
     // slots render at two different intensities.
     const ONSET_X: usize = FIRST_CELL_X;
@@ -146,7 +147,9 @@ fn render_playlist_snapshot() {
     assert_eq!(added.get(), Some((0, 192)));
     assert_eq!(removed.get(), Some((0, 192)));
 
-    let file_position = LogicalPosition::new(34.0, 24.0);
+    // The File title in the menu bar. Its x tracks the bar's leading padding
+    // and the width of the title text; its y is the bar's 26px height.
+    let file_position = LogicalPosition::new(22.0, 13.0);
     ui.window().dispatch_event(WindowEvent::PointerMoved {
         position: file_position,
     });
@@ -159,7 +162,7 @@ fn render_playlist_snapshot() {
         button: PointerEventButton::Left,
     });
     let menu_snapshot = ui.window().take_snapshot().unwrap();
-    write_snapshot(&menu_snapshot, "MOOLOOP_DOCUMENT_MENU_SNAPSHOT");
+    write_snapshot(&menu_snapshot, "MOOLOOP_FILE_MENU_SNAPSHOT");
 
     let outside_menu = LogicalPosition::new(250.0, 300.0);
     ui.window().dispatch_event(WindowEvent::PointerMoved {

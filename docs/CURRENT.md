@@ -55,9 +55,17 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   hats share a choke group in the generated starter kit.
 - Runtime appearance presets, custom accent persistence, shared audio controls,
   tooltips, and master peak-meter ballistics.
-- A File menu for song, kit, and selected-channel save/load. Song documents use
-  versioned directory bundles with an inspectable TOML manifest and optional
-  copied WAV assets. Missing or corrupt samples warn and load as silent slots.
+- A traditional menu bar above the toolbar (`menubar.slint`): File, Edit,
+  Pattern, Channel, View, and Help. Menus are declared where their window
+  callbacks are in scope, so an item is one `MenuRow` line and a new action is
+  one callback plus one line. Rows for features that do not exist yet (undo,
+  clipboard, pattern/channel management) are present but disabled, marking
+  where they will land. The File menu covers song, kit, and selected-channel
+  save/load, the sample-embed toggle, export, and quit; Ctrl+O / Ctrl+S /
+  Ctrl+Shift+S / Ctrl+E / Ctrl+Q mirror it. Help has an About dialog with the
+  crate version. Song documents use versioned directory bundles with an
+  inspectable TOML manifest and optional copied WAV assets. Missing or corrupt
+  samples warn and load as silent slots.
 - Offline export of exactly one selected-pattern pass in Pattern mode or one
   derived playlist pass in Song mode, followed by a configurable 0-30 second
   release tail. Outputs are 24-bit PCM WAV, 32-bit float WAV, or 192/256/320

@@ -17,10 +17,11 @@ use std::rc::Rc;
 
 /// Geometry of the first rack row, in logical pixels. The grid begins after the
 /// row's name, mute button and volume/pan knobs, and each cell is 24px wide
-/// with a 3px gap. These move if that prefix is resized.
+/// with a 3px gap. These move if that prefix is resized or the bar above the
+/// rack (menu bar + toolbar) changes height.
 const GRID_ORIGIN_X: f32 = 192.0;
 const CELL_PITCH: f32 = 27.0;
-const ROW_CENTRE_Y: f32 = 95.0;
+const ROW_CENTRE_Y: f32 = 121.0;
 const STEPS: usize = 8;
 
 /// Centre of the given step cell.

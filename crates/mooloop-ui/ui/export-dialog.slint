@@ -1,0 +1,69 @@
+import { CheckBox, ComboBox, SpinBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export component ExportDialog inherits Rectangle {
+    in-out property <bool> open;
+    in-out property <int> format-index;
+    in-out property <int> bitrate-index: 2;
+    in-out property <int> tail-seconds: 2;
+    callback accepted(int, int, int);
+    callback cancelled;
+
+    visible: root.open;
+    background: #00000099;
+    z: 200;
+    Rectangle {
+        width: 390px;
+        height: 220px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: 4px;
+        VerticalLayout {
+            padding: 18px;
+            spacing: 14px;
+            Text { text: "Export Audio"; color: Theme.text; font-size: 16px; }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: "FORMAT"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+                ComboBox {
+                    model: ["WAV 24-bit PCM", "WAV 32-bit float", "MP3"];
+                    current-index <=> root.format-index;
+                    horizontal-stretch: 1;
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: "MP3 RATE"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+                ComboBox {
+                    enabled: root.format-index == 2;
+                    model: ["192 kbps", "256 kbps", "320 kbps"];
+                    current-index <=> root.bitrate-index;
+                    horizontal-stretch: 1;
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: "TAIL (SECONDS)"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+                SpinBox { value <=> root.tail-seconds; minimum: 0; maximum: 30; width: 100px; }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                Rectangle {
+                    width: 76px; height: 28px; border-radius: 3px; background: cancel-touch.has-hover ? Theme.surface-active : Theme.surface-raised;
+                    Text { text: "Cancel"; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+                    cancel-touch := TouchArea { clicked => { root.cancelled(); root.open = false; } }
+                }
+                Rectangle {
+                    width: 76px; height: 28px; border-radius: 3px; background: export-touch.pressed ? Theme.accent-active : Theme.accent;
+                    Text { text: "Export"; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; }
+                    export-touch := TouchArea { clicked => { root.accepted(root.format-index, root.bitrate-index, root.tail-seconds); } }
+                }
+            }
+        }
+    }
+}

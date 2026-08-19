@@ -1,0 +1,58 @@
+import { Theme } from "theme.slint";
+
+// Minimal about overlay, following the ExportDialog overlay pattern.
+export component AboutDialog inherits Rectangle {
+    in-out property <bool> open;
+    in property <string> app-version;
+    callback closed;
+
+    visible: root.open;
+    background: #00000099;
+    z: 200;
+    Rectangle {
+        width: 340px;
+        height: 210px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: 4px;
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+            Text { text: "mooloop"; color: Theme.text; font-size: 20px; }
+            Text {
+                text: "Version " + root.app-version;
+                color: Theme.text-muted;
+                font-size: 11px;
+            }
+            Text {
+                text: "A Linux-native pattern instrument for rhythm-centered music.";
+                color: Theme.text-muted;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                alignment: end;
+                Rectangle {
+                    width: 76px;
+                    height: 28px;
+                    border-radius: 3px;
+                    background: close-touch.has-hover ? Theme.surface-active : Theme.surface-raised;
+                    Text {
+                        text: "Close";
+                        color: Theme.text;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    close-touch := TouchArea {
+                        clicked => { root.closed(); root.open = false; }
+                    }
+                }
+            }
+        }
+    }
+}

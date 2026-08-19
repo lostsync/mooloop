@@ -1103,10 +1103,27 @@ impl AppUi {
         );
         state.borrow().update_document_title(&window);
         state.borrow().sync_pattern_menu(&window);
+        window.set_app_version(env!("CARGO_PKG_VERSION").into());
 
         let (document_tx, document_rx) = std::sync::mpsc::channel::<DocumentResult>();
         let export_sample_rate = handle.sample_rate();
 
+        {
+            let st = state.clone();
+            window.on_quit_requested(move || {
+                // Same guard as Open Song: unsaved work must be confirmed
+                // away, and the zenity round-trip must not block the UI.
+                let dirty = st.borrow().dirty;
+                std::thread::spawn(move || {
+                    if dirty && !confirm_via_zenity("Discard unsaved song changes and quit?") {
+                        return;
+                    }
+                    let _ = slint::invoke_from_event_loop(|| {
+                        slint::quit_event_loop().ok();
+                    });
+                });
+            });
+        }
         {
             let st = state.clone();
             let tx = document_tx.clone();

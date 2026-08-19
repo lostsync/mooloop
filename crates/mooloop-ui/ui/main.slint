@@ -12,7 +12,9 @@ import {
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
-import { DocumentMenu, ExportDialog } from "document-menu.slint";
+import { AboutDialog } from "about-dialog.slint";
+import { ExportDialog } from "export-dialog.slint";
+import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 export { Theme }
 export { ControlGallery } from "gallery.slint";
 
@@ -523,6 +525,11 @@ export component MainWindow inherits Window {
     callback save-channel();
     callback export-audio();
     callback export-confirmed(int, int, int);
+    callback quit-requested();
+
+    // ---- about ----
+    in-out property <bool> about-open;
+    in property <string> app-version;
 
     // ---- channels / patterns ----
     in-out property <[ChannelRow]> channels;
@@ -747,12 +754,57 @@ export component MainWindow inherits Window {
 
     // Keyboard transport: Space toggles play/pause. Gives an input path
     // independent of mouse clicks (also useful for diagnosing input issues).
+    // Ctrl shortcuts mirror the menubar. A Ctrl+letter key event reaches
+    // us as a control character on some backends and as plain text with a
+    // modifier on others, so the control characters match on their own
+    // (they cannot be typed without Ctrl) while plain letters additionally
+    // require the modifier.
     forward-focus: keys;
     keys := FocusScope {
         key-pressed(event) => {
             if (event.text == " ") {
                 root.toggle-play();
                 accept
+            } else if (event.text == "\u{f}") {
+                root.open-song();
+                accept
+            } else if (event.text == "\u{13}") {
+                if (event.modifiers.shift) {
+                    root.save-song-as();
+                } else {
+                    root.save-song();
+                }
+                accept
+            } else if (event.text == "\u{5}") {
+                root.export-audio();
+                accept
+            } else if (event.text == "\u{11}") {
+                root.quit-requested();
+                accept
+            } else if (event.modifiers.control && !event.modifiers.shift) {
+                let k = event.text.to-lowercase();
+                if (k == "o") {
+                    root.open-song();
+                    accept
+                } else if (k == "s") {
+                    root.save-song();
+                    accept
+                } else if (k == "e") {
+                    root.export-audio();
+                    accept
+                } else if (k == "q") {
+                    root.quit-requested();
+                    accept
+                } else {
+                    reject
+                }
+            } else if (event.modifiers.control && event.modifiers.shift) {
+                if (event.text.to-lowercase() == "s") {
+                    root.save-song-as();
+                    accept
+                } else {
+                    reject
+                }
             } else if (event.text == Key.UpArrow) {
                 root.channel-selected(max(0, root.selected-channel - 1));
                 accept
@@ -767,6 +819,155 @@ export component MainWindow inherits Window {
 
     VerticalBox {
         spacing: 0px;
+
+        // ===== Menu bar =====
+        //
+        // The concrete menus live here, where every root callback is in
+        // scope: an item is one MenuRow line, a new action is one callback
+        // on the window plus one line. Rows whose feature does not exist
+        // yet are kept disabled on purpose so the menu documents what is
+        // being built toward.
+        menu-bar := MenuBar {
+            MenuBarItem {
+                title: "File";
+                menu-id: 0;
+                open-menu <=> menu-bar.open-menu;
+                enabled: !root.document-busy;
+
+                // Target: start a fresh song from scratch.
+                MenuRow { text: "New Song"; shortcut: "Ctrl+N"; enabled: false; selected => { } }
+                MenuRow {
+                    text: "Open Song...";
+                    shortcut: "Ctrl+O";
+                    selected => { root.open-song(); }
+                }
+                MenuRow {
+                    text: "Save Song";
+                    shortcut: "Ctrl+S";
+                    selected => { root.save-song(); }
+                }
+                MenuRow {
+                    text: "Save Song As...";
+                    shortcut: "Ctrl+Shift+S";
+                    selected => { root.save-song-as(); }
+                }
+                MenuSeparator {}
+                MenuRow { text: "Load Kit..."; selected => { root.load-kit(); } }
+                MenuRow { text: "Save Kit..."; selected => { root.save-kit(); } }
+                MenuRow { text: "Load Channel..."; selected => { root.load-channel(); } }
+                MenuRow { text: "Save Channel..."; selected => { root.save-channel(); } }
+                MenuSeparator {}
+                MenuRow {
+                    text: "Embed samples";
+                    checked: root.embed-assets;
+                    selected => { root.embed-assets = !root.embed-assets; }
+                }
+                MenuSeparator {}
+                MenuRow {
+                    text: "Export Audio...";
+                    shortcut: "Ctrl+E";
+                    selected => { root.export-audio(); }
+                }
+                MenuSeparator {}
+                MenuRow {
+                    text: "Quit";
+                    shortcut: "Ctrl+Q";
+                    selected => { root.quit-requested(); }
+                }
+            }
+
+            MenuBarItem {
+                title: "Edit";
+                menu-id: 1;
+                open-menu <=> menu-bar.open-menu;
+                // Targets: the command/shortcut layer and undo stack do not
+                // exist yet; the entries define where they land.
+                MenuRow { text: "Undo"; shortcut: "Ctrl+Z"; enabled: false; selected => { } }
+                MenuRow { text: "Redo"; shortcut: "Ctrl+Shift+Z"; enabled: false; selected => { } }
+                MenuSeparator {}
+                MenuRow { text: "Cut"; shortcut: "Ctrl+X"; enabled: false; selected => { } }
+                MenuRow { text: "Copy"; shortcut: "Ctrl+C"; enabled: false; selected => { } }
+                MenuRow { text: "Paste"; shortcut: "Ctrl+V"; enabled: false; selected => { } }
+                MenuSeparator {}
+                MenuRow { text: "Select All"; shortcut: "Ctrl+A"; enabled: false; selected => { } }
+            }
+
+            MenuBarItem {
+                title: "Pattern";
+                menu-id: 2;
+                open-menu <=> menu-bar.open-menu;
+                MenuRow {
+                    text: "New Pattern";
+                    enabled: root.pattern-count < 256;
+                    selected => { root.add-pattern-clicked(); }
+                }
+                // Target: duplicate the selected pattern's notes and length.
+                MenuRow { text: "Clone Pattern"; enabled: false; selected => { } }
+                MenuSeparator {}
+                // Target: clear the selected pattern's notes.
+                MenuRow { text: "Clear Pattern"; enabled: false; selected => { } }
+                // Target: remove the selected pattern and its placements.
+                MenuRow { text: "Delete Pattern"; enabled: false; selected => { } }
+            }
+
+            MenuBarItem {
+                title: "Channel";
+                menu-id: 3;
+                open-menu <=> menu-bar.open-menu;
+                MenuRow {
+                    text: "Add Channel";
+                    selected => { root.add-channel-clicked(0); }
+                }
+                MenuRow {
+                    text: "Remove Last Channel";
+                    enabled: root.channels.length > 1;
+                    selected => { root.remove-channel-clicked(); }
+                }
+                MenuSeparator {}
+                // Target: duplicate the selected channel's setup and notes.
+                MenuRow { text: "Clone Channel"; enabled: false; selected => { } }
+                // Target: rename the selected channel in place.
+                MenuRow { text: "Rename Channel"; enabled: false; selected => { } }
+                // Target: remove the selected channel (not just the last).
+                MenuRow { text: "Delete Selected Channel"; enabled: false; selected => { } }
+            }
+
+            MenuBarItem {
+                title: "View";
+                menu-id: 4;
+                open-menu <=> menu-bar.open-menu;
+                MenuRow {
+                    text: "Sampler";
+                    checked: root.editor-page == 0;
+                    selected => { root.editor-page = 0; }
+                }
+                MenuRow {
+                    text: "Notes";
+                    checked: root.editor-page == 1;
+                    selected => { root.editor-page = 1; }
+                }
+                MenuRow {
+                    text: "Playlist";
+                    checked: root.editor-page == 2;
+                    selected => { root.editor-page = 2; }
+                }
+                MenuSeparator {}
+                MenuRow {
+                    text: "Appearance...";
+                    selected => {
+                        root.appearance-opened();
+                        root.appearance-open = true;
+                    }
+                }
+            }
+
+            MenuBarItem {
+                title: "Help";
+                menu-id: 5;
+                open-menu <=> menu-bar.open-menu;
+                MenuRow { text: "About mooloop"; selected => { root.about-open = true; } }
+            }
+        }
 
         // ===== Toolbar =====
         //
@@ -790,23 +991,6 @@ export component MainWindow inherits Window {
                         padding-top: 4px;
                         padding-bottom: 4px;
                         spacing: 3px;
-
-                        DocumentMenu {
-                            height: 24px;
-                            embed-assets <=> root.embed-assets;
-                            busy: root.document-busy;
-                            new-song => { root.new-song(); }
-                            open-song => { root.open-song(); }
-                            save-song => { root.save-song(); }
-                            save-song-as => { root.save-song-as(); }
-                            load-kit => { root.load-kit(); }
-                            save-kit => { root.save-kit(); }
-                            load-channel => { root.load-channel(); }
-                            save-channel => { root.save-channel(); }
-                            export-audio => { root.export-audio(); }
-                        }
-
-                        ToolbarRule {}
 
                         TransportButton {
                             text: root.playing ? "⏸" : "▶";
@@ -2407,5 +2591,12 @@ export component MainWindow inherits Window {
         tail-seconds <=> root.export-tail-seconds;
         accepted(format, bitrate, tail) => { root.export-confirmed(format, bitrate, tail); }
         cancelled => { root.export-open = false; }
+    }
+    AboutDialog {
+        width: parent.width;
+        height: parent.height;
+        open <=> root.about-open;
+        app-version: root.app-version;
+        closed => { root.about-open = false; }
     }
 }

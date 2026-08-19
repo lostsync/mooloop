@@ -1,0 +1,180 @@
+import { Theme } from "theme.slint";
+
+// Traditional menu-bar vocabulary.
+//
+// These pieces are deliberately generic: they know nothing about which
+// actions exist. Concrete menus live where their callbacks are in scope
+// (see MainWindow in main.slint), so adding a menu item is one MenuRow
+// line -- and a new action is one callback on the window. Rows whose
+// feature does not exist yet are declared with `enabled: false` so the
+// menu itself documents what is being built toward.
+
+// One selectable row: label, optional shortcut hint, optional check state.
+// The 26px label gutter keeps checked and unchecked rows of one menu
+// aligned; the shortcut column is only reserved when a hint is shown.
+export component MenuRow inherits Rectangle {
+    in property <string> text;
+    in property <string> shortcut;
+    in property <bool> enabled: true;
+    in property <bool> checked: false;
+    callback selected;
+
+    height: 24px;
+    background: touch.has-hover && root.enabled ? Theme.surface-active : transparent;
+
+    Text {
+        x: 26px;
+        width: parent.width - 26px - (root.shortcut != "" ? 76px : 8px);
+        text: root.text;
+        color: root.enabled ? Theme.text : Theme.text-faint;
+        font-size: 11px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    Text {
+        x: 8px;
+        width: 14px;
+        text: "✓";
+        visible: root.checked;
+        color: root.enabled ? Theme.text : Theme.text-faint;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: parent.width - self.width - 10px;
+        text: root.shortcut;
+        visible: root.shortcut != "";
+        color: root.enabled ? Theme.text-faint : Theme.text-faint;
+        font-size: 10px;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.selected(); }
+    }
+}
+
+// Hairline gap between groups of rows.
+export component MenuSeparator inherits Rectangle {
+    height: 5px;
+    Rectangle {
+        x: 8px;
+        y: 2px;
+        width: parent.width - 16px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// One title in the bar, together with the dropdown it owns. `open-menu` is
+// the bar-wide "which menu is open" index (-1 = none), bound two-way to
+// every item: it is what makes hovering across titles switch menus the way
+// a native bar does, without another click.
+export component MenuBarItem inherits Rectangle {
+    in property <string> title;
+    in property <bool> enabled: true;
+    in property <int> menu-id;
+    in-out property <int> open-menu: -1;
+    // Watching the popup's `is-open` directly with a `changed` handler
+    // trips a Slint 1.17 compiler bug, so mirror it here instead.
+    property <bool> popup-open: menu.is-open;
+
+    width: title-text.preferred-width + 16px;
+    border-radius: 3px;
+    background: !root.enabled ? transparent
+        : root.open-menu == root.menu-id || touch.has-hover
+        ? Theme.surface-active : transparent;
+
+    title-text := Text {
+        x: 8px;
+        text: root.title;
+        color: root.enabled ? Theme.text : Theme.text-faint;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.open-menu == root.menu-id) {
+                root.open-menu = -1;
+            } else {
+                root.open-menu = root.menu-id;
+                menu.show();
+            }
+        }
+        changed has-hover => {
+            // Once any menu is open, crossing titles switches menus.
+            if (self.has-hover && root.open-menu >= 0 && root.open-menu != root.menu-id) {
+                root.open-menu = root.menu-id;
+                menu.show();
+            }
+        }
+    }
+
+    changed open-menu => {
+        if (root.open-menu != root.menu-id && menu.is-open) {
+            menu.close();
+        }
+    }
+
+    changed popup-open => {
+        // Outside clicks and Escape close the popup itself; forget the
+        // bar-wide state so the next title click reopens.
+        if (!root.popup-open && root.open-menu == root.menu-id) {
+            root.open-menu = -1;
+        }
+    }
+
+    menu := PopupWindow {
+        x: 0;
+        y: root.height + 2px;
+        width: 216px;
+        height: menu-frame.preferred-height;
+        close-policy: close-on-click;
+
+        menu-frame := Rectangle {
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 3px;
+
+            VerticalLayout {
+                padding: 4px;
+                @children
+            }
+        }
+
+    }
+}
+
+// The bar itself: a thin panel of titles above the toolbar. Children
+// declared on it are MenuBarItem instances.
+export component MenuBar inherits Rectangle {
+    in-out property <int> open-menu: -1;
+
+    height: 26px;
+    background: Theme.panel;
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 6px;
+        spacing: 2px;
+        alignment: start;
+        @children
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: Theme.border;
+        opacity: 0.6;
+    }
+}
