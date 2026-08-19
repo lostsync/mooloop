@@ -293,6 +293,30 @@ fn dbg_log(msg: &str) {
     }
 }
 
+/// The note under a grid position, if any.
+///
+/// Slint's binding-loop checker rejects a self-recursive `pure function`, so a
+/// variable-length note list cannot be scanned from `.slint` at all. The piano
+/// roll's single grid hit area calls this instead. Scans back to front so an
+/// overlap resolves to the note drawn on top, which is the one the user sees.
+pub fn note_hit_test(notes: &[NoteCell], tick: i32, midi_note: i32) -> NoteHit {
+    notes
+        .iter()
+        .rev()
+        .find(|cell| {
+            cell.note == midi_note
+                && tick >= cell.start_tick
+                && tick < cell.start_tick + cell.duration_ticks
+        })
+        .map(|cell| NoteHit {
+            found: true,
+            id: cell.id,
+            start_tick: cell.start_tick,
+            duration_ticks: cell.duration_ticks,
+        })
+        .unwrap_or_default()
+}
+
 fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
     let start = (step as u32).saturating_mul(TICKS_PER_STEP);
     let end = start.saturating_add(TICKS_PER_STEP);
@@ -2004,6 +2028,22 @@ impl AppUi {
                     channel: channel as u8,
                     note,
                 });
+            });
+        }
+        {
+            // Slint's binding-loop checker rejects a self-recursive `pure
+            // function`, so a variable-length note list cannot be scanned from
+            // .slint at all. The grid's single hit area asks Rust instead.
+            // Scans back to front so an overlap resolves to the note drawn on
+            // top, matching what the user sees.
+            let st = state.clone();
+            window.on_piano_note_hit_test(move |tick, midi_note| {
+                let st = st.borrow();
+                // ModelIterator is not DoubleEndedIterator, so collect first.
+                // The list is bounded and small, and this runs on the UI thread
+                // in response to pointer motion, not on the audio thread.
+                let notes: Vec<NoteCell> = st.note_model.iter().collect();
+                note_hit_test(&notes, tick, midi_note)
             });
         }
         {
