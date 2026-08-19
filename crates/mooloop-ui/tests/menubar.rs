@@ -74,7 +74,11 @@ fn view_menu_switches_editor_pages() {
     // row 0 (Sampler) spans about y 42..66, row 2 (Playlist) about 90..114.
     click(ui.window(), 220.0, 100.0);
 
-    assert_eq!(ui.get_editor_page(), 2, "Playlist must select the playlist page");
+    assert_eq!(
+        ui.get_editor_page(),
+        2,
+        "Playlist must select the playlist page"
+    );
 }
 
 #[test]

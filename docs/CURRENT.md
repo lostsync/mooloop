@@ -51,8 +51,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - A source editor that can add or replace sampler, drum synth, and mono synth
   instruments without changing the channel's notes or mixer state. The drum
   editor exposes kick, snare, and hat synthesis controls; the mono editor
-  exposes three oscillators, glide, ADSR, filter, and drive. Closed and open
-  hats share a choke group in the generated starter kit.
+  exposes three oscillators, glide, ADSR, filter, drive, and an LFO. Closed and
+  open hats share a choke group in the generated starter kit.
 - Runtime appearance presets, custom accent persistence, shared audio controls,
   tooltips, and master peak-meter ballistics.
 - A traditional menu bar above the toolbar (`menubar.slint`): File, Edit,
@@ -124,7 +124,16 @@ through an `ArcSwapOption` slot.
 - Pattern and channel capacity are bounded for realtime safety.
 - DSP tests cover sampler pitch, trim, loops, envelopes, filter behavior,
   reverse playback, and lo-fi stages, plus drum synth and mono synth voice,
-  envelope, glide, and filter behavior.
+  envelope, glide, filter, and LFO behavior. Mono synth tests also bound the
+  largest sample-to-sample step across note retriggers and parameter changes,
+  which is what the declicking work is defended by.
+- The mono synth's LFO is one shape (sine, triangle, saw, square, or sample and
+  hold) with a depth per destination: pitch, filter cutoff, pulse width, and
+  tremolo. It free-runs across notes and silence unless set to retrigger.
+- Mono synth amplitude is continuous by construction: the amp envelope attacks
+  from its current level rather than restarting at zero, and velocity,
+  oscillator levels, cutoff, and drive are one-pole smoothed over 5 ms so
+  neither a retrigger nor a knob turn steps the waveform.
 
 ## Important Limitations
 

@@ -7,7 +7,7 @@
 //! moves continuously.
 
 /// A one-pole smoothed scalar. `set_target` is cheap enough to call every
-/// block; `next` advances one sample.
+/// block; `advance` moves it one sample.
 #[derive(Clone, Copy, Debug)]
 pub struct Smoothed {
     current: f32,
@@ -45,7 +45,7 @@ impl Smoothed {
     }
 
     /// Advance one sample and return the smoothed value.
-    pub fn next(&mut self) -> f32 {
+    pub fn advance(&mut self) -> f32 {
         self.current += (self.target - self.current) * self.coeff;
         self.current
     }
@@ -64,10 +64,10 @@ mod tests {
         let sr = 48_000;
         let mut smoothed = Smoothed::new(0.0, 0.005, sr);
         smoothed.set_target(1.0);
-        let first = smoothed.next();
+        let first = smoothed.advance();
         assert!(first > 0.0 && first < 0.01, "{first}");
         for _ in 0..(0.05 * sr as f32) as usize {
-            smoothed.next();
+            smoothed.advance();
         }
         assert!((smoothed.value() - 1.0).abs() < 1.0e-3);
     }
@@ -76,6 +76,6 @@ mod tests {
     fn reset_skips_the_lag() {
         let mut smoothed = Smoothed::new(0.0, 0.005, 48_000);
         smoothed.reset_to(0.5);
-        assert_eq!(smoothed.next(), 0.5);
+        assert_eq!(smoothed.advance(), 0.5);
     }
 }

@@ -227,12 +227,12 @@ impl MonoSynth {
             } else {
                 (lfo_value * to_pitch / 12.0).exp2()
             };
-            let velocity = voice.velocity_amp.next();
+            let velocity = voice.velocity_amp.advance();
 
             let mut mix = 0.0;
             for (index, osc) in voice.oscs.iter_mut().enumerate() {
                 let osc_params = params.osc[index];
-                let osc_level = voice.osc_level[index].next();
+                let osc_level = voice.osc_level[index].advance();
                 if osc_level <= 1.0e-5 && osc_params.level <= 1.0e-5 {
                     continue;
                 }
@@ -247,8 +247,8 @@ impl MonoSynth {
 
             // Envelope- and LFO-modulated low-pass, same perceptual mapping
             // the sampler uses. Bypassed entirely when fully open.
-            let cutoff = voice.cutoff.next();
-            let drive = voice.drive.next();
+            let cutoff = voice.cutoff.advance();
+            let drive = voice.drive.advance();
             let filtered = if cutoff >= 0.999
                 && env_amount.abs() <= f32::EPSILON
                 && resonance <= f32::EPSILON

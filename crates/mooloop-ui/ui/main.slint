@@ -2,8 +2,8 @@ import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-w
 import { Theme } from "theme.slint";
 import {
     IconButton, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
-    SectionLabel as DesignSectionLabel, SegmentedControl, StereoPeakMeter, ToolButton,
-    TransportButton, ValueScale, MuteButton as DesignMuteButton
+    SectionLabel as DesignSectionLabel, SegmentedControl, StereoPeakMeter, ToggleButton,
+    ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton
 } from "controls.slint";
 import {
     BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
@@ -407,11 +407,15 @@ component MonoSourceEditor inherits Rectangle {
     in-out property <int> osc3-wave; in-out property <float> osc3-semitones; in-out property <float> osc3-cents; in-out property <float> osc3-level; in-out property <float> osc3-pulse-width;
     in-out property <float> glide; in-out property <float> attack; in-out property <float> decay; in-out property <float> sustain; in-out property <float> release;
     in-out property <float> filter-cutoff; in-out property <float> filter-resonance; in-out property <float> filter-env; in-out property <float> drive;
+    in-out property <int> lfo-wave; in-out property <float> lfo-rate; in-out property <bool> lfo-retrigger;
+    in-out property <float> lfo-pitch; in-out property <float> lfo-filter; in-out property <float> lfo-pulse-width; in-out property <float> lfo-amp;
     callback osc1-wave-changed(int); callback osc1-semitones-changed(float); callback osc1-cents-changed(float); callback osc1-level-changed(float); callback osc1-pulse-width-changed(float);
     callback osc2-wave-changed(int); callback osc2-semitones-changed(float); callback osc2-cents-changed(float); callback osc2-level-changed(float); callback osc2-pulse-width-changed(float);
     callback osc3-wave-changed(int); callback osc3-semitones-changed(float); callback osc3-cents-changed(float); callback osc3-level-changed(float); callback osc3-pulse-width-changed(float);
     callback glide-changed(float); callback attack-changed(float); callback decay-changed(float); callback sustain-changed(float); callback release-changed(float);
     callback filter-cutoff-changed(float); callback filter-resonance-changed(float); callback filter-env-changed(float); callback drive-changed(float);
+    callback lfo-wave-changed(int); callback lfo-rate-changed(float); callback lfo-retrigger-changed(bool);
+    callback lfo-pitch-changed(float); callback lfo-filter-changed(float); callback lfo-pulse-width-changed(float); callback lfo-amp-changed(float);
 
     ScrollView {
         vertical-stretch: 1; horizontal-stretch: 1;
@@ -437,7 +441,7 @@ component MonoSourceEditor inherits Rectangle {
             HorizontalLayout {
                 spacing: 8px;
                 Rectangle {
-                    width: 388px; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
+                    width: 380px; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
                     VerticalLayout {
                         padding: 6px; spacing: 3px;
                         SectionLabel { text: "AMP ENVELOPE"; }
@@ -460,7 +464,7 @@ component MonoSourceEditor inherits Rectangle {
                     }
                 }
                 Rectangle {
-                    width: 480px; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
+                    width: 236px; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
                     VerticalLayout {
                         padding: 6px; spacing: 3px;
                         SectionLabel { text: "FILTER AND DRIVE"; }
@@ -470,7 +474,63 @@ component MonoSourceEditor inherits Rectangle {
                             ParameterKnob { label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; minimum: 0; maximum: 1; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; changed(v) => { root.filter-resonance-changed(v); } }
                             ParameterKnob { label: "Env"; tooltip: "Bipolar filter envelope depth"; value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true; fill: Theme.warning; value-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%"; changed(v) => { root.filter-env-changed(v); } }
                             ParameterKnob { label: "Drive"; tooltip: "Soft saturation amount"; value <=> root.drive; minimum: 0; maximum: 1; default-value: 0; fill: Theme.warning; value-text: round(root.drive * 100) + "%"; changed(v) => { root.drive-changed(v); } }
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 292px; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
+                    VerticalLayout {
+                        padding: 6px; spacing: 3px;
+                        SectionLabel { text: "LFO"; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            ComboBox {
+                                model: ["Sine", "Tri", "Saw", "Square", "S&H"];
+                                current-index <=> root.lfo-wave;
+                                width: 96px; height: 24px;
+                                selected(value) => { root.lfo-wave-changed(self.current-index); }
+                                Tooltip { text: @markdown("LFO waveform"); }
+                            }
+                            ToggleButton {
+                                text: "Retrig"; tooltip: "Restart the LFO on every note instead of letting it free run";
+                                width: 60px; height: 24px;
+                                checked <=> root.lfo-retrigger;
+                                toggled(on) => { root.lfo-retrigger-changed(on); }
+                            }
                             Rectangle { horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 0px;
+                            ParameterKnob {
+                                label: "Rate"; tooltip: "LFO speed";
+                                value <=> root.lfo-rate; minimum: 0.01; maximum: 20; default-value: 5; scale: ValueScale.logarithmic;
+                                value-text: root.lfo-rate < 1 ? round(root.lfo-rate * 100) / 100 + " Hz" : round(root.lfo-rate * 10) / 10 + " Hz";
+                                changed(v) => { root.lfo-rate-changed(v); }
+                            }
+                            ParameterKnob {
+                                label: "Pitch"; tooltip: "LFO depth into pitch, in semitones (vibrato)";
+                                value <=> root.lfo-pitch; minimum: -24; maximum: 24; default-value: 0; bipolar: true;
+                                value-text: (root.lfo-pitch > 0 ? "+" : "") + round(root.lfo-pitch * 10) / 10 + " st";
+                                changed(v) => { root.lfo-pitch-changed(v); }
+                            }
+                            ParameterKnob {
+                                label: "Cutoff"; tooltip: "LFO depth into filter cutoff, in octaves";
+                                value <=> root.lfo-filter; minimum: -4; maximum: 4; default-value: 0; bipolar: true;
+                                value-text: (root.lfo-filter > 0 ? "+" : "") + round(root.lfo-filter * 10) / 10 + " oct";
+                                changed(v) => { root.lfo-filter-changed(v); }
+                            }
+                            ParameterKnob {
+                                label: "Width"; tooltip: "LFO depth into pulse width";
+                                value <=> root.lfo-pulse-width; minimum: -0.45; maximum: 0.45; default-value: 0; bipolar: true;
+                                value-text: (root.lfo-pulse-width > 0 ? "+" : "") + round(root.lfo-pulse-width * 100) + "%";
+                                changed(v) => { root.lfo-pulse-width-changed(v); }
+                            }
+                            ParameterKnob {
+                                label: "Trem"; tooltip: "LFO depth into amplitude (tremolo)";
+                                value <=> root.lfo-amp; minimum: 0; maximum: 1; default-value: 0; fill: Theme.warning;
+                                value-text: round(root.lfo-amp * 100) + "%";
+                                changed(v) => { root.lfo-amp-changed(v); }
+                            }
                         }
                     }
                 }
@@ -740,11 +800,20 @@ export component MainWindow inherits Window {
     in-out property <float> mono-filter-resonance;
     in-out property <float> mono-filter-env;
     in-out property <float> mono-drive;
+    in-out property <int> mono-lfo-wave;
+    in-out property <float> mono-lfo-rate: 5;
+    in-out property <bool> mono-lfo-retrigger;
+    in-out property <float> mono-lfo-pitch;
+    in-out property <float> mono-lfo-filter;
+    in-out property <float> mono-lfo-pulse-width;
+    in-out property <float> mono-lfo-amp;
     callback mono-osc1-wave-changed(int); callback mono-osc1-semitones-changed(float); callback mono-osc1-cents-changed(float); callback mono-osc1-level-changed(float); callback mono-osc1-pulse-width-changed(float);
     callback mono-osc2-wave-changed(int); callback mono-osc2-semitones-changed(float); callback mono-osc2-cents-changed(float); callback mono-osc2-level-changed(float); callback mono-osc2-pulse-width-changed(float);
     callback mono-osc3-wave-changed(int); callback mono-osc3-semitones-changed(float); callback mono-osc3-cents-changed(float); callback mono-osc3-level-changed(float); callback mono-osc3-pulse-width-changed(float);
     callback mono-glide-changed(float); callback mono-attack-changed(float); callback mono-decay-changed(float); callback mono-sustain-changed(float); callback mono-release-changed(float);
     callback mono-filter-cutoff-changed(float); callback mono-filter-resonance-changed(float); callback mono-filter-env-changed(float); callback mono-drive-changed(float);
+    callback mono-lfo-wave-changed(int); callback mono-lfo-rate-changed(float); callback mono-lfo-retrigger-changed(bool);
+    callback mono-lfo-pitch-changed(float); callback mono-lfo-filter-changed(float); callback mono-lfo-pulse-width-changed(float); callback mono-lfo-amp-changed(float);
 
     // ---- transport callbacks ----
     callback new-song();
@@ -2157,11 +2226,15 @@ export component MainWindow inherits Window {
                             osc3-wave <=> root.mono-osc3-wave; osc3-semitones <=> root.mono-osc3-semitones; osc3-cents <=> root.mono-osc3-cents; osc3-level <=> root.mono-osc3-level; osc3-pulse-width <=> root.mono-osc3-pulse-width;
                             glide <=> root.mono-glide; attack <=> root.mono-attack; decay <=> root.mono-decay; sustain <=> root.mono-sustain; release <=> root.mono-release;
                             filter-cutoff <=> root.mono-filter-cutoff; filter-resonance <=> root.mono-filter-resonance; filter-env <=> root.mono-filter-env; drive <=> root.mono-drive;
+                            lfo-wave <=> root.mono-lfo-wave; lfo-rate <=> root.mono-lfo-rate; lfo-retrigger <=> root.mono-lfo-retrigger;
+                            lfo-pitch <=> root.mono-lfo-pitch; lfo-filter <=> root.mono-lfo-filter; lfo-pulse-width <=> root.mono-lfo-pulse-width; lfo-amp <=> root.mono-lfo-amp;
                             osc1-wave-changed(v) => { root.mono-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.mono-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.mono-osc1-cents-changed(v); } osc1-level-changed(v) => { root.mono-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.mono-osc1-pulse-width-changed(v); }
                             osc2-wave-changed(v) => { root.mono-osc2-wave-changed(v); } osc2-semitones-changed(v) => { root.mono-osc2-semitones-changed(v); } osc2-cents-changed(v) => { root.mono-osc2-cents-changed(v); } osc2-level-changed(v) => { root.mono-osc2-level-changed(v); } osc2-pulse-width-changed(v) => { root.mono-osc2-pulse-width-changed(v); }
                             osc3-wave-changed(v) => { root.mono-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.mono-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.mono-osc3-cents-changed(v); } osc3-level-changed(v) => { root.mono-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.mono-osc3-pulse-width-changed(v); }
                             glide-changed(v) => { root.mono-glide-changed(v); } attack-changed(v) => { root.mono-attack-changed(v); } decay-changed(v) => { root.mono-decay-changed(v); } sustain-changed(v) => { root.mono-sustain-changed(v); } release-changed(v) => { root.mono-release-changed(v); }
                             filter-cutoff-changed(v) => { root.mono-filter-cutoff-changed(v); } filter-resonance-changed(v) => { root.mono-filter-resonance-changed(v); } filter-env-changed(v) => { root.mono-filter-env-changed(v); } drive-changed(v) => { root.mono-drive-changed(v); }
+                            lfo-wave-changed(v) => { root.mono-lfo-wave-changed(v); } lfo-rate-changed(v) => { root.mono-lfo-rate-changed(v); } lfo-retrigger-changed(v) => { root.mono-lfo-retrigger-changed(v); }
+                            lfo-pitch-changed(v) => { root.mono-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.mono-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.mono-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.mono-lfo-amp-changed(v); }
                         }
                     }
                 }

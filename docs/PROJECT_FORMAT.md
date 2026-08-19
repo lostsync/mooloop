@@ -114,7 +114,9 @@ decay = 0.05
 ```
 
 `mono_synth` uses the same `state.params` envelope for its oscillator,
-envelope, filter, glide, and drive fields.
+envelope, filter, glide, and drive fields. Its `params.lfo` table holds the
+LFO wave, rate, retrigger flag, and one depth per destination; readers default
+the whole table for version 1 manifests written before the LFO was added.
 
 ## Kit And Channel Documents
 

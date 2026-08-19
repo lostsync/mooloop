@@ -14,8 +14,8 @@ slint::include_modules!();
 use meter::MeterBallistics;
 use mooloop_core::{
     Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState,
-    EngineCommand, EngineEvent, Kit, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
-    OscWave, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
+    EngineCommand, EngineEvent, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent,
+    NoteId, OscWave, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
     SampleReference, SamplerParams, SamplerState, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS,
     MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT,
@@ -284,6 +284,26 @@ fn osc_wave_to_int(wave: OscWave) -> i32 {
         OscWave::Triangle => 1,
         OscWave::Saw => 2,
         OscWave::Pulse => 3,
+    }
+}
+
+fn lfo_wave_from_int(value: i32) -> LfoWave {
+    match value {
+        1 => LfoWave::Triangle,
+        2 => LfoWave::Saw,
+        3 => LfoWave::Square,
+        4 => LfoWave::Random,
+        _ => LfoWave::Sine,
+    }
+}
+
+fn lfo_wave_to_int(wave: LfoWave) -> i32 {
+    match wave {
+        LfoWave::Sine => 0,
+        LfoWave::Triangle => 1,
+        LfoWave::Saw => 2,
+        LfoWave::Square => 3,
+        LfoWave::Random => 4,
     }
 }
 
@@ -885,6 +905,13 @@ impl UiState {
         window.set_mono_filter_resonance(mono.filter_resonance);
         window.set_mono_filter_env(mono.filter_env_amount);
         window.set_mono_drive(mono.drive);
+        window.set_mono_lfo_wave(lfo_wave_to_int(mono.lfo.wave));
+        window.set_mono_lfo_rate(mono.lfo.rate_hz);
+        window.set_mono_lfo_retrigger(mono.lfo.retrigger);
+        window.set_mono_lfo_pitch(mono.lfo.to_pitch);
+        window.set_mono_lfo_filter(mono.lfo.to_filter);
+        window.set_mono_lfo_pulse_width(mono.lfo.to_pulse_width);
+        window.set_mono_lfo_amp(mono.lfo.to_amp);
         window.set_sample_name(ch.sample_name.as_str().into());
         window.set_sample_description(ch.sample_description.as_str().into());
         window.set_sample_duration(ch.sample_duration);
@@ -2713,14 +2740,14 @@ impl AppUi {
         }
 
         macro_rules! wire_mono_param {
-            ($callback:ident, $field:ident) => {{
+            ($callback:ident, $($field:ident).+) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
                     let channel_index = st.selected;
                     let channel = &mut st.channels[channel_index];
-                    channel.mono_params.$field = value;
+                    channel.mono_params.$($field).+ = value;
                     let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
                         channel: channel_index as u8,
                         params: channel.mono_params,
@@ -2738,6 +2765,41 @@ impl AppUi {
         wire_mono_param!(on_mono_filter_resonance_changed, filter_resonance);
         wire_mono_param!(on_mono_filter_env_changed, filter_env_amount);
         wire_mono_param!(on_mono_drive_changed, drive);
+        wire_mono_param!(on_mono_lfo_rate_changed, lfo.rate_hz);
+        wire_mono_param!(on_mono_lfo_pitch_changed, lfo.to_pitch);
+        wire_mono_param!(on_mono_lfo_filter_changed, lfo.to_filter);
+        wire_mono_param!(on_mono_lfo_pulse_width_changed, lfo.to_pulse_width);
+        wire_mono_param!(on_mono_lfo_amp_changed, lfo.to_amp);
+
+        // The LFO's two non-float controls take the same shape by hand.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_mono_lfo_wave_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.mono_params.lfo.wave = lfo_wave_from_int(value);
+                let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
+                    channel: channel_index as u8,
+                    params: channel.mono_params,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_mono_lfo_retrigger_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.mono_params.lfo.retrigger = value;
+                let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
+                    channel: channel_index as u8,
+                    params: channel.mono_params,
+                });
+            });
+        }
 
         macro_rules! wire_mono_osc_float {
             ($callback:ident, $index:expr, $field:ident) => {{

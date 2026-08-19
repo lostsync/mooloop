@@ -66,7 +66,9 @@ fn harness(notes: Vec<NoteCell>) -> MainWindow {
 /// distinguish a working drag from one that stalls after the first step.
 fn drag(window: &slint::Window, from: (f32, f32), to: (f32, f32)) {
     let pos = |(x, y): (f32, f32)| LogicalPosition::new(x, y);
-    window.dispatch_event(WindowEvent::PointerMoved { position: pos(from) });
+    window.dispatch_event(WindowEvent::PointerMoved {
+        position: pos(from),
+    });
     window.dispatch_event(WindowEvent::PointerPressed {
         position: pos(from),
         button: PointerEventButton::Left,
@@ -75,10 +77,7 @@ fn drag(window: &slint::Window, from: (f32, f32), to: (f32, f32)) {
     for i in 1..=STEPS {
         let t = i as f32 / STEPS as f32;
         window.dispatch_event(WindowEvent::PointerMoved {
-            position: pos((
-                from.0 + (to.0 - from.0) * t,
-                from.1 + (to.1 - from.1) * t,
-            )),
+            position: pos((from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t)),
         });
     }
     window.dispatch_event(WindowEvent::PointerReleased {
