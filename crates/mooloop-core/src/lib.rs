@@ -24,7 +24,8 @@ pub use playlist::{
 };
 pub use project::{
     ChannelPreset, ChannelSetup, ChannelSource, DrumSynthState, Kit, MonoSynthState, Project,
-    ProjectChannel, SampleReference, SamplerState,
+    ProjectChannel, SampleReference, SamplerState, DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT,
+    MIN_SWING_PERCENT,
 };
 pub use sampler::{
     clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,

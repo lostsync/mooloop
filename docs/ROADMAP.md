@@ -65,7 +65,8 @@ Scope:
 - Extend the initial layered, tick-addressed playlist with clip dragging,
   selection, duplication, and keyboard editing on the shared musical grid.
 - Add independent loop ranges to the existing Pattern and Song transport modes.
-- Swing and groove features built on explicit timing displacement.
+- Extend global swing with per-pattern overrides and groove templates built on
+  explicit timing displacement.
 - Extract the render graph from JACK and render offline to WAV.
 
 Implemented foundation:
@@ -74,10 +75,13 @@ Implemented foundation:
   embedded WAV assets, missing-sample warnings, and transactional loading.
 - A JACK-independent shared render state with one-pass WAV and MP3 export plus
   a fixed configurable release tail.
+- Persistent global sixteenth-note swing shared by realtime and offline
+  scheduling.
 
 Remaining work in this phase includes autosave/recovery, undo, richer missing-
 sample relinking, pattern management, playlist manipulation, explicit loop
-ranges, swing/groove, and realtime/offline comparison tolerances.
+ranges, per-pattern swing/groove templates, and realtime/offline comparison
+tolerances.
 
 Different pattern lengths:
 

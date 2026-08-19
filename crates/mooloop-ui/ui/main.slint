@@ -489,6 +489,7 @@ export component MainWindow inherits Window {
     // ---- transport / state exchanged with Rust ----
     in-out property <bool>  playing;
     in-out property <int>   bpm;
+    in-out property <int>   swing-percent: 50;
     in-out property <int>   beat-in-bar;
     in-out property <float> meter-l-db: -60;
     in-out property <float> meter-r-db: -60;
@@ -750,6 +751,7 @@ export component MainWindow inherits Window {
     callback play-clicked();
     callback stop-clicked();
     callback bpm-changed(int);
+    callback swing-changed(int);
     callback toggle-play();
 
     // Keyboard transport: Space toggles play/pause. Gives an input path
@@ -1038,6 +1040,17 @@ export component MainWindow inherits Window {
                         TempoField {
                             bpm <=> root.bpm;
                             changed(v) => { root.bpm-changed(v); }
+                        }
+
+                        StepperField {
+                            label: "SWING";
+                            tooltip: "Global sixteenth-note swing; 50% is straight";
+                            value <=> root.swing-percent;
+                            minimum: 50;
+                            maximum: 75;
+                            display-text: root.swing-percent + "%";
+                            value-width: 28px;
+                            changed(v) => { root.swing-changed(v); }
                         }
 
                         Rectangle { horizontal-stretch: 1; min-width: 8px; }

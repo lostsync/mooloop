@@ -439,6 +439,15 @@ pub fn validate_project(project: &Project) -> Result<(), Error> {
     if !(1..=999).contains(&project.bpm) {
         return Err(Error::Invalid("tempo must be in 1..=999 BPM".into()));
     }
+    if !(mooloop_core::MIN_SWING_PERCENT..=mooloop_core::MAX_SWING_PERCENT)
+        .contains(&project.swing_percent)
+    {
+        return Err(Error::Invalid(format!(
+            "swing must be in {}..={} percent",
+            mooloop_core::MIN_SWING_PERCENT,
+            mooloop_core::MAX_SWING_PERCENT
+        )));
+    }
     if project.channels.is_empty() || project.channels.len() > MAX_CHANNELS {
         return Err(Error::Invalid(format!(
             "channel count must be in 1..={MAX_CHANNELS}"
@@ -653,7 +662,10 @@ mod tests {
     fn song_round_trip_retains_hidden_notes_and_playlist() {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("song.mooloop");
-        let mut project = Project::default();
+        let mut project = Project {
+            swing_percent: 66,
+            ..Project::default()
+        };
         project.pattern_lengths.push(8);
         project.channels[0]
             .notes
@@ -940,6 +952,14 @@ id = "default_kick"
 
     #[test]
     fn rejects_mismatched_or_invalid_synth_sources() {
+        let mut project = Project {
+            swing_percent: 49,
+            ..Project::default()
+        };
+        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        project.swing_percent = 76;
+        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+
         let mut project = Project::starter_kit(1);
         project.channels[0].setup.channel.kind = mooloop_core::DeviceKind::Sampler;
         assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));

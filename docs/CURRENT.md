@@ -9,9 +9,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 
 - One application window with a two-row toolbar, channel rack, and a lower
   editor. The transport row carries play/stop, pattern-vs-song mode, a
-  bar:beat:tick position readout, beat lamps, drag-or-type tempo, and the master
-  meter; the edit row carries pattern selection, the cursor tools, pattern
-  length, and grid snap.
+  bar:beat:tick position readout, beat lamps, drag-or-type tempo, global
+  sixteenth-note swing, and the master meter; the edit row carries pattern
+  selection, the cursor tools, pattern length, and grid snap.
 - Patterns are chosen with a fixed-width stepper plus a jump menu and can be
   named; the selector costs the same width at any pattern count.
 - Four cursor tools drive the rack grid: Select (click toggles, ctrl-drag sets
@@ -145,8 +145,11 @@ through an `ArcSwapOption` slot.
   on the shared absolute clock and loops at the bar after the furthest clip end.
 - Playlist starts use the shared musical snap while retaining absolute PPQ
   ticks and are bounded to a 64-bar start canvas. The timeline is horizontally
-  zoomable. There is no clip dragging, explicit song loop range, time-signature
-  model, swing, groove, or per-channel timing offset.
+  zoomable. Global swing delays alternate sixteenth notes from 50% (straight)
+  through 75% (strong shuffle), preserving note duration in realtime and
+  offline rendering. There is no clip dragging, explicit song loop range,
+  time-signature model, groove template, per-pattern swing override, or
+  per-channel timing offset.
 
 ### State And Persistence
 

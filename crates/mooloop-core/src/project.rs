@@ -7,6 +7,14 @@ use crate::{
     PatternPlacement, PlaybackMode, SamplerParams, DEFAULT_STEPS,
 };
 
+pub const MIN_SWING_PERCENT: u8 = 50;
+pub const MAX_SWING_PERCENT: u8 = 75;
+pub const DEFAULT_SWING_PERCENT: u8 = MIN_SWING_PERCENT;
+
+const fn default_swing_percent() -> u8 {
+    DEFAULT_SWING_PERCENT
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SampleReference {
@@ -241,6 +249,8 @@ impl ProjectChannel {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Project {
     pub bpm: u16,
+    #[serde(default = "default_swing_percent")]
+    pub swing_percent: u8,
     pub ppq: u16,
     pub beats_per_bar: u8,
     pub playback_mode: PlaybackMode,
@@ -255,6 +265,7 @@ impl Default for Project {
     fn default() -> Self {
         Self {
             bpm: 120,
+            swing_percent: DEFAULT_SWING_PERCENT,
             ppq: 96,
             beats_per_bar: 4,
             playback_mode: PlaybackMode::Pattern,

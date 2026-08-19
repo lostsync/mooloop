@@ -24,6 +24,8 @@ pub enum EngineCommand {
     Pause,
     /// Set tempo in beats per minute.
     SetTempo(f64),
+    /// Set global sixteenth-note swing. 50% is straight; 75% is maximum.
+    SetSwing(u8),
     /// Select which pattern the transport loops (live-switchable).
     SetCurrentPattern(u8),
     /// Make the next preallocated pattern available to the project.

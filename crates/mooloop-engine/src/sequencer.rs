@@ -6,8 +6,9 @@
 
 use mooloop_core::{
     NoteEvent, NoteId, Pattern, PatternPlacement, PlaybackMode, Ppq, Project,
-    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, MAX_CHANNELS, MAX_PATTERN_STEPS,
-    MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, TICKS_PER_BAR, TICKS_PER_STEP,
+    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
+    MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT,
+    MIN_SWING_PERCENT, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{Event, EventList, TimedEvent};
 
@@ -19,6 +20,7 @@ pub struct Sequencer {
     current: usize,
     active_channels: usize,
     playback_mode: PlaybackMode,
+    swing_percent: u8,
     playlist: Vec<PatternPlacement>,
 }
 
@@ -43,6 +45,7 @@ impl Sequencer {
             current: 0,
             active_channels: initial_channels.min(MAX_CHANNELS),
             playback_mode: PlaybackMode::Pattern,
+            swing_percent: DEFAULT_SWING_PERCENT,
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
         }
     }
@@ -75,6 +78,15 @@ impl Sequencer {
 
     pub fn set_playback_mode(&mut self, mode: PlaybackMode) {
         self.playback_mode = mode;
+    }
+
+    pub fn set_swing(&mut self, percent: u8) {
+        self.swing_percent = percent.clamp(MIN_SWING_PERCENT, MAX_SWING_PERCENT);
+    }
+
+    // Keep override resolution here when patterns gain their own swing value.
+    fn swing_for_pattern(&self, _pattern: usize) -> u8 {
+        self.swing_percent
     }
 
     pub fn set_playlist_placement(&mut self, pattern: usize, start_tick: u32, on: bool) -> bool {
@@ -140,6 +152,7 @@ impl Sequencer {
         self.active_channels = project.channels.len().min(MAX_CHANNELS);
         self.current = (project.current_pattern as usize).min(self.active_patterns - 1);
         self.playback_mode = project.playback_mode;
+        self.set_swing(project.swing_percent);
         self.playlist.clear();
         self.playlist.extend(
             project
@@ -266,6 +279,7 @@ impl Sequencer {
                     return;
                 };
                 let pattern_ticks = pattern.length_ticks();
+                let swing_percent = self.swing_for_pattern(self.current);
                 for (channel_index, event_list) in
                     events.iter_mut().enumerate().take(self.active_channels)
                 {
@@ -278,9 +292,10 @@ impl Sequencer {
                         .copied()
                         .filter(|note| note.start_tick < pattern_ticks)
                     {
+                        let swing = swing_offset_ticks(note.start_tick, swing_percent);
                         Self::schedule_edge_once(
                             note,
-                            note.start_tick,
+                            note.start_tick.saturating_add(swing),
                             false,
                             0,
                             start_tick,
@@ -291,7 +306,7 @@ impl Sequencer {
                         );
                         Self::schedule_edge_once(
                             note,
-                            note.end_tick(),
+                            note.end_tick().saturating_add(swing),
                             true,
                             0,
                             start_tick,
@@ -310,6 +325,7 @@ impl Sequencer {
                         continue;
                     }
                     let pattern = &self.patterns[pattern_index];
+                    let swing_percent = self.swing_for_pattern(pattern_index);
                     let pattern_ticks = pattern.length_ticks();
                     let instance = u64::from(placement.pattern) * u64::from(MAX_PLAYLIST_TICKS)
                         + u64::from(placement.start_tick);
@@ -325,9 +341,13 @@ impl Sequencer {
                             .copied()
                             .filter(|note| note.start_tick < pattern_ticks)
                         {
+                            let swing = swing_offset_ticks(note.start_tick, swing_percent);
                             Self::schedule_edge_once(
                                 note,
-                                placement.start_tick.saturating_add(note.start_tick),
+                                placement
+                                    .start_tick
+                                    .saturating_add(note.start_tick)
+                                    .saturating_add(swing),
                                 false,
                                 instance,
                                 start_tick,
@@ -338,7 +358,10 @@ impl Sequencer {
                             );
                             Self::schedule_edge_once(
                                 note,
-                                placement.start_tick.saturating_add(note.end_tick()),
+                                placement
+                                    .start_tick
+                                    .saturating_add(note.end_tick())
+                                    .saturating_add(swing),
                                 true,
                                 instance,
                                 start_tick,
@@ -402,6 +425,7 @@ impl Sequencer {
             return;
         };
         let pattern_ticks = pattern.length_ticks();
+        let swing_percent = self.swing_for_pattern(self.current);
 
         for (channel_index, event_list) in events.iter_mut().enumerate().take(self.active_channels)
         {
@@ -414,9 +438,10 @@ impl Sequencer {
                 .copied()
                 .filter(|note| note.start_tick < pattern_ticks)
             {
+                let swing = swing_offset_ticks(note.start_tick, swing_percent);
                 Self::schedule_note_edge(
                     note,
-                    note.start_tick,
+                    note.start_tick.saturating_add(swing),
                     false,
                     pattern_ticks,
                     1,
@@ -429,7 +454,7 @@ impl Sequencer {
                 );
                 Self::schedule_note_edge(
                     note,
-                    note.end_tick(),
+                    note.end_tick().saturating_add(swing),
                     true,
                     pattern_ticks,
                     1,
@@ -460,6 +485,7 @@ impl Sequencer {
                 continue;
             }
             let pattern = &self.patterns[pattern_index];
+            let swing_percent = self.swing_for_pattern(pattern_index);
             let instance_offset = placement.pattern as u64 * MAX_PLAYLIST_TICKS as u64
                 + u64::from(placement.start_tick);
             let pattern_ticks = pattern.length_ticks();
@@ -475,9 +501,13 @@ impl Sequencer {
                     .copied()
                     .filter(|note| note.start_tick < pattern_ticks)
                 {
+                    let swing = swing_offset_ticks(note.start_tick, swing_percent);
                     Self::schedule_note_edge(
                         note,
-                        placement.start_tick.saturating_add(note.start_tick),
+                        placement
+                            .start_tick
+                            .saturating_add(note.start_tick)
+                            .saturating_add(swing),
                         false,
                         song_ticks,
                         instance_stride,
@@ -490,7 +520,10 @@ impl Sequencer {
                     );
                     Self::schedule_note_edge(
                         note,
-                        placement.start_tick.saturating_add(note.end_tick()),
+                        placement
+                            .start_tick
+                            .saturating_add(note.end_tick())
+                            .saturating_add(swing),
                         true,
                         song_ticks,
                         instance_stride,
@@ -554,6 +587,15 @@ impl Sequencer {
     }
 }
 
+fn swing_offset_ticks(note_start_tick: u32, percent: u8) -> u32 {
+    if (note_start_tick / TICKS_PER_STEP).is_multiple_of(2) {
+        return 0;
+    }
+    let amount = u32::from(percent.clamp(MIN_SWING_PERCENT, MAX_SWING_PERCENT))
+        - u32::from(MIN_SWING_PERCENT);
+    (TICKS_PER_STEP * 2 * amount + 50) / 100
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,6 +608,18 @@ mod tests {
         let frames = ((end_tick - start_tick) / ticks_per_sample).ceil() as usize;
         let mut events = [EventList::empty()];
         sequencer.schedule(start_tick, end_tick, frames, ticks_per_sample, &mut events);
+        events[0].iter().copied().collect()
+    }
+
+    fn schedule_once_range(
+        sequencer: &Sequencer,
+        start_tick: f64,
+        end_tick: f64,
+    ) -> Vec<TimedEvent> {
+        let ticks_per_sample = ticks_per_sample(120.0, 48_000, Ppq::DEFAULT);
+        let frames = ((end_tick - start_tick) / ticks_per_sample).ceil() as usize;
+        let mut events = [EventList::empty()];
+        sequencer.schedule_once(start_tick, end_tick, frames, ticks_per_sample, &mut events);
         events[0].iter().copied().collect()
     }
 
@@ -632,6 +686,50 @@ mod tests {
             Event::NoteOff { id: 9, note: 64 }
         ));
         assert!(events[1].offset > events[0].offset);
+    }
+
+    #[test]
+    fn swing_delays_alternate_sixteenths_without_changing_duration() {
+        let mut sequencer = Sequencer::new(1, 1, 16, Ppq::DEFAULT);
+        sequencer.set_swing(66);
+        assert!(sequencer.upsert_note(0, 0, NoteEvent::new(1, 0, 12, 60, 100)));
+        assert!(sequencer.upsert_note(0, 0, NoteEvent::new(2, 24, 12, 60, 100)));
+
+        for events in [
+            schedule_range(&sequencer, 0.0, 48.0),
+            schedule_once_range(&sequencer, 0.0, 48.0),
+        ] {
+            let swung_on = events
+                .iter()
+                .find(|event| matches!(event.event, Event::NoteOn { id: 2, .. }))
+                .unwrap();
+            let swung_off = events
+                .iter()
+                .find(|event| matches!(event.event, Event::NoteOff { id: 2, .. }))
+                .unwrap();
+            assert_eq!(swung_on.offset, 8_000);
+            assert_eq!(swung_off.offset - swung_on.offset, 3_000);
+        }
+    }
+
+    #[test]
+    fn song_swing_uses_pattern_phase_not_playlist_position() {
+        let mut sequencer = Sequencer::new(1, 1, 16, Ppq::DEFAULT);
+        sequencer.set_swing(66);
+        assert!(sequencer.upsert_note(0, 0, NoteEvent::new(1, 0, 6, 60, 100)));
+        assert!(sequencer.upsert_note(0, 0, NoteEvent::new(2, 24, 6, 62, 100)));
+        assert!(sequencer.set_playlist_placement(0, 24, true));
+        sequencer.set_playback_mode(PlaybackMode::Song);
+
+        let events = schedule_range(&sequencer, 0.0, 64.0);
+        let note_on_offsets: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event.event {
+                Event::NoteOn { note, .. } => Some((note, event.offset)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(note_on_offsets, vec![(60, 6_000), (62, 14_000)]);
     }
 
     #[test]

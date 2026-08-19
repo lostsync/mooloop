@@ -59,6 +59,7 @@ table:
 ```toml
 [document]
 bpm = 120
+swing_percent = 50
 ppq = 96
 beats_per_bar = 4
 playback_mode = "pattern" # or "song"
@@ -94,6 +95,10 @@ pattern's current logical length remain stored, so shortening and re-extending
 a pattern is lossless. The sampler state also contains every field in
 `SamplerParams`: voice/retrigger/choke settings, trim, reverse, root and tune,
 loop settings, ADSR, filter, drive, bit reduction, and rate reduction.
+
+`swing_percent` is global sixteenth-note swing from `50` (straight) through
+`75` (strong shuffle); `66` is approximately triplet swing. Readers default
+the field to `50` for version 1 manifests written before swing was added.
 
 Generated sources use the same tagged envelope and store their complete
 parameter sets without an asset reference:
@@ -159,6 +164,7 @@ shows the missing path so it can be relinked by loading another WAV.
 - Pattern lengths from 1 to 256 sixteenth-note steps.
 - Playlist starts within the 64-bar playlist canvas.
 - Tempo from 1 to 999 BPM.
+- Swing from 50 to 75 percent.
 - Unique nonzero note IDs, nonzero durations, MIDI notes `0..=127`, and
   velocities `1..=127`.
 - Finite, bounded mixer and sampler values; polyphony and choke groups from

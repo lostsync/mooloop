@@ -17,8 +17,9 @@ use mooloop_core::{
     EngineCommand, EngineEvent, Kit, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
     OscWave, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
     SampleReference, SamplerParams, SamplerState, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
-    DEFAULT_STEPS, MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
-    MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
+    DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS,
+    MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT,
+    MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::SampleData;
 use mooloop_engine::{
@@ -441,7 +442,7 @@ impl UiState {
         }
     }
 
-    fn project_snapshot(&self, bpm: i32) -> Project {
+    fn project_snapshot(&self, bpm: i32, swing_percent: i32) -> Project {
         let channels = self
             .channels
             .iter()
@@ -486,6 +487,8 @@ impl UiState {
             .collect();
         Project {
             bpm: bpm.clamp(1, 999) as u16,
+            swing_percent: swing_percent.clamp(MIN_SWING_PERCENT.into(), MAX_SWING_PERCENT.into())
+                as u8,
             ppq: 96,
             beats_per_bar: 4,
             playback_mode: if self.song_mode {
@@ -670,6 +673,7 @@ impl UiState {
             .collect();
         self.rows.set_vec(rows);
         window.set_bpm(project.bpm.into());
+        window.set_swing_percent(project.swing_percent.into());
         window.set_song_mode(self.song_mode);
         window.set_current_pattern(self.current_pattern as i32);
         window.set_pattern_count(self.pattern_lengths.len() as i32);
@@ -930,6 +934,7 @@ impl AppUi {
 
         // --- Transport initial state ---
         window.set_bpm(INITIAL_BPM);
+        window.set_swing_percent(DEFAULT_SWING_PERCENT.into());
         window.set_playing(false);
         window.set_beat_in_bar(0);
         window.set_position_bar(1);
@@ -946,6 +951,7 @@ impl AppUi {
         window.set_current_step(0);
         window.set_editor_page(0);
         handle.send(EngineCommand::SetTempo(INITIAL_BPM as f64));
+        handle.send(EngineCommand::SetSwing(DEFAULT_SWING_PERCENT));
 
         // --- Appearance settings and live preview ---
         let ui_settings = Rc::new(RefCell::new(UiSettings::load_or_default()));
@@ -1186,7 +1192,9 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
-                let project = st.borrow().project_snapshot(window.get_bpm());
+                let project = st
+                    .borrow()
+                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
                 let revision = st.borrow().revision;
                 let mode = if window.get_embed_assets() {
                     AssetMode::Embedded
@@ -1248,7 +1256,9 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
-                let snapshot = st.borrow().project_snapshot(window.get_bpm());
+                let snapshot = st
+                    .borrow()
+                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
                 let kit = Kit {
                     channels: snapshot
                         .channels
@@ -1285,7 +1295,9 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
-                let snapshot = st.borrow().project_snapshot(window.get_bpm());
+                let snapshot = st
+                    .borrow()
+                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
                 let channel = snapshot.channels[snapshot.selected_channel as usize]
                     .setup
                     .clone();
@@ -1365,7 +1377,9 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
-                let project = st.borrow().project_snapshot(window.get_bpm());
+                let project = st
+                    .borrow()
+                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
                 let samples = st.borrow().sample_snapshots();
                 let scope = if st.borrow().song_mode {
                     RenderScope::Song
@@ -1474,6 +1488,22 @@ impl AppUi {
             let tx = cmd_tx.clone();
             window.on_bpm_changed(move |bpm| {
                 let _ = tx.send(EngineCommand::SetTempo(bpm as f64));
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_swing_changed(move |percent| {
+                let percent =
+                    percent.clamp(MIN_SWING_PERCENT.into(), MAX_SWING_PERCENT.into()) as u8;
+                let _ = tx.send(EngineCommand::SetSwing(percent));
+                let mut st = st.borrow_mut();
+                st.dirty = true;
+                st.revision = st.revision.wrapping_add(1);
+                if let Some(window) = weak.upgrade() {
+                    st.update_document_title(&window);
+                }
             });
         }
         {
@@ -2928,7 +2958,9 @@ impl AppUi {
                                 asset_mode,
                                 warnings,
                             } = report;
-                            let current = st.borrow().project_snapshot(window.get_bpm());
+                            let current = st
+                                .borrow()
+                                .project_snapshot(window.get_bpm(), window.get_swing_percent());
                             let current_samples = st.borrow().sample_snapshots();
                             let merged = match (target, document) {
                                 (LoadTarget::Song, LoadedDocument::Song(project)) => {

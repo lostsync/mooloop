@@ -218,6 +218,7 @@ impl RenderState {
             EngineCommand::Pause => self.transport.pause(),
             EngineCommand::Stop => self.transport.stop(),
             EngineCommand::SetTempo(bpm) => self.transport.set_tempo(bpm),
+            EngineCommand::SetSwing(percent) => self.sequencer.set_swing(percent),
             EngineCommand::SetCurrentPattern(pattern) => {
                 self.sequencer.set_current_pattern(pattern as usize)
             }
