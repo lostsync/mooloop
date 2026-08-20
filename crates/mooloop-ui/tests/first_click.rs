@@ -57,6 +57,7 @@ slint::slint! {
 const BUTTON_CENTER: (f32, f32) = (50.0, 20.0);
 /// Inside the knob dial itself, which sits above the label and readout.
 const KNOB_DIAL: (f32, f32) = (28.0, 82.0);
+const KNOB_LABEL: (f32, f32) = (28.0, 112.0);
 const FADER_TRACK: (f32, f32) = (150.0, 181.0);
 
 fn pos(p: (f32, f32)) -> LogicalPosition {
@@ -125,6 +126,32 @@ fn knob_responds_to_the_first_drag() {
     assert!(
         ui.get_knob_value() > before,
         "dragging a knob must change its value on the first press (was {before}, now {})",
+        ui.get_knob_value()
+    );
+}
+
+#[test]
+fn knob_label_drags_the_parameter() {
+    let ui = harness();
+    let before = ui.get_knob_value();
+    let window = ui.window();
+
+    let start = pos(KNOB_LABEL);
+    window.dispatch_event(WindowEvent::PointerMoved { position: start });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: start,
+        button: PointerEventButton::Left,
+    });
+    let end = LogicalPosition::new(start.x, start.y - 30.0);
+    window.dispatch_event(WindowEvent::PointerMoved { position: end });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: end,
+        button: PointerEventButton::Left,
+    });
+
+    assert!(
+        ui.get_knob_value() > before,
+        "dragging a knob label must change its value (was {before}, now {})",
         ui.get_knob_value()
     );
 }

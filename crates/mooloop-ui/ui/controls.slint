@@ -121,10 +121,63 @@ export component SegmentedControl inherits Rectangle {
     }
 }
 
+// Compact one-click choice for short, fixed option sets such as waveforms and
+// filter modes. Segment widths follow their labels instead of filling an
+// arbitrary panel width.
+export component SelectorBank inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected-index;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback selected(int);
+
+    height: 26px;
+    width: selector-layout.preferred-width;
+    background: Theme.surface;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    selector-layout := HorizontalLayout {
+        spacing: 1px;
+        for option[i] in root.options : ToolButton {
+            text: option;
+            tooltip: root.tooltip == "" ? option : root.tooltip + ": " + option;
+            active: root.selected-index == i;
+            enabled: root.enabled;
+            min-width: 38px;
+            clicked => {
+                root.selected-index = i;
+                root.selected(i);
+            }
+        }
+    }
+}
+
 export component SectionLabel inherits Text {
     color: Theme.text-faint;
     font-size: 9px;
     height: 12px;
+}
+
+// Bounded functional group used to tile instrument editors. Children live in
+// one padded content column under a stable title line.
+export component InstrumentModule inherits Rectangle {
+    in property <string> title;
+    in property <length> module-padding: 6px;
+
+    min-height: 96px;
+    background: Theme.surface;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: root.module-padding;
+        spacing: 4px;
+        if root.title != "" : SectionLabel { text: root.title; }
+        @children
+    }
 }
 
 export component ValueReadout inherits Rectangle {
@@ -303,27 +356,6 @@ export component ParameterKnob inherits Rectangle {
             fill: root.fill;
             focused: keyboard.has-focus;
             hovered: knob-touch.has-hover;
-
-            knob-touch := TouchArea {
-                enabled: root.enabled;
-                mouse-cursor: ns-resize;
-                pointer-event(e) => {
-                    if (e.kind == PointerEventKind.down) {
-                        keyboard.focus();
-                        root.pressed-normalized = root.normalized;
-                        root.fine-drag = e.modifiers.control || e.modifiers.shift;
-                    } else if (e.kind == PointerEventKind.move && self.pressed) {
-                        root.set-normalized(root.pressed-normalized
-                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
-                    }
-                }
-                double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
-                scroll-event(e) => {
-                    root.set-normalized(root.normalized
-                        - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
-                    accept
-                }
-            }
         }
 
         Text {
@@ -335,6 +367,29 @@ export component ParameterKnob inherits Rectangle {
             overflow: elide;
         }
         ValueReadout { value-text: root.value-text; width: parent.width; }
+    }
+
+    // The label and value are part of the parameter, so they share the knob's
+    // drag, reset, and wheel interaction instead of becoming dead pixels.
+    knob-touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: ns-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                keyboard.focus();
+                root.pressed-normalized = root.normalized;
+                root.fine-drag = e.modifiers.control || e.modifiers.shift;
+            } else if (e.kind == PointerEventKind.move && self.pressed) {
+                root.set-normalized(root.pressed-normalized
+                    + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+            }
+        }
+        double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
+        scroll-event(e) => {
+            root.set-normalized(root.normalized
+                - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
+            accept
+        }
     }
 
     keyboard := FocusScope {
