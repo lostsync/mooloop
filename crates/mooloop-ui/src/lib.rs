@@ -25,7 +25,9 @@ use mooloop_dsp::SampleData;
 use mooloop_engine::{
     EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, WavEncoding,
 };
-use mooloop_project::{AssetMode, AssetWarning, LoadReport, LoadedDocument, SaveReport};
+use mooloop_project::{
+    AssetMode, AssetWarning, LoadReport, LoadedDocument, PresetInfo, PresetSummary, SaveReport,
+};
 use settings::{AppearancePreset, AppearanceSettings, ThemePalette, UiSettings};
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
@@ -171,6 +173,10 @@ enum DocumentResult {
         label: &'static str,
         report: SaveReport,
     },
+    SavedPreset {
+        label: &'static str,
+        report: SaveReport,
+    },
     Loaded {
         path: PathBuf,
         target: LoadTarget,
@@ -199,6 +205,7 @@ enum LoadTarget {
     Song,
     Kit,
     Channel,
+    Generator,
 }
 
 pub struct AppUi {
@@ -405,6 +412,15 @@ struct UiState {
     dirty: bool,
     revision: u64,
     source_revision: u64,
+    generator_presets: Vec<PresetSummary>,
+    channel_presets: Vec<PresetSummary>,
+    pending_preset_save: Option<PresetSaveTarget>,
+}
+
+#[derive(Clone, Copy)]
+enum PresetSaveTarget {
+    Generator,
+    Channel,
 }
 
 impl UiState {
@@ -775,6 +791,18 @@ impl UiState {
         window.set_current_pattern_name(current.into());
     }
 
+    fn sync_generator_preset_menu(&self, window: &MainWindow) {
+        let options: Vec<slint::SharedString> =
+            self.generator_presets.iter().map(preset_menu_label).collect();
+        window.set_generator_preset_options(ModelRc::from(Rc::new(VecModel::from(options))));
+    }
+
+    fn sync_channel_preset_menu(&self, window: &MainWindow) {
+        let options: Vec<slint::SharedString> =
+            self.channel_presets.iter().map(preset_menu_label).collect();
+        window.set_channel_preset_options(ModelRc::from(Rc::new(VecModel::from(options))));
+    }
+
     fn song_length_ticks(&self) -> u32 {
         let content_end = self
             .playlist
@@ -1123,6 +1151,9 @@ impl AppUi {
             dirty: false,
             revision: 0,
             source_revision: 0,
+            generator_presets: Vec::new(),
+            channel_presets: Vec::new(),
+            pending_preset_save: None,
         }));
         let starter = Project::starter_kit(fresh_starter_seed());
         let starter_samples = vec![None; starter.channels.len()];
@@ -1388,6 +1419,150 @@ impl AppUi {
                 window.on_load_channel(callback);
             }
         }
+
+        // --- Presets: browse-and-load from the well-known presets dirs ---
+        for (generator, label) in [(true, "generator preset"), (false, "channel preset")] {
+            let st = state.clone();
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            let callback = move |index: i32| {
+                let Some(path) = ({
+                    let st = st.borrow();
+                    let presets = if generator {
+                        &st.generator_presets
+                    } else {
+                        &st.channel_presets
+                    };
+                    presets.get(index as usize).map(|preset| preset.path.clone())
+                }) else {
+                    return;
+                };
+                if let Some(window) = weak.upgrade() {
+                    window.set_document_busy(true);
+                    window.set_status_message(format!("Loading {label}...").into());
+                }
+                let tx = tx.clone();
+                let target = if generator {
+                    LoadTarget::Generator
+                } else {
+                    LoadTarget::Channel
+                };
+                std::thread::spawn(move || {
+                    let result = resolve_document(&path)
+                        .map(|document| DocumentResult::Loaded {
+                            path,
+                            target,
+                            document,
+                        })
+                        .unwrap_or_else(DocumentResult::Failed);
+                    let _ = tx.send(result);
+                });
+            };
+            if generator {
+                window.on_generator_preset_selected(callback);
+            } else {
+                window.on_channel_preset_selected(callback);
+            }
+        }
+
+        // --- Presets: open the save dialog, scoped to generator or channel ---
+        for (generator, title) in [
+            (true, "Save Generator Preset"),
+            (false, "Save Channel Preset"),
+        ] {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let callback = move || {
+                st.borrow_mut().pending_preset_save = Some(if generator {
+                    PresetSaveTarget::Generator
+                } else {
+                    PresetSaveTarget::Channel
+                });
+                if let Some(window) = weak.upgrade() {
+                    window.set_save_preset_title(title.into());
+                    window.set_save_preset_name("".into());
+                    window.set_save_preset_category("".into());
+                    window.set_save_preset_open(true);
+                }
+            };
+            if generator {
+                window.on_save_generator_preset_requested(callback);
+            } else {
+                window.on_save_channel_preset_requested(callback);
+            }
+        }
+        {
+            let st = state.clone();
+            window.on_save_preset_cancelled(move || {
+                st.borrow_mut().pending_preset_save = None;
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            window.on_save_preset_confirmed(move |name, category| {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                let Some(target) = st.borrow_mut().pending_preset_save.take() else {
+                    return;
+                };
+                let snapshot = st
+                    .borrow()
+                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
+                let selected = snapshot.channels[snapshot.selected_channel as usize]
+                    .setup
+                    .clone();
+                let info = PresetInfo {
+                    name: name.clone(),
+                    category: category.trim().to_string(),
+                    tags: Vec::new(),
+                };
+                let file_stem = mooloop_project::sanitize_preset_name(&name);
+                let (dir, extension, label) = match target {
+                    PresetSaveTarget::Generator => (
+                        settings::generator_presets_dir(selected.kind()),
+                        "mooloop-generator",
+                        "Generator preset saved",
+                    ),
+                    PresetSaveTarget::Channel => (
+                        settings::channel_presets_dir(),
+                        "mooloop-channel",
+                        "Channel preset saved",
+                    ),
+                };
+                let path = dir.join(format!("{file_stem}.{extension}"));
+                window.set_document_busy(true);
+                window.set_status_message("Saving preset...".into());
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let result = match target {
+                        PresetSaveTarget::Generator => mooloop_project::save_generator_preset(
+                            &path,
+                            &selected.source,
+                            info,
+                            AssetMode::Embedded,
+                        ),
+                        PresetSaveTarget::Channel => mooloop_project::save_channel_preset(
+                            &path,
+                            &selected,
+                            info,
+                            AssetMode::Embedded,
+                        ),
+                    };
+                    let result = result
+                        .map(|report| DocumentResult::SavedPreset { label, report })
+                        .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                    let _ = tx.send(result);
+                });
+            });
+        }
+
         {
             let weak = window.as_weak();
             window.on_export_audio(move || {
@@ -2321,16 +2496,19 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_channel_selected(move |ch| {
                 let ch = ch as usize;
-                let mut st = st.borrow_mut();
-                if ch >= st.channels.len() || ch == st.selected {
-                    return;
+                {
+                    let mut guard = st.borrow_mut();
+                    if ch >= guard.channels.len() || ch == guard.selected {
+                        return;
+                    }
+                    guard.selected = ch;
+                    guard.selected_note_id = None;
                 }
-                st.selected = ch;
-                st.selected_note_id = None;
                 if let Some(w) = weak.upgrade() {
                     w.set_selected_channel(ch as i32);
-                    st.sync_row_flags();
-                    st.refresh_editor(&w);
+                    st.borrow().sync_row_flags();
+                    st.borrow().refresh_editor(&w);
+                    refresh_preset_menus(&st, &w);
                 }
             });
         }
@@ -2401,16 +2579,20 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_channel_source_changed(move |value| {
                 let source = device_kind_from_int(value);
-                let mut st = st.borrow_mut();
-                let channel = st.selected;
-                if st.channels[channel].kind == source {
-                    return;
-                }
-                st.reset_channel_source(channel, source);
-                st.selected_note_id = None;
-                st.sync_row_flags();
+                let channel = {
+                    let mut guard = st.borrow_mut();
+                    let channel = guard.selected;
+                    if guard.channels[channel].kind == source {
+                        return;
+                    }
+                    guard.reset_channel_source(channel, source);
+                    guard.selected_note_id = None;
+                    guard.sync_row_flags();
+                    channel
+                };
                 if let Some(window) = weak.upgrade() {
-                    st.refresh_editor(&window);
+                    st.borrow().refresh_editor(&window);
+                    refresh_preset_menus(&st, &window);
                 }
                 let _ = reset_tx.send(channel);
                 let _ = tx.send(EngineCommand::SetChannelSource {
@@ -3000,6 +3182,13 @@ impl AppUi {
                                 format!("{label}{}", warning_suffix(report.warnings.len())).into(),
                             );
                         }
+                        DocumentResult::SavedPreset { label, report } => {
+                            window.set_status_message(
+                                format!("{label}{}", warning_suffix(report.warnings.len())).into(),
+                            );
+                            window.set_save_preset_open(false);
+                            refresh_preset_menus(&st, &window);
+                        }
                         DocumentResult::Exported { path } => {
                             window
                                 .set_status_message(format!("Exported {}", path.display()).into());
@@ -3088,6 +3277,15 @@ impl AppUi {
                                     let mut project = current;
                                     let selected = project.selected_channel as usize;
                                     project.channels[selected].setup = setup;
+                                    let mut samples = current_samples;
+                                    samples[selected] = loaded_samples.into_iter().next().flatten();
+                                    Some((project, samples, false))
+                                }
+                                (LoadTarget::Generator, LoadedDocument::Generator(source)) => {
+                                    let mut project = current;
+                                    let selected = project.selected_channel as usize;
+                                    project.channels[selected].setup.channel.kind = source.kind();
+                                    project.channels[selected].setup.source = source;
                                     let mut samples = current_samples;
                                     samples[selected] = loaded_samples.into_iter().next().flatten();
                                     Some((project, samples, false))
@@ -3426,6 +3624,40 @@ fn install_project_in_ui(
     state.borrow_mut().replace_project(project, samples, window);
     window.set_playing(false);
     window.set_playlist_position_ticks(0);
+    refresh_preset_menus(state, window);
+}
+
+fn preset_menu_label(preset: &PresetSummary) -> slint::SharedString {
+    if preset.category.trim().is_empty() {
+        preset.name.as_str().into()
+    } else {
+        format!("{} — {}", preset.category, preset.name).into()
+    }
+}
+
+/// Re-scans the on-disk preset directories for the currently selected
+/// channel's generator kind, plus the whole-channel presets, and pushes
+/// the results into the `MenuField` popups. Cheap enough to call on every
+/// channel/kind switch and project load: presets are a handful of small
+/// TOML manifests, not a large library.
+fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
+    let kind = {
+        let st = state.borrow();
+        st.channels
+            .get(st.selected)
+            .map(|channel| channel.kind)
+            .unwrap_or(DeviceKind::Sampler)
+    };
+    let generator_presets = mooloop_project::list_presets(&settings::generator_presets_dir(kind));
+    let channel_presets = mooloop_project::list_presets(&settings::channel_presets_dir());
+    {
+        let mut st = state.borrow_mut();
+        st.generator_presets = generator_presets;
+        st.channel_presets = channel_presets;
+    }
+    let st = state.borrow();
+    st.sync_generator_preset_menu(window);
+    st.sync_channel_preset_menu(window);
 }
 
 fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
@@ -3448,6 +3680,10 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
             })
             .collect(),
         LoadedDocument::Channel(channel) => vec![match &channel.source {
+            ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
+            ChannelSource::DrumSynth(_) | ChannelSource::MonoSynth(_) => None,
+        }],
+        LoadedDocument::Generator(source) => vec![match source {
             ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
             ChannelSource::DrumSynth(_) | ChannelSource::MonoSynth(_) => None,
         }],

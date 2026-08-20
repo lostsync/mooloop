@@ -1,3 +1,4 @@
+use mooloop_core::DeviceKind;
 use serde::{Deserialize, Serialize};
 use slint::Color;
 use std::fmt;
@@ -210,22 +211,48 @@ impl UiSettings {
 }
 
 fn settings_path() -> PathBuf {
+    config_dir().join("settings.toml")
+}
+
+/// Directory presets and prefs both live under: `$MOOLOOP_CONFIG_DIR`, or
+/// the platform config directory (`%APPDATA%\mooloop`,
+/// `~/Library/Application Support/mooloop`, or
+/// `$XDG_CONFIG_HOME/mooloop`/`~/.config/mooloop`).
+fn config_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("MOOLOOP_CONFIG_DIR") {
-        return PathBuf::from(path).join("settings.toml");
+        return PathBuf::from(path);
     }
     #[cfg(target_os = "windows")]
     if let Some(path) = std::env::var_os("APPDATA") {
-        return PathBuf::from(path).join("mooloop").join("settings.toml");
+        return PathBuf::from(path).join("mooloop");
     }
     #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join("Library/Application Support/mooloop/settings.toml");
+        return PathBuf::from(home).join("Library/Application Support/mooloop");
     }
     if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
-        return PathBuf::from(path).join("mooloop").join("settings.toml");
+        return PathBuf::from(path).join("mooloop");
     }
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| ".".into()))
-        .join(".config/mooloop/settings.toml")
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| ".".into())).join(".config/mooloop")
+}
+
+/// Directory holding one subdirectory of generator presets per
+/// [`DeviceKind`], e.g. `presets/generators/mono_synth/`.
+pub(crate) fn generator_presets_dir(kind: DeviceKind) -> PathBuf {
+    config_dir().join("presets/generators").join(kind_slug(kind))
+}
+
+/// Directory holding whole-channel presets (`presets/channels/`).
+pub(crate) fn channel_presets_dir() -> PathBuf {
+    config_dir().join("presets/channels")
+}
+
+fn kind_slug(kind: DeviceKind) -> &'static str {
+    match kind {
+        DeviceKind::Sampler => "sampler",
+        DeviceKind::DrumSynth => "drum_synth",
+        DeviceKind::MonoSynth => "mono_synth",
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

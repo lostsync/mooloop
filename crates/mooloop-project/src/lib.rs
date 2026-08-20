@@ -7,10 +7,10 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooloop_core::{
-    ChannelSetup, ChannelSource, DrumSynthParams, Kit, MonoSynthParams, Project, SampleReference,
-    SamplerParams, MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS,
-    MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SAMPLER_VOICES,
-    TICKS_PER_STEP,
+    ChannelSetup, ChannelSource, DeviceKind, DrumSynthParams, Kit, MonoSynthParams, Project,
+    SampleReference, SamplerParams, MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_NOTES_PER_CHANNEL_PATTERN,
+    MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
+    MAX_SAMPLER_VOICES, TICKS_PER_STEP,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +30,7 @@ pub enum DocumentKind {
     Song,
     Kit,
     Channel,
+    Generator,
 }
 
 impl DocumentKind {
@@ -38,8 +39,32 @@ impl DocumentKind {
             Self::Song => "song",
             Self::Kit => "kit",
             Self::Channel => "channel",
+            Self::Generator => "generator",
         }
     }
+}
+
+/// Indexable metadata for a saved preset, carried alongside the document so
+/// a future preset browser can list/group/filter without opening every
+/// bundle's full document.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresetInfo {
+    pub name: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Summary of a preset bundle found by [`list_presets`], cheap to compute
+/// because it only reads the manifest header and preset metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetSummary {
+    pub path: PathBuf,
+    pub name: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub kind: DeviceKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +84,7 @@ pub enum LoadedDocument {
     Song(Project),
     Kit(Kit),
     Channel(ChannelSetup),
+    Generator(ChannelSource),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +144,8 @@ struct Envelope<T> {
     format_version: u32,
     document_type: String,
     asset_mode: AssetMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preset: Option<PresetInfo>,
     document: T,
 }
 
@@ -125,23 +153,35 @@ struct Envelope<T> {
 struct Header {
     format_version: u32,
     document_type: String,
+    #[serde(default)]
+    preset: Option<PresetInfo>,
 }
 
 pub fn save_song(path: &Path, project: &Project, mode: AssetMode) -> Result<SaveReport, Error> {
     validate_project(project)?;
-    save_with_assets(path, DocumentKind::Song, project.clone(), mode, |project| {
-        project
-            .channels
-            .iter_mut()
-            .map(|channel| &mut channel.setup)
-            .collect()
-    })
+    save_with_assets(
+        path,
+        DocumentKind::Song,
+        project.clone(),
+        mode,
+        None,
+        |project| {
+            project
+                .channels
+                .iter_mut()
+                .map(|channel| &mut channel.setup.source)
+                .collect()
+        },
+    )
 }
 
 pub fn save_kit(path: &Path, kit: &Kit, mode: AssetMode) -> Result<SaveReport, Error> {
     validate_setups(&kit.channels)?;
-    save_with_assets(path, DocumentKind::Kit, kit.clone(), mode, |kit| {
-        kit.channels.iter_mut().collect()
+    save_with_assets(path, DocumentKind::Kit, kit.clone(), mode, None, |kit| {
+        kit.channels
+            .iter_mut()
+            .map(|setup| &mut setup.source)
+            .collect()
     })
 }
 
@@ -150,13 +190,53 @@ pub fn save_channel(
     channel: &ChannelSetup,
     mode: AssetMode,
 ) -> Result<SaveReport, Error> {
+    save_channel_with_preset(path, channel, mode, None)
+}
+
+/// Saves a channel bundle the same way [`save_channel`] does, additionally
+/// carrying indexable preset metadata in the manifest when `info` is set.
+pub fn save_channel_preset(
+    path: &Path,
+    channel: &ChannelSetup,
+    info: PresetInfo,
+    mode: AssetMode,
+) -> Result<SaveReport, Error> {
+    save_channel_with_preset(path, channel, mode, Some(info))
+}
+
+fn save_channel_with_preset(
+    path: &Path,
+    channel: &ChannelSetup,
+    mode: AssetMode,
+    preset: Option<PresetInfo>,
+) -> Result<SaveReport, Error> {
     validate_setups(std::slice::from_ref(channel))?;
     save_with_assets(
         path,
         DocumentKind::Channel,
         channel.clone(),
         mode,
-        |channel| vec![channel],
+        preset,
+        |channel| vec![&mut channel.source],
+    )
+}
+
+/// Saves a generator-only preset: just the [`ChannelSource`] (params +
+/// sample reference for a sampler), no mixer/channel fields.
+pub fn save_generator_preset(
+    path: &Path,
+    source: &ChannelSource,
+    info: PresetInfo,
+    mode: AssetMode,
+) -> Result<SaveReport, Error> {
+    validate_source(0, source)?;
+    save_with_assets(
+        path,
+        DocumentKind::Generator,
+        source.clone(),
+        mode,
+        Some(info),
+        |source| vec![source],
     )
 }
 
@@ -165,11 +245,12 @@ fn save_with_assets<T, F>(
     kind: DocumentKind,
     mut document: T,
     mode: AssetMode,
+    preset: Option<PresetInfo>,
     setups: F,
 ) -> Result<SaveReport, Error>
 where
     T: Serialize,
-    F: FnOnce(&mut T) -> Vec<&mut ChannelSetup>,
+    F: FnOnce(&mut T) -> Vec<&mut ChannelSource>,
 {
     let parent = path
         .parent()
@@ -211,6 +292,7 @@ where
             format_version: FORMAT_VERSION,
             document_type: kind.as_str().into(),
             asset_mode: mode,
+            preset,
             document,
         };
         let manifest = toml::to_string_pretty(&envelope)?;
@@ -227,14 +309,14 @@ where
 
 fn prepare_setup_asset(
     channel: usize,
-    setup: &mut ChannelSetup,
+    source: &mut ChannelSource,
     target: &Path,
     staging: &Path,
     mode: AssetMode,
     copied: &mut HashMap<PathBuf, PathBuf>,
     warnings: &mut Vec<AssetWarning>,
 ) -> Result<(), Error> {
-    let ChannelSource::Sampler(sampler) = &mut setup.source else {
+    let ChannelSource::Sampler(sampler) = source else {
         return Ok(());
     };
     let SampleReference::File { path, embedded } = &mut sampler.sample else {
@@ -277,7 +359,7 @@ fn prepare_setup_asset(
         let name = source
             .file_name()
             .and_then(|name| name.to_str())
-            .map(sanitize_name)
+            .map(sanitize_preset_name)
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "sample.wav".into());
         let relative = PathBuf::from("samples").join(format!("{channel:02}-{name}"));
@@ -290,7 +372,9 @@ fn prepare_setup_asset(
     Ok(())
 }
 
-fn sanitize_name(name: &str) -> String {
+/// Sanitizes a user-facing name (preset name, sample file name) into a
+/// filesystem-safe string: only alphanumerics, `.`, `-`, and `_` survive.
+pub fn sanitize_preset_name(name: &str) -> String {
     name.chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
@@ -356,6 +440,15 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
                 envelope.asset_mode,
             )
         }
+        "generator" => {
+            let envelope: Envelope<ChannelSource> = toml::from_str(&manifest)?;
+            validate_envelope(&envelope, "generator")?;
+            validate_source(0, &envelope.document)?;
+            (
+                LoadedDocument::Generator(envelope.document),
+                envelope.asset_mode,
+            )
+        }
         other => return Err(Error::UnsupportedDocument(other.into())),
     };
 
@@ -363,21 +456,75 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
     match &mut document {
         LoadedDocument::Song(project) => {
             for (index, channel) in project.channels.iter_mut().enumerate() {
-                resolve_setup_asset(path, index, &mut channel.setup, &mut warnings)?;
+                resolve_setup_asset(path, index, &mut channel.setup.source, &mut warnings)?;
                 channel.recompute_next_note_id();
             }
         }
         LoadedDocument::Kit(kit) => {
             for (index, setup) in kit.channels.iter_mut().enumerate() {
-                resolve_setup_asset(path, index, setup, &mut warnings)?;
+                resolve_setup_asset(path, index, &mut setup.source, &mut warnings)?;
             }
         }
-        LoadedDocument::Channel(setup) => resolve_setup_asset(path, 0, setup, &mut warnings)?,
+        LoadedDocument::Channel(setup) => {
+            resolve_setup_asset(path, 0, &mut setup.source, &mut warnings)?
+        }
+        LoadedDocument::Generator(source) => {
+            resolve_setup_asset(path, 0, source, &mut warnings)?
+        }
     }
     Ok(LoadReport {
         document,
         asset_mode,
         warnings,
+    })
+}
+
+/// Scans `dir` for one level of preset bundles (`*.mooloop-generator` /
+/// `*.mooloop-channel` directories) and returns a summary for each,
+/// sorted by `(category, name)`. Bundles that fail to parse, are missing
+/// preset metadata, or aren't a `generator`/`channel` document are
+/// silently skipped rather than failing the whole scan. Returns an empty
+/// list if `dir` doesn't exist yet.
+pub fn list_presets(dir: &Path) -> Vec<PresetSummary> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+    let mut summaries: Vec<PresetSummary> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| summarize_preset(&entry.path()))
+        .collect();
+    summaries.sort_by(|a, b| (&a.category, &a.name).cmp(&(&b.category, &b.name)));
+    summaries
+}
+
+fn summarize_preset(path: &Path) -> Option<PresetSummary> {
+    if !path.is_dir() {
+        return None;
+    }
+    let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).ok()?;
+    let header: Header = toml::from_str(&manifest).ok()?;
+    if header.format_version != FORMAT_VERSION {
+        return None;
+    }
+    let preset = header.preset?;
+    let kind = match header.document_type.as_str() {
+        "generator" => {
+            let envelope: Envelope<ChannelSource> = toml::from_str(&manifest).ok()?;
+            envelope.document.kind()
+        }
+        "channel" => {
+            let envelope: Envelope<ChannelSetup> = toml::from_str(&manifest).ok()?;
+            envelope.document.kind()
+        }
+        _ => return None,
+    };
+    Some(PresetSummary {
+        path: path.to_path_buf(),
+        name: preset.name,
+        category: preset.category,
+        tags: preset.tags,
+        kind,
     })
 }
 
@@ -394,10 +541,10 @@ fn validate_envelope<T>(envelope: &Envelope<T>, expected: &str) -> Result<(), Er
 fn resolve_setup_asset(
     bundle: &Path,
     channel: usize,
-    setup: &mut ChannelSetup,
+    source: &mut ChannelSource,
     warnings: &mut Vec<AssetWarning>,
 ) -> Result<(), Error> {
-    let ChannelSource::Sampler(sampler) = &mut setup.source else {
+    let ChannelSource::Sampler(sampler) = source else {
         return Ok(());
     };
     let SampleReference::File { path, embedded } = &mut sampler.sample else {
@@ -547,13 +694,17 @@ fn validate_setups(setups: &[ChannelSetup]) -> Result<(), Error> {
                 "channel {index} kind does not match its source"
             )));
         }
-        match &setup.source {
-            ChannelSource::Sampler(sampler) => validate_sampler(index, sampler.params)?,
-            ChannelSource::DrumSynth(synth) => validate_drum_synth(index, synth.params)?,
-            ChannelSource::MonoSynth(synth) => validate_mono_synth(index, synth.params)?,
-        }
+        validate_source(index, &setup.source)?;
     }
     Ok(())
+}
+
+fn validate_source(index: usize, source: &ChannelSource) -> Result<(), Error> {
+    match source {
+        ChannelSource::Sampler(sampler) => validate_sampler(index, sampler.params),
+        ChannelSource::DrumSynth(synth) => validate_drum_synth(index, synth.params),
+        ChannelSource::MonoSynth(synth) => validate_mono_synth(index, synth.params),
+    }
 }
 
 fn validate_drum_synth(channel: usize, params: DrumSynthParams) -> Result<(), Error> {
@@ -812,6 +963,7 @@ mod tests {
             format_version: FORMAT_VERSION,
             document_type: "song".into(),
             asset_mode: AssetMode::Embedded,
+            preset: None,
             document: project,
         };
         fs::write(
@@ -1006,5 +1158,103 @@ id = "default_kick"
         let (before_lfo, _) = written.split_once("[lfo]").unwrap();
         let loaded: MonoSynthParams = toml::from_str(before_lfo).unwrap();
         assert_eq!(loaded, MonoSynthParams::default());
+    }
+
+    #[test]
+    fn generator_presets_round_trip_for_every_kind() {
+        let temp = tempdir().unwrap();
+        let sources = [
+            ChannelSource::Sampler(mooloop_core::SamplerState::default()),
+            ChannelSource::DrumSynth(mooloop_core::DrumSynthState::default()),
+            ChannelSource::MonoSynth(mooloop_core::MonoSynthState::default()),
+        ];
+        for (index, source) in sources.into_iter().enumerate() {
+            let info = PresetInfo {
+                name: format!("Preset {index}"),
+                category: "Bass".into(),
+                tags: vec!["warm".into(), "analog".into()],
+            };
+            let path = temp.path().join(format!("preset-{index}.mooloop-generator"));
+            save_generator_preset(&path, &source, info.clone(), AssetMode::Embedded).unwrap();
+            let loaded = load_bundle(&path).unwrap();
+            assert!(loaded.warnings.is_empty());
+            assert_eq!(loaded.document, LoadedDocument::Generator(source));
+
+            let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
+            let header: Header = toml::from_str(&manifest).unwrap();
+            assert_eq!(header.preset, Some(info));
+        }
+    }
+
+    #[test]
+    fn channel_preset_round_trips_with_metadata() {
+        let temp = tempdir().unwrap();
+        let setup = ChannelSetup::mono_synth("Lead");
+        let info = PresetInfo {
+            name: "Screamer".into(),
+            category: "Lead".into(),
+            tags: vec!["aggressive".into()],
+        };
+        let path = temp.path().join("screamer.mooloop-channel");
+        save_channel_preset(&path, &setup, info.clone(), AssetMode::Embedded).unwrap();
+        let loaded = load_bundle(&path).unwrap();
+        assert_eq!(loaded.document, LoadedDocument::Channel(setup.clone()));
+
+        let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
+        let header: Header = toml::from_str(&manifest).unwrap();
+        assert_eq!(header.preset, Some(info));
+
+        // A plain (non-preset) channel save leaves preset metadata unset.
+        let plain_path = temp.path().join("plain.mooloop-channel");
+        save_channel(&plain_path, &setup, AssetMode::Embedded).unwrap();
+        let manifest = fs::read_to_string(plain_path.join(MANIFEST_FILE)).unwrap();
+        let header: Header = toml::from_str(&manifest).unwrap();
+        assert_eq!(header.preset, None);
+    }
+
+    #[test]
+    fn list_presets_skips_corrupt_bundles_and_sorts_by_category_then_name() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("presets");
+        fs::create_dir_all(&dir).unwrap();
+
+        save_generator_preset(
+            &dir.join("b.mooloop-generator"),
+            &ChannelSource::MonoSynth(mooloop_core::MonoSynthState::default()),
+            PresetInfo {
+                name: "Zeta".into(),
+                category: "Bass".into(),
+                tags: vec![],
+            },
+            AssetMode::Embedded,
+        )
+        .unwrap();
+        save_generator_preset(
+            &dir.join("a.mooloop-generator"),
+            &ChannelSource::MonoSynth(mooloop_core::MonoSynthState::default()),
+            PresetInfo {
+                name: "Alpha".into(),
+                category: "Bass".into(),
+                tags: vec![],
+            },
+            AssetMode::Embedded,
+        )
+        .unwrap();
+
+        // A bundle with no manifest at all should be skipped, not error.
+        fs::create_dir_all(dir.join("corrupt.mooloop-generator")).unwrap();
+        fs::write(dir.join("not-a-bundle.txt"), "ignored").unwrap();
+
+        let summaries = list_presets(&dir);
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].name, "Alpha");
+        assert_eq!(summaries[1].name, "Zeta");
+        assert_eq!(summaries[0].kind, mooloop_core::DeviceKind::MonoSynth);
+    }
+
+    #[test]
+    fn list_presets_on_missing_directory_returns_empty() {
+        let temp = tempdir().unwrap();
+        assert!(list_presets(&temp.path().join("does-not-exist")).is_empty());
     }
 }

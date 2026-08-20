@@ -12,6 +12,7 @@ import {
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
+import { SavePresetDialog } from "save-preset-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
 import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
@@ -587,6 +588,20 @@ export component MainWindow inherits Window {
     callback export-audio();
     callback export-confirmed(int, int, int);
     callback quit-requested();
+
+    // ---- presets (per-generator and whole-channel) ----
+    in-out property <[string]> generator-preset-options;
+    in-out property <[string]> channel-preset-options;
+    callback generator-preset-selected(int);
+    callback channel-preset-selected(int);
+    callback save-generator-preset-requested();
+    callback save-channel-preset-requested();
+    in-out property <bool> save-preset-open;
+    in property <string> save-preset-title;
+    in-out property <string> save-preset-name;
+    in-out property <string> save-preset-category;
+    callback save-preset-confirmed(string, string);
+    callback save-preset-cancelled();
 
     // ---- about ----
     in-out property <bool> about-open;
@@ -1562,6 +1577,22 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
                         Rectangle { horizontal-stretch: 1; }
+                        if root.editor-page != 2 : MenuField {
+                            label: "CHANNEL PRESET";
+                            options: root.channel-preset-options;
+                            selected-index: -1;
+                            display-text: "Browse...";
+                            field-width: 90px;
+                            menu-width: 220px;
+                            tooltip: "Load a saved whole-channel preset (source + mixer)";
+                            selected(i) => { root.channel-preset-selected(i); }
+                        }
+                        if root.editor-page != 2 : IconButton {
+                            text: "💾";
+                            tooltip: "Save this channel (source + mixer) as a preset";
+                            size: 24px;
+                            clicked => { root.save-channel-preset-requested(); }
+                        }
                     }
                 }
 
@@ -1793,6 +1824,22 @@ export component MainWindow inherits Window {
                                     selected(i) => { root.channel-source-changed(i); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
+                                MenuField {
+                                    label: "PRESET";
+                                    options: root.generator-preset-options;
+                                    selected-index: -1;
+                                    display-text: "Browse...";
+                                    field-width: 90px;
+                                    menu-width: 220px;
+                                    tooltip: "Load a saved preset for this generator";
+                                    selected(i) => { root.generator-preset-selected(i); }
+                                }
+                                IconButton {
+                                    text: "💾";
+                                    tooltip: "Save the current sound as a preset";
+                                    size: 24px;
+                                    clicked => { root.save-generator-preset-requested(); }
+                                }
                             }
                         }
 
@@ -2719,6 +2766,16 @@ export component MainWindow inherits Window {
         preview(preset, accent) => { root.appearance-preview(preset, accent); }
         save(preset, accent) => { root.appearance-save(preset, accent) }
         cancelled => { root.appearance-cancelled(); }
+    }
+    SavePresetDialog {
+        width: parent.width;
+        height: parent.height;
+        open <=> root.save-preset-open;
+        title: root.save-preset-title;
+        name-text <=> root.save-preset-name;
+        category-text <=> root.save-preset-category;
+        save-confirmed(name, category) => { root.save-preset-confirmed(name, category); }
+        cancelled => { root.save-preset-cancelled(); }
     }
     ExportDialog {
         width: parent.width;

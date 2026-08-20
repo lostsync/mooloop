@@ -1,0 +1,64 @@
+import { HorizontalBox, LineEdit, VerticalBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { SectionLabel, ToolButton } from "controls.slint";
+
+export component SavePresetDialog inherits Rectangle {
+    in-out property <bool> open;
+    in property <string> title;
+    in-out property <string> name-text;
+    in-out property <string> category-text;
+    callback save-confirmed(string, string);
+    callback cancelled;
+
+    visible: root.open;
+    background: #00000099;
+    z: 100;
+
+    TouchArea { }
+
+    Rectangle {
+        width: min(parent.width - 32px, 380px);
+        height: 210px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: 6px;
+
+        VerticalBox {
+            padding: 16px;
+            spacing: 10px;
+
+            Text { text: root.title; color: Theme.text; font-size: 16px; height: 24px; }
+
+            SectionLabel { text: "NAME"; }
+            LineEdit {
+                text <=> root.name-text;
+                placeholder-text: "Preset name";
+            }
+
+            SectionLabel { text: "CATEGORY"; }
+            LineEdit {
+                text <=> root.category-text;
+                placeholder-text: "e.g. Bass, Lead, Pad";
+            }
+
+            Rectangle { vertical-stretch: 1; }
+            HorizontalBox {
+                spacing: 6px;
+                alignment: end;
+                ToolButton {
+                    text: "Cancel";
+                    clicked => { root.cancelled(); root.open = false; }
+                }
+                ToolButton {
+                    text: "Save";
+                    active: true;
+                    enabled: root.name-text != "";
+                    clicked => { root.save-confirmed(root.name-text, root.category-text); }
+                }
+            }
+        }
+    }
+}
