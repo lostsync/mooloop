@@ -277,17 +277,24 @@ component DrumSourceEditor inherits Rectangle {
     ScrollView {
         vertical-stretch: 1;
         horizontal-stretch: 1;
-        viewport-width: max(self.visible-width, 660px);
-        viewport-height: max(self.visible-height, 330px);
+        viewport-width: max(self.visible-width, 520px);
+        viewport-height: max(self.visible-height, 270px);
         VerticalLayout {
-            width: 660px;
+            width: 520px;
             padding: 8px;
             spacing: 8px;
             Rectangle {
-                height: 64px;
-                HorizontalLayout {
+                width: mode-layout.preferred-width;
+                height: 26px;
+                mode-layout := HorizontalLayout {
                     spacing: 8px;
-                    Text { text: "MODE"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+                    Text {
+                        text: "MODE";
+                        width: 48px;
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                    }
                     SegmentedControl {
                         width: 180px;
                         options: ["Kick", "Snare", "Hat"];
@@ -315,12 +322,13 @@ component DrumSourceEditor inherits Rectangle {
                 }
             }
             Rectangle {
-                height: 110px;
+                width: shared-layout.preferred-width;
+                height: 94px;
                 background: Theme.surface;
                 border-radius: 3px;
                 border-width: 1px;
                 border-color: Theme.border;
-                HorizontalLayout {
+                shared-layout := HorizontalLayout {
                     padding: 6px;
                     spacing: 2px;
                     SectionLabel { text: "SHARED"; width: 48px; vertical-alignment: center; }
@@ -348,23 +356,28 @@ component DrumSourceEditor inherits Rectangle {
                         value-text: round(root.punch * 100) + "%";
                         changed(v) => { root.punch-changed(v); }
                     }
-                    StepperField {
-                        label: "CHOKE";
-                        value <=> root.choke-group;
-                        minimum: 0;
-                        maximum: 16;
-                        step: 1;
-                        value-width: 18px;
-                        tooltip: "Matching non-zero groups choke each other. 0 is off.";
-                        changed(v) => { root.choke-group-changed(v); }
+                    Rectangle {
+                        width: 92px;
+                        height: 80px;
+                        StepperField {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            label: "CHOKE";
+                            value <=> root.choke-group;
+                            minimum: 0;
+                            maximum: 16;
+                            step: 1;
+                            value-width: 18px;
+                            tooltip: "Matching non-zero groups choke each other. 0 is off.";
+                            changed(v) => { root.choke-group-changed(v); }
+                        }
                     }
-                    Rectangle { horizontal-stretch: 1; }
                 }
             }
             if root.mode == 0 : Rectangle {
-                height: 110px; background: Theme.surface;
+                width: kick-layout.preferred-width; height: 94px; background: Theme.surface;
                 border-radius: 3px; border-width: 1px; border-color: Theme.border;
-                HorizontalLayout {
+                kick-layout := HorizontalLayout {
                     padding: 6px; spacing: 2px;
                     SectionLabel { text: "KICK"; width: 48px; vertical-alignment: center; }
                     ParameterKnob {
@@ -387,13 +400,12 @@ component DrumSourceEditor inherits Rectangle {
                         value <=> root.kick-click; minimum: 0; maximum: 1; default-value: 0.5;
                         value-text: round(root.kick-click * 100) + "%"; changed(v) => { root.kick-click-changed(v); }
                     }
-                    Rectangle { horizontal-stretch: 1; }
                 }
             }
             if root.mode == 1 : Rectangle {
-                height: 110px; background: Theme.surface;
+                width: snare-layout.preferred-width; height: 94px; background: Theme.surface;
                 border-radius: 3px; border-width: 1px; border-color: Theme.border;
-                HorizontalLayout {
+                snare-layout := HorizontalLayout {
                     padding: 6px; spacing: 2px;
                     SectionLabel { text: "SNARE"; width: 48px; vertical-alignment: center; }
                     ParameterKnob {
@@ -426,13 +438,12 @@ component DrumSourceEditor inherits Rectangle {
                         value <=> root.snare-noise-color; minimum: 0; maximum: 1; default-value: 0.65;
                         value-text: round(root.snare-noise-color * 100) + "%"; changed(v) => { root.snare-noise-color-changed(v); }
                     }
-                    Rectangle { horizontal-stretch: 1; }
                 }
             }
             if root.mode == 2 : Rectangle {
-                height: 110px; background: Theme.surface;
+                width: hat-layout.preferred-width; height: 94px; background: Theme.surface;
                 border-radius: 3px; border-width: 1px; border-color: Theme.border;
-                HorizontalLayout {
+                hat-layout := HorizontalLayout {
                     padding: 6px; spacing: 2px;
                     SectionLabel { text: "HAT"; width: 48px; vertical-alignment: center; }
                     ParameterKnob {
@@ -445,7 +456,6 @@ component DrumSourceEditor inherits Rectangle {
                         value <=> root.hat-metallic; minimum: 0; maximum: 1; default-value: 0.5;
                         value-text: round(root.hat-metallic * 100) + "%"; changed(v) => { root.hat-metallic-changed(v); }
                     }
-                    Rectangle { horizontal-stretch: 1; }
                 }
             }
             Rectangle { vertical-stretch: 1; }
