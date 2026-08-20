@@ -15,6 +15,39 @@ pub enum DrumMode {
     Hat,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KickCharacter {
+    Sub,
+    Punch,
+    Deep,
+    #[default]
+    Kit,
+    Dnb,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnareCharacter {
+    #[default]
+    Pop,
+    Snap,
+    Power,
+    Clap,
+    Rim,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HatCharacter {
+    Soft,
+    #[default]
+    Tight,
+    Metal,
+    Sizzle,
+    Trash,
+}
+
 impl DrumMode {
     pub fn all() -> [DrumMode; 3] {
         [DrumMode::Kick, DrumMode::Snare, DrumMode::Hat]
@@ -33,8 +66,12 @@ impl DrumMode {
 /// belong to other modes are inert but retained, so switching modes never
 /// loses an authored setting.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct DrumSynthParams {
     pub mode: DrumMode,
+    pub kick_character: KickCharacter,
+    pub snare_character: SnareCharacter,
+    pub hat_character: HatCharacter,
     /// `0` disables choking; matching non-zero groups choke each other.
     pub choke_group: u8,
     /// Master decay of the amplitude envelope (seconds).
@@ -44,6 +81,8 @@ pub struct DrumSynthParams {
     pub tune_semitones: f32,
     /// Soft saturation in `[0, 1]`. `0` bypasses it.
     pub drive: f32,
+    /// Short transient emphasis in `[0, 1]`.
+    pub punch: f32,
 
     // Kick
     /// Sweep start frequency (Hz) at the moment of impact.
@@ -58,10 +97,16 @@ pub struct DrumSynthParams {
     // Snare
     /// Body oscillator frequency (Hz).
     pub snare_tone_hz: f32,
+    /// Secondary body tone frequency (Hz).
+    pub snare_tone2_hz: f32,
+    /// Secondary tone level in `[0, 1]`.
+    pub snare_tone2_mix: f32,
     /// Noise vs body mix in `[0, 1]`. `0` is pure tone, `1` is pure noise.
     pub snare_noise_mix: f32,
     /// Noise burst decay (seconds), independent of the body decay.
     pub snare_noise_decay: f32,
+    /// Noise brightness in `[0, 1]`.
+    pub snare_noise_color: f32,
 
     // Hat
     /// High-pass cutoff (Hz) shaping the noise.
@@ -74,17 +119,24 @@ impl Default for DrumSynthParams {
     fn default() -> Self {
         Self {
             mode: DrumMode::Kick,
+            kick_character: KickCharacter::Kit,
+            snare_character: SnareCharacter::Pop,
+            hat_character: HatCharacter::Tight,
             choke_group: 0,
-            decay: 0.35,
+            decay: 0.24,
             tune_semitones: 0.0,
             drive: 0.0,
+            punch: 0.35,
             kick_start_hz: 160.0,
             kick_end_hz: 48.0,
             kick_sweep: 0.045,
             kick_click: 0.5,
             snare_tone_hz: 180.0,
+            snare_tone2_hz: 330.0,
+            snare_tone2_mix: 0.2,
             snare_noise_mix: 0.6,
-            snare_noise_decay: 0.15,
+            snare_noise_decay: 0.11,
+            snare_noise_color: 0.65,
             hat_hp_hz: 7500.0,
             hat_metallic: 0.5,
         }
@@ -102,10 +154,12 @@ impl DrumSynthParams {
         match mode {
             DrumMode::Kick => {}
             DrumMode::Snare => {
-                params.decay = 0.18;
+                params.decay = 0.14;
+                params.punch = 0.45;
             }
             DrumMode::Hat => {
-                params.decay = 0.05;
+                params.decay = 0.045;
+                params.punch = 0.15;
             }
         }
         params

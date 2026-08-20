@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use crate::{
-    Channel, DeviceKind, DrumMode, DrumSynthParams, MonoSynthParams, NoteEvent, NoteId,
-    PatternPlacement, PlaybackMode, SamplerParams, DEFAULT_STEPS,
+    Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter, MonoSynthParams, NoteEvent,
+    NoteId, PatternPlacement, PlaybackMode, SamplerParams, SnareCharacter, DEFAULT_STEPS,
 };
 
 pub const MIN_SWING_PERCENT: u8 = 50;
@@ -283,7 +283,9 @@ impl Project {
     pub fn starter_kit(seed: u64) -> Self {
         let mut random = StarterRandom::new(seed);
         let mut kick = DrumSynthParams::preset(DrumMode::Kick);
-        kick.decay = random.range(0.28, 0.43);
+        kick.kick_character = KickCharacter::Punch;
+        kick.decay = random.range(0.18, 0.32);
+        kick.punch = random.range(0.45, 0.7);
         kick.kick_start_hz = random.range(145.0, 185.0);
         kick.kick_end_hz = random.range(42.0, 58.0);
         kick.kick_sweep = random.range(0.035, 0.065);
@@ -291,10 +293,15 @@ impl Project {
         kick.drive = random.range(0.02, 0.14);
 
         let mut snare = DrumSynthParams::preset(DrumMode::Snare);
-        snare.decay = random.range(0.14, 0.24);
+        snare.snare_character = SnareCharacter::Snap;
+        snare.decay = random.range(0.10, 0.18);
+        snare.punch = random.range(0.45, 0.72);
         snare.snare_tone_hz = random.range(150.0, 220.0);
+        snare.snare_tone2_hz = random.range(280.0, 520.0);
+        snare.snare_tone2_mix = random.range(0.14, 0.34);
         snare.snare_noise_mix = random.range(0.52, 0.76);
-        snare.snare_noise_decay = random.range(0.09, 0.18);
+        snare.snare_noise_decay = random.range(0.07, 0.14);
+        snare.snare_noise_color = random.range(0.54, 0.82);
         snare.drive = random.range(0.0, 0.1);
 
         let mut closed_hat = DrumSynthParams::preset(DrumMode::Hat);
@@ -393,6 +400,8 @@ mod tests {
         assert_eq!(snare.mode, DrumMode::Snare);
         assert_eq!(closed_hat.mode, DrumMode::Hat);
         assert_eq!(open_hat.mode, DrumMode::Hat);
+        assert_eq!(kick.kick_character, KickCharacter::Punch);
+        assert_eq!(snare.snare_character, SnareCharacter::Snap);
         assert_eq!(closed_hat.choke_group, 1);
         assert_eq!(open_hat.choke_group, 1);
         assert!(closed_hat.decay < open_hat.decay);

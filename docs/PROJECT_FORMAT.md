@@ -109,9 +109,18 @@ type = "drum_synth"
 
 [document.channels.setup.source.state.params]
 mode = "hat"
+kick_character = "kit"
+snare_character = "pop"
+hat_character = "tight"
 choke_group = 1
 decay = 0.05
+punch = 0.35
 ```
+
+Drum synth readers default `kick_character`, `snare_character`,
+`hat_character`, `punch`, `snare_tone2_hz`, `snare_tone2_mix`, and
+`snare_noise_color` for version 1 manifests written before the punch/noise
+controls were added.
 
 `mono_synth` uses the same `state.params` envelope for its oscillator,
 envelope, filter, glide, and drive fields. Its `params.lfo` table holds the

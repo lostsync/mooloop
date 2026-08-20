@@ -14,12 +14,13 @@ slint::include_modules!();
 use meter::MeterBallistics;
 use mooloop_core::{
     Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState,
-    EngineCommand, EngineEvent, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent,
-    NoteId, OscWave, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
-    SampleReference, SamplerParams, SamplerState, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
-    DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS,
-    MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT,
-    MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
+    EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit, LfoWave, LoopMode,
+    MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, PatternPlacement, PlaybackMode,
+    Ppq, Project, ProjectChannel, RetriggerMode, SampleReference, SamplerParams, SamplerState,
+    SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT,
+    MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
+    MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR,
+    TICKS_PER_STEP,
 };
 use mooloop_dsp::SampleData;
 use mooloop_engine::{
@@ -273,6 +274,66 @@ fn drum_mode_to_int(mode: DrumMode) -> i32 {
         DrumMode::Kick => 0,
         DrumMode::Snare => 1,
         DrumMode::Hat => 2,
+    }
+}
+
+fn kick_character_from_int(value: i32) -> KickCharacter {
+    match value {
+        0 => KickCharacter::Sub,
+        1 => KickCharacter::Punch,
+        2 => KickCharacter::Deep,
+        4 => KickCharacter::Dnb,
+        _ => KickCharacter::Kit,
+    }
+}
+
+fn kick_character_to_int(character: KickCharacter) -> i32 {
+    match character {
+        KickCharacter::Sub => 0,
+        KickCharacter::Punch => 1,
+        KickCharacter::Deep => 2,
+        KickCharacter::Kit => 3,
+        KickCharacter::Dnb => 4,
+    }
+}
+
+fn snare_character_from_int(value: i32) -> SnareCharacter {
+    match value {
+        1 => SnareCharacter::Snap,
+        2 => SnareCharacter::Power,
+        3 => SnareCharacter::Clap,
+        4 => SnareCharacter::Rim,
+        _ => SnareCharacter::Pop,
+    }
+}
+
+fn snare_character_to_int(character: SnareCharacter) -> i32 {
+    match character {
+        SnareCharacter::Pop => 0,
+        SnareCharacter::Snap => 1,
+        SnareCharacter::Power => 2,
+        SnareCharacter::Clap => 3,
+        SnareCharacter::Rim => 4,
+    }
+}
+
+fn hat_character_from_int(value: i32) -> HatCharacter {
+    match value {
+        0 => HatCharacter::Soft,
+        2 => HatCharacter::Metal,
+        3 => HatCharacter::Sizzle,
+        4 => HatCharacter::Trash,
+        _ => HatCharacter::Tight,
+    }
+}
+
+fn hat_character_to_int(character: HatCharacter) -> i32 {
+    match character {
+        HatCharacter::Soft => 0,
+        HatCharacter::Tight => 1,
+        HatCharacter::Metal => 2,
+        HatCharacter::Sizzle => 3,
+        HatCharacter::Trash => 4,
     }
 }
 
@@ -896,17 +957,24 @@ impl UiState {
         window.set_selected_channel_name(ch.name.as_str().into());
         window.set_source_kind(device_kind_to_int(ch.kind));
         window.set_drum_mode(drum_mode_to_int(drum.mode));
+        window.set_drum_kick_character(kick_character_to_int(drum.kick_character));
+        window.set_drum_snare_character(snare_character_to_int(drum.snare_character));
+        window.set_drum_hat_character(hat_character_to_int(drum.hat_character));
         window.set_drum_decay(drum.decay);
         window.set_drum_tune_semitones(drum.tune_semitones);
         window.set_drum_drive(drum.drive);
+        window.set_drum_punch(drum.punch);
         window.set_drum_choke_group(drum.choke_group as i32);
         window.set_drum_kick_start_hz(drum.kick_start_hz);
         window.set_drum_kick_end_hz(drum.kick_end_hz);
         window.set_drum_kick_sweep(drum.kick_sweep);
         window.set_drum_kick_click(drum.kick_click);
         window.set_drum_snare_tone_hz(drum.snare_tone_hz);
+        window.set_drum_snare_tone2_hz(drum.snare_tone2_hz);
+        window.set_drum_snare_tone2_mix(drum.snare_tone2_mix);
         window.set_drum_snare_noise_mix(drum.snare_noise_mix);
         window.set_drum_snare_noise_decay(drum.snare_noise_decay);
+        window.set_drum_snare_noise_color(drum.snare_noise_color);
         window.set_drum_hat_hp_hz(drum.hat_hp_hz);
         window.set_drum_hat_metallic(drum.hat_metallic);
         window.set_mono_osc1_wave(osc_wave_to_int(mono.osc[0].wave));
@@ -2883,15 +2951,52 @@ impl AppUi {
         wire_drum_param!(on_drum_decay_changed, decay);
         wire_drum_param!(on_drum_tune_semitones_changed, tune_semitones);
         wire_drum_param!(on_drum_drive_changed, drive);
+        wire_drum_param!(on_drum_punch_changed, punch);
         wire_drum_param!(on_drum_kick_start_hz_changed, kick_start_hz);
         wire_drum_param!(on_drum_kick_end_hz_changed, kick_end_hz);
         wire_drum_param!(on_drum_kick_sweep_changed, kick_sweep);
         wire_drum_param!(on_drum_kick_click_changed, kick_click);
         wire_drum_param!(on_drum_snare_tone_hz_changed, snare_tone_hz);
+        wire_drum_param!(on_drum_snare_tone2_hz_changed, snare_tone2_hz);
+        wire_drum_param!(on_drum_snare_tone2_mix_changed, snare_tone2_mix);
         wire_drum_param!(on_drum_snare_noise_mix_changed, snare_noise_mix);
         wire_drum_param!(on_drum_snare_noise_decay_changed, snare_noise_decay);
+        wire_drum_param!(on_drum_snare_noise_color_changed, snare_noise_color);
         wire_drum_param!(on_drum_hat_hp_hz_changed, hat_hp_hz);
         wire_drum_param!(on_drum_hat_metallic_changed, hat_metallic);
+
+        macro_rules! wire_drum_int_param {
+            ($callback:ident, $field:ident, $map:ident) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    channel.drum_params.$field = $map(value);
+                    let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
+                        channel: channel_index as u8,
+                        params: channel.drum_params,
+                    });
+                });
+            }};
+        }
+
+        wire_drum_int_param!(
+            on_drum_kick_character_changed,
+            kick_character,
+            kick_character_from_int
+        );
+        wire_drum_int_param!(
+            on_drum_snare_character_changed,
+            snare_character,
+            snare_character_from_int
+        );
+        wire_drum_int_param!(
+            on_drum_hat_character_changed,
+            hat_character,
+            hat_character_from_int
+        );
 
         {
             let tx = cmd_tx.clone();

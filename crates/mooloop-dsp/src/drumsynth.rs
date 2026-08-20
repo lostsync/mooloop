@@ -18,7 +18,10 @@ use crate::event::{Event, EventList};
 use crate::filter::{apply_drive, OnePoleHp};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{Noise, Osc};
-use mooloop_core::{DrumMode, DrumSynthParams, OscWave, MAX_CHOKE_GROUP, MAX_DRUM_VOICES};
+use mooloop_core::{
+    DrumMode, DrumSynthParams, HatCharacter, KickCharacter, OscWave, SnareCharacter,
+    MAX_CHOKE_GROUP, MAX_DRUM_VOICES,
+};
 
 /// Fast fade used for chokes and transport stops (seconds). The coefficient
 /// is scaled so the fade effectively completes within this window rather than
@@ -35,6 +38,10 @@ const CLICK_S: f32 = 0.003;
 /// give the hat its metallic edge.
 const HAT_METAL_A_HZ: f32 = 587.33;
 const HAT_METAL_B_HZ: f32 = 845.07;
+
+fn lerp(a: f32, b: f32, x: f32) -> f32 {
+    a + (b - a) * x.clamp(0.0, 1.0)
+}
 
 /// One independently enveloped drum hit.
 struct DrumVoice {
@@ -184,6 +191,9 @@ impl DrumSynth {
             DrumMode::Snare => {
                 voice.noise_env.set_time(params.snare_noise_decay, sr);
                 voice.noise_env.trigger();
+                voice
+                    .hp
+                    .set_cutoff(lerp(900.0, 9_500.0, params.snare_noise_color), sr);
                 voice.click_remaining = 0;
             }
             DrumMode::Hat => {
@@ -211,32 +221,68 @@ impl DrumSynth {
             DrumMode::Kick => {
                 voice.sweep_env.advance();
                 let sweep = voice.sweep_env.level();
-                let end_hz = params.kick_end_hz.max(1.0);
-                let ratio = (params.kick_start_hz.max(1.0) / end_hz).max(1.0);
+                let (pitch_scale, click_scale, body_gain, punch_scale) = match params.kick_character
+                {
+                    KickCharacter::Sub => (0.82, 0.35, 1.25, 0.55),
+                    KickCharacter::Punch => (1.0, 1.25, 1.0, 1.4),
+                    KickCharacter::Deep => (0.72, 0.55, 1.15, 0.9),
+                    KickCharacter::Kit => (1.0, 1.0, 1.0, 1.0),
+                    KickCharacter::Dnb => (1.18, 1.35, 0.95, 1.6),
+                };
+                let end_hz = (params.kick_end_hz * pitch_scale).max(1.0);
+                let ratio = ((params.kick_start_hz * pitch_scale).max(1.0) / end_hz).max(1.0);
                 let freq = end_hz * ratio.powf(sweep) * voice.pitch_factor;
                 let body = voice
                     .body_osc
                     .next_sample(freq, OscWave::Sine, 0.5, sample_rate);
+                let transient = 1.0 + params.punch.clamp(0.0, 1.0) * punch_scale * sweep.powf(0.45);
                 let click = if voice.click_remaining > 0 {
                     voice.click_remaining -= 1;
                     let fade = voice.click_remaining as f32 / voice.click_total as f32;
-                    voice.noise.next_sample() * params.kick_click * fade
+                    voice.noise.next_sample() * params.kick_click * click_scale * fade
                 } else {
                     0.0
                 };
-                (body + click) * voice.amp_env.level() * amp
+                (body * body_gain * transient + click) * voice.amp_env.level() * amp
             }
             DrumMode::Snare => {
-                let freq = params.snare_tone_hz * voice.pitch_factor;
-                let body = voice
+                let (body_scale, tone2_scale, noise_scale, noise_gain, punch_scale) =
+                    match params.snare_character {
+                        SnareCharacter::Pop => (1.0, 1.0, 1.0, 1.0, 0.85),
+                        SnareCharacter::Snap => (1.25, 1.65, 1.0, 1.12, 1.35),
+                        SnareCharacter::Power => (0.88, 0.75, 0.82, 1.25, 1.5),
+                        SnareCharacter::Clap => (0.6, 1.8, 1.25, 1.45, 1.05),
+                        SnareCharacter::Rim => (1.75, 2.35, 0.42, 0.45, 1.55),
+                    };
+                let freq = params.snare_tone_hz * body_scale * voice.pitch_factor;
+                let body1 = voice
                     .body_osc
                     .next_sample(freq, OscWave::Sine, 0.5, sample_rate)
                     * voice.amp_env.level();
-                let noise = voice.noise.next_sample() * voice.noise_env.level();
-                let mix = params.snare_noise_mix.clamp(0.0, 1.0);
+                let body2 = voice.metal_osc_a.next_sample(
+                    params.snare_tone2_hz * tone2_scale * voice.pitch_factor,
+                    OscWave::Triangle,
+                    0.5,
+                    sample_rate,
+                ) * voice.amp_env.level()
+                    * params.snare_tone2_mix.clamp(0.0, 1.0);
+                let transient = 1.0
+                    + params.punch.clamp(0.0, 1.0) * punch_scale * voice.amp_env.level().powf(2.0);
+                let body = (body1 + body2) * transient;
+                let noise = voice.hp.next_sample(voice.noise.next_sample())
+                    * voice.noise_env.level()
+                    * noise_gain;
+                let mix = (params.snare_noise_mix * noise_scale).clamp(0.0, 1.0);
                 ((1.0 - mix) * body + mix * noise) * amp
             }
             DrumMode::Hat => {
+                let (metal_scale, hp_input_scale, gain_scale) = match params.hat_character {
+                    HatCharacter::Soft => (0.45, 0.72, 0.8),
+                    HatCharacter::Tight => (1.0, 1.0, 1.0),
+                    HatCharacter::Metal => (1.45, 0.95, 1.0),
+                    HatCharacter::Sizzle => (0.85, 1.28, 1.15),
+                    HatCharacter::Trash => (1.65, 0.82, 1.25),
+                };
                 let metal = (voice.metal_osc_a.next_sample(
                     HAT_METAL_A_HZ * voice.pitch_factor,
                     OscWave::Pulse,
@@ -248,9 +294,12 @@ impl DrumSynth {
                     0.5,
                     sample_rate,
                 )) * 0.5;
-                let metallic = params.hat_metallic.clamp(0.0, 1.0);
+                let metallic = (params.hat_metallic * metal_scale).clamp(0.0, 1.0);
                 let source = metallic * metal + (1.0 - metallic) * voice.noise.next_sample();
-                voice.hp.next_sample(source) * voice.amp_env.level() * amp
+                voice.hp.next_sample(source * hp_input_scale)
+                    * voice.amp_env.level()
+                    * amp
+                    * gain_scale
             }
         };
         apply_drive(out, params.drive)
@@ -407,6 +456,54 @@ mod tests {
             .fold(0.0_f32, |peak, s| peak.max(s.abs()));
         assert!(first_peak > 0.5);
         assert!(late_peak < first_peak * 0.2);
+    }
+
+    #[test]
+    fn punch_raises_the_kick_transient() {
+        let sr = 48_000;
+        let peak = |punch: f32| {
+            let params = DrumSynthParams {
+                punch,
+                kick_click: 0.0,
+                ..DrumSynthParams::default()
+            };
+            let mut synth = make_synth(sr, params);
+            let mut bus = StereoBus::with_capacity(1024);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 60));
+            synth.process(&ctx(1024, sr), &mut bus, &events, None);
+            bus.l[..512]
+                .iter()
+                .fold(0.0_f32, |peak, s| peak.max(s.abs()))
+        };
+
+        assert!(peak(1.0) > peak(0.0) * 1.25);
+    }
+
+    #[test]
+    fn snare_character_and_second_tone_change_the_body() {
+        let sr = 48_000;
+        let render_peak = |character: SnareCharacter, tone2_mix: f32| {
+            let params = DrumSynthParams {
+                mode: DrumMode::Snare,
+                snare_character: character,
+                snare_noise_mix: 0.0,
+                snare_tone2_mix: tone2_mix,
+                ..DrumSynthParams::default()
+            };
+            let mut synth = make_synth(sr, params);
+            let mut bus = StereoBus::with_capacity(2048);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 60));
+            synth.process(&ctx(2048, sr), &mut bus, &events, None);
+            bus.l[..1024]
+                .iter()
+                .fold(0.0_f32, |peak, s| peak.max(s.abs()))
+        };
+
+        let pop = render_peak(SnareCharacter::Pop, 0.0);
+        let rim = render_peak(SnareCharacter::Rim, 0.65);
+        assert!((rim - pop).abs() > 0.05, "pop {pop}, rim {rim}");
     }
 
     #[test]

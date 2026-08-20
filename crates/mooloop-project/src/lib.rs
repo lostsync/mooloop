@@ -712,13 +712,17 @@ fn validate_drum_synth(channel: usize, params: DrumSynthParams) -> Result<(), Er
         && in_range(params.decay, 0.0, 10.0)
         && in_range(params.tune_semitones, -48.0, 48.0)
         && in_range(params.drive, 0.0, 1.0)
+        && in_range(params.punch, 0.0, 1.0)
         && in_range(params.kick_start_hz, 20.0, 20_000.0)
         && in_range(params.kick_end_hz, 20.0, 20_000.0)
         && in_range(params.kick_sweep, 0.0, 10.0)
         && in_range(params.kick_click, 0.0, 1.0)
         && in_range(params.snare_tone_hz, 20.0, 20_000.0)
+        && in_range(params.snare_tone2_hz, 20.0, 20_000.0)
+        && in_range(params.snare_tone2_mix, 0.0, 1.0)
         && in_range(params.snare_noise_mix, 0.0, 1.0)
         && in_range(params.snare_noise_decay, 0.0, 10.0)
+        && in_range(params.snare_noise_color, 0.0, 1.0)
         && in_range(params.hat_hp_hz, 20.0, 20_000.0)
         && in_range(params.hat_metallic, 0.0, 1.0);
     if !valid {
@@ -1256,5 +1260,25 @@ id = "default_kick"
     fn list_presets_on_missing_directory_returns_empty() {
         let temp = tempdir().unwrap();
         assert!(list_presets(&temp.path().join("does-not-exist")).is_empty());
+    }
+
+    #[test]
+    fn drum_synth_params_without_new_punch_fields_keep_defaults() {
+        let written = toml::to_string(&DrumSynthParams::default()).unwrap();
+        let stripped = written
+            .lines()
+            .filter(|line| {
+                !line.starts_with("kick_character")
+                    && !line.starts_with("snare_character")
+                    && !line.starts_with("hat_character")
+                    && !line.starts_with("punch")
+                    && !line.starts_with("snare_tone2_hz")
+                    && !line.starts_with("snare_tone2_mix")
+                    && !line.starts_with("snare_noise_color")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let loaded: DrumSynthParams = toml::from_str(&stripped).unwrap();
+        assert_eq!(loaded, DrumSynthParams::default());
     }
 }

@@ -232,45 +232,59 @@ component OscillatorStrip inherits Rectangle {
 
 component DrumSourceEditor inherits Rectangle {
     in-out property <int> mode;
+    in-out property <int> kick-character;
+    in-out property <int> snare-character;
+    in-out property <int> hat-character;
     in-out property <float> decay;
     in-out property <float> tune-semitones;
     in-out property <float> drive;
+    in-out property <float> punch;
     in-out property <int> choke-group;
     in-out property <float> kick-start-hz;
     in-out property <float> kick-end-hz;
     in-out property <float> kick-sweep;
     in-out property <float> kick-click;
     in-out property <float> snare-tone-hz;
+    in-out property <float> snare-tone2-hz;
+    in-out property <float> snare-tone2-mix;
     in-out property <float> snare-noise-mix;
     in-out property <float> snare-noise-decay;
+    in-out property <float> snare-noise-color;
     in-out property <float> hat-hp-hz;
     in-out property <float> hat-metallic;
     callback mode-changed(int);
+    callback kick-character-changed(int);
+    callback snare-character-changed(int);
+    callback hat-character-changed(int);
     callback decay-changed(float);
     callback tune-semitones-changed(float);
     callback drive-changed(float);
+    callback punch-changed(float);
     callback choke-group-changed(int);
     callback kick-start-hz-changed(float);
     callback kick-end-hz-changed(float);
     callback kick-sweep-changed(float);
     callback kick-click-changed(float);
     callback snare-tone-hz-changed(float);
+    callback snare-tone2-hz-changed(float);
+    callback snare-tone2-mix-changed(float);
     callback snare-noise-mix-changed(float);
     callback snare-noise-decay-changed(float);
+    callback snare-noise-color-changed(float);
     callback hat-hp-hz-changed(float);
     callback hat-metallic-changed(float);
 
     ScrollView {
         vertical-stretch: 1;
         horizontal-stretch: 1;
-        viewport-width: max(self.visible-width, 520px);
-        viewport-height: max(self.visible-height, 292px);
+        viewport-width: max(self.visible-width, 660px);
+        viewport-height: max(self.visible-height, 330px);
         VerticalLayout {
-            width: 520px;
+            width: 660px;
             padding: 8px;
             spacing: 8px;
             Rectangle {
-                height: 32px;
+                height: 64px;
                 HorizontalLayout {
                     spacing: 8px;
                     Text { text: "MODE"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
@@ -280,7 +294,24 @@ component DrumSourceEditor inherits Rectangle {
                         selected-index <=> root.mode;
                         selected(i) => { root.mode-changed(i); }
                     }
-                    Rectangle { horizontal-stretch: 1; }
+                    if root.mode == 0 : SegmentedControl {
+                        width: 260px;
+                        options: ["Sub", "Punch", "Deep", "Kit", "DNB"];
+                        selected-index <=> root.kick-character;
+                        selected(i) => { root.kick-character-changed(i); }
+                    }
+                    if root.mode == 1 : SegmentedControl {
+                        width: 260px;
+                        options: ["Pop", "Snap", "Power", "Clap", "Rim"];
+                        selected-index <=> root.snare-character;
+                        selected(i) => { root.snare-character-changed(i); }
+                    }
+                    if root.mode == 2 : SegmentedControl {
+                        width: 260px;
+                        options: ["Soft", "Tight", "Metal", "Sizzle", "Trash"];
+                        selected-index <=> root.hat-character;
+                        selected(i) => { root.hat-character-changed(i); }
+                    }
                 }
             }
             Rectangle {
@@ -295,7 +326,7 @@ component DrumSourceEditor inherits Rectangle {
                     SectionLabel { text: "SHARED"; width: 48px; vertical-alignment: center; }
                     ParameterKnob {
                         label: "Decay"; tooltip: "Amplitude decay in seconds";
-                        value <=> root.decay; minimum: 0; maximum: 2; default-value: 0.35;
+                        value <=> root.decay; minimum: 0.005; maximum: 2; default-value: 0.24; scale: ValueScale.logarithmic;
                         value-text: round(root.decay * 1000) + " ms";
                         changed(v) => { root.decay-changed(v); }
                     }
@@ -311,16 +342,21 @@ component DrumSourceEditor inherits Rectangle {
                         value-text: round(root.drive * 100) + "%";
                         changed(v) => { root.drive-changed(v); }
                     }
-                    VerticalLayout {
-                        width: 66px;
-                        spacing: 2px;
-                        Text { text: "CHOKE"; color: Theme.text-faint; font-size: 8px; }
-                        SpinBox {
-                            value <=> root.choke-group; minimum: 0; maximum: 16; step-size: 1;
-                            width: 62px; height: 24px;
-                            edited(value) => { root.choke-group-changed(value); }
-                            Tooltip { text: @markdown("Matching non-zero groups choke each other. 0 is off."); }
-                        }
+                    ParameterKnob {
+                        label: "Punch"; tooltip: "Transient emphasis";
+                        value <=> root.punch; minimum: 0; maximum: 1; default-value: 0.35; fill: Theme.warning;
+                        value-text: round(root.punch * 100) + "%";
+                        changed(v) => { root.punch-changed(v); }
+                    }
+                    StepperField {
+                        label: "CHOKE";
+                        value <=> root.choke-group;
+                        minimum: 0;
+                        maximum: 16;
+                        step: 1;
+                        value-width: 18px;
+                        tooltip: "Matching non-zero groups choke each other. 0 is off.";
+                        changed(v) => { root.choke-group-changed(v); }
                     }
                     Rectangle { horizontal-stretch: 1; }
                 }
@@ -343,7 +379,7 @@ component DrumSourceEditor inherits Rectangle {
                     }
                     ParameterKnob {
                         label: "Sweep"; tooltip: "Kick pitch sweep time";
-                        value <=> root.kick-sweep; minimum: 0; maximum: 2; default-value: 0.045;
+                        value <=> root.kick-sweep; minimum: 0.005; maximum: 1; default-value: 0.045; scale: ValueScale.logarithmic;
                         value-text: round(root.kick-sweep * 1000) + " ms"; changed(v) => { root.kick-sweep-changed(v); }
                     }
                     ParameterKnob {
@@ -366,14 +402,29 @@ component DrumSourceEditor inherits Rectangle {
                         value-text: round(root.snare-tone-hz) + " Hz"; changed(v) => { root.snare-tone-hz-changed(v); }
                     }
                     ParameterKnob {
-                        label: "Noise Mix"; tooltip: "Noise versus body mix";
+                        label: "Tone 2"; tooltip: "Secondary snare body frequency";
+                        value <=> root.snare-tone2-hz; minimum: 80; maximum: 4000; default-value: 330; scale: ValueScale.logarithmic;
+                        value-text: round(root.snare-tone2-hz) + " Hz"; changed(v) => { root.snare-tone2-hz-changed(v); }
+                    }
+                    ParameterKnob {
+                        label: "T2 Mix"; tooltip: "Secondary tone level";
+                        value <=> root.snare-tone2-mix; minimum: 0; maximum: 1; default-value: 0.2;
+                        value-text: round(root.snare-tone2-mix * 100) + "%"; changed(v) => { root.snare-tone2-mix-changed(v); }
+                    }
+                    ParameterKnob {
+                        label: "Noise"; tooltip: "Noise versus body mix";
                         value <=> root.snare-noise-mix; minimum: 0; maximum: 1; default-value: 0.6;
                         value-text: round(root.snare-noise-mix * 100) + "%"; changed(v) => { root.snare-noise-mix-changed(v); }
                     }
                     ParameterKnob {
-                        label: "Noise Decay"; tooltip: "Noise burst decay in seconds";
-                        value <=> root.snare-noise-decay; minimum: 0; maximum: 2; default-value: 0.15;
+                        label: "N Decay"; tooltip: "Noise burst decay";
+                        value <=> root.snare-noise-decay; minimum: 0.005; maximum: 2; default-value: 0.11; scale: ValueScale.logarithmic;
                         value-text: round(root.snare-noise-decay * 1000) + " ms"; changed(v) => { root.snare-noise-decay-changed(v); }
+                    }
+                    ParameterKnob {
+                        label: "Color"; tooltip: "Noise brightness";
+                        value <=> root.snare-noise-color; minimum: 0; maximum: 1; default-value: 0.65;
+                        value-text: round(root.snare-noise-color * 100) + "%"; changed(v) => { root.snare-noise-color-changed(v); }
                     }
                     Rectangle { horizontal-stretch: 1; }
                 }
@@ -764,31 +815,45 @@ export component MainWindow inherits Window {
 
     // ---- drum synth params of the selected channel ----
     in-out property <int> drum-mode; // 0=Kick, 1=Snare, 2=Hat
-    in-out property <float> drum-decay: 0.35;
+    in-out property <int> drum-kick-character: 3;
+    in-out property <int> drum-snare-character;
+    in-out property <int> drum-hat-character: 1;
+    in-out property <float> drum-decay: 0.24;
     in-out property <float> drum-tune-semitones;
     in-out property <float> drum-drive;
+    in-out property <float> drum-punch: 0.35;
     in-out property <int> drum-choke-group;
     in-out property <float> drum-kick-start-hz: 160;
     in-out property <float> drum-kick-end-hz: 48;
     in-out property <float> drum-kick-sweep: 0.045;
     in-out property <float> drum-kick-click: 0.5;
     in-out property <float> drum-snare-tone-hz: 180;
+    in-out property <float> drum-snare-tone2-hz: 330;
+    in-out property <float> drum-snare-tone2-mix: 0.2;
     in-out property <float> drum-snare-noise-mix: 0.6;
     in-out property <float> drum-snare-noise-decay: 0.15;
+    in-out property <float> drum-snare-noise-color: 0.65;
     in-out property <float> drum-hat-hp-hz: 7500;
     in-out property <float> drum-hat-metallic: 0.5;
     callback drum-mode-changed(int);
+    callback drum-kick-character-changed(int);
+    callback drum-snare-character-changed(int);
+    callback drum-hat-character-changed(int);
     callback drum-decay-changed(float);
     callback drum-tune-semitones-changed(float);
     callback drum-drive-changed(float);
+    callback drum-punch-changed(float);
     callback drum-choke-group-changed(int);
     callback drum-kick-start-hz-changed(float);
     callback drum-kick-end-hz-changed(float);
     callback drum-kick-sweep-changed(float);
     callback drum-kick-click-changed(float);
     callback drum-snare-tone-hz-changed(float);
+    callback drum-snare-tone2-hz-changed(float);
+    callback drum-snare-tone2-mix-changed(float);
     callback drum-snare-noise-mix-changed(float);
     callback drum-snare-noise-decay-changed(float);
+    callback drum-snare-noise-color-changed(float);
     callback drum-hat-hp-hz-changed(float);
     callback drum-hat-metallic-changed(float);
 
@@ -2248,31 +2313,45 @@ export component MainWindow inherits Window {
                         if root.source-kind == 1 : DrumSourceEditor {
                             vertical-stretch: 1;
                             mode <=> root.drum-mode;
+                            kick-character <=> root.drum-kick-character;
+                            snare-character <=> root.drum-snare-character;
+                            hat-character <=> root.drum-hat-character;
                             decay <=> root.drum-decay;
                             tune-semitones <=> root.drum-tune-semitones;
                             drive <=> root.drum-drive;
+                            punch <=> root.drum-punch;
                             choke-group <=> root.drum-choke-group;
                             kick-start-hz <=> root.drum-kick-start-hz;
                             kick-end-hz <=> root.drum-kick-end-hz;
                             kick-sweep <=> root.drum-kick-sweep;
                             kick-click <=> root.drum-kick-click;
                             snare-tone-hz <=> root.drum-snare-tone-hz;
+                            snare-tone2-hz <=> root.drum-snare-tone2-hz;
+                            snare-tone2-mix <=> root.drum-snare-tone2-mix;
                             snare-noise-mix <=> root.drum-snare-noise-mix;
                             snare-noise-decay <=> root.drum-snare-noise-decay;
+                            snare-noise-color <=> root.drum-snare-noise-color;
                             hat-hp-hz <=> root.drum-hat-hp-hz;
                             hat-metallic <=> root.drum-hat-metallic;
                             mode-changed(v) => { root.drum-mode-changed(v); }
+                            kick-character-changed(v) => { root.drum-kick-character-changed(v); }
+                            snare-character-changed(v) => { root.drum-snare-character-changed(v); }
+                            hat-character-changed(v) => { root.drum-hat-character-changed(v); }
                             decay-changed(v) => { root.drum-decay-changed(v); }
                             tune-semitones-changed(v) => { root.drum-tune-semitones-changed(v); }
                             drive-changed(v) => { root.drum-drive-changed(v); }
+                            punch-changed(v) => { root.drum-punch-changed(v); }
                             choke-group-changed(v) => { root.drum-choke-group-changed(v); }
                             kick-start-hz-changed(v) => { root.drum-kick-start-hz-changed(v); }
                             kick-end-hz-changed(v) => { root.drum-kick-end-hz-changed(v); }
                             kick-sweep-changed(v) => { root.drum-kick-sweep-changed(v); }
                             kick-click-changed(v) => { root.drum-kick-click-changed(v); }
                             snare-tone-hz-changed(v) => { root.drum-snare-tone-hz-changed(v); }
+                            snare-tone2-hz-changed(v) => { root.drum-snare-tone2-hz-changed(v); }
+                            snare-tone2-mix-changed(v) => { root.drum-snare-tone2-mix-changed(v); }
                             snare-noise-mix-changed(v) => { root.drum-snare-noise-mix-changed(v); }
                             snare-noise-decay-changed(v) => { root.drum-snare-noise-decay-changed(v); }
+                            snare-noise-color-changed(v) => { root.drum-snare-noise-color-changed(v); }
                             hat-hp-hz-changed(v) => { root.drum-hat-hp-hz-changed(v); }
                             hat-metallic-changed(v) => { root.drum-hat-metallic-changed(v); }
                         }

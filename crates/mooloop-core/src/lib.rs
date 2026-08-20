@@ -31,7 +31,7 @@ pub use sampler::{
     clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,
 };
 pub use synth::{
-    DrumMode, DrumSynthParams, LfoParams, LfoWave, MonoSynthParams, OscParams, OscWave,
-    MAX_DRUM_VOICES,
+    DrumMode, DrumSynthParams, HatCharacter, KickCharacter, LfoParams, LfoWave, MonoSynthParams,
+    OscParams, OscWave, SnareCharacter, MAX_DRUM_VOICES,
 };
 pub use time::{ticks_per_sample, Ppq, Samples, Ticks};

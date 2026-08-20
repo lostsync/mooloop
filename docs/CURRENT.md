@@ -50,9 +50,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   restart/layer retriggering, and 16 cross-channel choke groups.
 - A source editor that can add or replace sampler, drum synth, and mono synth
   instruments without changing the channel's notes or mixer state. The drum
-  editor exposes kick, snare, and hat synthesis controls; the mono editor
-  exposes three oscillators, glide, ADSR, filter, drive, and an LFO. Closed and
-  open hats share a choke group in the generated starter kit.
+  editor exposes kick, snare, and hat synthesis controls with compact character
+  buttons, punch, kick sweep/click controls, snare secondary tone and noise
+  color, and hat metallic/noise shaping; the mono editor exposes three
+  oscillators, glide, ADSR, filter, drive, and an LFO. Closed and open hats
+  share a choke group in the generated starter kit.
 - Runtime appearance presets, custom accent persistence, shared audio controls,
   tooltips, and master peak-meter ballistics.
 - A traditional menu bar above the toolbar (`menubar.slint`): File, Edit,
