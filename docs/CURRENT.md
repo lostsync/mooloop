@@ -75,9 +75,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
   bipolar mode (`controls.slint`), LED-segment metering with scales, latching
   clip indicators, gain-reduction and correlation meters (`meters.slint`), and a
-  draggable graphical ADSR (`envelope.slint`). `cargo run -p mooloop-ui --example
-  control-gallery` shows every control; set `MOOLOOP_GALLERY_SNAPSHOT` and
-  `MOOLOOP_GALLERY_SIZE` to capture it headlessly.
+  draggable graphical ADSR (`envelope.slint`). Source panels use bounded
+  instrument modules, visible selector banks for short fixed choices, and
+  horizontal or vertical parameter faders where aligned values need to use a
+  module's area. Knob labels and value readouts share the knob's drag target.
+  `cargo run -p mooloop-ui --example control-gallery` shows every control; set
+  `MOOLOOP_GALLERY_SNAPSHOT` and `MOOLOOP_GALLERY_SIZE` to capture it headlessly.
+- The active interface contract is `docs/UI_DESIGN.md`. A visual composition
+  tool using the real controls is available with `cargo run -p mooloop-ui
+  --example mockup`; it saves and loads `mockup.toml` from the working directory.
 - Some widgets exist ahead of the features that will use them: gain reduction and
   correlation have no audio behind them yet, and solo is a button style only.
 - There is no metronome. The toolbar deliberately does not offer a click-track

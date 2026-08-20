@@ -1,0 +1,482 @@
+import { HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import {
+    AudioOrientation, IconButton, InstrumentModule, LedIndicator, MiniKnob, MixerFader,
+    ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl, SelectorBank,
+    StereoPeakMeter, ToggleButton, ToolButton, TransportButton, ValueReadout, ValueScale
+} from "controls.slint";
+import { EnvelopeEditor } from "envelope.slint";
+
+// One placed instance on the mockup canvas. Every kind reuses the same
+// struct - a design mockup does not need each control's full parameter set,
+// only enough to look and behave roughly like the real thing while it is
+// dragged, resized and captioned.
+export struct MockupItem {
+    kind: int,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    label: string,
+    value: float,
+    text: string,
+}
+
+// Palette order fixes the add callback, render switch, and PALETTE_SIZES in
+// examples/mockup.rs. Keep all three in sync when adding a kind.
+export global MockupKinds {
+    out property <[string]> names: [
+        "Module frame", "Section label", "Knob", "Mini knob", "Fader (h)",
+        "Fader (v)", "Mixer fader", "Toggle", "Button", "Icon button",
+        "Transport button", "Segmented", "Selector", "LED", "Value readout",
+        "Envelope", "Peak meter", "Stereo meter", "Sticky note",
+    ];
+}
+
+component PaletteEntry inherits Rectangle {
+    in property <string> text;
+    callback clicked;
+    min-height: 26px;
+    border-radius: 3px;
+    background: touch.pressed ? Theme.surface-active : touch.has-hover ? Theme.surface-raised : transparent;
+
+    Text {
+        text: root.text;
+        color: Theme.text;
+        font-size: 10px;
+        x: 6px;
+        vertical-alignment: center;
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+// One placed widget: a drag handle / label strip, the live control body, and
+// a resize grip. Dragging the strip moves the item; dragging the grip
+// resizes it. Clicking either selects it for the property panel.
+component PlacedItem inherits Rectangle {
+    in property <MockupItem> item;
+    in property <bool> selected;
+    callback select;
+    callback moved(length, length);
+    callback resized(length, length);
+    callback remove;
+    callback value-changed(float);
+    callback label-changed(string);
+
+    private property <length> press-x;
+    private property <length> press-y;
+    private property <bool> overlay-ctrl;
+    private property <float> overlay-start-value;
+    // Knob, mini knob, both faders, and the mixer fader all read plain drags
+    // as value changes internally, so a body drag can never reach `moved`
+    // through them - the overlay below claims the gesture first and decides
+    // move vs. value-adjust from the modifier at press time instead.
+    private property <bool> drag-kind: root.item.kind >= 2 && root.item.kind <= 6;
+
+    x: item.x;
+    y: item.y;
+    width: item.width;
+    height: item.height + 14px;
+
+    if root.selected: Rectangle {
+        x: -2px;
+        y: -2px;
+        width: parent.width + 4px;
+        height: parent.height + 4px;
+        border-width: 1px;
+        border-color: Theme.focus;
+        border-radius: 3px;
+    }
+
+    strip := Rectangle {
+        height: 14px;
+        background: root.selected ? Theme.focus.with-alpha(0.3) : Theme.surface-raised.with-alpha(0.9);
+        border-radius: 2px;
+        HorizontalLayout {
+            padding-left: 4px;
+            padding-right: 2px;
+            Text {
+                text: MockupKinds.names[root.item.kind];
+                color: Theme.text-faint;
+                font-size: 7px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: "\u{2715}";
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+                TouchArea { clicked => { root.remove(); } }
+            }
+        }
+        strip-touch := TouchArea {
+            mouse-cursor: move;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.select();
+                    root.press-x = self.mouse-x;
+                    root.press-y = self.mouse-y;
+                } else if (e.kind == PointerEventKind.move && self.pressed) {
+                    root.moved(self.mouse-x - root.press-x, self.mouse-y - root.press-y);
+                }
+            }
+        }
+    }
+
+    body := Rectangle {
+        y: 14px;
+        width: parent.width;
+        height: parent.height - 14px;
+        clip: true;
+
+        if root.item.kind == 0: InstrumentModule {
+            title: root.item.label == "" ? "MODULE" : root.item.label;
+            width: 100%;
+            height: 100%;
+        }
+        if root.item.kind == 1: SectionLabel {
+            text: root.item.label == "" ? "SECTION" : root.item.label;
+        }
+        if root.item.kind == 2: ParameterKnob {
+            label: root.item.label == "" ? "PARAM" : root.item.label;
+            value: root.item.value;
+            value-text: round(root.item.value * 100) + "%";
+            width: 100%;
+            height: 100%;
+            changed(v) => { root.value-changed(v); }
+        }
+        if root.item.kind == 3: MiniKnob {
+            label: root.item.label;
+            value: root.item.value;
+            value-text: round(root.item.value * 100) + "%";
+            changed(v) => { root.value-changed(v); }
+        }
+        if root.item.kind == 4: ParameterFader {
+            label: root.item.label == "" ? "LEVEL" : root.item.label;
+            value: root.item.value;
+            width: 100%;
+            changed(v) => { root.value-changed(v); }
+        }
+        if root.item.kind == 5: ParameterFader {
+            label: root.item.label == "" ? "LVL" : root.item.label;
+            value: root.item.value;
+            orientation: AudioOrientation.vertical;
+            height: 100%;
+            changed(v) => { root.value-changed(v); }
+        }
+        if root.item.kind == 6: MixerFader {
+            value: root.item.value;
+            value-text: round(root.item.value * 100) + "%";
+            height: 100%;
+            changed(v) => { root.value-changed(v); }
+        }
+        if root.item.kind == 7: ToggleButton {
+            text: root.item.label == "" ? "Toggle" : root.item.label;
+            checked: root.item.value > 0.5;
+            width: 100%;
+            height: 100%;
+            toggled(v) => { root.value-changed(v ? 1 : 0); }
+        }
+        if root.item.kind == 8: ToolButton {
+            text: root.item.label == "" ? "Button" : root.item.label;
+            active: root.item.value > 0.5;
+            width: 100%;
+            height: 100%;
+            clicked => { root.value-changed(root.item.value > 0.5 ? 0 : 1); }
+        }
+        if root.item.kind == 9: IconButton {
+            text: root.item.label == "" ? "+" : root.item.label;
+            active: root.item.value > 0.5;
+            clicked => { root.value-changed(root.item.value > 0.5 ? 0 : 1); }
+        }
+        if root.item.kind == 10: TransportButton {
+            text: root.item.label == "" ? "\u{25b6}" : root.item.label;
+            active: root.item.value > 0.5;
+            clicked => { root.value-changed(root.item.value > 0.5 ? 0 : 1); }
+        }
+        if root.item.kind == 11: SegmentedControl {
+            options: root.item.label == "" ? ["Mono", "Stereo", "M/S"] : [root.item.label, "B", "C"];
+            selected-index: round(root.item.value * 2);
+            width: 100%;
+            selected(i) => { root.value-changed(i / 2.0); }
+        }
+        if root.item.kind == 12: SelectorBank {
+            options: root.item.label == "" ? ["Sine", "Saw", "Square"] : [root.item.label, "B", "C"];
+            selected-index: round(root.item.value * 2);
+            selected(i) => { root.value-changed(i / 2.0); }
+        }
+        if root.item.kind == 13: LedIndicator {
+            on: root.item.value > 0.5;
+            tooltip: root.item.label;
+            TouchArea { clicked => { root.value-changed(root.item.value > 0.5 ? 0 : 1); } }
+        }
+        if root.item.kind == 14: ValueReadout {
+            value-text: root.item.label == "" ? "0%" : root.item.label;
+            width: 100%;
+            height: 100%;
+        }
+        if root.item.kind == 15: EnvelopeEditor {
+            width: 100%;
+            height: 100%;
+            attack: 0.12;
+            decay: 0.3;
+            sustain: 0.6;
+            release: 0.25;
+        }
+        if root.item.kind == 16: PeakMeter {
+            level-db: root.item.value * 60 - 60;
+            held-db: root.item.value * 60 - 60;
+            width: 100%;
+            height: 100%;
+        }
+        if root.item.kind == 17: StereoPeakMeter {
+            left-db: root.item.value * 60 - 60;
+            right-db: root.item.value * 60 - 60;
+            held-left-db: root.item.value * 60 - 60;
+            held-right-db: root.item.value * 60 - 60;
+            width: 100%;
+        }
+        if root.item.kind == 18: Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Theme.warning.with-alpha(0.16);
+            border-width: 1px;
+            border-color: Theme.warning.with-alpha(0.5);
+            border-radius: 3px;
+            note-input := TextInput {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                text: root.item.text;
+                color: Theme.text;
+                font-size: 10px;
+                wrap: word-wrap;
+                single-line: false;
+                edited => { root.label-changed(self.text); }
+            }
+        }
+
+        // Sits above the live control so a plain drag always moves the item;
+        // holding control reaches through to adjust the value instead, since
+        // the control's own drag handler would otherwise claim every gesture.
+        if root.drag-kind: TouchArea {
+            mouse-cursor: move;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.select();
+                    root.press-x = self.mouse-x;
+                    root.press-y = self.mouse-y;
+                    root.overlay-ctrl = e.modifiers.control;
+                    root.overlay-start-value = root.item.value;
+                } else if (e.kind == PointerEventKind.move && self.pressed) {
+                    if (root.overlay-ctrl) {
+                        root.value-changed(clamp(root.overlay-start-value
+                            + (root.item.kind == 4
+                                ? (self.mouse-x - root.press-x) / 150px
+                                : (root.press-y - self.mouse-y) / 150px), 0, 1));
+                    } else {
+                        root.moved(self.mouse-x - root.press-x, self.mouse-y - root.press-y);
+                    }
+                }
+            }
+            double-clicked => { root.value-changed(0.5); }
+            scroll-event(e) => {
+                root.value-changed(clamp(root.item.value - e.delta-y / 600px, 0, 1));
+                accept
+            }
+        }
+    }
+
+    grip := Rectangle {
+        x: parent.width - 8px;
+        y: parent.height - 8px;
+        width: 8px;
+        height: 8px;
+        background: root.selected ? Theme.focus : Theme.text-faint;
+        opacity: root.selected ? 1 : 0.5;
+        grip-touch := TouchArea {
+            mouse-cursor: nwse-resize;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.select();
+                    root.press-x = self.mouse-x;
+                    root.press-y = self.mouse-y;
+                } else if (e.kind == PointerEventKind.move && self.pressed) {
+                    root.resized(self.mouse-x - root.press-x, self.mouse-y - root.press-y);
+                }
+            }
+        }
+    }
+}
+
+export component MockupCanvas inherits Window {
+    title: "mooloop mockup";
+    preferred-width: 1200px;
+    preferred-height: 760px;
+    background: Theme.background;
+
+    in-out property <[MockupItem]> items: [];
+    in-out property <int> selected-index: -1;
+    in-out property <string> status-text;
+    callback save-requested(string);
+    callback load-requested();
+    // Adding and removing rows needs a real Vec, which only Rust can splice
+    // into the model - .slint arrays have no push/remove of their own.
+    callback add-item(int);
+    callback remove-item(int);
+
+    VerticalBox {
+        spacing: 0px;
+        Rectangle {
+            height: 40px;
+            background: Theme.surface;
+            HorizontalBox {
+                padding: 8px;
+                spacing: 8px;
+                Text { text: "MOOLOOP / MOCKUP"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.status-text; color: Theme.text-faint; font-size: 10px; vertical-alignment: center; }
+                ToolButton { text: "Load"; clicked => { root.load-requested(); } }
+                ToolButton {
+                    text: "Save";
+                    clicked => { root.save-requested("mockup.toml"); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            Rectangle {
+                width: 150px;
+                background: Theme.panel;
+                ScrollView {
+                    VerticalBox {
+                        padding: 6px;
+                        spacing: 2px;
+                        SectionLabel { text: "PALETTE"; }
+                        for name[i] in MockupKinds.names: PaletteEntry {
+                            text: name;
+                            clicked => { root.add-item(i); }
+                        }
+                        Rectangle { height: 4px; }
+                    }
+                }
+            }
+
+            canvas-scroll := ScrollView {
+                viewport-width: 1600px;
+                viewport-height: 1100px;
+                Rectangle {
+                    width: 1600px;
+                    height: 1100px;
+                    background: Theme.background;
+
+                    // Faint grid, purely a placement aid.
+                    for gx in 40: Rectangle {
+                        x: gx * 40px;
+                        width: 1px;
+                        height: 100%;
+                        background: Theme.panel;
+                    }
+                    for gy in 27: Rectangle {
+                        y: gy * 40px;
+                        height: 1px;
+                        width: 100%;
+                        background: Theme.panel;
+                    }
+
+                    background-touch := TouchArea {
+                        clicked => { root.selected-index = -1; }
+                    }
+
+                    for item[i] in root.items: PlacedItem {
+                        item: item;
+                        selected: root.selected-index == i;
+                        select => { root.selected-index = i; }
+                        moved(dx, dy) => {
+                            root.items[i].x = max(0px, item.x + dx);
+                            root.items[i].y = max(0px, item.y + dy);
+                        }
+                        resized(dx, dy) => {
+                            root.items[i].width = max(16px, item.width + dx);
+                            root.items[i].height = max(16px, item.height + dy);
+                        }
+                        remove => { root.remove-item(i); }
+                        value-changed(v) => { root.items[i].value = v; }
+                        label-changed(t) => { root.items[i].text = t; }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 220px;
+                background: Theme.panel;
+                if root.selected-index >= 0 && root.selected-index < root.items.length: VerticalBox {
+                    padding: 8px;
+                    spacing: 8px;
+                    SectionLabel { text: MockupKinds.names[root.items[root.selected-index].kind]; }
+
+                    Text { text: "Label"; color: Theme.text-faint; font-size: 9px; }
+                    Rectangle {
+                        height: 22px;
+                        background: Theme.surface;
+                        border-radius: 2px;
+                        TextInput {
+                            x: 4px;
+                            width: parent.width - 8px;
+                            height: parent.height;
+                            color: Theme.text;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                            text: root.items[root.selected-index].label;
+                            edited => { root.items[root.selected-index].label = self.text; }
+                        }
+                    }
+
+                    Text { text: "Value"; color: Theme.text-faint; font-size: 9px; }
+                    ParameterFader {
+                        value: root.items[root.selected-index].value;
+                        width: 100%;
+                        changed(v) => { root.items[root.selected-index].value = v; }
+                    }
+
+                    Text { text: "Note text"; color: Theme.text-faint; font-size: 9px; }
+                    Rectangle {
+                        height: 60px;
+                        background: Theme.surface;
+                        border-radius: 2px;
+                        TextInput {
+                            x: 4px;
+                            y: 4px;
+                            width: parent.width - 8px;
+                            height: parent.height - 8px;
+                            color: Theme.text;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                            single-line: false;
+                            text: root.items[root.selected-index].text;
+                            edited => { root.items[root.selected-index].text = self.text; }
+                        }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                    ToolButton {
+                        text: "Delete";
+                        clicked => { root.remove-item(root.selected-index); }
+                    }
+                }
+                if root.selected-index < 0: VerticalBox {
+                    padding: 8px;
+                    Text {
+                        text: "Click a palette item to place it. Drag it (or the strip) to move, the corner dot to resize, the \u{2715} to delete. Ctrl+drag a knob or fader to change its value instead of moving it.";
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,9 +1,9 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
-    IconButton, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
-    SectionLabel as DesignSectionLabel, SegmentedControl, StereoPeakMeter, ToggleButton,
-    ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton
+    AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
+    SectionLabel as DesignSectionLabel, SegmentedControl, SelectorBank, StereoPeakMeter,
+    ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton
 } from "controls.slint";
 import {
     BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
@@ -18,6 +18,7 @@ import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 export { Theme }
 export { ControlGallery } from "gallery.slint";
+export { MockupCanvas, MockupItem } from "mockup.slint";
 
 // One step cell used in the step-grid models.
 struct StepCell {
@@ -90,31 +91,6 @@ global SamplerIcons {
         "M 3 8 L 13 8 M 3 8 L 6.2 5 M 3 8 L 6.2 11 M 13 8 L 9.8 5 M 13 8 L 9.8 11";
 }
 
-// Label-over-control pairing used repeatedly in the VOICE section. A plain
-// Text element's line box is taller than its glyphs, so a VerticalLayout
-// with the label as one child leaves a visible gap above the control even
-// with a small `spacing`; fixing the label's own height closes it, and
-// factoring the pairing here keeps that fix in one place.
-component LabelledField inherits VerticalLayout {
-    in property <string> label;
-    spacing: 1px;
-    Text {
-        text: root.label;
-        color: Theme.text-faint;
-        font-size: 8px;
-        height: 9px;
-        vertical-alignment: bottom;
-    }
-    @children
-}
-
-// Hairline separator between the sampler editor's parameter groups.
-component SectionDivider inherits Rectangle {
-    width: 1px;
-    height: 142px;
-    background: Theme.border;
-}
-
 component WaveformMarker inherits Rectangle {
     in property <string> marker-label;
     in property <color> marker-color;
@@ -177,8 +153,8 @@ component OscillatorStrip inherits Rectangle {
     callback level-changed(float);
     callback pulse-width-changed(float);
 
-    width: 300px;
-    height: 116px;
+    min-width: 280px;
+    height: 142px;
     background: Theme.surface-raised;
     border-radius: 3px;
     border-width: 1px;
@@ -187,16 +163,15 @@ component OscillatorStrip inherits Rectangle {
         padding: 5px;
         spacing: 2px;
         SectionLabel { text: root.title; }
+        SelectorBank {
+            options: ["Sin", "Tri", "Saw", "Pulse"];
+            selected-index <=> root.wave;
+            tooltip: "Oscillator waveform";
+            selected(i) => { root.wave-changed(i); }
+        }
         HorizontalLayout {
             spacing: 0px;
-            ComboBox {
-                model: ["Sine", "Tri", "Saw", "Pulse"];
-                current-index <=> root.wave;
-                width: 72px;
-                height: 24px;
-                selected(value) => { root.wave-changed(self.current-index); }
-                Tooltip { text: @markdown("Oscillator waveform"); }
-            }
+            alignment: space-around;
             ParameterKnob {
                 width: 52px; diameter: 40px;
                 label: "Semi"; tooltip: "Oscillator coarse tuning in semitones";
@@ -277,14 +252,13 @@ component DrumSourceEditor inherits Rectangle {
     ScrollView {
         vertical-stretch: 1;
         horizontal-stretch: 1;
-        viewport-width: max(self.visible-width, 520px);
+        viewport-width: max(self.visible-width, 700px);
         viewport-height: max(self.visible-height, 270px);
         VerticalLayout {
-            width: 520px;
+            width: max(root.width, 700px);
             padding: 8px;
             spacing: 8px;
             Rectangle {
-                width: mode-layout.preferred-width;
                 height: 26px;
                 mode-layout := HorizontalLayout {
                     spacing: 8px;
@@ -319,19 +293,15 @@ component DrumSourceEditor inherits Rectangle {
                         selected-index <=> root.hat-character;
                         selected(i) => { root.hat-character-changed(i); }
                     }
+                    Rectangle { horizontal-stretch: 1; }
                 }
             }
-            Rectangle {
-                width: shared-layout.preferred-width;
-                height: 94px;
-                background: Theme.surface;
-                border-radius: 3px;
-                border-width: 1px;
-                border-color: Theme.border;
-                shared-layout := HorizontalLayout {
-                    padding: 6px;
-                    spacing: 2px;
-                    SectionLabel { text: "SHARED"; width: 48px; vertical-alignment: center; }
+            InstrumentModule {
+                title: "SHARED";
+                height: 104px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: space-around;
                     ParameterKnob {
                         label: "Decay"; tooltip: "Amplitude decay in seconds";
                         value <=> root.decay; minimum: 0.005; maximum: 2; default-value: 0.24; scale: ValueScale.logarithmic;
@@ -374,84 +344,108 @@ component DrumSourceEditor inherits Rectangle {
                     }
                 }
             }
-            if root.mode == 0 : Rectangle {
-                width: kick-layout.preferred-width; height: 94px; background: Theme.surface;
-                border-radius: 3px; border-width: 1px; border-color: Theme.border;
-                kick-layout := HorizontalLayout {
-                    padding: 6px; spacing: 2px;
-                    SectionLabel { text: "KICK"; width: 48px; vertical-alignment: center; }
-                    ParameterKnob {
+            if root.mode == 0 : InstrumentModule {
+                title: "KICK";
+                height: 96px;
+                VerticalLayout {
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "Start"; tooltip: "Kick sweep start frequency";
                         value <=> root.kick-start-hz; minimum: 20; maximum: 1000; default-value: 160; scale: ValueScale.logarithmic;
                         value-text: round(root.kick-start-hz) + " Hz"; changed(v) => { root.kick-start-hz-changed(v); }
                     }
-                    ParameterKnob {
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "End"; tooltip: "Kick sweep end frequency";
                         value <=> root.kick-end-hz; minimum: 20; maximum: 400; default-value: 48; scale: ValueScale.logarithmic;
                         value-text: round(root.kick-end-hz) + " Hz"; changed(v) => { root.kick-end-hz-changed(v); }
                     }
-                    ParameterKnob {
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "Sweep"; tooltip: "Kick pitch sweep time";
                         value <=> root.kick-sweep; minimum: 0.005; maximum: 1; default-value: 0.045; scale: ValueScale.logarithmic;
                         value-text: round(root.kick-sweep * 1000) + " ms"; changed(v) => { root.kick-sweep-changed(v); }
                     }
-                    ParameterKnob {
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "Click"; tooltip: "Beater click level";
                         value <=> root.kick-click; minimum: 0; maximum: 1; default-value: 0.5;
                         value-text: round(root.kick-click * 100) + "%"; changed(v) => { root.kick-click-changed(v); }
                     }
+                    }
                 }
             }
-            if root.mode == 1 : Rectangle {
-                width: snare-layout.preferred-width; height: 94px; background: Theme.surface;
-                border-radius: 3px; border-width: 1px; border-color: Theme.border;
-                snare-layout := HorizontalLayout {
-                    padding: 6px; spacing: 2px;
-                    SectionLabel { text: "SNARE"; width: 48px; vertical-alignment: center; }
-                    ParameterKnob {
+            if root.mode == 1 : InstrumentModule {
+                title: "SNARE";
+                height: 112px;
+                VerticalLayout {
+                    spacing: 5px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "Tone"; tooltip: "Snare body frequency";
                         value <=> root.snare-tone-hz; minimum: 40; maximum: 2000; default-value: 180; scale: ValueScale.logarithmic;
                         value-text: round(root.snare-tone-hz) + " Hz"; changed(v) => { root.snare-tone-hz-changed(v); }
                     }
-                    ParameterKnob {
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "Tone 2"; tooltip: "Secondary snare body frequency";
                         value <=> root.snare-tone2-hz; minimum: 80; maximum: 4000; default-value: 330; scale: ValueScale.logarithmic;
                         value-text: round(root.snare-tone2-hz) + " Hz"; changed(v) => { root.snare-tone2-hz-changed(v); }
                     }
-                    ParameterKnob {
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "T2 Mix"; tooltip: "Secondary tone level";
                         value <=> root.snare-tone2-mix; minimum: 0; maximum: 1; default-value: 0.2;
                         value-text: round(root.snare-tone2-mix * 100) + "%"; changed(v) => { root.snare-tone2-mix-changed(v); }
                     }
-                    ParameterKnob {
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "Noise"; tooltip: "Noise versus body mix";
                         value <=> root.snare-noise-mix; minimum: 0; maximum: 1; default-value: 0.6;
                         value-text: round(root.snare-noise-mix * 100) + "%"; changed(v) => { root.snare-noise-mix-changed(v); }
                     }
-                    ParameterKnob {
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "N Decay"; tooltip: "Noise burst decay";
                         value <=> root.snare-noise-decay; minimum: 0.005; maximum: 2; default-value: 0.11; scale: ValueScale.logarithmic;
                         value-text: round(root.snare-noise-decay * 1000) + " ms"; changed(v) => { root.snare-noise-decay-changed(v); }
                     }
-                    ParameterKnob {
+                        ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "Color"; tooltip: "Noise brightness";
                         value <=> root.snare-noise-color; minimum: 0; maximum: 1; default-value: 0.65;
                         value-text: round(root.snare-noise-color * 100) + "%"; changed(v) => { root.snare-noise-color-changed(v); }
                     }
+                    }
                 }
             }
-            if root.mode == 2 : Rectangle {
-                width: hat-layout.preferred-width; height: 94px; background: Theme.surface;
-                border-radius: 3px; border-width: 1px; border-color: Theme.border;
-                hat-layout := HorizontalLayout {
-                    padding: 6px; spacing: 2px;
-                    SectionLabel { text: "HAT"; width: 48px; vertical-alignment: center; }
-                    ParameterKnob {
+            if root.mode == 2 : InstrumentModule {
+                title: "HAT";
+                height: 64px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "HP"; tooltip: "Hat high-pass cutoff";
                         value <=> root.hat-hp-hz; minimum: 500; maximum: 16000; default-value: 7500; scale: ValueScale.logarithmic;
                         value-text: round(root.hat-hp-hz) + " Hz"; changed(v) => { root.hat-hp-hz-changed(v); }
                     }
-                    ParameterKnob {
+                    ParameterFader {
+                        width: (root.width - 44px) / 2;
                         label: "Metallic"; tooltip: "Metallic square oscillator blend";
                         value <=> root.hat-metallic; minimum: 0; maximum: 1; default-value: 0.5;
                         value-text: round(root.hat-metallic * 100) + "%"; changed(v) => { root.hat-metallic-changed(v); }
@@ -481,21 +475,24 @@ component MonoSourceEditor inherits Rectangle {
 
     ScrollView {
         vertical-stretch: 1; horizontal-stretch: 1;
-        viewport-width: max(self.visible-width, 944px);
+        viewport-width: max(self.visible-width, 900px);
         viewport-height: max(self.visible-height, 344px);
         VerticalLayout {
-            width: 944px; padding: 8px; spacing: 8px;
+            width: max(root.width, 900px); padding: 8px; spacing: 8px;
             HorizontalLayout {
                 spacing: 8px;
                 OscillatorStrip {
+                    horizontal-stretch: 1;
                     title: "OSC 1"; wave <=> root.osc1-wave; semitones <=> root.osc1-semitones; cents <=> root.osc1-cents; level <=> root.osc1-level; pulse-width <=> root.osc1-pulse-width;
                     wave-changed(v) => { root.osc1-wave-changed(v); } semitones-changed(v) => { root.osc1-semitones-changed(v); } cents-changed(v) => { root.osc1-cents-changed(v); } level-changed(v) => { root.osc1-level-changed(v); } pulse-width-changed(v) => { root.osc1-pulse-width-changed(v); }
                 }
                 OscillatorStrip {
+                    horizontal-stretch: 1;
                     title: "OSC 2"; wave <=> root.osc2-wave; semitones <=> root.osc2-semitones; cents <=> root.osc2-cents; level <=> root.osc2-level; pulse-width <=> root.osc2-pulse-width;
                     wave-changed(v) => { root.osc2-wave-changed(v); } semitones-changed(v) => { root.osc2-semitones-changed(v); } cents-changed(v) => { root.osc2-cents-changed(v); } level-changed(v) => { root.osc2-level-changed(v); } pulse-width-changed(v) => { root.osc2-pulse-width-changed(v); }
                 }
                 OscillatorStrip {
+                    horizontal-stretch: 1;
                     title: "OSC 3"; wave <=> root.osc3-wave; semitones <=> root.osc3-semitones; cents <=> root.osc3-cents; level <=> root.osc3-level; pulse-width <=> root.osc3-pulse-width;
                     wave-changed(v) => { root.osc3-wave-changed(v); } semitones-changed(v) => { root.osc3-semitones-changed(v); } cents-changed(v) => { root.osc3-cents-changed(v); } level-changed(v) => { root.osc3-level-changed(v); } pulse-width-changed(v) => { root.osc3-pulse-width-changed(v); }
                 }
@@ -503,7 +500,7 @@ component MonoSourceEditor inherits Rectangle {
             HorizontalLayout {
                 spacing: 8px;
                 Rectangle {
-                    width: 380px; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
+                    min-width: 340px; horizontal-stretch: 2; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
                     VerticalLayout {
                         padding: 6px; spacing: 3px;
                         SectionLabel { text: "AMP ENVELOPE"; }
@@ -526,7 +523,7 @@ component MonoSourceEditor inherits Rectangle {
                     }
                 }
                 Rectangle {
-                    width: 236px; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
+                    min-width: 220px; horizontal-stretch: 1; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
                     VerticalLayout {
                         padding: 6px; spacing: 3px;
                         SectionLabel { text: "FILTER AND DRIVE"; }
@@ -540,18 +537,17 @@ component MonoSourceEditor inherits Rectangle {
                     }
                 }
                 Rectangle {
-                    width: 292px; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
+                    min-width: 292px; horizontal-stretch: 2; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
                     VerticalLayout {
                         padding: 6px; spacing: 3px;
                         SectionLabel { text: "LFO"; }
                         HorizontalLayout {
                             spacing: 6px;
-                            ComboBox {
-                                model: ["Sine", "Tri", "Saw", "Square", "S&H"];
-                                current-index <=> root.lfo-wave;
-                                width: 96px; height: 24px;
-                                selected(value) => { root.lfo-wave-changed(self.current-index); }
-                                Tooltip { text: @markdown("LFO waveform"); }
+                            SelectorBank {
+                                options: ["Sin", "Tri", "Saw", "Sq", "S&H"];
+                                selected-index <=> root.lfo-wave;
+                                tooltip: "LFO waveform";
+                                selected(i) => { root.lfo-wave-changed(i); }
                             }
                             ToggleButton {
                                 text: "Retrig"; tooltip: "Restart the LFO on every note instead of letting it free run";
@@ -1567,19 +1563,22 @@ export component MainWindow inherits Window {
                 }
 
                 HorizontalBox {
+                    height: 28px;
                     padding: 0px;
                     spacing: 4px;
                     alignment: start;
                     FlatButton {
                         text: "+";
                         tooltip: "Add sound source";
-                        min-width: 28px;
+                        min-width: 28px; max-width: 28px;
+                        min-height: 24px; max-height: 24px;
                         clicked => { add-source-menu.show(); }
                     }
                     FlatButton {
                         text: "−";
                         tooltip: "Remove last channel";
-                        min-width: 28px;
+                        min-width: 28px; max-width: 28px;
+                        min-height: 24px; max-height: 24px;
                         clicked => { root.remove-channel-clicked(); }
                     }
                 }
@@ -1891,14 +1890,20 @@ export component MainWindow inherits Window {
                                 padding-top: 5px;
                                 padding-bottom: 5px;
                                 spacing: 8px;
-                                Text { text: "SOURCE"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+                                Text {
+                                    text: "SOURCE";
+                                    width: 48px;
+                                    color: Theme.text-faint;
+                                    font-size: 9px;
+                                    vertical-alignment: center;
+                                }
                                 SegmentedControl {
                                     width: 252px;
                                     options: ["Sampler", "Drum", "Mono"];
                                     selected-index <=> root.source-kind;
                                     selected(i) => { root.channel-source-changed(i); }
                                 }
-                                Rectangle { horizontal-stretch: 1; }
+                                Rectangle { width: 8px; }
                                 MenuField {
                                     label: "PRESET";
                                     options: root.generator-preset-options;
@@ -2127,26 +2132,29 @@ export component MainWindow inherits Window {
                         }
 
                         Rectangle {
-                            height: 168px;
+                            height: 148px;
                             background: Theme.panel;
                             HorizontalLayout {
                                 padding: 6px;
-                                spacing: 3px;
+                                spacing: 4px;
                                 alignment: start;
 
-                                VerticalLayout {
-                                    width: 116px; spacing: 3px;
-                                    SectionLabel { text: "TUNE"; }
+                                InstrumentModule {
+                                    title: "TUNE";
+                                    width: 92px;
                                     HorizontalLayout {
-                                        spacing: 0px;
-                                        ParameterKnob {
+                                        spacing: 8px;
+                                        alignment: space-around;
+                                        ParameterFader {
+                                            orientation: AudioOrientation.vertical;
                                             label: "Coarse"; tooltip: "Coarse tuning in semitones";
                                             value <=> root.tune-semitones;
                                             minimum: -24; maximum: 24; default-value: 0; step: 1;
                                             value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
                                             changed(v) => { root.tune-semitones-changed(v); }
                                         }
-                                        ParameterKnob {
+                                        ParameterFader {
+                                            orientation: AudioOrientation.vertical;
                                             label: "Fine"; tooltip: "Fine tuning in cents";
                                             value <=> root.tune-cents;
                                             minimum: -100; maximum: 100; default-value: 0; step: 1;
@@ -2155,66 +2163,61 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                SectionDivider {}
 
-                                VerticalLayout {
-                                    width: 180px; spacing: 3px;
-                                    SectionLabel { text: "VOICE"; }
+                                InstrumentModule {
+                                    title: "VOICE";
+                                    width: 260px;
+                                    VerticalLayout {
+                                        spacing: 8px;
                                     HorizontalLayout {
-                                        spacing: 4px;
-                                        LabelledField {
-                                            label: "MODE";
-                                            ComboBox {
-                                                model: ["One Shot", "Gate"];
-                                                current-index <=> root.voice-mode;
-                                                width: 105px; height: 24px;
-                                                selected(value) => { root.voice-mode-changed(self.current-index); }
-                                                Tooltip { text: @markdown("**One Shot** plays the region or exits a loop into its tail. **Gate** follows note length and envelope release."); }
-                                            }
+                                            spacing: 6px;
+                                            SelectorBank {
+                                                options: ["One Shot", "Gate"];
+                                                segment-width: 62px;
+                                                selected-index <=> root.voice-mode;
+                                                tooltip: "Playback mode";
+                                                selected(i) => { root.voice-mode-changed(i); }
                                         }
-                                        LabelledField {
-                                            label: "VOICES";
-                                            SpinBox {
+                                            Rectangle { horizontal-stretch: 1; }
+                                            StepperField {
+                                                label: "VOICES";
                                                 value <=> root.sampler-polyphony;
-                                                minimum: 1; maximum: 16; step-size: 1;
-                                                width: 62px; height: 24px;
-                                                edited(value) => { root.sampler-polyphony-changed(value); }
-                                                Tooltip { text: @markdown("Maximum simultaneous sample voices"); }
+                                                minimum: 1; maximum: 16; step: 1;
+                                                value-width: 18px;
+                                                tooltip: "Maximum simultaneous sample voices";
+                                                changed(v) => { root.sampler-polyphony-changed(v); }
                                             }
                                         }
-                                    }
                                     HorizontalLayout {
-                                        spacing: 4px;
-                                        LabelledField {
-                                            label: "RETRIGGER";
-                                            ComboBox {
-                                                model: ["Restart", "Layer"];
-                                                current-index <=> root.retrigger-mode;
-                                                width: 105px; height: 24px;
-                                                selected(value) => { root.retrigger-mode-changed(self.current-index); }
-                                                Tooltip { text: @markdown("**Restart** replaces a matching pitch. **Layer** stacks repeated notes."); }
-                                            }
+                                            spacing: 6px;
+                                            SelectorBank {
+                                                options: ["Restart", "Layer"];
+                                                segment-width: 62px;
+                                                selected-index <=> root.retrigger-mode;
+                                                tooltip: "Retrigger behavior";
+                                                selected(i) => { root.retrigger-mode-changed(i); }
                                         }
-                                        LabelledField {
-                                            label: "CHOKE";
-                                            SpinBox {
+                                            Rectangle { horizontal-stretch: 1; }
+                                            StepperField {
+                                                label: "CHOKE";
                                                 value <=> root.choke-group;
-                                                minimum: 0; maximum: 16; step-size: 1;
-                                                width: 62px; height: 24px;
-                                                edited(value) => { root.choke-group-changed(value); }
-                                                Tooltip { text: @markdown("Matching non-zero groups choke each other. **0** is off."); }
+                                                minimum: 0; maximum: 16; step: 1;
+                                                value-width: 18px;
+                                                tooltip: "Matching non-zero groups choke each other. 0 is off.";
+                                                changed(v) => { root.choke-group-changed(v); }
                                             }
                                         }
                                     }
                                 }
-                                SectionDivider {}
 
-                                VerticalLayout {
-                                    width: 230px; spacing: 3px;
-                                    SectionLabel { text: "FILTER"; }
+                                InstrumentModule {
+                                    title: "FILTER";
+                                    width: 164px;
                                     HorizontalLayout {
-                                        spacing: 1px;
-                                        ParameterKnob {
+                                        spacing: 8px;
+                                        alignment: space-around;
+                                        ParameterFader {
+                                            orientation: AudioOrientation.vertical;
                                             label: "Cutoff"; tooltip: "Low-pass filter cutoff";
                                             value <=> root.filter-cutoff; default-value: 1;
                                             value-text: root.filter-cutoff >= 0.999 ? "Open"
@@ -2222,20 +2225,23 @@ export component MainWindow inherits Window {
                                                     root.filter-cutoff)) + " Hz";
                                             changed(v) => { root.filter-cutoff-changed(v); }
                                         }
-                                        ParameterKnob {
+                                        ParameterFader {
+                                            orientation: AudioOrientation.vertical;
                                             label: "Reso"; tooltip: "Filter resonance";
                                             value <=> root.filter-resonance; default-value: 0;
                                             value-text: round(root.filter-resonance * 100) + "%";
                                             changed(v) => { root.filter-resonance-changed(v); }
                                         }
-                                        ParameterKnob {
+                                        ParameterFader {
+                                            orientation: AudioOrientation.vertical;
                                             label: "Env"; tooltip: "Bipolar amplitude-envelope modulation of cutoff";
-                                            value <=> root.filter-env; default-value: 0.5; fill: Theme.warning;
+                                            value <=> root.filter-env; default-value: 0.5; bipolar: true; fill: Theme.warning;
                                             value-text: (round((root.filter-env * 2 - 1) * 100) > 0 ? "+" : "")
                                                 + round((root.filter-env * 2 - 1) * 100) + "%";
                                             changed(v) => { root.filter-env-changed(v); }
                                         }
-                                        ParameterKnob {
+                                        ParameterFader {
+                                            orientation: AudioOrientation.vertical;
                                             label: "Drive"; tooltip: "Pre-filter soft saturation";
                                             value <=> root.sampler-drive; default-value: 0; fill: Theme.warning;
                                             value-text: round(root.sampler-drive * 100) + "%";
@@ -2243,16 +2249,13 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                SectionDivider {}
 
-                                VerticalLayout {
-                                    width: 230px; spacing: 3px;
-                                    SectionLabel { text: "AMP ENVELOPE"; }
-                                    // The graph and the knobs edit the same
-                                    // properties: drag the shape to find it,
-                                    // use a knob when a number matters.
+                                InstrumentModule {
+                                    title: "AMP ENVELOPE";
+                                    min-width: 270px;
+                                    horizontal-stretch: 1;
                                     EnvelopeEditor {
-                                        height: 56px;
+                                        height: 52px;
                                         attack <=> root.attack;
                                         decay <=> root.decay;
                                         sustain <=> root.sustain;
@@ -2267,26 +2270,33 @@ export component MainWindow inherits Window {
                                         release-changed(v) => { root.release-changed(v); }
                                     }
                                     HorizontalLayout {
-                                        spacing: 1px;
-                                        ParameterKnob {
+                                        spacing: 12px;
+                                        ParameterFader {
+                                            horizontal-stretch: 1;
                                             label: "Attack"; tooltip: "Amplitude attack";
                                             value <=> root.attack; default-value: 0;
                                             value-text: round(root.attack * 5000) + " ms";
                                             changed(v) => { root.attack-changed(v); }
                                         }
-                                        ParameterKnob {
+                                        ParameterFader {
+                                            horizontal-stretch: 1;
                                             label: "Decay"; tooltip: "Amplitude decay";
                                             value <=> root.decay; default-value: 0.05;
                                             value-text: round(root.decay * 5000) + " ms";
                                             changed(v) => { root.decay-changed(v); }
                                         }
-                                        ParameterKnob {
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 12px;
+                                        ParameterFader {
+                                            horizontal-stretch: 1;
                                             label: "Sustain"; tooltip: "Amplitude sustain level";
                                             value <=> root.sustain; default-value: 1;
                                             value-text: round(root.sustain * 100) + "%";
                                             changed(v) => { root.sustain-changed(v); }
                                         }
-                                        ParameterKnob {
+                                        ParameterFader {
+                                            horizontal-stretch: 1;
                                             label: "Release"; tooltip: "Amplitude release";
                                             value <=> root.release; default-value: 0.01;
                                             value-text: round(root.release * 5000) + " ms";
@@ -2294,20 +2304,22 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                SectionDivider {}
 
-                                VerticalLayout {
-                                    width: 116px; spacing: 3px;
-                                    SectionLabel { text: "LO-FI"; }
+                                InstrumentModule {
+                                    title: "LO-FI";
+                                    width: 92px;
                                     HorizontalLayout {
-                                        spacing: 0px;
-                                        ParameterKnob {
+                                        spacing: 8px;
+                                        alignment: space-around;
+                                        ParameterFader {
+                                            orientation: AudioOrientation.vertical;
                                             label: "Bits"; tooltip: "Bit-depth reduction";
                                             value <=> root.bit-reduction; default-value: 0; fill: Theme.warning;
                                             value-text: round(16 - root.bit-reduction * 12) + " bit";
                                             changed(v) => { root.bit-reduction-changed(v); }
                                         }
-                                        ParameterKnob {
+                                        ParameterFader {
+                                            orientation: AudioOrientation.vertical;
                                             label: "Rate"; tooltip: "Sample-rate reduction";
                                             value <=> root.rate-reduction; default-value: 0; fill: Theme.warning;
                                             value-text: "÷" + round(1 + root.rate-reduction * 31);
@@ -2315,7 +2327,6 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                Rectangle { horizontal-stretch: 1; }
                             }
                         }
                         }
