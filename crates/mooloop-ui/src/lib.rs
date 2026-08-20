@@ -2102,6 +2102,7 @@ impl AppUi {
                     channel: channel as u8,
                     note,
                 });
+                note.id as i32
             });
         }
         {

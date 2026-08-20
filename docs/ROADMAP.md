@@ -16,9 +16,19 @@ Scope:
 
 - Resolve remaining single-click, focus, selection, zoom, scrolling, and
   narrow-window issues.
+- Bring the piano roll closer to normal DAW behavior: fixed keyboard/header
+  scroll sync, single-click selection without accidental note creation,
+  double-click note insertion, double-click-drag length entry, and independent
+  piano-roll snap.
 - Establish consistent right-click removal and keyboard navigation.
+- Make labeled knobs draggable from their labels as well as from the knob body.
 - Finish sampler voice controls that do not require the new event model.
+- Audit drum synth time ranges and parameter scaling; defaults and useful
+  knob travel should make sub-100 ms percussion easy without making the rest
+  of the range feel wrong.
 - Add per-channel meters through the existing strip; volume and pan are exposed.
+- Replace terse implementation-style tooltips with user-facing wording, and
+  consider a status bar for longer hover text.
 - Keep the UI control gallery as the interaction contract.
 
 Exit criteria:
@@ -44,6 +54,8 @@ Scope:
   placement works.
 - Rack cells summarize substeps while the piano roll edits full events.
 - Parameter lanes edit selected note data without inventing separate state.
+- Dragging the playhead should move transport position in the rack, piano
+  roll, and playlist without creating a separate timeline concept.
 
 Exit criteria:
 
@@ -62,6 +74,11 @@ Scope:
   and renderer.
 - Save/load, autosave or recovery, missing-sample handling, and undoable edits.
 - Pattern duplicate, rename, copy/paste, and independent lengths.
+- Cut, copy, and paste work consistently for notes, rack steps, playlist
+  placements, patterns, channels, and parameter-lane selections through one
+  command layer.
+- Shortcut keys and right-click context menus are first-class command surfaces,
+  not one-off handlers hidden in individual widgets.
 - Extend the initial layered, tick-addressed playlist with clip dragging,
   selection, duplication, and keyboard editing on the shared musical grid.
 - Add independent loop ranges to the existing Pattern and Song transport modes.
@@ -79,9 +96,9 @@ Implemented foundation:
   scheduling.
 
 Remaining work in this phase includes autosave/recovery, undo, richer missing-
-sample relinking, pattern management, playlist manipulation, explicit loop
-ranges, per-pattern swing/groove templates, and realtime/offline comparison
-tolerances.
+sample relinking, pattern management, playlist manipulation, cut/copy/paste,
+shortcut keys, context menus, explicit loop ranges, per-pattern swing/groove
+templates, and realtime/offline comparison tolerances.
 
 Different pattern lengths:
 
@@ -127,6 +144,8 @@ Scope:
 - Realtime-safe fixed-capacity insert editing, bypass, ordering, and state.
 - A small authored initial effect set: filter, delay, saturation/color, and
   utility dynamics or EQ only where the signal flow needs them.
+- Restore effects only after the device and parameter contracts can support
+  them without special-case automation or realtime graph edits.
 - Buffer placement explicitly accounts for pre/post insert signal flow and any
   future feedback path.
 
@@ -151,6 +170,9 @@ Scope:
   command.
 - External input, internal routing, groups, sends, and selected resampling
   sources as the graph model permits.
+- Add a mixer model where rack channels explicitly assign to mixer tracks.
+  Unlike FL Studio, assignment and track management should be visible,
+  deliberate, and recoverable instead of feeling like an afterthought.
 
 Implemented foundation:
 

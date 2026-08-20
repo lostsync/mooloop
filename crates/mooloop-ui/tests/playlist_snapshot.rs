@@ -31,7 +31,7 @@ fn render_playlist_snapshot() {
     ui.set_editor_page(2);
     ui.set_pattern_count(2);
     ui.set_pattern_length(2);
-    ui.set_musical_snap_index(1);
+    ui.set_playlist_snap_index(1);
     ui.set_current_pattern(0);
     ui.set_playlist_bars(64);
     ui.set_playlist_song_length_ticks(1152);

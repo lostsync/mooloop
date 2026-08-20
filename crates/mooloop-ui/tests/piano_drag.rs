@@ -156,7 +156,10 @@ fn dragging_a_note_does_not_create_a_new_one() {
     let created = Rc::new(RefCell::new(0usize));
     {
         let created = created.clone();
-        ui.on_piano_note_created(move |_, _, _| *created.borrow_mut() += 1);
+        ui.on_piano_note_created(move |_, _, _| {
+            *created.borrow_mut() += 1;
+            99
+        });
     }
 
     let start = (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60));
@@ -170,13 +173,14 @@ fn dragging_a_note_does_not_create_a_new_one() {
 }
 
 #[test]
-fn pressing_empty_grid_still_creates_a_note() {
+fn pressing_empty_grid_does_not_create_a_note() {
     let ui = harness(one_note());
     let created: Rc<RefCell<Vec<(i32, i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
     {
         let created = created.clone();
         ui.on_piano_note_created(move |tick, note, dur| {
             created.borrow_mut().push((tick, note, dur));
+            21
         });
     }
 
@@ -194,6 +198,58 @@ fn pressing_empty_grid_still_creates_a_note() {
     });
 
     let created = created.borrow();
-    assert_eq!(created.len(), 1, "empty grid should still add a note");
-    assert_eq!(created[0].1, 55, "the new note takes the row pressed");
+    assert!(created.is_empty(), "single-clicking empty grid should only focus/arm");
+}
+
+#[test]
+fn double_clicking_empty_grid_creates_and_drags_note_length() {
+    let ui = harness(one_note());
+    let created: Rc<RefCell<Vec<(i32, i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let sizes: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let created = created.clone();
+        ui.on_piano_note_created(move |tick, note, dur| {
+            created.borrow_mut().push((tick, note, dur));
+            21
+        });
+    }
+    {
+        let sizes = sizes.clone();
+        ui.on_piano_note_resized(move |id, duration| {
+            sizes.borrow_mut().push((id, duration));
+        });
+    }
+
+    let start = LogicalPosition::new(tick_x(4 * TICKS_PER_STEP), note_centre_y(55));
+    let end = LogicalPosition::new(start.x + 3.0 * STEP_WIDTH, start.y);
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: start });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: start,
+        button: PointerEventButton::Left,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: start,
+        button: PointerEventButton::Left,
+    });
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: start });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: start,
+        button: PointerEventButton::Left,
+    });
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: end });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: end,
+        button: PointerEventButton::Left,
+    });
+
+    let created = created.borrow();
+    assert_eq!(created.len(), 1, "double-clicking empty grid should add one note");
+    assert_eq!(created[0], (4 * TICKS_PER_STEP, 55, TICKS_PER_STEP));
+    let sizes = sizes.borrow();
+    let (id, duration) = *sizes.last().expect("dragging after creation should resize the note");
+    assert_eq!(id, 21);
+    assert_eq!(duration, 4 * TICKS_PER_STEP);
 }
