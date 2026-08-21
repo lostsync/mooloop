@@ -226,7 +226,12 @@ through an `ArcSwapOption` slot.
    before buffers become part of every strip.
 4. Add deferred reclamation for replaced samples, graphs, and future buffers.
 
-## Verification Commands
+## Full Integration Verification
+
+These commands are the release/integration suite, not the default checklist
+for every change. Routine work should use the narrowest package, test target,
+or snapshot that covers the behavior, as specified in `AGENTS.md`. Run these
+commands sequentially when full integration coverage is warranted.
 
 ```sh
 cargo test --workspace

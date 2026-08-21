@@ -1,8 +1,12 @@
 [build]
-# 8 cores worth of parallel rustc/link jobs was OOMing on this workstation
-# (16GB RAM), mostly during linking of the mooloop-ui (Slint) test/bin
-# targets. Capping concurrency trades wall-clock time for headroom.
-jobs = 4
+# This T14 has 4 physical cores/8 threads and 16 GiB RAM. Eight concurrent
+# Slint-heavy rustc/link jobs exhausted memory; six leaves two threads and
+# enough memory headroom for the desktop while making better use of the CPU.
+jobs = 6
+# All task worktrees use this persistent cache instead of rebuilding Slint and
+# the dependency graph into a new target directory for every branch. Cargo
+# commands must remain sequential as required by AGENTS.md.
+target-dir = "/home/lost/projects/mooloop/target"
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]

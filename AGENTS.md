@@ -87,10 +87,20 @@ commands, when spawning a subagent for isolated work.
 
 - Working tree must be clean before you consider a task done. Run
   `git status` as a final check.
-- Verify changes before merging, using judgment and checks proportional to
-  risk. Code changes require relevant tests/builds. Documentation, metadata,
-  and static-asset-only changes do not require compiling the workspace when
-  targeted validation covers them.
+- Verify changes before merging, using the smallest check that covers the
+  changed behavior:
+  - Documentation, metadata, instructions, and static assets need only
+    targeted validation; do not compile the workspace for them.
+  - For isolated Rust changes, run the affected package's test or check
+    (`cargo test -p <package>` or a narrower named test). Scope Clippy the
+    same way when lint coverage is relevant.
+  - For UI changes, run the specific UI test or software-rendered snapshot
+    that exercises the changed surface. Do not run every UI integration-test
+    binary merely because the change is in `mooloop-ui`.
+  - Run workspace-wide tests/Clippy only for cross-crate API or dependency
+    changes, release/integration work, or when explicitly requested.
+- Never run Cargo build, test, or Clippy commands concurrently on this
+  workstation. Parallel rustc/link processes already run within each command.
 - Merge the branch back into `main` with a fast-forward (`git merge
   --ff-only <branch>` from a `main` checkout) so history stays a single
   straight line. If `main` has moved on and a fast-forward isn't possible,

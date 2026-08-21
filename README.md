@@ -105,7 +105,8 @@ Run the audio control gallery:
 cargo run -p mooloop-ui --example control-gallery
 ```
 
-Verify the workspace:
+Run the full integration checks for cross-crate or release work. For routine
+changes, follow the targeted verification guidance in `AGENTS.md` instead:
 
 ```sh
 cargo test --workspace
