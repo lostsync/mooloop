@@ -1,0 +1,8 @@
+[build]
+# 8 cores worth of parallel rustc/link jobs was OOMing on this workstation
+# (16GB RAM), mostly during linking of the mooloop-ui (Slint) test/bin
+# targets. Capping concurrency trades wall-clock time for headroom.
+jobs = 4
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

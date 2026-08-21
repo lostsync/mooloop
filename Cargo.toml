@@ -32,3 +32,9 @@ toml = "1"
 
 [profile.release]
 debug = true
+
+# mooloop-ui's Slint-generated code is the heaviest thing in the workspace to
+# compile; full debuginfo on it is what tends to push dev builds/tests over
+# the edge on a 16GB workstation. Line tables are enough for backtraces.
+[profile.dev.package.mooloop-ui]
+debug = "line-tables-only"
