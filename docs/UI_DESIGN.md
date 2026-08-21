@@ -25,14 +25,6 @@ decorative:
 - The entire panel has a deliberate silhouette. Controls do not trail off into
   unexplained bordered space.
 
-Reference examples are in `reference/img/helm.webp`, `malstrom.jpg`,
-`phase4.png`, `polysynth.png`, `subtractor.jpg`, and `thor.jpg`. They are not a
-palette or skin specification. Do not copy their branding, skeuomorphism, or
-color. Study their grouping, density, control choice, and use of area.
-
-Annotated failure cases are in `reference/img/mooloop-1.png` through
-`mooloop-5.png`. Treat the annotations as bug reports.
-
 ## Composition Grammar
 
 The interface has four levels. Their ownership must remain visible.

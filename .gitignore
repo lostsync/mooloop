@@ -3,4 +3,4 @@
 Cargo.lock.bak
 *.swp
 .DS_Store
-/reference/img/
+/reference/
