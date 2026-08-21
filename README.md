@@ -73,3 +73,8 @@ When documents disagree, use this order:
 3. `docs/ROADMAP.md` for sequencing work.
 4. `docs/CURRENT.md` and the code for implemented behavior.
 5. `reference/ADAM.md` only as fallible background taste context.
+
+## License
+
+Mooloop is free software licensed under the
+[GNU General Public License v3.0 or later](LICENSE).
