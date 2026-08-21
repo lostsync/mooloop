@@ -60,12 +60,32 @@ fn render_drum_and_mono_source_editors() {
     assert!(drum.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&drum, "MOOLOOP_DRUM_SOURCE_SNAPSHOT");
 
+    ui.set_drum_mode(1);
+    let snare = ui.window().take_snapshot().unwrap();
+    assert_ne!(drum.as_bytes(), snare.as_bytes());
+    write_snapshot(&snare, "MOOLOOP_SNARE_SOURCE_SNAPSHOT");
+
+    ui.set_drum_mode(2);
+    let hat = ui.window().take_snapshot().unwrap();
+    assert_ne!(snare.as_bytes(), hat.as_bytes());
+    write_snapshot(&hat, "MOOLOOP_HAT_SOURCE_SNAPSHOT");
+
     ui.set_source_kind(2);
     ui.set_selected_channel_name(SharedString::from("Mono"));
     let mono = ui.window().take_snapshot().unwrap();
     assert_eq!((mono.width(), mono.height()), (960, 760));
     assert_ne!(drum.as_bytes(), mono.as_bytes());
     write_snapshot(&mono, "MOOLOOP_MONO_SOURCE_SNAPSHOT");
+
+    ui.set_mono_device_page(1);
+    let mono_amp = ui.window().take_snapshot().unwrap();
+    assert_ne!(mono.as_bytes(), mono_amp.as_bytes());
+    write_snapshot(&mono_amp, "MOOLOOP_MONO_AMP_SOURCE_SNAPSHOT");
+
+    ui.set_mono_device_page(2);
+    let mono_mod = ui.window().take_snapshot().unwrap();
+    assert_ne!(mono_amp.as_bytes(), mono_mod.as_bytes());
+    write_snapshot(&mono_mod, "MOOLOOP_MONO_MOD_SOURCE_SNAPSHOT");
 
     ui.window().set_size(LogicalSize::new(720.0, 760.0));
     let narrow = ui.window().take_snapshot().unwrap();
@@ -105,4 +125,14 @@ fn render_sampler_source_editor() {
     assert_eq!((snapshot.width(), snapshot.height()), (960, 760));
     assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&snapshot, "MOOLOOP_SAMPLER_SOURCE_SNAPSHOT");
+
+    ui.set_sampler_device_page(1);
+    let voice = ui.window().take_snapshot().unwrap();
+    assert_ne!(snapshot.as_bytes(), voice.as_bytes());
+    write_snapshot(&voice, "MOOLOOP_SAMPLER_VOICE_SOURCE_SNAPSHOT");
+
+    ui.set_sampler_device_page(2);
+    let tone = ui.window().take_snapshot().unwrap();
+    assert_ne!(voice.as_bytes(), tone.as_bytes());
+    write_snapshot(&tone, "MOOLOOP_SAMPLER_TONE_SOURCE_SNAPSHOT");
 }

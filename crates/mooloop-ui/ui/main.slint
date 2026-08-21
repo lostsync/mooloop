@@ -2,7 +2,7 @@ import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-w
 import { Theme } from "theme.slint";
 import {
     AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
-    SectionLabel as DesignSectionLabel, SegmentedControl, SelectorBank, StereoPeakMeter,
+    SegmentedControl, SelectorBank, StereoPeakMeter,
     ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton
 } from "controls.slint";
 import {
@@ -16,6 +16,12 @@ import { SavePresetDialog } from "save-preset-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
 import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
+import {
+    DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics
+} from "device-rack.slint";
+import { DrumDeviceFace } from "drum-device.slint";
+import { MonoDeviceFace } from "mono-device.slint";
+import { SamplerDeviceFace } from "sampler-device.slint";
 export { Theme }
 export { ControlGallery } from "gallery.slint";
 export { MockupCanvas, MockupItem } from "mockup.slint";
@@ -73,531 +79,7 @@ struct PlaylistClip {
 }
 
 component FlatButton inherits ToolButton { }
-component SectionLabel inherits DesignSectionLabel { }
 component MuteButton inherits DesignMuteButton { }
-
-// Sample-editor transport icons, drawn as line art on a shared 16x16 grid
-// (same rationale as ToolIcons in toolbar.slint: the previous `‹ › ⌕ ↤ — ↻ ↔`
-// text glyphs resolved through font fallback at inconsistent weights and
-// sizes).
-global SamplerIcons {
-    out property <string> previous: "M 10 3 L 5 8 L 10 13";
-    out property <string> next: "M 6 3 L 11 8 L 6 13";
-    out property <string> search:
-        "M 10 6 A 4 4 0 1 1 2 6 A 4 4 0 1 1 10 6 Z M 9.2 9.2 L 13.5 13.5";
-    out property <string> reverse: "M 12 3 L 12 13 M 12 8 L 4.5 8 M 7.3 5 L 4.3 8 L 7.3 11";
-    out property <string> loop-off: "M 4 8 L 12 8";
-    out property <string> loop-forward: "M 8 3 A 5 5 0 1 1 3 8 M 3 8 L 3 4.5 M 3 8 L 6.3 9";
-    out property <string> loop-pingpong:
-        "M 3 8 L 13 8 M 3 8 L 6.2 5 M 3 8 L 6.2 11 M 13 8 L 9.8 5 M 13 8 L 9.8 11";
-}
-
-component WaveformMarker inherits Rectangle {
-    in property <string> marker-label;
-    in property <color> marker-color;
-    in property <float> value;
-    in property <length> editor-width;
-    in property <bool> label-at-bottom;
-    callback moved(float);
-
-    width: 1px;
-    background: transparent;
-    accessible-role: slider;
-    accessible-label: root.marker-label + " marker";
-    accessible-value: round(root.value * 1000) / 10 + "%";
-
-    Rectangle {
-        width: 1px;
-        height: parent.height;
-        background: root.marker-color;
-    }
-    Rectangle {
-        x: clamp(-6px, -root.x, root.editor-width - root.x - 13px);
-        y: root.label-at-bottom ? parent.height - 18px : 2px;
-        width: 13px;
-        height: 16px;
-        border-radius: 2px;
-        background: root.marker-color;
-        Text {
-            text: root.marker-label;
-            color: Theme.background;
-            font-size: 8px;
-            font-weight: 700;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-    }
-    marker-touch := TouchArea {
-        x: -7px;
-        width: 15px;
-        mouse-cursor: ew-resize;
-        pointer-event(e) => {
-            if (e.kind == PointerEventKind.down || (e.kind == PointerEventKind.move && self.pressed)) {
-                root.moved(clamp((root.x + self.x + self.mouse-x) / max(1px, root.editor-width), 0, 1));
-            }
-        }
-    }
-    Tooltip { text: @markdown("Drag the **\{root.marker-label}** marker"); }
-}
-
-// A compact oscillator strip shared by the three mono-synth oscillators.
-component OscillatorStrip inherits Rectangle {
-    in property <string> title;
-    in-out property <int> wave;
-    in-out property <float> semitones;
-    in-out property <float> cents;
-    in-out property <float> level;
-    in-out property <float> pulse-width;
-    callback wave-changed(int);
-    callback semitones-changed(float);
-    callback cents-changed(float);
-    callback level-changed(float);
-    callback pulse-width-changed(float);
-
-    min-width: 280px;
-    height: 142px;
-    background: Theme.surface-raised;
-    border-radius: 3px;
-    border-width: 1px;
-    border-color: Theme.border;
-    VerticalLayout {
-        padding: 5px;
-        spacing: 2px;
-        SectionLabel { text: root.title; }
-        SelectorBank {
-            options: ["Sin", "Tri", "Saw", "Pulse"];
-            selected-index <=> root.wave;
-            tooltip: "Oscillator waveform";
-            selected(i) => { root.wave-changed(i); }
-        }
-        HorizontalLayout {
-            spacing: 0px;
-            alignment: space-around;
-            ParameterKnob {
-                width: 52px; diameter: 40px;
-                label: "Semi"; tooltip: "Oscillator coarse tuning in semitones";
-                value <=> root.semitones; minimum: -48; maximum: 48; default-value: 0; step: 1;
-                value-text: (root.semitones > 0 ? "+" : "") + round(root.semitones) + " st";
-                changed(v) => { root.semitones-changed(v); }
-            }
-            ParameterKnob {
-                width: 52px; diameter: 40px;
-                label: "Cents"; tooltip: "Oscillator fine tuning in cents";
-                value <=> root.cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
-                value-text: (root.cents > 0 ? "+" : "") + round(root.cents) + " ct";
-                changed(v) => { root.cents-changed(v); }
-            }
-            ParameterKnob {
-                width: 52px; diameter: 40px;
-                label: "Level"; tooltip: "Oscillator mix level";
-                value <=> root.level; minimum: 0; maximum: 1; default-value: 0;
-                value-text: round(root.level * 100) + "%";
-                changed(v) => { root.level-changed(v); }
-            }
-            ParameterKnob {
-                width: 52px; diameter: 40px;
-                label: "Width"; tooltip: "Pulse width (used by Pulse waveform)";
-                value <=> root.pulse-width; minimum: 0.05; maximum: 0.95; default-value: 0.5;
-                enabled: root.wave == 3;
-                value-text: round(root.pulse-width * 100) + "%";
-                changed(v) => { root.pulse-width-changed(v); }
-            }
-        }
-    }
-}
-
-component DrumSourceEditor inherits Rectangle {
-    in-out property <int> mode;
-    in-out property <int> kick-character;
-    in-out property <int> snare-character;
-    in-out property <int> hat-character;
-    in-out property <float> decay;
-    in-out property <float> tune-semitones;
-    in-out property <float> drive;
-    in-out property <float> punch;
-    in-out property <int> choke-group;
-    in-out property <float> kick-start-hz;
-    in-out property <float> kick-end-hz;
-    in-out property <float> kick-sweep;
-    in-out property <float> kick-click;
-    in-out property <float> snare-tone-hz;
-    in-out property <float> snare-tone2-hz;
-    in-out property <float> snare-tone2-mix;
-    in-out property <float> snare-noise-mix;
-    in-out property <float> snare-noise-decay;
-    in-out property <float> snare-noise-color;
-    in-out property <float> hat-hp-hz;
-    in-out property <float> hat-metallic;
-    callback mode-changed(int);
-    callback kick-character-changed(int);
-    callback snare-character-changed(int);
-    callback hat-character-changed(int);
-    callback decay-changed(float);
-    callback tune-semitones-changed(float);
-    callback drive-changed(float);
-    callback punch-changed(float);
-    callback choke-group-changed(int);
-    callback kick-start-hz-changed(float);
-    callback kick-end-hz-changed(float);
-    callback kick-sweep-changed(float);
-    callback kick-click-changed(float);
-    callback snare-tone-hz-changed(float);
-    callback snare-tone2-hz-changed(float);
-    callback snare-tone2-mix-changed(float);
-    callback snare-noise-mix-changed(float);
-    callback snare-noise-decay-changed(float);
-    callback snare-noise-color-changed(float);
-    callback hat-hp-hz-changed(float);
-    callback hat-metallic-changed(float);
-
-    ScrollView {
-        vertical-stretch: 1;
-        horizontal-stretch: 1;
-        viewport-width: max(self.visible-width, 700px);
-        viewport-height: max(self.visible-height, 270px);
-        VerticalLayout {
-            width: max(root.width, 700px);
-            padding: 8px;
-            spacing: 8px;
-            Rectangle {
-                height: 26px;
-                mode-layout := HorizontalLayout {
-                    spacing: 8px;
-                    Text {
-                        text: "MODE";
-                        width: 48px;
-                        color: Theme.text-faint;
-                        font-size: 9px;
-                        vertical-alignment: center;
-                    }
-                    SegmentedControl {
-                        width: 180px;
-                        options: ["Kick", "Snare", "Hat"];
-                        selected-index <=> root.mode;
-                        selected(i) => { root.mode-changed(i); }
-                    }
-                    if root.mode == 0 : SegmentedControl {
-                        width: 260px;
-                        options: ["Sub", "Punch", "Deep", "Kit", "DNB"];
-                        selected-index <=> root.kick-character;
-                        selected(i) => { root.kick-character-changed(i); }
-                    }
-                    if root.mode == 1 : SegmentedControl {
-                        width: 260px;
-                        options: ["Pop", "Snap", "Power", "Clap", "Rim"];
-                        selected-index <=> root.snare-character;
-                        selected(i) => { root.snare-character-changed(i); }
-                    }
-                    if root.mode == 2 : SegmentedControl {
-                        width: 260px;
-                        options: ["Soft", "Tight", "Metal", "Sizzle", "Trash"];
-                        selected-index <=> root.hat-character;
-                        selected(i) => { root.hat-character-changed(i); }
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                }
-            }
-            InstrumentModule {
-                title: "SHARED";
-                height: 104px;
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: space-around;
-                    ParameterKnob {
-                        label: "Decay"; tooltip: "Amplitude decay in seconds";
-                        value <=> root.decay; minimum: 0.005; maximum: 2; default-value: 0.24; scale: ValueScale.logarithmic;
-                        value-text: round(root.decay * 1000) + " ms";
-                        changed(v) => { root.decay-changed(v); }
-                    }
-                    ParameterKnob {
-                        label: "Tune"; tooltip: "Keyboard tracking offset in semitones";
-                        value <=> root.tune-semitones; minimum: -48; maximum: 48; default-value: 0; step: 1;
-                        value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
-                        changed(v) => { root.tune-semitones-changed(v); }
-                    }
-                    ParameterKnob {
-                        label: "Drive"; tooltip: "Soft saturation amount";
-                        value <=> root.drive; minimum: 0; maximum: 1; default-value: 0; fill: Theme.warning;
-                        value-text: round(root.drive * 100) + "%";
-                        changed(v) => { root.drive-changed(v); }
-                    }
-                    ParameterKnob {
-                        label: "Punch"; tooltip: "Transient emphasis";
-                        value <=> root.punch; minimum: 0; maximum: 1; default-value: 0.35; fill: Theme.warning;
-                        value-text: round(root.punch * 100) + "%";
-                        changed(v) => { root.punch-changed(v); }
-                    }
-                    Rectangle {
-                        width: 92px;
-                        height: 80px;
-                        StepperField {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            label: "CHOKE";
-                            value <=> root.choke-group;
-                            minimum: 0;
-                            maximum: 16;
-                            step: 1;
-                            value-width: 18px;
-                            tooltip: "Matching non-zero groups choke each other. 0 is off.";
-                            changed(v) => { root.choke-group-changed(v); }
-                        }
-                    }
-                }
-            }
-            if root.mode == 0 : InstrumentModule {
-                title: "KICK";
-                height: 96px;
-                VerticalLayout {
-                    spacing: 6px;
-                    HorizontalLayout {
-                        spacing: 12px;
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "Start"; tooltip: "Kick sweep start frequency";
-                        value <=> root.kick-start-hz; minimum: 20; maximum: 1000; default-value: 160; scale: ValueScale.logarithmic;
-                        value-text: round(root.kick-start-hz) + " Hz"; changed(v) => { root.kick-start-hz-changed(v); }
-                    }
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "End"; tooltip: "Kick sweep end frequency";
-                        value <=> root.kick-end-hz; minimum: 20; maximum: 400; default-value: 48; scale: ValueScale.logarithmic;
-                        value-text: round(root.kick-end-hz) + " Hz"; changed(v) => { root.kick-end-hz-changed(v); }
-                    }
-                    }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "Sweep"; tooltip: "Kick pitch sweep time";
-                        value <=> root.kick-sweep; minimum: 0.005; maximum: 1; default-value: 0.045; scale: ValueScale.logarithmic;
-                        value-text: round(root.kick-sweep * 1000) + " ms"; changed(v) => { root.kick-sweep-changed(v); }
-                    }
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "Click"; tooltip: "Beater click level";
-                        value <=> root.kick-click; minimum: 0; maximum: 1; default-value: 0.5;
-                        value-text: round(root.kick-click * 100) + "%"; changed(v) => { root.kick-click-changed(v); }
-                    }
-                    }
-                }
-            }
-            if root.mode == 1 : InstrumentModule {
-                title: "SNARE";
-                height: 112px;
-                VerticalLayout {
-                    spacing: 5px;
-                    HorizontalLayout {
-                        spacing: 12px;
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "Tone"; tooltip: "Snare body frequency";
-                        value <=> root.snare-tone-hz; minimum: 40; maximum: 2000; default-value: 180; scale: ValueScale.logarithmic;
-                        value-text: round(root.snare-tone-hz) + " Hz"; changed(v) => { root.snare-tone-hz-changed(v); }
-                    }
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "Tone 2"; tooltip: "Secondary snare body frequency";
-                        value <=> root.snare-tone2-hz; minimum: 80; maximum: 4000; default-value: 330; scale: ValueScale.logarithmic;
-                        value-text: round(root.snare-tone2-hz) + " Hz"; changed(v) => { root.snare-tone2-hz-changed(v); }
-                    }
-                    }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "T2 Mix"; tooltip: "Secondary tone level";
-                        value <=> root.snare-tone2-mix; minimum: 0; maximum: 1; default-value: 0.2;
-                        value-text: round(root.snare-tone2-mix * 100) + "%"; changed(v) => { root.snare-tone2-mix-changed(v); }
-                    }
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "Noise"; tooltip: "Noise versus body mix";
-                        value <=> root.snare-noise-mix; minimum: 0; maximum: 1; default-value: 0.6;
-                        value-text: round(root.snare-noise-mix * 100) + "%"; changed(v) => { root.snare-noise-mix-changed(v); }
-                    }
-                    }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "N Decay"; tooltip: "Noise burst decay";
-                        value <=> root.snare-noise-decay; minimum: 0.005; maximum: 2; default-value: 0.11; scale: ValueScale.logarithmic;
-                        value-text: round(root.snare-noise-decay * 1000) + " ms"; changed(v) => { root.snare-noise-decay-changed(v); }
-                    }
-                        ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "Color"; tooltip: "Noise brightness";
-                        value <=> root.snare-noise-color; minimum: 0; maximum: 1; default-value: 0.65;
-                        value-text: round(root.snare-noise-color * 100) + "%"; changed(v) => { root.snare-noise-color-changed(v); }
-                    }
-                    }
-                }
-            }
-            if root.mode == 2 : InstrumentModule {
-                title: "HAT";
-                height: 64px;
-                HorizontalLayout {
-                    spacing: 12px;
-                    ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "HP"; tooltip: "Hat high-pass cutoff";
-                        value <=> root.hat-hp-hz; minimum: 500; maximum: 16000; default-value: 7500; scale: ValueScale.logarithmic;
-                        value-text: round(root.hat-hp-hz) + " Hz"; changed(v) => { root.hat-hp-hz-changed(v); }
-                    }
-                    ParameterFader {
-                        width: (root.width - 44px) / 2;
-                        label: "Metallic"; tooltip: "Metallic square oscillator blend";
-                        value <=> root.hat-metallic; minimum: 0; maximum: 1; default-value: 0.5;
-                        value-text: round(root.hat-metallic * 100) + "%"; changed(v) => { root.hat-metallic-changed(v); }
-                    }
-                }
-            }
-            Rectangle { vertical-stretch: 1; }
-        }
-    }
-}
-
-component MonoSourceEditor inherits Rectangle {
-    in-out property <int> osc1-wave; in-out property <float> osc1-semitones; in-out property <float> osc1-cents; in-out property <float> osc1-level; in-out property <float> osc1-pulse-width;
-    in-out property <int> osc2-wave; in-out property <float> osc2-semitones; in-out property <float> osc2-cents; in-out property <float> osc2-level; in-out property <float> osc2-pulse-width;
-    in-out property <int> osc3-wave; in-out property <float> osc3-semitones; in-out property <float> osc3-cents; in-out property <float> osc3-level; in-out property <float> osc3-pulse-width;
-    in-out property <float> glide; in-out property <float> attack; in-out property <float> decay; in-out property <float> sustain; in-out property <float> release;
-    in-out property <float> filter-cutoff; in-out property <float> filter-resonance; in-out property <float> filter-env; in-out property <float> drive;
-    in-out property <int> lfo-wave; in-out property <float> lfo-rate; in-out property <bool> lfo-retrigger;
-    in-out property <float> lfo-pitch; in-out property <float> lfo-filter; in-out property <float> lfo-pulse-width; in-out property <float> lfo-amp;
-    callback osc1-wave-changed(int); callback osc1-semitones-changed(float); callback osc1-cents-changed(float); callback osc1-level-changed(float); callback osc1-pulse-width-changed(float);
-    callback osc2-wave-changed(int); callback osc2-semitones-changed(float); callback osc2-cents-changed(float); callback osc2-level-changed(float); callback osc2-pulse-width-changed(float);
-    callback osc3-wave-changed(int); callback osc3-semitones-changed(float); callback osc3-cents-changed(float); callback osc3-level-changed(float); callback osc3-pulse-width-changed(float);
-    callback glide-changed(float); callback attack-changed(float); callback decay-changed(float); callback sustain-changed(float); callback release-changed(float);
-    callback filter-cutoff-changed(float); callback filter-resonance-changed(float); callback filter-env-changed(float); callback drive-changed(float);
-    callback lfo-wave-changed(int); callback lfo-rate-changed(float); callback lfo-retrigger-changed(bool);
-    callback lfo-pitch-changed(float); callback lfo-filter-changed(float); callback lfo-pulse-width-changed(float); callback lfo-amp-changed(float);
-
-    ScrollView {
-        vertical-stretch: 1; horizontal-stretch: 1;
-        viewport-width: max(self.visible-width, 900px);
-        viewport-height: max(self.visible-height, 344px);
-        VerticalLayout {
-            width: max(root.width, 900px); padding: 8px; spacing: 8px;
-            HorizontalLayout {
-                spacing: 8px;
-                OscillatorStrip {
-                    horizontal-stretch: 1;
-                    title: "OSC 1"; wave <=> root.osc1-wave; semitones <=> root.osc1-semitones; cents <=> root.osc1-cents; level <=> root.osc1-level; pulse-width <=> root.osc1-pulse-width;
-                    wave-changed(v) => { root.osc1-wave-changed(v); } semitones-changed(v) => { root.osc1-semitones-changed(v); } cents-changed(v) => { root.osc1-cents-changed(v); } level-changed(v) => { root.osc1-level-changed(v); } pulse-width-changed(v) => { root.osc1-pulse-width-changed(v); }
-                }
-                OscillatorStrip {
-                    horizontal-stretch: 1;
-                    title: "OSC 2"; wave <=> root.osc2-wave; semitones <=> root.osc2-semitones; cents <=> root.osc2-cents; level <=> root.osc2-level; pulse-width <=> root.osc2-pulse-width;
-                    wave-changed(v) => { root.osc2-wave-changed(v); } semitones-changed(v) => { root.osc2-semitones-changed(v); } cents-changed(v) => { root.osc2-cents-changed(v); } level-changed(v) => { root.osc2-level-changed(v); } pulse-width-changed(v) => { root.osc2-pulse-width-changed(v); }
-                }
-                OscillatorStrip {
-                    horizontal-stretch: 1;
-                    title: "OSC 3"; wave <=> root.osc3-wave; semitones <=> root.osc3-semitones; cents <=> root.osc3-cents; level <=> root.osc3-level; pulse-width <=> root.osc3-pulse-width;
-                    wave-changed(v) => { root.osc3-wave-changed(v); } semitones-changed(v) => { root.osc3-semitones-changed(v); } cents-changed(v) => { root.osc3-cents-changed(v); } level-changed(v) => { root.osc3-level-changed(v); } pulse-width-changed(v) => { root.osc3-pulse-width-changed(v); }
-                }
-            }
-            HorizontalLayout {
-                spacing: 8px;
-                Rectangle {
-                    min-width: 340px; horizontal-stretch: 2; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
-                    VerticalLayout {
-                        padding: 6px; spacing: 3px;
-                        SectionLabel { text: "AMP ENVELOPE"; }
-                        EnvelopeEditor {
-                            height: 52px; attack: root.attack / 2; decay: root.decay / 2; sustain <=> root.sustain; release: root.release / 2;
-                            attack-text: round(root.attack * 1000) + " ms"; decay-text: round(root.decay * 1000) + " ms"; sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 1000) + " ms";
-                            attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
-                            decay-changed(v) => { root.decay = v * 2; root.decay-changed(root.decay); }
-                            sustain-changed(v) => { root.sustain-changed(v); }
-                            release-changed(v) => { root.release = v * 2; root.release-changed(root.release); }
-                        }
-                        HorizontalLayout {
-                            spacing: 0px;
-                            ParameterKnob { label: "Glide"; tooltip: "Portamento time"; value <=> root.glide; minimum: 0; maximum: 2; default-value: 0; value-text: round(root.glide * 1000) + " ms"; changed(v) => { root.glide-changed(v); } }
-                            ParameterKnob { label: "Attack"; tooltip: "Amplitude attack time"; value <=> root.attack; minimum: 0; maximum: 2; default-value: 0.005; value-text: round(root.attack * 1000) + " ms"; changed(v) => { root.attack-changed(v); } }
-                            ParameterKnob { label: "Decay"; tooltip: "Amplitude decay time"; value <=> root.decay; minimum: 0; maximum: 2; default-value: 0.2; value-text: round(root.decay * 1000) + " ms"; changed(v) => { root.decay-changed(v); } }
-                            ParameterKnob { label: "Sustain"; tooltip: "Amplitude sustain level"; value <=> root.sustain; minimum: 0; maximum: 1; default-value: 0.7; value-text: round(root.sustain * 100) + "%"; changed(v) => { root.sustain-changed(v); } }
-                            ParameterKnob { label: "Release"; tooltip: "Amplitude release time"; value <=> root.release; minimum: 0; maximum: 2; default-value: 0.15; value-text: round(root.release * 1000) + " ms"; changed(v) => { root.release-changed(v); } }
-                        }
-                    }
-                }
-                Rectangle {
-                    min-width: 220px; horizontal-stretch: 1; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
-                    VerticalLayout {
-                        padding: 6px; spacing: 3px;
-                        SectionLabel { text: "FILTER AND DRIVE"; }
-                        HorizontalLayout {
-                            spacing: 0px;
-                            ParameterKnob { label: "Cutoff"; tooltip: "Low-pass filter cutoff"; value <=> root.filter-cutoff; minimum: 0; maximum: 1; default-value: 1; value-text: root.filter-cutoff >= 0.999 ? "Open" : round(20 * pow(20000 / 20, root.filter-cutoff)) + " Hz"; changed(v) => { root.filter-cutoff-changed(v); } }
-                            ParameterKnob { label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; minimum: 0; maximum: 1; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; changed(v) => { root.filter-resonance-changed(v); } }
-                            ParameterKnob { label: "Env"; tooltip: "Bipolar filter envelope depth"; value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true; fill: Theme.warning; value-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%"; changed(v) => { root.filter-env-changed(v); } }
-                            ParameterKnob { label: "Drive"; tooltip: "Soft saturation amount"; value <=> root.drive; minimum: 0; maximum: 1; default-value: 0; fill: Theme.warning; value-text: round(root.drive * 100) + "%"; changed(v) => { root.drive-changed(v); } }
-                        }
-                    }
-                }
-                Rectangle {
-                    min-width: 292px; horizontal-stretch: 2; height: 166px; background: Theme.surface; border-radius: 3px; border-width: 1px; border-color: Theme.border;
-                    VerticalLayout {
-                        padding: 6px; spacing: 3px;
-                        SectionLabel { text: "LFO"; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            SelectorBank {
-                                options: ["Sin", "Tri", "Saw", "Sq", "S&H"];
-                                selected-index <=> root.lfo-wave;
-                                tooltip: "LFO waveform";
-                                selected(i) => { root.lfo-wave-changed(i); }
-                            }
-                            ToggleButton {
-                                text: "Retrig"; tooltip: "Restart the LFO on every note instead of letting it free run";
-                                width: 60px; height: 24px;
-                                checked <=> root.lfo-retrigger;
-                                toggled(on) => { root.lfo-retrigger-changed(on); }
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                        }
-                        HorizontalLayout {
-                            spacing: 0px;
-                            ParameterKnob {
-                                label: "Rate"; tooltip: "LFO speed";
-                                value <=> root.lfo-rate; minimum: 0.01; maximum: 20; default-value: 5; scale: ValueScale.logarithmic;
-                                value-text: root.lfo-rate < 1 ? round(root.lfo-rate * 100) / 100 + " Hz" : round(root.lfo-rate * 10) / 10 + " Hz";
-                                changed(v) => { root.lfo-rate-changed(v); }
-                            }
-                            ParameterKnob {
-                                label: "Pitch"; tooltip: "LFO depth into pitch, in semitones (vibrato)";
-                                value <=> root.lfo-pitch; minimum: -24; maximum: 24; default-value: 0; bipolar: true;
-                                value-text: (root.lfo-pitch > 0 ? "+" : "") + round(root.lfo-pitch * 10) / 10 + " st";
-                                changed(v) => { root.lfo-pitch-changed(v); }
-                            }
-                            ParameterKnob {
-                                label: "Cutoff"; tooltip: "LFO depth into filter cutoff, in octaves";
-                                value <=> root.lfo-filter; minimum: -4; maximum: 4; default-value: 0; bipolar: true;
-                                value-text: (root.lfo-filter > 0 ? "+" : "") + round(root.lfo-filter * 10) / 10 + " oct";
-                                changed(v) => { root.lfo-filter-changed(v); }
-                            }
-                            ParameterKnob {
-                                label: "Width"; tooltip: "LFO depth into pulse width";
-                                value <=> root.lfo-pulse-width; minimum: -0.45; maximum: 0.45; default-value: 0; bipolar: true;
-                                value-text: (root.lfo-pulse-width > 0 ? "+" : "") + round(root.lfo-pulse-width * 100) + "%";
-                                changed(v) => { root.lfo-pulse-width-changed(v); }
-                            }
-                            ParameterKnob {
-                                label: "Trem"; tooltip: "LFO depth into amplitude (tremolo)";
-                                value <=> root.lfo-amp; minimum: 0; maximum: 1; default-value: 0; fill: Theme.warning;
-                                value-text: round(root.lfo-amp * 100) + "%";
-                                changed(v) => { root.lfo-amp-changed(v); }
-                            }
-                        }
-                    }
-                }
-            }
-            Rectangle { vertical-stretch: 1; }
-        }
-    }
-}
 
 export component MainWindow inherits Window {
     title: root.document-title;
@@ -736,6 +218,8 @@ export component MainWindow inherits Window {
     // ---- lower editor ----
     in-out property <int> editor-page;      // 0=Source, 1=Notes, 2=Playlist
     in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono
+    in-out property <int> sampler-device-page;
+    in-out property <int> mono-device-page;
     callback channel-source-changed(int);
     in-out property <int> selected-note-step;
     in-out property <int> selected-note;
@@ -1883,28 +1367,31 @@ export component MainWindow inherits Window {
                         spacing: 0px;
 
                         Rectangle {
-                            height: 36px;
+                            height: 34px;
                             background: Theme.surface-raised;
                             HorizontalLayout {
                                 padding-left: 8px;
                                 padding-right: 8px;
-                                padding-top: 5px;
-                                padding-bottom: 5px;
-                                spacing: 8px;
+                                padding-top: 4px;
+                                padding-bottom: 4px;
+                                spacing: 6px;
                                 Text {
-                                    text: "SOURCE";
-                                    width: 48px;
+                                    text: "DEVICE CHAIN";
                                     color: Theme.text-faint;
                                     font-size: 9px;
                                     vertical-alignment: center;
                                 }
-                                SegmentedControl {
-                                    width: 252px;
+                                SelectorBank {
                                     options: ["Sampler", "Drum", "Mono"];
                                     selected-index <=> root.source-kind;
-                                    selected(i) => { root.channel-source-changed(i); }
+                                    segment-width: 62px;
+                                    tooltip: "Source device";
+                                    selected(i) => {
+                                        root.source-kind = i;
+                                        root.channel-source-changed(i);
+                                    }
                                 }
-                                Rectangle { width: 8px; }
+                                Rectangle { width: 6px; }
                                 MenuField {
                                     label: "PRESET";
                                     options: root.generator-preset-options;
@@ -1912,488 +1399,185 @@ export component MainWindow inherits Window {
                                     display-text: "Browse...";
                                     field-width: 90px;
                                     menu-width: 220px;
-                                    tooltip: "Load a saved preset for this generator";
+                                    tooltip: "Load a preset for this source device";
                                     selected(i) => { root.generator-preset-selected(i); }
                                 }
                                 IconButton {
                                     text: "💾";
-                                    tooltip: "Save the current sound as a preset";
+                                    tooltip: "Save the current source as a preset";
                                     size: 24px;
                                     clicked => { root.save-generator-preset-requested(); }
                                 }
+                                Rectangle { horizontal-stretch: 1; }
                             }
                         }
 
-                        if root.source-kind == 0 : VerticalLayout {
+                        device-chain-scroll := ScrollView {
                             vertical-stretch: 1;
-                            spacing: 0px;
-                        Rectangle {
-                            height: 34px;
-                            background: Theme.surface-raised;
-                            HorizontalLayout {
-                                padding-left: 6px;
-                                padding-right: 6px;
-                                padding-top: 4px;
-                                padding-bottom: 4px;
-                                spacing: 3px;
-                                FlatButton {
-                                    icon: SamplerIcons.previous;
-                                    tooltip: "Previous WAV in this folder";
-                                    enabled: root.can-previous-sample;
-                                    min-width: 28px; max-width: 28px;
-                                    clicked => { root.previous-sample-clicked(); }
-                                }
-                                FlatButton {
-                                    icon: SamplerIcons.search;
-                                    tooltip: "Choose a WAV file";
-                                    min-width: 28px; max-width: 28px;
-                                    clicked => { root.load-sample-clicked(); }
-                                }
-                                FlatButton {
-                                    icon: SamplerIcons.next;
-                                    tooltip: "Next WAV in this folder";
-                                    enabled: root.can-next-sample;
-                                    min-width: 28px; max-width: 28px;
-                                    clicked => { root.next-sample-clicked(); }
-                                }
-                                Rectangle { width: 5px; }
-                                VerticalLayout {
-                                    min-width: 180px;
-                                    horizontal-stretch: 1;
+                            viewport-width: max(self.visible-width, 758px);
+                            viewport-height: max(self.visible-height, 284px);
+
+                            Rectangle {
+                                width: max(device-chain-scroll.visible-width, 758px);
+                                height: 284px;
+                                background: Theme.panel;
+
+                                HorizontalLayout {
+                                    padding: 8px;
                                     spacing: 0px;
-                                    Text {
-                                        text: root.sample-name;
-                                        color: Theme.text;
-                                        font-size: 11px;
-                                        overflow: elide;
+                                    alignment: start;
+
+                                    source-device := DeviceFrame {
+                                        width: DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap;
+                                        height: DeviceRackMetrics.face-height;
+
+                                        if root.source-kind == 0 : SamplerDeviceFace {
+                                            x: 0px;
+                                            y: DeviceRackMetrics.header-height;
+                                            width: parent.width;
+                                            height: parent.height - DeviceRackMetrics.header-height;
+                                            page <=> root.sampler-device-page;
+                                            attack <=> root.attack;
+                                            decay <=> root.decay;
+                                            sustain <=> root.sustain;
+                                            release <=> root.release;
+                                            start-pos <=> root.start-pos;
+                                            end-pos <=> root.end-pos;
+                                            loop-start <=> root.loop-start;
+                                            loop-end <=> root.loop-end;
+                                            reverse-playback <=> root.reverse-playback;
+                                            root-note <=> root.root-note;
+                                            tune-semitones <=> root.tune-semitones;
+                                            tune-cents <=> root.tune-cents;
+                                            filter-cutoff <=> root.filter-cutoff;
+                                            filter-resonance <=> root.filter-resonance;
+                                            filter-env <=> root.filter-env;
+                                            drive <=> root.sampler-drive;
+                                            bit-reduction <=> root.bit-reduction;
+                                            rate-reduction <=> root.rate-reduction;
+                                            loop-mode <=> root.loop-mode;
+                                            voice-mode <=> root.voice-mode;
+                                            polyphony <=> root.sampler-polyphony;
+                                            retrigger-mode <=> root.retrigger-mode;
+                                            choke-group <=> root.choke-group;
+                                            sample-name <=> root.sample-name;
+                                            sample-description <=> root.sample-description;
+                                            waveform <=> root.waveform;
+                                            can-previous-sample <=> root.can-previous-sample;
+                                            can-next-sample <=> root.can-next-sample;
+                                            attack-changed(v) => { root.attack-changed(v); }
+                                            decay-changed(v) => { root.decay-changed(v); }
+                                            sustain-changed(v) => { root.sustain-changed(v); }
+                                            release-changed(v) => { root.release-changed(v); }
+                                            start-pos-changed(v) => { root.start-pos-changed(v); }
+                                            end-pos-changed(v) => { root.end-pos-changed(v); }
+                                            loop-start-changed(v) => { root.loop-start-changed(v); }
+                                            loop-end-changed(v) => { root.loop-end-changed(v); }
+                                            reverse-playback-changed(v) => { root.reverse-playback-changed(v); }
+                                            root-note-changed(v) => { root.root-note-changed(v); }
+                                            tune-semitones-changed(v) => { root.tune-semitones-changed(v); }
+                                            tune-cents-changed(v) => { root.tune-cents-changed(v); }
+                                            loop-mode-changed(v) => { root.loop-mode-changed(v); }
+                                            voice-mode-changed(v) => { root.voice-mode-changed(v); }
+                                            polyphony-changed(v) => { root.sampler-polyphony-changed(v); }
+                                            retrigger-mode-changed(v) => { root.retrigger-mode-changed(v); }
+                                            choke-group-changed(v) => { root.choke-group-changed(v); }
+                                            filter-cutoff-changed(v) => { root.filter-cutoff-changed(v); }
+                                            filter-resonance-changed(v) => { root.filter-resonance-changed(v); }
+                                            filter-env-changed(v) => { root.filter-env-changed(v); }
+                                            drive-changed(v) => { root.sampler-drive-changed(v); }
+                                            bit-reduction-changed(v) => { root.bit-reduction-changed(v); }
+                                            rate-reduction-changed(v) => { root.rate-reduction-changed(v); }
+                                            load-sample-clicked => { root.load-sample-clicked(); }
+                                            previous-sample-clicked => { root.previous-sample-clicked(); }
+                                            next-sample-clicked => { root.next-sample-clicked(); }
+                                        }
+
+                                        if root.source-kind == 1 : DrumDeviceFace {
+                                            x: 0px;
+                                            y: DeviceRackMetrics.header-height;
+                                            width: parent.width;
+                                            height: parent.height - DeviceRackMetrics.header-height;
+                                            mode <=> root.drum-mode;
+                                            kick-character <=> root.drum-kick-character;
+                                            snare-character <=> root.drum-snare-character;
+                                            hat-character <=> root.drum-hat-character;
+                                            decay <=> root.drum-decay;
+                                            tune-semitones <=> root.drum-tune-semitones;
+                                            drive <=> root.drum-drive;
+                                            punch <=> root.drum-punch;
+                                            choke-group <=> root.drum-choke-group;
+                                            kick-start-hz <=> root.drum-kick-start-hz;
+                                            kick-end-hz <=> root.drum-kick-end-hz;
+                                            kick-sweep <=> root.drum-kick-sweep;
+                                            kick-click <=> root.drum-kick-click;
+                                            snare-tone-hz <=> root.drum-snare-tone-hz;
+                                            snare-tone2-hz <=> root.drum-snare-tone2-hz;
+                                            snare-tone2-mix <=> root.drum-snare-tone2-mix;
+                                            snare-noise-mix <=> root.drum-snare-noise-mix;
+                                            snare-noise-decay <=> root.drum-snare-noise-decay;
+                                            snare-noise-color <=> root.drum-snare-noise-color;
+                                            hat-hp-hz <=> root.drum-hat-hp-hz;
+                                            hat-metallic <=> root.drum-hat-metallic;
+                                            mode-changed(v) => { root.drum-mode-changed(v); }
+                                            kick-character-changed(v) => { root.drum-kick-character-changed(v); }
+                                            snare-character-changed(v) => { root.drum-snare-character-changed(v); }
+                                            hat-character-changed(v) => { root.drum-hat-character-changed(v); }
+                                            decay-changed(v) => { root.drum-decay-changed(v); }
+                                            tune-semitones-changed(v) => { root.drum-tune-semitones-changed(v); }
+                                            drive-changed(v) => { root.drum-drive-changed(v); }
+                                            punch-changed(v) => { root.drum-punch-changed(v); }
+                                            choke-group-changed(v) => { root.drum-choke-group-changed(v); }
+                                            kick-start-hz-changed(v) => { root.drum-kick-start-hz-changed(v); }
+                                            kick-end-hz-changed(v) => { root.drum-kick-end-hz-changed(v); }
+                                            kick-sweep-changed(v) => { root.drum-kick-sweep-changed(v); }
+                                            kick-click-changed(v) => { root.drum-kick-click-changed(v); }
+                                            snare-tone-hz-changed(v) => { root.drum-snare-tone-hz-changed(v); }
+                                            snare-tone2-hz-changed(v) => { root.drum-snare-tone2-hz-changed(v); }
+                                            snare-tone2-mix-changed(v) => { root.drum-snare-tone2-mix-changed(v); }
+                                            snare-noise-mix-changed(v) => { root.drum-snare-noise-mix-changed(v); }
+                                            snare-noise-decay-changed(v) => { root.drum-snare-noise-decay-changed(v); }
+                                            snare-noise-color-changed(v) => { root.drum-snare-noise-color-changed(v); }
+                                            hat-hp-hz-changed(v) => { root.drum-hat-hp-hz-changed(v); }
+                                            hat-metallic-changed(v) => { root.drum-hat-metallic-changed(v); }
+                                        }
+
+                                        if root.source-kind == 2 : MonoDeviceFace {
+                                            x: 0px;
+                                            y: DeviceRackMetrics.header-height;
+                                            width: parent.width;
+                                            height: parent.height - DeviceRackMetrics.header-height;
+                                            page <=> root.mono-device-page;
+                                            osc1-wave <=> root.mono-osc1-wave; osc1-semitones <=> root.mono-osc1-semitones; osc1-cents <=> root.mono-osc1-cents; osc1-level <=> root.mono-osc1-level; osc1-pulse-width <=> root.mono-osc1-pulse-width;
+                                            osc2-wave <=> root.mono-osc2-wave; osc2-semitones <=> root.mono-osc2-semitones; osc2-cents <=> root.mono-osc2-cents; osc2-level <=> root.mono-osc2-level; osc2-pulse-width <=> root.mono-osc2-pulse-width;
+                                            osc3-wave <=> root.mono-osc3-wave; osc3-semitones <=> root.mono-osc3-semitones; osc3-cents <=> root.mono-osc3-cents; osc3-level <=> root.mono-osc3-level; osc3-pulse-width <=> root.mono-osc3-pulse-width;
+                                            glide <=> root.mono-glide; attack <=> root.mono-attack; decay <=> root.mono-decay; sustain <=> root.mono-sustain; release <=> root.mono-release;
+                                            filter-cutoff <=> root.mono-filter-cutoff; filter-resonance <=> root.mono-filter-resonance; filter-env <=> root.mono-filter-env; drive <=> root.mono-drive;
+                                            lfo-wave <=> root.mono-lfo-wave; lfo-rate <=> root.mono-lfo-rate; lfo-retrigger <=> root.mono-lfo-retrigger;
+                                            lfo-pitch <=> root.mono-lfo-pitch; lfo-filter <=> root.mono-lfo-filter; lfo-pulse-width <=> root.mono-lfo-pulse-width; lfo-amp <=> root.mono-lfo-amp;
+                                            osc1-wave-changed(v) => { root.mono-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.mono-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.mono-osc1-cents-changed(v); } osc1-level-changed(v) => { root.mono-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.mono-osc1-pulse-width-changed(v); }
+                                            osc2-wave-changed(v) => { root.mono-osc2-wave-changed(v); } osc2-semitones-changed(v) => { root.mono-osc2-semitones-changed(v); } osc2-cents-changed(v) => { root.mono-osc2-cents-changed(v); } osc2-level-changed(v) => { root.mono-osc2-level-changed(v); } osc2-pulse-width-changed(v) => { root.mono-osc2-pulse-width-changed(v); }
+                                            osc3-wave-changed(v) => { root.mono-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.mono-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.mono-osc3-cents-changed(v); } osc3-level-changed(v) => { root.mono-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.mono-osc3-pulse-width-changed(v); }
+                                            glide-changed(v) => { root.mono-glide-changed(v); } attack-changed(v) => { root.mono-attack-changed(v); } decay-changed(v) => { root.mono-decay-changed(v); } sustain-changed(v) => { root.mono-sustain-changed(v); } release-changed(v) => { root.mono-release-changed(v); }
+                                            filter-cutoff-changed(v) => { root.mono-filter-cutoff-changed(v); } filter-resonance-changed(v) => { root.mono-filter-resonance-changed(v); } filter-env-changed(v) => { root.mono-filter-env-changed(v); } drive-changed(v) => { root.mono-drive-changed(v); }
+                                            lfo-wave-changed(v) => { root.mono-lfo-wave-changed(v); } lfo-rate-changed(v) => { root.mono-lfo-rate-changed(v); } lfo-retrigger-changed(v) => { root.mono-lfo-retrigger-changed(v); }
+                                            lfo-pitch-changed(v) => { root.mono-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.mono-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.mono-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.mono-lfo-amp-changed(v); }
+                                        }
+
+                                        DeviceHeader {
+                                            x: 0px; y: 0px; width: parent.width;
+                                            name: root.source-kind == 0 ? "Sampler"
+                                                : root.source-kind == 1 ? "Drum Synth" : "Mono Synth";
+                                            kind: "SOURCE / 3U";
+                                            device-color: Theme.accent;
+                                        }
                                     }
-                                    Text {
-                                        text: root.sample-description;
-                                        color: Theme.text-faint;
-                                        font-size: 8px;
-                                        overflow: elide;
-                                    }
-                                }
-                                Text { text: "ROOT"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
-                                SpinBox {
-                                    value <=> root.root-note;
-                                    minimum: 0; maximum: 127; step-size: 1;
-                                    width: 62px; height: 24px;
-                                    edited(value) => { root.root-note-changed(value); }
-                                    Tooltip { text: @markdown("MIDI root note for original sample pitch"); }
-                                }
-                                FlatButton {
-                                    icon: SamplerIcons.reverse;
-                                    tooltip: "Reverse playback";
-                                    active: root.reverse-playback;
-                                    min-width: 28px; max-width: 28px;
-                                    clicked => {
-                                        root.reverse-playback = !root.reverse-playback;
-                                        root.reverse-playback-changed(root.reverse-playback);
-                                    }
-                                }
-                                Rectangle { width: 6px; }
-                                Text { text: "LOOP"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
-                                FlatButton {
-                                    icon: SamplerIcons.loop-off; tooltip: "Loop off"; active: root.loop-mode == 0;
-                                    min-width: 28px; max-width: 28px;
-                                    clicked => { root.loop-mode = 0; root.loop-mode-changed(0); }
-                                }
-                                FlatButton {
-                                    icon: SamplerIcons.loop-forward; tooltip: "Forward loop"; active: root.loop-mode == 1;
-                                    min-width: 28px; max-width: 28px;
-                                    clicked => { root.loop-mode = 1; root.loop-mode-changed(1); }
-                                }
-                                FlatButton {
-                                    icon: SamplerIcons.loop-pingpong; tooltip: "Ping-pong loop"; active: root.loop-mode == 2;
-                                    min-width: 28px; max-width: 28px;
-                                    clicked => { root.loop-mode = 2; root.loop-mode-changed(2); }
+
+                                    DeviceJoin { }
+                                    DeviceAddSlot { enabled: false; }
+                                    Rectangle { horizontal-stretch: 1; }
                                 }
                             }
-                        }
-
-                        waveform-view := Rectangle {
-                            vertical-stretch: 1;
-                            min-height: 130px;
-                            background: Theme.surface;
-                            clip: true;
-
-                            // Shade audio outside the selected playback region.
-                            Rectangle {
-                                width: clamp(root.start-pos, 0, 1) * parent.width;
-                                height: parent.height;
-                                background: Theme.background;
-                                opacity: 0.68;
-                            }
-                            Rectangle {
-                                x: clamp(root.end-pos, 0, 1) * parent.width;
-                                width: parent.width - self.x;
-                                height: parent.height;
-                                background: Theme.background;
-                                opacity: 0.68;
-                            }
-                            if root.loop-mode != 0 : Rectangle {
-                                x: clamp(root.loop-start, root.start-pos, root.end-pos) * parent.width;
-                                width: max(1px, (clamp(root.loop-end, root.start-pos, root.end-pos)
-                                    - clamp(root.loop-start, root.start-pos, root.end-pos)) * parent.width);
-                                height: parent.height;
-                                background: Theme.accent-active;
-                                opacity: 0.32;
-                            }
-
-                            for tick in 9 : Rectangle {
-                                x: tick * parent.width / 8;
-                                width: 1px;
-                                height: parent.height;
-                                background: Theme.border;
-                                opacity: mod(tick, 2) == 0 ? 0.8 : 0.35;
-                            }
-                            for tick in 9 : Text {
-                                visible: mod(tick, 2) == 0;
-                                x: clamp(tick * parent.width / 8 - 22px, 3px, parent.width - 47px);
-                                y: 3px;
-                                width: 44px;
-                                text: round(root.sample-duration * tick / 8 * 1000) / 1000 + "s";
-                                color: Theme.text-faint;
-                                font-size: 8px;
-                                horizontal-alignment: center;
-                            }
-                            Rectangle {
-                                y: parent.height / 2;
-                                width: parent.width;
-                                height: 1px;
-                                background: Theme.border;
-                            }
-                            for amplitude[index] in root.waveform : Rectangle {
-                                x: index * parent.width / max(1, root.waveform.length);
-                                y: (parent.height - self.height) / 2;
-                                width: max(1px, parent.width / max(1, root.waveform.length));
-                                height: max(1px, amplitude * (parent.height - 22px));
-                                background: Theme.text-muted;
-                            }
-
-                            WaveformMarker {
-                                x: clamp(root.start-pos, 0, 1) * (parent.width - 1px);
-                                height: parent.height; editor-width: parent.width;
-                                marker-label: "S"; marker-color: Theme.accent;
-                                moved(v) => {
-                                    root.start-pos = min(v, root.end-pos - 0.001);
-                                    root.start-pos-changed(root.start-pos);
-                                    if (root.loop-start < root.start-pos) {
-                                        root.loop-start = root.start-pos;
-                                        root.loop-start-changed(root.loop-start);
-                                    }
-                                    if (root.loop-end < root.loop-start + 0.001) {
-                                        root.loop-end = min(root.end-pos, root.loop-start + 0.001);
-                                        root.loop-end-changed(root.loop-end);
-                                    }
-                                }
-                            }
-                            WaveformMarker {
-                                x: clamp(root.end-pos, 0, 1) * (parent.width - 1px);
-                                height: parent.height; editor-width: parent.width;
-                                marker-label: "E"; marker-color: Theme.accent; label-at-bottom: true;
-                                moved(v) => {
-                                    root.end-pos = max(v, root.start-pos + 0.001);
-                                    root.end-pos-changed(root.end-pos);
-                                    if (root.loop-end > root.end-pos) {
-                                        root.loop-end = root.end-pos;
-                                        root.loop-end-changed(root.loop-end);
-                                    }
-                                    if (root.loop-start > root.loop-end - 0.001) {
-                                        root.loop-start = max(root.start-pos, root.loop-end - 0.001);
-                                        root.loop-start-changed(root.loop-start);
-                                    }
-                                }
-                            }
-                            WaveformMarker {
-                                x: clamp(root.loop-start, 0, 1) * (parent.width - 1px);
-                                height: parent.height; editor-width: parent.width;
-                                marker-label: "L"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning;
-                                label-at-bottom: true;
-                                moved(v) => {
-                                    root.loop-start = clamp(v, root.start-pos, root.loop-end - 0.001);
-                                    root.loop-start-changed(root.loop-start);
-                                }
-                            }
-                            WaveformMarker {
-                                x: clamp(root.loop-end, 0, 1) * (parent.width - 1px);
-                                height: parent.height; editor-width: parent.width;
-                                marker-label: "R"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning;
-                                moved(v) => {
-                                    root.loop-end = clamp(v, root.loop-start + 0.001, root.end-pos);
-                                    root.loop-end-changed(root.loop-end);
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border;
-                        }
-
-                        Rectangle {
-                            height: 148px;
-                            background: Theme.panel;
-                            HorizontalLayout {
-                                padding: 6px;
-                                spacing: 4px;
-                                alignment: start;
-
-                                InstrumentModule {
-                                    title: "TUNE";
-                                    width: 92px;
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        alignment: space-around;
-                                        ParameterFader {
-                                            orientation: AudioOrientation.vertical;
-                                            label: "Coarse"; tooltip: "Coarse tuning in semitones";
-                                            value <=> root.tune-semitones;
-                                            minimum: -24; maximum: 24; default-value: 0; step: 1;
-                                            value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
-                                            changed(v) => { root.tune-semitones-changed(v); }
-                                        }
-                                        ParameterFader {
-                                            orientation: AudioOrientation.vertical;
-                                            label: "Fine"; tooltip: "Fine tuning in cents";
-                                            value <=> root.tune-cents;
-                                            minimum: -100; maximum: 100; default-value: 0; step: 1;
-                                            value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
-                                            changed(v) => { root.tune-cents-changed(v); }
-                                        }
-                                    }
-                                }
-
-                                InstrumentModule {
-                                    title: "VOICE";
-                                    width: 260px;
-                                    VerticalLayout {
-                                        spacing: 8px;
-                                    HorizontalLayout {
-                                            spacing: 6px;
-                                            SelectorBank {
-                                                options: ["One Shot", "Gate"];
-                                                segment-width: 62px;
-                                                selected-index <=> root.voice-mode;
-                                                tooltip: "Playback mode";
-                                                selected(i) => { root.voice-mode-changed(i); }
-                                        }
-                                            Rectangle { horizontal-stretch: 1; }
-                                            StepperField {
-                                                label: "VOICES";
-                                                value <=> root.sampler-polyphony;
-                                                minimum: 1; maximum: 16; step: 1;
-                                                value-width: 18px;
-                                                tooltip: "Maximum simultaneous sample voices";
-                                                changed(v) => { root.sampler-polyphony-changed(v); }
-                                            }
-                                        }
-                                    HorizontalLayout {
-                                            spacing: 6px;
-                                            SelectorBank {
-                                                options: ["Restart", "Layer"];
-                                                segment-width: 62px;
-                                                selected-index <=> root.retrigger-mode;
-                                                tooltip: "Retrigger behavior";
-                                                selected(i) => { root.retrigger-mode-changed(i); }
-                                        }
-                                            Rectangle { horizontal-stretch: 1; }
-                                            StepperField {
-                                                label: "CHOKE";
-                                                value <=> root.choke-group;
-                                                minimum: 0; maximum: 16; step: 1;
-                                                value-width: 18px;
-                                                tooltip: "Matching non-zero groups choke each other. 0 is off.";
-                                                changed(v) => { root.choke-group-changed(v); }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                InstrumentModule {
-                                    title: "FILTER";
-                                    width: 164px;
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        alignment: space-around;
-                                        ParameterFader {
-                                            orientation: AudioOrientation.vertical;
-                                            label: "Cutoff"; tooltip: "Low-pass filter cutoff";
-                                            value <=> root.filter-cutoff; default-value: 1;
-                                            value-text: root.filter-cutoff >= 0.999 ? "Open"
-                                                : round(20 * pow(root.audio-sample-rate * 0.45 / 20,
-                                                    root.filter-cutoff)) + " Hz";
-                                            changed(v) => { root.filter-cutoff-changed(v); }
-                                        }
-                                        ParameterFader {
-                                            orientation: AudioOrientation.vertical;
-                                            label: "Reso"; tooltip: "Filter resonance";
-                                            value <=> root.filter-resonance; default-value: 0;
-                                            value-text: round(root.filter-resonance * 100) + "%";
-                                            changed(v) => { root.filter-resonance-changed(v); }
-                                        }
-                                        ParameterFader {
-                                            orientation: AudioOrientation.vertical;
-                                            label: "Env"; tooltip: "Bipolar amplitude-envelope modulation of cutoff";
-                                            value <=> root.filter-env; default-value: 0.5; bipolar: true; fill: Theme.warning;
-                                            value-text: (round((root.filter-env * 2 - 1) * 100) > 0 ? "+" : "")
-                                                + round((root.filter-env * 2 - 1) * 100) + "%";
-                                            changed(v) => { root.filter-env-changed(v); }
-                                        }
-                                        ParameterFader {
-                                            orientation: AudioOrientation.vertical;
-                                            label: "Drive"; tooltip: "Pre-filter soft saturation";
-                                            value <=> root.sampler-drive; default-value: 0; fill: Theme.warning;
-                                            value-text: round(root.sampler-drive * 100) + "%";
-                                            changed(v) => { root.sampler-drive-changed(v); }
-                                        }
-                                    }
-                                }
-
-                                InstrumentModule {
-                                    title: "AMP ENVELOPE";
-                                    min-width: 270px;
-                                    horizontal-stretch: 1;
-                                    EnvelopeEditor {
-                                        height: 52px;
-                                        attack <=> root.attack;
-                                        decay <=> root.decay;
-                                        sustain <=> root.sustain;
-                                        release <=> root.release;
-                                        attack-text: round(root.attack * 5000) + " ms";
-                                        decay-text: round(root.decay * 5000) + " ms";
-                                        sustain-text: round(root.sustain * 100) + "%";
-                                        release-text: round(root.release * 5000) + " ms";
-                                        attack-changed(v) => { root.attack-changed(v); }
-                                        decay-changed(v) => { root.decay-changed(v); }
-                                        sustain-changed(v) => { root.sustain-changed(v); }
-                                        release-changed(v) => { root.release-changed(v); }
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 12px;
-                                        ParameterFader {
-                                            horizontal-stretch: 1;
-                                            label: "Attack"; tooltip: "Amplitude attack";
-                                            value <=> root.attack; default-value: 0;
-                                            value-text: round(root.attack * 5000) + " ms";
-                                            changed(v) => { root.attack-changed(v); }
-                                        }
-                                        ParameterFader {
-                                            horizontal-stretch: 1;
-                                            label: "Decay"; tooltip: "Amplitude decay";
-                                            value <=> root.decay; default-value: 0.05;
-                                            value-text: round(root.decay * 5000) + " ms";
-                                            changed(v) => { root.decay-changed(v); }
-                                        }
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 12px;
-                                        ParameterFader {
-                                            horizontal-stretch: 1;
-                                            label: "Sustain"; tooltip: "Amplitude sustain level";
-                                            value <=> root.sustain; default-value: 1;
-                                            value-text: round(root.sustain * 100) + "%";
-                                            changed(v) => { root.sustain-changed(v); }
-                                        }
-                                        ParameterFader {
-                                            horizontal-stretch: 1;
-                                            label: "Release"; tooltip: "Amplitude release";
-                                            value <=> root.release; default-value: 0.01;
-                                            value-text: round(root.release * 5000) + " ms";
-                                            changed(v) => { root.release-changed(v); }
-                                        }
-                                    }
-                                }
-
-                                InstrumentModule {
-                                    title: "LO-FI";
-                                    width: 92px;
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        alignment: space-around;
-                                        ParameterFader {
-                                            orientation: AudioOrientation.vertical;
-                                            label: "Bits"; tooltip: "Bit-depth reduction";
-                                            value <=> root.bit-reduction; default-value: 0; fill: Theme.warning;
-                                            value-text: round(16 - root.bit-reduction * 12) + " bit";
-                                            changed(v) => { root.bit-reduction-changed(v); }
-                                        }
-                                        ParameterFader {
-                                            orientation: AudioOrientation.vertical;
-                                            label: "Rate"; tooltip: "Sample-rate reduction";
-                                            value <=> root.rate-reduction; default-value: 0; fill: Theme.warning;
-                                            value-text: "÷" + round(1 + root.rate-reduction * 31);
-                                            changed(v) => { root.rate-reduction-changed(v); }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        }
-
-                        if root.source-kind == 1 : DrumSourceEditor {
-                            vertical-stretch: 1;
-                            mode <=> root.drum-mode;
-                            kick-character <=> root.drum-kick-character;
-                            snare-character <=> root.drum-snare-character;
-                            hat-character <=> root.drum-hat-character;
-                            decay <=> root.drum-decay;
-                            tune-semitones <=> root.drum-tune-semitones;
-                            drive <=> root.drum-drive;
-                            punch <=> root.drum-punch;
-                            choke-group <=> root.drum-choke-group;
-                            kick-start-hz <=> root.drum-kick-start-hz;
-                            kick-end-hz <=> root.drum-kick-end-hz;
-                            kick-sweep <=> root.drum-kick-sweep;
-                            kick-click <=> root.drum-kick-click;
-                            snare-tone-hz <=> root.drum-snare-tone-hz;
-                            snare-tone2-hz <=> root.drum-snare-tone2-hz;
-                            snare-tone2-mix <=> root.drum-snare-tone2-mix;
-                            snare-noise-mix <=> root.drum-snare-noise-mix;
-                            snare-noise-decay <=> root.drum-snare-noise-decay;
-                            snare-noise-color <=> root.drum-snare-noise-color;
-                            hat-hp-hz <=> root.drum-hat-hp-hz;
-                            hat-metallic <=> root.drum-hat-metallic;
-                            mode-changed(v) => { root.drum-mode-changed(v); }
-                            kick-character-changed(v) => { root.drum-kick-character-changed(v); }
-                            snare-character-changed(v) => { root.drum-snare-character-changed(v); }
-                            hat-character-changed(v) => { root.drum-hat-character-changed(v); }
-                            decay-changed(v) => { root.drum-decay-changed(v); }
-                            tune-semitones-changed(v) => { root.drum-tune-semitones-changed(v); }
-                            drive-changed(v) => { root.drum-drive-changed(v); }
-                            punch-changed(v) => { root.drum-punch-changed(v); }
-                            choke-group-changed(v) => { root.drum-choke-group-changed(v); }
-                            kick-start-hz-changed(v) => { root.drum-kick-start-hz-changed(v); }
-                            kick-end-hz-changed(v) => { root.drum-kick-end-hz-changed(v); }
-                            kick-sweep-changed(v) => { root.drum-kick-sweep-changed(v); }
-                            kick-click-changed(v) => { root.drum-kick-click-changed(v); }
-                            snare-tone-hz-changed(v) => { root.drum-snare-tone-hz-changed(v); }
-                            snare-tone2-hz-changed(v) => { root.drum-snare-tone2-hz-changed(v); }
-                            snare-tone2-mix-changed(v) => { root.drum-snare-tone2-mix-changed(v); }
-                            snare-noise-mix-changed(v) => { root.drum-snare-noise-mix-changed(v); }
-                            snare-noise-decay-changed(v) => { root.drum-snare-noise-decay-changed(v); }
-                            snare-noise-color-changed(v) => { root.drum-snare-noise-color-changed(v); }
-                            hat-hp-hz-changed(v) => { root.drum-hat-hp-hz-changed(v); }
-                            hat-metallic-changed(v) => { root.drum-hat-metallic-changed(v); }
-                        }
-
-                        if root.source-kind == 2 : MonoSourceEditor {
-                            vertical-stretch: 1;
-                            osc1-wave <=> root.mono-osc1-wave; osc1-semitones <=> root.mono-osc1-semitones; osc1-cents <=> root.mono-osc1-cents; osc1-level <=> root.mono-osc1-level; osc1-pulse-width <=> root.mono-osc1-pulse-width;
-                            osc2-wave <=> root.mono-osc2-wave; osc2-semitones <=> root.mono-osc2-semitones; osc2-cents <=> root.mono-osc2-cents; osc2-level <=> root.mono-osc2-level; osc2-pulse-width <=> root.mono-osc2-pulse-width;
-                            osc3-wave <=> root.mono-osc3-wave; osc3-semitones <=> root.mono-osc3-semitones; osc3-cents <=> root.mono-osc3-cents; osc3-level <=> root.mono-osc3-level; osc3-pulse-width <=> root.mono-osc3-pulse-width;
-                            glide <=> root.mono-glide; attack <=> root.mono-attack; decay <=> root.mono-decay; sustain <=> root.mono-sustain; release <=> root.mono-release;
-                            filter-cutoff <=> root.mono-filter-cutoff; filter-resonance <=> root.mono-filter-resonance; filter-env <=> root.mono-filter-env; drive <=> root.mono-drive;
-                            lfo-wave <=> root.mono-lfo-wave; lfo-rate <=> root.mono-lfo-rate; lfo-retrigger <=> root.mono-lfo-retrigger;
-                            lfo-pitch <=> root.mono-lfo-pitch; lfo-filter <=> root.mono-lfo-filter; lfo-pulse-width <=> root.mono-lfo-pulse-width; lfo-amp <=> root.mono-lfo-amp;
-                            osc1-wave-changed(v) => { root.mono-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.mono-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.mono-osc1-cents-changed(v); } osc1-level-changed(v) => { root.mono-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.mono-osc1-pulse-width-changed(v); }
-                            osc2-wave-changed(v) => { root.mono-osc2-wave-changed(v); } osc2-semitones-changed(v) => { root.mono-osc2-semitones-changed(v); } osc2-cents-changed(v) => { root.mono-osc2-cents-changed(v); } osc2-level-changed(v) => { root.mono-osc2-level-changed(v); } osc2-pulse-width-changed(v) => { root.mono-osc2-pulse-width-changed(v); }
-                            osc3-wave-changed(v) => { root.mono-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.mono-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.mono-osc3-cents-changed(v); } osc3-level-changed(v) => { root.mono-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.mono-osc3-pulse-width-changed(v); }
-                            glide-changed(v) => { root.mono-glide-changed(v); } attack-changed(v) => { root.mono-attack-changed(v); } decay-changed(v) => { root.mono-decay-changed(v); } sustain-changed(v) => { root.mono-sustain-changed(v); } release-changed(v) => { root.mono-release-changed(v); }
-                            filter-cutoff-changed(v) => { root.mono-filter-cutoff-changed(v); } filter-resonance-changed(v) => { root.mono-filter-resonance-changed(v); } filter-env-changed(v) => { root.mono-filter-env-changed(v); } drive-changed(v) => { root.mono-drive-changed(v); }
-                            lfo-wave-changed(v) => { root.mono-lfo-wave-changed(v); } lfo-rate-changed(v) => { root.mono-lfo-rate-changed(v); } lfo-retrigger-changed(v) => { root.mono-lfo-retrigger-changed(v); }
-                            lfo-pitch-changed(v) => { root.mono-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.mono-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.mono-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.mono-lfo-amp-changed(v); }
                         }
                     }
                 }

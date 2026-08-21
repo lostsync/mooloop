@@ -112,49 +112,53 @@ Exit criteria:
 - Mixed-length patterns layer and loop predictably in Song mode.
 - Offline WAV output matches realtime playback within defined tolerances.
 
-## Phase 4: Channel Buffer Spike
+## Phase 4: Device Chain, Parameters, And Core Effects
 
-Goal: decide whether persistent channel audio memory is the reason for mooloop
-to exist.
+Goal: make sound shaping composable and establish the contracts that an
+insertable retained-audio device will use.
 
-Implement only the bounded spike in `BUFFER_ENGINE.md`. Do not build a general
-looper, destructive audio editor, or large synth suite during this phase.
+Scope:
+
+- An ordered, fixed-capacity per-channel device chain with realtime-safe
+  insertion, removal, bypass, ordering, and persisted state.
+- Stable device-instance and parameter IDs with metadata for range, scale,
+  units, default, and polarity.
+- Sample-accurate `ParamValue` scheduling with smoothing where required.
+- The horizontal lower-rack UI shared by sources and effects.
+- A useful authored EQ first, followed only by the small effect set the signal
+  flow needs: filter, delay, saturation/color, and utility dynamics.
+- The lower lane selects note, channel, and device targets through one target
+  browser.
 
 Exit criteria:
 
-- A running channel continuously retains a bounded span of source audio without
-  a record gesture or transport stop.
+- Device edits cannot allocate, lock, or free large objects on the audio
+  thread.
+- Realtime and offline rendering execute the same ordered devices.
+- The EQ is useful enough for ordinary mix correction and its parameters use
+  the same IDs and events that automation will use.
+
+## Phase 5: Retained-Audio Buffer Device Spike
+
+Goal: decide whether insertable retained audio is the reason for mooloop to
+exist.
+
+Implement only the bounded insert-device spike in `BUFFER_ENGINE.md`. Do not
+build a general looper, destructive audio editor, or large synth suite during
+this phase.
+
+Exit criteria:
+
+- One inserted buffer device continuously retains a bounded span of its input
+  without a record gesture or transport stop.
 - A following read head behaves like a trustworthy live bridge, then can jump,
-  loop, change rate, reverse, and return live under sequencer control.
+  loop, change rate, reverse, and return live through ordinary device
+  parameters.
+- Moving the buffer in the chain predictably changes what it captures.
 - Head and history state are understandable, resettable, persistable when
   musically required, and realtime safe.
 - The workflow produces something materially faster or different than manual
   bounce-to-sample. If it does not, revise or reject the thesis.
-
-## Phase 5: Automation And Effects
-
-Goal: make sound shaping composable with notes, buffers, and arrangement.
-
-Scope:
-
-- Stable parameter IDs and metadata: range, scale, units, default, polarity.
-- Sample-accurate ParamValue scheduling with smoothing where required.
-- The lower lane selects note, channel, buffer, and device targets through one
-  target browser.
-- Realtime-safe fixed-capacity insert editing, bypass, ordering, and state.
-- A small authored initial effect set: filter, delay, saturation/color, and
-  utility dynamics or EQ only where the signal flow needs them.
-- Restore effects only after the device and parameter contracts can support
-  them without special-case automation or realtime graph edits.
-- Buffer placement explicitly accounts for pre/post insert signal flow and any
-  future feedback path.
-
-Exit criteria:
-
-- The same lane interaction automates sampler, buffer, mixer, and effect
-  parameters.
-- Device edits cannot allocate, lock, or free large objects on the audio
-  thread.
 
 ## Phase 6: Synth Sources And Routing
 

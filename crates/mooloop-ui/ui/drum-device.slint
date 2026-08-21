@@ -1,0 +1,239 @@
+import { Theme } from "theme.slint";
+import { ParameterFader, ParameterKnob, SelectorBank, ValueScale } from "controls.slint";
+import { StepperField } from "toolbar.slint";
+
+export component DrumDeviceFace inherits Rectangle {
+    in-out property <int> mode;
+    in-out property <int> kick-character;
+    in-out property <int> snare-character;
+    in-out property <int> hat-character;
+    in-out property <float> decay;
+    in-out property <float> tune-semitones;
+    in-out property <float> drive;
+    in-out property <float> punch;
+    in-out property <int> choke-group;
+    in-out property <float> kick-start-hz;
+    in-out property <float> kick-end-hz;
+    in-out property <float> kick-sweep;
+    in-out property <float> kick-click;
+    in-out property <float> snare-tone-hz;
+    in-out property <float> snare-tone2-hz;
+    in-out property <float> snare-tone2-mix;
+    in-out property <float> snare-noise-mix;
+    in-out property <float> snare-noise-decay;
+    in-out property <float> snare-noise-color;
+    in-out property <float> hat-hp-hz;
+    in-out property <float> hat-metallic;
+    callback mode-changed(int);
+    callback kick-character-changed(int);
+    callback snare-character-changed(int);
+    callback hat-character-changed(int);
+    callback decay-changed(float);
+    callback tune-semitones-changed(float);
+    callback drive-changed(float);
+    callback punch-changed(float);
+    callback choke-group-changed(int);
+    callback kick-start-hz-changed(float);
+    callback kick-end-hz-changed(float);
+    callback kick-sweep-changed(float);
+    callback kick-click-changed(float);
+    callback snare-tone-hz-changed(float);
+    callback snare-tone2-hz-changed(float);
+    callback snare-tone2-mix-changed(float);
+    callback snare-noise-mix-changed(float);
+    callback snare-noise-decay-changed(float);
+    callback snare-noise-color-changed(float);
+    callback hat-hp-hz-changed(float);
+    callback hat-metallic-changed(float);
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 5px;
+
+        HorizontalLayout {
+            spacing: 6px;
+            SelectorBank {
+                options: ["Kick", "Snare", "Hat"];
+                selected-index <=> root.mode;
+                segment-width: 46px;
+                tooltip: "Drum voice";
+                selected(i) => { root.mode-changed(i); }
+            }
+            Rectangle { width: 1px; background: Theme.border; }
+            if root.mode == 0 : SelectorBank {
+                options: ["Sub", "Punch", "Deep", "Kit", "DNB"];
+                selected-index <=> root.kick-character;
+                segment-width: 54px;
+                tooltip: "Kick character";
+                selected(i) => { root.kick-character-changed(i); }
+            }
+            if root.mode == 1 : SelectorBank {
+                options: ["Pop", "Snap", "Power", "Clap", "Rim"];
+                selected-index <=> root.snare-character;
+                segment-width: 54px;
+                tooltip: "Snare character";
+                selected(i) => { root.snare-character-changed(i); }
+            }
+            if root.mode == 2 : SelectorBank {
+                options: ["Soft", "Tight", "Metal", "Sizzle", "Trash"];
+                selected-index <=> root.hat-character;
+                segment-width: 54px;
+                tooltip: "Hat character";
+                selected(i) => { root.hat-character-changed(i); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        Rectangle { height: 1px; background: Theme.border; }
+
+        HorizontalLayout {
+            spacing: 4px;
+            alignment: start;
+            ParameterKnob {
+                label: "Decay"; tooltip: "Amplitude decay";
+                value <=> root.decay; minimum: 0.005; maximum: 2; default-value: 0.24; scale: ValueScale.logarithmic;
+                value-text: round(root.decay * 1000) + " ms";
+                changed(v) => { root.decay-changed(v); }
+            }
+            ParameterKnob {
+                label: "Tune"; tooltip: "Keyboard tracking offset";
+                value <=> root.tune-semitones; minimum: -48; maximum: 48; default-value: 0; step: 1;
+                value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
+                changed(v) => { root.tune-semitones-changed(v); }
+            }
+            ParameterKnob {
+                label: "Drive"; tooltip: "Soft saturation";
+                value <=> root.drive; default-value: 0; fill: Theme.warning;
+                value-text: round(root.drive * 100) + "%";
+                changed(v) => { root.drive-changed(v); }
+            }
+            ParameterKnob {
+                label: "Punch"; tooltip: "Transient emphasis";
+                value <=> root.punch; default-value: 0.35; fill: Theme.warning;
+                value-text: round(root.punch * 100) + "%";
+                changed(v) => { root.punch-changed(v); }
+            }
+            Rectangle {
+                width: 84px;
+                height: 80px;
+                StepperField {
+                    x: 4px;
+                    y: (parent.height - self.height) / 2;
+                    label: "CHOKE";
+                    value <=> root.choke-group;
+                    minimum: 0; maximum: 16; step: 1;
+                    value-width: 18px;
+                    tooltip: "Matching non-zero groups choke each other. 0 is off.";
+                    changed(v) => { root.choke-group-changed(v); }
+                }
+            }
+            Rectangle { width: 1px; height: 80px; background: Theme.border; }
+            Rectangle {
+                width: 300px;
+                height: 80px;
+                background: Theme.panel;
+                border-radius: 2px;
+                Text {
+                    text: root.mode == 0 ? "KICK" : root.mode == 1 ? "SNARE" : "HAT";
+                    x: 8px; y: 6px;
+                    color: Theme.text-faint;
+                    font-size: 8px;
+                }
+                Path {
+                    x: 8px; y: 18px; width: 284px; height: 54px;
+                    viewbox-width: 180; viewbox-height: 50;
+                    commands: root.mode == 0
+                        ? "M 0 25 C 18 3 28 47 44 25 C 59 10 70 38 85 25 C 100 17 112 32 126 25 C 144 21 158 28 180 25"
+                        : root.mode == 1
+                            ? "M 0 25 L 14 10 L 20 42 L 29 4 L 38 45 L 48 18 L 58 34 L 70 13 L 82 39 L 96 19 L 112 32 L 128 21 L 146 29 L 162 23 L 180 26"
+                            : "M 0 25 L 8 8 L 16 43 L 24 12 L 32 38 L 40 6 L 48 45 L 56 14 L 64 36 L 72 9 L 80 42 L 88 16 L 96 34 L 104 11 L 112 40 L 120 15 L 128 35 L 136 12 L 144 39 L 152 17 L 160 32 L 168 20 L 180 26";
+                    stroke: Theme.accent;
+                    stroke-width: 1.4px;
+                    fill: transparent;
+                }
+            }
+        }
+
+        if root.mode == 0 : VerticalLayout {
+            spacing: 5px;
+            HorizontalLayout {
+                spacing: 10px;
+                ParameterFader {
+                    horizontal-stretch: 1; label: "Start"; tooltip: "Kick sweep start frequency";
+                    value <=> root.kick-start-hz; minimum: 20; maximum: 1000; default-value: 160; scale: ValueScale.logarithmic;
+                    value-text: round(root.kick-start-hz) + " Hz"; changed(v) => { root.kick-start-hz-changed(v); }
+                }
+                ParameterFader {
+                    horizontal-stretch: 1; label: "End"; tooltip: "Kick sweep end frequency";
+                    value <=> root.kick-end-hz; minimum: 20; maximum: 400; default-value: 48; scale: ValueScale.logarithmic;
+                    value-text: round(root.kick-end-hz) + " Hz"; changed(v) => { root.kick-end-hz-changed(v); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                ParameterFader {
+                    horizontal-stretch: 1; label: "Sweep"; tooltip: "Kick pitch sweep time";
+                    value <=> root.kick-sweep; minimum: 0.005; maximum: 1; default-value: 0.045; scale: ValueScale.logarithmic;
+                    value-text: round(root.kick-sweep * 1000) + " ms"; changed(v) => { root.kick-sweep-changed(v); }
+                }
+                ParameterFader {
+                    horizontal-stretch: 1; label: "Click"; tooltip: "Beater click level";
+                    value <=> root.kick-click; default-value: 0.5;
+                    value-text: round(root.kick-click * 100) + "%"; changed(v) => { root.kick-click-changed(v); }
+                }
+            }
+        }
+        if root.mode == 1 : VerticalLayout {
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 10px;
+                ParameterFader {
+                    horizontal-stretch: 1; label: "Tone"; tooltip: "Snare body frequency";
+                    value <=> root.snare-tone-hz; minimum: 40; maximum: 2000; default-value: 180; scale: ValueScale.logarithmic;
+                    value-text: round(root.snare-tone-hz) + " Hz"; changed(v) => { root.snare-tone-hz-changed(v); }
+                }
+                ParameterFader {
+                    horizontal-stretch: 1; label: "Tone 2"; tooltip: "Secondary body frequency";
+                    value <=> root.snare-tone2-hz; minimum: 80; maximum: 4000; default-value: 330; scale: ValueScale.logarithmic;
+                    value-text: round(root.snare-tone2-hz) + " Hz"; changed(v) => { root.snare-tone2-hz-changed(v); }
+                }
+                ParameterFader {
+                    horizontal-stretch: 1; label: "T2 Mix"; tooltip: "Secondary tone level";
+                    value <=> root.snare-tone2-mix; default-value: 0.2;
+                    value-text: round(root.snare-tone2-mix * 100) + "%"; changed(v) => { root.snare-tone2-mix-changed(v); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                ParameterFader {
+                    horizontal-stretch: 1; label: "Noise"; tooltip: "Noise versus body mix";
+                    value <=> root.snare-noise-mix; default-value: 0.6;
+                    value-text: round(root.snare-noise-mix * 100) + "%"; changed(v) => { root.snare-noise-mix-changed(v); }
+                }
+                ParameterFader {
+                    horizontal-stretch: 1; label: "N Decay"; tooltip: "Noise burst decay";
+                    value <=> root.snare-noise-decay; minimum: 0.005; maximum: 2; default-value: 0.11; scale: ValueScale.logarithmic;
+                    value-text: round(root.snare-noise-decay * 1000) + " ms"; changed(v) => { root.snare-noise-decay-changed(v); }
+                }
+                ParameterFader {
+                    horizontal-stretch: 1; label: "Color"; tooltip: "Noise brightness";
+                    value <=> root.snare-noise-color; default-value: 0.65;
+                    value-text: round(root.snare-noise-color * 100) + "%"; changed(v) => { root.snare-noise-color-changed(v); }
+                }
+            }
+        }
+        if root.mode == 2 : HorizontalLayout {
+            spacing: 10px;
+            ParameterFader {
+                horizontal-stretch: 1; label: "High-pass"; tooltip: "Hat high-pass cutoff";
+                value <=> root.hat-hp-hz; minimum: 500; maximum: 16000; default-value: 7500; scale: ValueScale.logarithmic;
+                value-text: round(root.hat-hp-hz) + " Hz"; changed(v) => { root.hat-hp-hz-changed(v); }
+            }
+            ParameterFader {
+                horizontal-stretch: 1; label: "Metallic"; tooltip: "Metallic square oscillator blend";
+                value <=> root.hat-metallic; default-value: 0.5;
+                value-text: round(root.hat-metallic * 100) + "%"; changed(v) => { root.hat-metallic-changed(v); }
+            }
+        }
+    }
+}

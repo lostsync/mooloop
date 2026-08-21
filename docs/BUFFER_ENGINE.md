@@ -5,12 +5,12 @@ engine contract.
 
 ## Thesis
 
-Each channel owns musical audio memory, not merely an input instrument and an
-output mixer strip. Every sound source continuously writes its generated PCM
-frames into a bounded circular working buffer before downstream channel DSP.
-One or more read heads immediately turn that recent history back into the live
-channel signal. Parameter events can move those heads with the same precision
-as notes.
+A retained-audio insert device owns musical audio memory. Any channel may place
+one in its ordered device chain, including before or after EQ, saturation,
+delay, or other processing. The device continuously writes the PCM frames that
+reach its input into a bounded circular working buffer. One or more read heads
+immediately turn that recent history back into the device's output. Parameter
+events can move those heads with the same precision as notes.
 
 In normal operation, a read head follows the write head at a defined minimal
 latency, so the stage behaves like a transparent connection. It becomes an
@@ -26,8 +26,9 @@ play -> hear live -> jump into history -> reverse -> repeat -> return live
 ```
 
 The point is not automatic freezing or conventional render-to-sample. The point
-is that short-term retained audio is the ordinary bridge between generation and
-processing, and its read behavior can participate in composition.
+is that short-term retained audio can be inserted at the useful point in a
+signal chain and its read behavior can participate in composition. Channels
+that do not use the device pay no buffer-memory cost.
 
 The existing engine already renders instruments into an `f32` stereo bus for
 each JACK block. That scratch bus is cleared on the next callback, so it only
@@ -60,34 +61,27 @@ Primary references:
 - https://www.native-instruments.com/ni-tech-manuals/maschine-software-manual/en/sampling-and-sample-mapping.html
 - https://tutorials.renoise.com/wiki/Render_or_Freeze_Plugin_Instruments_to_Samples
 
-## Proposed Channel Model
+## Proposed Device-Chain Model
 
 ```text
-timed events
-    |
-    +-> source instrument -> write head -> circular working buffer
-                                                   |
-timed events -------------------------------> read head(s)
-                                                   |
-                                                   v
-                                            downstream DSP
-                                                   |
-                                                   v
-                                               strip mix
+timed events -> source -> EQ -> buffer device -> delay -> strip mix
+                                  |      |
+                                  |      +-> read head(s) -> device output
+                                  +--------> write head -> circular memory
 ```
 
 The default read mode is `Follow`: the primary read head tracks newly written
-samples and the channel sounds live. A manipulation temporarily changes that
-relationship. `Jump`, `Loop`, `Reverse`, `Rate`, `Hold`, and `Return Live` are
-read-head behaviors, not file-editing modes. An explicit bypass may remain as a
-safety comparison, but a Source/Buffer monitor switch is not the core design.
+samples and the device passes its input transparently at its defined latency. A
+manipulation temporarily changes that relationship. `Jump`, `Loop`, `Reverse`,
+`Rate`, `Hold`, and `Return Live` are read-head behaviors, not file-editing
+modes. Ordinary insert bypass provides the safety comparison.
 
 ## Working Buffer Semantics
 
-The first implementation should have one fixed-capacity stereo circular buffer
-on one spiked channel, allocated off the audio thread. Capacity is a project or
-engine budget, not an unbounded user allocation. The write head advances while
-the source renders and wraps without user intervention.
+The first implementation should have one insert instance with a fixed-capacity
+stereo circular buffer, allocated off the audio thread. Capacity is a project
+or engine budget, not an unbounded user allocation. The write head advances
+while input reaches the device and wraps without user intervention.
 
 Required state:
 
@@ -99,9 +93,8 @@ Required state:
   keep a small protected distance or read a defined prior sample.
 - Optional freeze, clear, and snapshot operations that never free large memory
   on the realtime thread.
-- An explicit buffer placement. The spike sits immediately after the source
-  and before channel inserts; later feedback or post-insert buffering must be a
-  deliberate routing design.
+- Explicit position in the ordered device chain. Moving the device changes
+  what signal it captures without introducing a separate tap-point model.
 
 The rolling history is working audio and need not all become a project asset.
 If an arrangement depends on a frozen or detached region, project save writes a
@@ -141,9 +134,9 @@ automation engine.
 
 ## Bounded Spike
 
-Build the spike on one channel before changing every strip:
+Build one insert instance before expanding the device count:
 
-1. Continuously write the current channel source into a short stereo ring.
+1. Continuously write the device input into a short stereo ring.
 2. Pass live audio through a following read head with no surprising coloration
    or timing shift.
 3. Detach the head and sequence read offset, window length, rate, reverse, and

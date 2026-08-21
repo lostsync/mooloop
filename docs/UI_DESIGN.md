@@ -137,49 +137,59 @@ Use contrast and spacing to show hierarchy, not floating cards within cards.
 The source editor should feel like one instrument front panel. It should not
 look like several cards dropped into the center of a page.
 
-## Source Editor Layout
+## Device Rack Layout
 
-### Header
+The lower source editor is an ordered horizontal device rack. Signal flows
+left-to-right from one source device through zero or more insert devices. The
+source is not a special full-width page: it uses the same rack chrome,
+alignment, and height contract as effects.
 
-The lower editor begins with one 30-36 px channel row:
+- Device faces have one fixed 268 px height.
+- Width is quantized in 220 px units with 4 px inter-device gaps. Half-unit
+  widths are valid for compact effects.
+- Current source devices use 3U. An effect uses only the units its working
+  controls require.
+- The rack scrolls horizontally. Device internals never compress when the
+  application narrows.
+- Every device has a 28 px identity header with enabled state, name, kind, and
+  size. Controls begin below that header.
+- Signal direction and insertion points remain visible between devices.
+- A device with more controls than one face can hold uses stable internal
+  pages. Switching pages never changes device dimensions or moves neighboring
+  devices.
+- A face is a working surface, not a dump of every parameter. Each page must
+  still expose a coherent musical operation rather than an arbitrary subset.
+
+The lower editor retains one channel row:
 
 `[Source | Notes | Playlist] [channel name] [channel preset browser/actions]`
 
-The generator begins with one 30-36 px row:
+The device-chain row directly below it owns source type and generator presets:
 
-`[source type selector] [generator preset browser/actions]`
-
-These controls stay attached to what they operate on. There is no duplicate
-preset browser at the opposite edge of the panel.
+`[DEVICE CHAIN] [source type] [generator preset browser/actions]`
 
 ### Sampler
 
-- The waveform owns the wide upper module.
-- Tune, voice, filter, amp envelope, and lo-fi form one aligned lower module
-  row that fills the available width.
-- Voice and retrigger use visible mode selectors when the option count remains
-  small.
-- The amp graph and A/D/S/R controls form one module.
-- Faders are preferred where they make the lower row fill cleanly and improve
-  comparison.
+- `Sample` keeps file navigation, waveform, trim/loop markers, root note,
+  reverse, loop mode, and tuning together.
+- `Voice` keeps playback/retrigger/polyphony/choke behavior beside the
+  amplitude envelope.
+- `Tone` keeps filter/drive and lo-fi processing together.
 
 ### Drum synth
 
-- Drum family and character selectors occupy one compact header row.
-- Shared controls and voice-specific controls form a rectangular grid with a
-  common outer width.
-- A sparse voice such as hat must use an intentional module composition; it
-  must not become a narrow card followed by empty framed area.
-- Character controls are one-click selectors, never dropdowns.
+- Drum family and character remain one-click selectors on the face.
+- Shared controls, a voice-shape display, and the selected voice's parameters
+  fill one stable face without internal paging.
+- Kick, snare, and hat use the same outer geometry even though their parameter
+  counts differ.
 
 ### Mono synth
 
-- Oscillators use a repeated module template with identical geometry.
-- Waveform is a visible selector bank, not a dropdown.
-- Amp, filter, and LFO modules align to the oscillator grid.
-- Sparse modules expand a useful graph/control or share a row; they do not end
-  in blank bordered rectangles.
-- LFO waveform is a visible selector bank.
+- `Osc` uses three repeated oscillator strips with identical geometry.
+- `Amp/Filter` pairs the graphical amplitude envelope with filter and drive.
+- `Mod` keeps LFO shape, retrigger, rate, and destination depths together.
+- Waveforms remain visible selector banks rather than dropdowns.
 
 ## Rack Actions
 
@@ -222,6 +232,8 @@ Before committing UI work, answer all of these:
 - Are labels, centers, values, and dividers aligned?
 - Does the desktop view look composed at 960x760 and at the real app width?
 - Does the narrow view wrap or scroll without overlap or clipped text?
+- Does every device retain the fixed rack height and an intentional unit width?
+- Is signal order legible without opening a menu or inspector?
 - Was the result inspected from a software-rendered screenshot rather than
   accepted from code alone?
 

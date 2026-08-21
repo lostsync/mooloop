@@ -48,13 +48,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   filter with envelope depth and resonance, drive, bit reduction, and rate
   reduction. Voice controls cover one-shot/gated playback, 1-16 voices,
   restart/layer retriggering, and 16 cross-channel choke groups.
-- A source editor that can add or replace sampler, drum synth, and mono synth
-  instruments without changing the channel's notes or mixer state. The drum
-  editor exposes kick, snare, and hat synthesis controls with compact character
-  buttons, punch, kick sweep/click controls, snare secondary tone and noise
-  color, and hat metallic/noise shaping; the mono editor exposes three
-  oscillators, glide, ADSR, filter, drive, and an LFO. Closed and open hats
-  share a choke group in the generated starter kit.
+- A horizontal lower device rack with one fixed-height 3U source face and a
+  visible insertion point for future effects. Sampler, drum synth, and mono
+  synth faces share the same rack chrome and preserve their dimensions at
+  narrow widths through horizontal scrolling. Sampler controls are divided
+  into Sample, Voice, and Tone pages; mono controls into Osc, Amp/Filter, and
+  Mod pages; the drum face keeps family, character, shared shaping, and
+  voice-specific controls visible together. Replacing a source does not change
+  the channel's notes or mixer state. Closed and open hats share a choke group
+  in the generated starter kit.
 - Runtime appearance presets, custom accent persistence, shared audio controls,
   tooltips, and master peak-meter ballistics.
 - A traditional menu bar above the toolbar (`menubar.slint`): File, Edit,

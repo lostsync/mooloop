@@ -1,0 +1,113 @@
+import { HorizontalBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { ToolButton } from "controls.slint";
+
+export global DeviceRackMetrics {
+    out property <length> unit-width: 220px;
+    out property <length> half-gap: 4px;
+    out property <length> face-height: 268px;
+    out property <length> header-height: 28px;
+}
+
+export component DeviceFrame inherits Rectangle {
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: 3px;
+    clip: true;
+}
+
+export component DeviceHeader inherits Rectangle {
+    in property <string> name;
+    in property <string> kind;
+    in property <color> device-color: Theme.accent;
+    in property <bool> enabled: true;
+
+    height: DeviceRackMetrics.header-height;
+    background: Theme.surface-raised;
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: Theme.border;
+    }
+    HorizontalBox {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 6px;
+        Rectangle {
+            width: 4px;
+            height: 16px;
+            border-radius: 2px;
+            background: root.enabled ? root.device-color : Theme.text-faint;
+        }
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.enabled ? root.device-color : Theme.text-faint;
+        }
+        Text {
+            text: root.name;
+            color: Theme.text;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.kind;
+            color: Theme.text-faint;
+            font-size: 8px;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: "SOURCE";
+            color: Theme.text-faint;
+            font-size: 8px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component DeviceJoin inherits Rectangle {
+    width: 20px;
+    height: DeviceRackMetrics.face-height;
+    Text {
+        text: "\u{2192}";
+        color: Theme.text-muted;
+        font-size: 16px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component DeviceAddSlot inherits Rectangle {
+    callback clicked;
+    in property <bool> enabled: true;
+    width: 50px;
+    height: DeviceRackMetrics.face-height;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: 3px;
+    background: add-touch.has-hover && root.enabled ? Theme.surface : transparent;
+    Text {
+        text: "+";
+        color: root.enabled ? Theme.text-muted : Theme.text-faint;
+        font-size: 22px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    add-touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+    Tooltip { text: @markdown("Add a device"); }
+}
+
+export component DevicePageButton inherits ToolButton {
+    min-width: 52px;
+    max-width: 76px;
+    min-height: 22px;
+    max-height: 22px;
+}

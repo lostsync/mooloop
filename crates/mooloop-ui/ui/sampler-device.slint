@@ -1,0 +1,322 @@
+import { Theme } from "theme.slint";
+import { ParameterFader, ParameterKnob, SelectorBank, ToolButton, ValueScale } from "controls.slint";
+import { DevicePageButton } from "device-rack.slint";
+import { EnvelopeEditor } from "envelope.slint";
+import { StepperField } from "toolbar.slint";
+
+global SamplerDeviceIcons {
+    out property <string> previous: "M 10 3 L 5 8 L 10 13";
+    out property <string> next: "M 6 3 L 11 8 L 6 13";
+    out property <string> search: "M 10 6 A 4 4 0 1 1 2 6 A 4 4 0 1 1 10 6 Z M 9.2 9.2 L 13.5 13.5";
+    out property <string> reverse: "M 12 3 L 12 13 M 12 8 L 4.5 8 M 7.3 5 L 4.3 8 L 7.3 11";
+}
+
+component SampleMarker inherits Rectangle {
+    in property <color> marker-color;
+    in property <string> marker-label;
+    in property <length> editor-width;
+    in property <bool> label-at-bottom;
+    callback moved(float);
+
+    width: 1px;
+    background: root.marker-color;
+    Rectangle {
+        x: -3px;
+        y: root.label-at-bottom ? parent.height - 8px : 0px;
+        width: 7px;
+        height: 7px;
+        background: root.marker-color;
+    }
+    Text {
+        x: root.x > root.editor-width - 18px ? -16px : 3px;
+        y: root.label-at-bottom ? parent.height - 12px : 2px;
+        text: root.marker-label;
+        color: root.marker-color;
+        font-size: 8px;
+    }
+    TouchArea {
+        x: -6px;
+        width: 13px;
+        mouse-cursor: ew-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down || (e.kind == PointerEventKind.move && self.pressed)) {
+                root.moved(clamp((root.x + self.x + self.mouse-x) / max(1px, root.editor-width), 0, 1));
+            }
+        }
+    }
+}
+
+export component SamplerDeviceFace inherits Rectangle {
+    in-out property <int> page;
+    in-out property <float> attack;
+    in-out property <float> decay;
+    in-out property <float> sustain;
+    in-out property <float> release;
+    in-out property <float> start-pos;
+    in-out property <float> end-pos: 1;
+    in-out property <float> loop-start;
+    in-out property <float> loop-end;
+    in-out property <bool> reverse-playback;
+    in-out property <int> root-note: 60;
+    in-out property <float> tune-semitones;
+    in-out property <float> tune-cents;
+    in-out property <float> filter-cutoff;
+    in-out property <float> filter-resonance;
+    in-out property <float> filter-env;
+    in-out property <float> drive;
+    in-out property <float> bit-reduction;
+    in-out property <float> rate-reduction;
+    in-out property <int> loop-mode;
+    in-out property <int> voice-mode;
+    in-out property <int> polyphony: 1;
+    in-out property <int> retrigger-mode;
+    in-out property <int> choke-group;
+    in-out property <string> sample-name;
+    in-out property <string> sample-description;
+    in-out property <[float]> waveform;
+    in-out property <bool> can-previous-sample;
+    in-out property <bool> can-next-sample;
+
+    callback attack-changed(float);
+    callback decay-changed(float);
+    callback sustain-changed(float);
+    callback release-changed(float);
+    callback start-pos-changed(float);
+    callback end-pos-changed(float);
+    callback loop-start-changed(float);
+    callback loop-end-changed(float);
+    callback reverse-playback-changed(bool);
+    callback root-note-changed(int);
+    callback tune-semitones-changed(float);
+    callback tune-cents-changed(float);
+    callback loop-mode-changed(int);
+    callback voice-mode-changed(int);
+    callback polyphony-changed(int);
+    callback retrigger-mode-changed(int);
+    callback choke-group-changed(int);
+    callback filter-cutoff-changed(float);
+    callback filter-resonance-changed(float);
+    callback filter-env-changed(float);
+    callback drive-changed(float);
+    callback bit-reduction-changed(float);
+    callback rate-reduction-changed(float);
+    callback load-sample-clicked();
+    callback previous-sample-clicked();
+    callback next-sample-clicked();
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 5px;
+        HorizontalLayout {
+            spacing: 3px;
+            DevicePageButton { text: "SAMPLE"; active: root.page == 0; clicked => { root.page = 0; } }
+            DevicePageButton { text: "VOICE"; active: root.page == 1; clicked => { root.page = 1; } }
+            DevicePageButton { text: "TONE"; active: root.page == 2; clicked => { root.page = 2; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+
+        if root.page == 0 : VerticalLayout {
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 3px;
+                ToolButton {
+                    icon: SamplerDeviceIcons.previous; tooltip: "Previous WAV in this folder";
+                    enabled: root.can-previous-sample; min-width: 28px; max-width: 28px;
+                    clicked => { root.previous-sample-clicked(); }
+                }
+                ToolButton {
+                    icon: SamplerDeviceIcons.search; tooltip: "Choose a WAV file";
+                    min-width: 28px; max-width: 28px;
+                    clicked => { root.load-sample-clicked(); }
+                }
+                ToolButton {
+                    icon: SamplerDeviceIcons.next; tooltip: "Next WAV in this folder";
+                    enabled: root.can-next-sample; min-width: 28px; max-width: 28px;
+                    clicked => { root.next-sample-clicked(); }
+                }
+                VerticalLayout {
+                    min-width: 130px; horizontal-stretch: 1; spacing: 0px;
+                    Text { text: root.sample-name; color: Theme.text; font-size: 10px; overflow: elide; }
+                    Text { text: root.sample-description; color: Theme.text-faint; font-size: 8px; overflow: elide; }
+                }
+                StepperField {
+                    label: "ROOT"; value <=> root.root-note; minimum: 0; maximum: 127; step: 1; value-width: 24px;
+                    tooltip: "MIDI root note for original sample pitch";
+                    changed(v) => { root.root-note-changed(v); }
+                }
+                ToolButton {
+                    icon: SamplerDeviceIcons.reverse; tooltip: "Reverse playback";
+                    active: root.reverse-playback; min-width: 28px; max-width: 28px;
+                    clicked => { root.reverse-playback = !root.reverse-playback; root.reverse-playback-changed(root.reverse-playback); }
+                }
+                SelectorBank {
+                    options: ["Off", "Loop", "Pong"];
+                    selected-index <=> root.loop-mode;
+                    segment-width: 42px;
+                    tooltip: "Loop mode";
+                    selected(i) => { root.loop-mode-changed(i); }
+                }
+            }
+
+            waveform-view := Rectangle {
+                vertical-stretch: 1;
+                min-height: 105px;
+                background: Theme.panel;
+                border-radius: 2px;
+                clip: true;
+                for tick in 9 : Rectangle {
+                    x: tick * parent.width / 8;
+                    width: 1px; height: parent.height;
+                    background: Theme.border; opacity: 0.45;
+                }
+                Rectangle {
+                    width: clamp(root.start-pos, 0, 1) * parent.width;
+                    height: parent.height; background: Theme.background; opacity: 0.66;
+                }
+                Rectangle {
+                    x: clamp(root.end-pos, 0, 1) * parent.width;
+                    width: parent.width - self.x;
+                    height: parent.height; background: Theme.background; opacity: 0.66;
+                }
+                if root.loop-mode != 0 : Rectangle {
+                    x: clamp(root.loop-start, root.start-pos, root.end-pos) * parent.width;
+                    width: max(1px, (clamp(root.loop-end, root.start-pos, root.end-pos)
+                        - clamp(root.loop-start, root.start-pos, root.end-pos)) * parent.width);
+                    height: parent.height; background: Theme.accent-active; opacity: 0.32;
+                }
+                Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border; }
+                for amplitude[index] in root.waveform : Rectangle {
+                    x: index * parent.width / max(1, root.waveform.length);
+                    y: (parent.height - self.height) / 2;
+                    width: max(1px, parent.width / max(1, root.waveform.length));
+                    height: max(1px, amplitude * (parent.height - 18px));
+                    background: Theme.text-muted;
+                }
+                SampleMarker {
+                    x: clamp(root.start-pos, 0, 1) * (parent.width - 1px); height: parent.height;
+                    editor-width: parent.width; marker-label: "S"; marker-color: Theme.accent;
+                    moved(v) => {
+                        root.start-pos = min(v, root.end-pos - 0.001); root.start-pos-changed(root.start-pos);
+                        if (root.loop-start < root.start-pos) { root.loop-start = root.start-pos; root.loop-start-changed(root.loop-start); }
+                    }
+                }
+                SampleMarker {
+                    x: clamp(root.end-pos, 0, 1) * (parent.width - 1px); height: parent.height;
+                    editor-width: parent.width; marker-label: "E"; marker-color: Theme.accent; label-at-bottom: true;
+                    moved(v) => {
+                        root.end-pos = max(v, root.start-pos + 0.001); root.end-pos-changed(root.end-pos);
+                        if (root.loop-end > root.end-pos) { root.loop-end = root.end-pos; root.loop-end-changed(root.loop-end); }
+                    }
+                }
+                SampleMarker {
+                    x: clamp(root.loop-start, 0, 1) * (parent.width - 1px); height: parent.height;
+                    editor-width: parent.width; marker-label: "L"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning; label-at-bottom: true;
+                    moved(v) => { root.loop-start = clamp(v, root.start-pos, root.loop-end - 0.001); root.loop-start-changed(root.loop-start); }
+                }
+                SampleMarker {
+                    x: clamp(root.loop-end, 0, 1) * (parent.width - 1px); height: parent.height;
+                    editor-width: parent.width; marker-label: "R"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning;
+                    moved(v) => { root.loop-end = clamp(v, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end); }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                ParameterFader {
+                    horizontal-stretch: 1; label: "Coarse"; tooltip: "Coarse tuning in semitones";
+                    value <=> root.tune-semitones; minimum: -24; maximum: 24; default-value: 0; step: 1;
+                    value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
+                    changed(v) => { root.tune-semitones-changed(v); }
+                }
+                ParameterFader {
+                    horizontal-stretch: 1; label: "Fine"; tooltip: "Fine tuning in cents";
+                    value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
+                    value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
+                    changed(v) => { root.tune-cents-changed(v); }
+                }
+            }
+        }
+
+        if root.page == 1 : HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                width: 200px; background: Theme.panel; border-radius: 2px;
+                VerticalLayout {
+                    padding: 6px; spacing: 6px;
+                    Text { text: "VOICE"; color: Theme.text-faint; font-size: 8px; }
+                    SelectorBank { options: ["One Shot", "Gate"]; selected-index <=> root.voice-mode; segment-width: 74px; tooltip: "Playback mode"; selected(i) => { root.voice-mode-changed(i); } }
+                    SelectorBank { options: ["Restart", "Layer"]; selected-index <=> root.retrigger-mode; segment-width: 74px; tooltip: "Retrigger behavior"; selected(i) => { root.retrigger-mode-changed(i); } }
+                    StepperField { label: "VOICES"; value <=> root.polyphony; minimum: 1; maximum: 16; step: 1; value-width: 18px; tooltip: "Maximum simultaneous voices"; changed(v) => { root.polyphony-changed(v); } }
+                    StepperField { label: "CHOKE"; value <=> root.choke-group; minimum: 0; maximum: 16; step: 1; value-width: 18px; tooltip: "Matching non-zero groups choke each other"; changed(v) => { root.choke-group-changed(v); } }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1; background: Theme.panel; border-radius: 2px;
+                VerticalLayout {
+                    padding: 6px; spacing: 4px;
+                    Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: 8px; }
+                    EnvelopeEditor {
+                        height: 78px;
+                        attack <=> root.attack; decay <=> root.decay; sustain <=> root.sustain; release <=> root.release;
+                        attack-text: round(root.attack * 5000) + " ms"; decay-text: round(root.decay * 5000) + " ms"; sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 5000) + " ms";
+                        attack-changed(v) => { root.attack-changed(v); } decay-changed(v) => { root.decay-changed(v); } sustain-changed(v) => { root.sustain-changed(v); } release-changed(v) => { root.release-changed(v); }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        ParameterKnob { diameter: 36px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; default-value: 0; value-text: round(root.attack * 5000) + " ms"; changed(v) => { root.attack-changed(v); } }
+                        ParameterKnob { diameter: 36px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; default-value: 0.05; value-text: round(root.decay * 5000) + " ms"; changed(v) => { root.decay-changed(v); } }
+                        ParameterKnob { diameter: 36px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 1; value-text: round(root.sustain * 100) + "%"; changed(v) => { root.sustain-changed(v); } }
+                        ParameterKnob { diameter: 36px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; default-value: 0.01; value-text: round(root.release * 5000) + " ms"; changed(v) => { root.release-changed(v); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+        }
+
+        if root.page == 2 : HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                horizontal-stretch: 3; background: Theme.panel; border-radius: 2px;
+                VerticalLayout {
+                    padding: 6px; spacing: 4px;
+                    Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: 8px; }
+                    Rectangle {
+                        vertical-stretch: 1;
+                        for line in 5 : Rectangle { y: line * parent.height / 5; width: 100%; height: 1px; background: Theme.border.with-alpha(0.4); }
+                        Path {
+                            x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px;
+                            viewbox-width: 280; viewbox-height: 70;
+                            commands: "M 0 14 C 132 14 174 12 198 18 C 225 25 232 58 280 64";
+                            stroke: Theme.accent; stroke-width: 1.5px; fill: transparent;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 5px;
+                        ParameterKnob { diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff"; value <=> root.filter-cutoff; default-value: 1; value-text: root.filter-cutoff >= 0.999 ? "Open" : round(20 * pow(1000, root.filter-cutoff)) + " Hz"; changed(v) => { root.filter-cutoff-changed(v); } }
+                        ParameterKnob { diameter: 36px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; changed(v) => { root.filter-resonance-changed(v); } }
+                        ParameterKnob { diameter: 36px; label: "Env"; tooltip: "Envelope modulation"; value <=> root.filter-env; default-value: 0.5; bipolar: true; fill: Theme.warning; value-text: (round((root.filter-env * 2 - 1) * 100) > 0 ? "+" : "") + round((root.filter-env * 2 - 1) * 100) + "%"; changed(v) => { root.filter-env-changed(v); } }
+                        ParameterKnob { diameter: 36px; label: "Drive"; tooltip: "Pre-filter saturation"; value <=> root.drive; default-value: 0; fill: Theme.warning; value-text: round(root.drive * 100) + "%"; changed(v) => { root.drive-changed(v); } }
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 2; background: Theme.panel; border-radius: 2px;
+                VerticalLayout {
+                    padding: 6px; spacing: 4px;
+                    Text { text: "LO-FI"; color: Theme.text-faint; font-size: 8px; }
+                    Rectangle {
+                        vertical-stretch: 1;
+                        Path { x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px; viewbox-width: 180; viewbox-height: 70; commands: "M 0 35 L 22 35 L 22 12 L 45 12 L 45 52 L 68 52 L 68 20 L 90 20 L 90 44 L 112 44 L 112 27 L 136 27 L 136 39 L 158 39 L 158 32 L 180 32"; stroke: Theme.warning; stroke-width: 1.5px; fill: transparent; }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ParameterKnob { label: "Bits"; tooltip: "Bit-depth reduction"; value <=> root.bit-reduction; default-value: 0; fill: Theme.warning; value-text: round(16 - root.bit-reduction * 12) + " bit"; changed(v) => { root.bit-reduction-changed(v); } }
+                        ParameterKnob { label: "Rate"; tooltip: "Sample-rate reduction"; value <=> root.rate-reduction; default-value: 0; fill: Theme.warning; value-text: "÷" + round(1 + root.rate-reduction * 31); changed(v) => { root.rate-reduction-changed(v); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+        }
+    }
+}

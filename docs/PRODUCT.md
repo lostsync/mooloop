@@ -52,14 +52,19 @@ The step rack summarizes denser events. For example, a sixteenth-note cell can
 show four occupied or empty 64th-note subdivisions while the piano roll edits
 the actual events.
 
-### Channels As Instruments And Memory
+### Channels As Device Chains And Memory
 
-A channel combines a sound source, a continuously written working audio
-buffer, playback heads, processing, and a mixer output. In the ordinary state,
-the read head follows the write head and the stage behaves like a transparent
-bridge between source generation and downstream DSP. Patterns can make that
-head jump into recent history, change direction or rate, repeat a window, or
-otherwise treat every generated source as sampled material in realtime.
+A channel is an ordered device chain: one sound source followed by insert
+devices and a mixer output. A retained-audio buffer is one insert device, not a
+mandatory stage allocated in every channel. It can therefore capture the
+signal at any musically useful point in the chain and can be omitted where it
+is not needed.
+
+In the buffer device's ordinary state, its read head follows the write head and
+the device behaves like a transparent bridge. Patterns and automation can make
+that head jump into recent history, change direction or rate, repeat a window,
+or otherwise treat the signal reaching that device as sampled material in
+realtime.
 
 Controls operate on PCM sample frames, not opaque encoded file bytes. The
 source already has to produce discrete samples for the audio graph; the working
@@ -67,8 +72,8 @@ buffer keeps those samples addressable after the current process block would
 normally be discarded.
 
 This is the proposed differentiator. It is still a product hypothesis and must
-pass the spike in `BUFFER_ENGINE.md` before the whole architecture is committed
-to it.
+pass the insert-device spike in `BUFFER_ENGINE.md` before the buffer contract
+is treated as permanent.
 
 ### Sample-Centric, Not Sample-Only
 
@@ -114,7 +119,7 @@ Mooloop should include:
 - Variable-length patterns and a layered pattern playlist.
 - Pattern and Song transport modes with explicit loop ranges.
 - A capable sampler and a small set of authored synthesis sources.
-- Per-channel working buffers with sequencable capture and playback.
+- Insertable retained-audio buffer devices with sequencable capture and playback.
 - Parameter automation, channel inserts, sends, groups, and useful routing.
 - Project and kit persistence with ordinary audio assets.
 - Offline WAV rendering and JACK output. Compressed export can be added through
@@ -150,8 +155,9 @@ These are firm enough to build against:
   a text document.
 - WAV is the canonical render target. MP3 is a delivery format, not an engine
   primitive.
-- Broad effects work waits until the voice/event model and buffer tap points
-  are defined.
+- Effects use an ordered fixed-capacity device chain and stable parameter IDs.
+- Buffer capture position is determined by where its device is inserted; it
+  does not require a separate fixed channel tap point.
 
 ## Open Product Questions
 
