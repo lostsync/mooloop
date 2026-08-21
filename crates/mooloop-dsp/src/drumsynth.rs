@@ -13,7 +13,7 @@
 //! ringing voice.
 
 use crate::bus::StereoBus;
-use crate::env::ExpDecay;
+use crate::env::{ExpDecay, DECAY_TAIL_CONSTANTS};
 use crate::event::{Event, EventList};
 use crate::filter::{apply_drive, OnePoleHp};
 use crate::node::{AudioNode, ProcessContext};
@@ -27,9 +27,6 @@ use mooloop_core::{
 /// is scaled so the fade effectively completes within this window rather than
 /// treating it as a single time constant.
 const CHOKE_DECAY_S: f32 = 0.005;
-
-/// Time constants needed for an exponential decay to fall below audibility.
-const DECAY_TAIL_CONSTANTS: f32 = 9.2;
 
 /// Beater click duration for the kick (seconds).
 const CLICK_S: f32 = 0.003;
@@ -426,8 +423,9 @@ mod tests {
             let (pl, pr) = bus.peak(sr as usize);
             assert!(pl > 0.05, "{mode:?} too quiet: {pl}");
             assert_eq!(pl, pr, "{mode:?} should render mono");
-            // Exponential decays idle after ~9.2 time constants; the longest
-            // default is the kick at 0.35 s. Four seconds covers everything.
+            // `ExpDecay::set_time`'s seconds argument is the time to become
+            // inaudible; the longest default is the kick's 0.24 s amp decay.
+            // Four seconds covers everything.
             let mut bus = StereoBus::with_capacity(sr as usize);
             for _ in 0..3 {
                 bus.clear(sr as usize);

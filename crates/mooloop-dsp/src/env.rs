@@ -123,6 +123,12 @@ impl Adsr {
 /// Threshold below which an exponential decay is considered finished.
 const EXP_IDLE_LEVEL: f32 = 1.0e-4;
 
+/// Number of 1/e time constants for a level of 1.0 to fall below
+/// `EXP_IDLE_LEVEL`: `ln(1 / EXP_IDLE_LEVEL)`. `ExpDecay::set_time` uses this
+/// so its `seconds` argument means "time to become inaudible" (matching the
+/// UI's decay-time knobs) rather than the raw 1/e time constant.
+pub(crate) const DECAY_TAIL_CONSTANTS: f32 = 9.210_34;
+
 /// A one-shot exponential decay envelope for percussive sounds. Triggers at
 /// level 1 and falls toward zero with a musically natural curve.
 #[derive(Clone, Copy, Debug)]
@@ -139,9 +145,11 @@ impl ExpDecay {
         }
     }
 
-    /// Set the decay time in seconds (time to fall by a factor of e).
+    /// Set the decay time in seconds (time for the level to fall below
+    /// audibility, not the raw 1/e time constant).
     pub fn set_time(&mut self, seconds: f32, sample_rate: u32) {
-        self.coeff = (-1.0 / (seconds.max(MIN_STAGE_S) * sample_rate as f32)).exp();
+        let tau = seconds.max(MIN_STAGE_S) / DECAY_TAIL_CONSTANTS;
+        self.coeff = (-1.0 / (tau * sample_rate as f32)).exp();
     }
 
     /// Force an already-computed coefficient (used for fixed fast fades).
@@ -230,8 +238,9 @@ mod tests {
         env.set_time(0.01, sr);
         env.trigger();
         assert_eq!(env.level(), 1.0);
-        // Idle takes ~9.2 time constants (level < 1e-4); run 12.
-        for _ in 0..(0.12 * sr as f32) as usize {
+        // `set_time`'s seconds argument is the time to become inaudible, so
+        // running for slightly longer than that should reach idle.
+        for _ in 0..(0.012 * sr as f32) as usize {
             env.advance();
         }
         assert!(env.is_idle());
@@ -243,7 +252,9 @@ mod tests {
         let mut env = ExpDecay::new();
         env.set_time(0.1, sr);
         env.trigger();
-        for _ in 0..(0.1 * sr as f32) as usize {
+        // One 1/e time constant is `seconds / DECAY_TAIL_CONSTANTS`.
+        let tau_samples = (0.1 / DECAY_TAIL_CONSTANTS) * sr as f32;
+        for _ in 0..tau_samples as usize {
             env.advance();
         }
         // After exactly one time constant the level should be ~1/e.
