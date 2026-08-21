@@ -117,6 +117,9 @@ must be visible one-click choices.
 - Section dividers span the module content height; they do not stop or start at
   arbitrary points.
 - Graph handles must lie on the rendered envelope or curve.
+- Device plots derive from the parameters and transfer functions used by the
+  audio path. Static decorative waveforms and filter curves are not valid
+  substitutes for parameter feedback.
 - A compact control beside tall controls must be intentionally centered or
   placed in a labeled sub-row. It must not leave an accidental blank quadrant.
 - Dynamic visibility must not move unrelated modules. Reserve a stable grid
@@ -183,6 +186,8 @@ The device-chain row directly below it owns source type and generator presets:
   fill one stable face without internal paging.
 - Kick, snare, and hat use the same outer geometry even though their parameter
   counts differ.
+- The voice-shape display is a deterministic preview rendered through the
+  production drum voice and reduced to waveform min/max bins.
 
 ### Mono synth
 
@@ -190,6 +195,17 @@ The device-chain row directly below it owns source type and generator presets:
 - `Amp/Filter` pairs the graphical amplitude envelope with filter and drive.
 - `Mod` keeps LFO shape, retrigger, rate, and destination depths together.
 - Waveforms remain visible selector banks rather than dropdowns.
+- Oscillator plots respond to waveform, tuning, level, and pulse width.
+
+### Response displays
+
+- Filter plots use the state-variable filter's cutoff, resonance, and
+  bilinear frequency mapping. The reusable display supports low-pass,
+  band-pass, and high-pass even while current instruments expose low-pass.
+- Envelope-modulated filters show the base response and the response at peak
+  envelope depth without implying that the second curve is a separate filter.
+- Lo-fi plots apply the same rounded bit-depth and sample-hold mappings as the
+  sampler DSP.
 
 ## Rack Actions
 

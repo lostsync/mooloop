@@ -22,7 +22,7 @@ use mooloop_core::{
     MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR,
     TICKS_PER_STEP,
 };
-use mooloop_dsp::SampleData;
+use mooloop_dsp::{DrumSynth, SampleData};
 use mooloop_engine::{
     EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, WavEncoding,
 };
@@ -43,6 +43,13 @@ const INITIAL_BPM: i32 = 120;
 /// Fader positions for time-based params map onto [0, MAX_TIME_S] seconds.
 const MAX_TIME_S: f32 = 2.0;
 const WAVEFORM_BINS: usize = 256;
+const DRUM_PREVIEW_BINS: usize = 144;
+
+fn sync_drum_preview(window: &MainWindow, params: DrumSynthParams) {
+    let (minimums, maximums) = DrumSynth::preview_waveform(params, DRUM_PREVIEW_BINS);
+    window.set_drum_preview_minimums(ModelRc::from(Rc::new(VecModel::from(minimums))));
+    window.set_drum_preview_maximums(ModelRc::from(Rc::new(VecModel::from(maximums))));
+}
 
 fn apply_theme(window: &MainWindow, palette: ThemePalette) {
     let theme = window.global::<Theme>();
@@ -853,8 +860,11 @@ impl UiState {
     }
 
     fn sync_generator_preset_menu(&self, window: &MainWindow) {
-        let options: Vec<slint::SharedString> =
-            self.generator_presets.iter().map(preset_menu_label).collect();
+        let options: Vec<slint::SharedString> = self
+            .generator_presets
+            .iter()
+            .map(preset_menu_label)
+            .collect();
         window.set_generator_preset_options(ModelRc::from(Rc::new(VecModel::from(options))));
     }
 
@@ -977,6 +987,7 @@ impl UiState {
         window.set_drum_snare_noise_color(drum.snare_noise_color);
         window.set_drum_hat_hp_hz(drum.hat_hp_hz);
         window.set_drum_hat_metallic(drum.hat_metallic);
+        sync_drum_preview(window, drum);
         window.set_mono_osc1_wave(osc_wave_to_int(mono.osc[0].wave));
         window.set_mono_osc1_semitones(mono.osc[0].semitones);
         window.set_mono_osc1_cents(mono.osc[0].cents);
@@ -1501,7 +1512,9 @@ impl AppUi {
                     } else {
                         &st.channel_presets
                     };
-                    presets.get(index as usize).map(|preset| preset.path.clone())
+                    presets
+                        .get(index as usize)
+                        .map(|preset| preset.path.clone())
                 }) else {
                     return;
                 };
@@ -2935,15 +2948,21 @@ impl AppUi {
             ($callback:ident, $field:ident) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let window_weak = window.as_weak();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
                     let channel_index = st.selected;
                     let channel = &mut st.channels[channel_index];
                     channel.drum_params.$field = value;
+                    let params = channel.drum_params;
                     let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
                         channel: channel_index as u8,
-                        params: channel.drum_params,
+                        params,
                     });
+                    drop(st);
+                    if let Some(window) = window_weak.upgrade() {
+                        sync_drum_preview(&window, params);
+                    }
                 });
             }};
         }
@@ -2969,15 +2988,21 @@ impl AppUi {
             ($callback:ident, $field:ident, $map:ident) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let window_weak = window.as_weak();
                 window.$callback(move |value| {
                     let mut st = st.borrow_mut();
                     let channel_index = st.selected;
                     let channel = &mut st.channels[channel_index];
                     channel.drum_params.$field = $map(value);
+                    let params = channel.drum_params;
                     let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
                         channel: channel_index as u8,
-                        params: channel.drum_params,
+                        params,
                     });
+                    drop(st);
+                    if let Some(window) = window_weak.upgrade() {
+                        sync_drum_preview(&window, params);
+                    }
                 });
             }};
         }
@@ -3001,15 +3026,21 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let window_weak = window.as_weak();
             window.on_drum_mode_changed(move |value| {
                 let mut st = st.borrow_mut();
                 let channel_index = st.selected;
                 let channel = &mut st.channels[channel_index];
                 channel.drum_params.mode = drum_mode_from_int(value);
+                let params = channel.drum_params;
                 let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
                     channel: channel_index as u8,
-                    params: channel.drum_params,
+                    params,
                 });
+                drop(st);
+                if let Some(window) = window_weak.upgrade() {
+                    sync_drum_preview(&window, params);
+                }
             });
         }
         {

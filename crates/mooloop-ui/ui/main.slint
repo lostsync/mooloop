@@ -326,6 +326,8 @@ export component MainWindow inherits Window {
     in-out property <float> drum-snare-noise-color: 0.65;
     in-out property <float> drum-hat-hp-hz: 7500;
     in-out property <float> drum-hat-metallic: 0.5;
+    in-out property <[float]> drum-preview-minimums;
+    in-out property <[float]> drum-preview-maximums;
     callback drum-mode-changed(int);
     callback drum-kick-character-changed(int);
     callback drum-snare-character-changed(int);
@@ -1519,6 +1521,8 @@ export component MainWindow inherits Window {
                                             snare-noise-color <=> root.drum-snare-noise-color;
                                             hat-hp-hz <=> root.drum-hat-hp-hz;
                                             hat-metallic <=> root.drum-hat-metallic;
+                                            preview-minimums: root.drum-preview-minimums;
+                                            preview-maximums: root.drum-preview-maximums;
                                             mode-changed(v) => { root.drum-mode-changed(v); }
                                             kick-character-changed(v) => { root.drum-kick-character-changed(v); }
                                             snare-character-changed(v) => { root.drum-snare-character-changed(v); }

@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { ParameterKnob, SelectorBank, ToggleButton, ValueScale } from "controls.slint";
 import { DevicePageButton } from "device-rack.slint";
+import { FilterResponseDisplay, OscillatorTrace } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
 
 component OscillatorDeviceStrip inherits Rectangle {
@@ -35,19 +36,13 @@ component OscillatorDeviceStrip inherits Rectangle {
         }
         Rectangle {
             height: 42px;
-            Path {
+            OscillatorTrace {
                 x: 5px; y: 4px; width: parent.width - 10px; height: parent.height - 8px;
-                viewbox-width: 160; viewbox-height: 34;
-                commands: root.wave == 0
-                    ? "M 0 17 C 20 -3 40 -3 60 17 C 80 37 100 37 120 17 C 136 1 150 1 160 17"
-                    : root.wave == 1
-                        ? "M 0 17 L 40 0 L 80 34 L 120 0 L 160 17"
-                        : root.wave == 2
-                            ? "M 0 34 L 80 0 L 80 34 L 160 0"
-                            : "M 0 4 L 80 4 L 80 30 L 160 30";
-                stroke: Theme.accent;
-                stroke-width: 1.4px;
-                fill: transparent;
+                wave: root.wave;
+                semitones: root.semitones;
+                cents: root.cents;
+                level: root.level;
+                pulse-width: root.pulse-width;
             }
         }
         HorizontalLayout {
@@ -166,14 +161,12 @@ export component MonoDeviceFace inherits Rectangle {
                 VerticalLayout {
                     padding: 5px; spacing: 4px;
                     Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: 8px; }
-                    Rectangle {
+                    FilterResponseDisplay {
                         height: 90px;
-                        Path {
-                            x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px;
-                            viewbox-width: 180; viewbox-height: 60;
-                            commands: "M 0 15 C 82 15 103 14 118 18 C 138 24 142 50 180 56";
-                            stroke: Theme.warning; stroke-width: 1.5px; fill: transparent;
-                        }
+                        mode: 0;
+                        cutoff: root.filter-cutoff;
+                        resonance: root.filter-resonance;
+                        env-amount: root.filter-env;
                     }
                     HorizontalLayout {
                         spacing: 0px;

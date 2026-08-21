@@ -1,3 +1,5 @@
+use mooloop_core::{DrumMode, DrumSynthParams};
+use mooloop_dsp::DrumSynth;
 use mooloop_ui::{ChannelRow, MainWindow, StepCell};
 use slint::{ComponentHandle, LogicalSize, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
@@ -36,6 +38,12 @@ fn rack_rows() -> ModelRc<ChannelRow> {
     ModelRc::from(Rc::new(VecModel::from(rows)))
 }
 
+fn set_drum_preview(ui: &MainWindow, params: DrumSynthParams) {
+    let (minimums, maximums) = DrumSynth::preview_waveform(params, 144);
+    ui.set_drum_preview_minimums(ModelRc::from(Rc::new(VecModel::from(minimums))));
+    ui.set_drum_preview_maximums(ModelRc::from(Rc::new(VecModel::from(maximums))));
+}
+
 #[test]
 fn render_drum_and_mono_source_editors() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
@@ -55,17 +63,32 @@ fn render_drum_and_mono_source_editors() {
     ui.set_editor_page(0);
     ui.set_source_kind(1);
     ui.set_drum_mode(0);
+    set_drum_preview(&ui, DrumSynthParams::default());
     let drum = ui.window().take_snapshot().unwrap();
     assert_eq!((drum.width(), drum.height()), (960, 760));
     assert!(drum.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&drum, "MOOLOOP_DRUM_SOURCE_SNAPSHOT");
 
     ui.set_drum_mode(1);
+    set_drum_preview(
+        &ui,
+        DrumSynthParams {
+            mode: DrumMode::Snare,
+            ..DrumSynthParams::default()
+        },
+    );
     let snare = ui.window().take_snapshot().unwrap();
     assert_ne!(drum.as_bytes(), snare.as_bytes());
     write_snapshot(&snare, "MOOLOOP_SNARE_SOURCE_SNAPSHOT");
 
     ui.set_drum_mode(2);
+    set_drum_preview(
+        &ui,
+        DrumSynthParams {
+            mode: DrumMode::Hat,
+            ..DrumSynthParams::default()
+        },
+    );
     let hat = ui.window().take_snapshot().unwrap();
     assert_ne!(snare.as_bytes(), hat.as_bytes());
     write_snapshot(&hat, "MOOLOOP_HAT_SOURCE_SNAPSHOT");
@@ -77,7 +100,18 @@ fn render_drum_and_mono_source_editors() {
     assert_ne!(drum.as_bytes(), mono.as_bytes());
     write_snapshot(&mono, "MOOLOOP_MONO_SOURCE_SNAPSHOT");
 
+    ui.set_mono_osc1_wave(3);
+    ui.set_mono_osc1_level(1.0);
+    ui.set_mono_osc1_pulse_width(0.2);
+    let narrow_pulse = ui.window().take_snapshot().unwrap();
+    ui.set_mono_osc1_pulse_width(0.8);
+    let wide_pulse = ui.window().take_snapshot().unwrap();
+    assert_ne!(narrow_pulse.as_bytes(), wide_pulse.as_bytes());
+    write_snapshot(&wide_pulse, "MOOLOOP_MONO_PULSE_SOURCE_SNAPSHOT");
+
     ui.set_mono_device_page(1);
+    ui.set_mono_filter_cutoff(0.35);
+    ui.set_mono_filter_resonance(0.8);
     let mono_amp = ui.window().take_snapshot().unwrap();
     assert_ne!(mono.as_bytes(), mono_amp.as_bytes());
     write_snapshot(&mono_amp, "MOOLOOP_MONO_AMP_SOURCE_SNAPSHOT");
@@ -135,4 +169,10 @@ fn render_sampler_source_editor() {
     let tone = ui.window().take_snapshot().unwrap();
     assert_ne!(voice.as_bytes(), tone.as_bytes());
     write_snapshot(&tone, "MOOLOOP_SAMPLER_TONE_SOURCE_SNAPSHOT");
+
+    ui.set_bit_reduction(1.0);
+    ui.set_rate_reduction(1.0);
+    let crushed = ui.window().take_snapshot().unwrap();
+    assert_ne!(tone.as_bytes(), crushed.as_bytes());
+    write_snapshot(&crushed, "MOOLOOP_SAMPLER_CRUSHED_SOURCE_SNAPSHOT");
 }

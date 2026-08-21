@@ -1,0 +1,143 @@
+import { Theme } from "theme.slint";
+
+export component SampleTrace inherits Rectangle {
+    in property <[float]> minimums;
+    in property <[float]> maximums;
+    in property <color> trace-color: Theme.accent;
+
+    Rectangle {
+        y: parent.height / 2;
+        width: 100%;
+        height: 1px;
+        background: Theme.border.with-alpha(0.55);
+    }
+    for maximum[index] in root.maximums : Rectangle {
+        property <float> minimum: index < root.minimums.length ? root.minimums[index] : -maximum;
+        property <float> top-value: clamp(max(maximum, self.minimum), -1, 1);
+        property <float> bottom-value: clamp(min(maximum, self.minimum), -1, 1);
+        x: index * parent.width / max(1, root.maximums.length);
+        y: parent.height * (0.5 - self.top-value * 0.44);
+        width: max(1px, parent.width / max(1, root.maximums.length));
+        height: max(1px, parent.height * (self.top-value - self.bottom-value) * 0.44);
+        background: root.trace-color;
+    }
+}
+
+export component OscillatorTrace inherits Rectangle {
+    in property <int> wave;
+    in property <float> semitones;
+    in property <float> cents;
+    in property <float> level;
+    in property <float> pulse-width;
+    private property <int> sample-count: 160;
+    private property <float> cycles: clamp(pow(2, (root.semitones + root.cents / 100) / 12), 0.5, 8);
+
+    pure function sample(index: int) -> float {
+        let phase = mod(index * root.cycles / (root.sample-count - 1), 1);
+        let raw = root.wave == 0
+            ? sin(phase * 360deg)
+            : root.wave == 1
+                ? 4 * abs(phase - 0.5) - 1
+                : root.wave == 2
+                    ? 2 * phase - 1
+                    : phase < clamp(root.pulse-width, 0.05, 0.95) ? 1 : -1;
+        return raw * clamp(root.level, 0, 1);
+    }
+
+    Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border.with-alpha(0.55); }
+    for index in root.sample-count : Rectangle {
+        property <float> current: root.sample(index);
+        property <float> previous: root.sample(max(0, index - 1));
+        property <float> top-value: max(self.current, self.previous);
+        property <float> bottom-value: min(self.current, self.previous);
+        x: index * parent.width / root.sample-count;
+        y: parent.height * (0.5 - self.top-value * 0.42);
+        width: max(1px, parent.width / root.sample-count + 0.5px);
+        height: max(1px, parent.height * (self.top-value - self.bottom-value) * 0.42);
+        background: Theme.accent;
+    }
+}
+
+export component BitcrusherTrace inherits Rectangle {
+    in property <float> bit-reduction;
+    in property <float> rate-reduction;
+    private property <int> sample-count: 96;
+    private property <int> hold-frames: round(1 + clamp(root.rate-reduction, 0, 1) * 31);
+    private property <int> bits: round(16 - clamp(root.bit-reduction, 0, 1) * 12);
+    private property <float> quantization-scale: pow(2, root.bits - 1);
+
+    pure function sample(index: int) -> float {
+        let held-index = floor(index / root.hold-frames) * root.hold-frames;
+        let source = sin(held-index * 2.75 * 360deg / (root.sample-count - 1));
+        return round(source * root.quantization-scale) / root.quantization-scale;
+    }
+
+    Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border.with-alpha(0.55); }
+    for index in root.sample-count : Rectangle {
+        property <float> current: root.sample(index);
+        property <float> previous: root.sample(max(0, index - 1));
+        property <float> top-value: max(self.current, self.previous);
+        property <float> bottom-value: min(self.current, self.previous);
+        x: index * parent.width / root.sample-count;
+        y: parent.height * (0.5 - self.top-value * 0.42);
+        width: max(1px, parent.width / root.sample-count + 0.5px);
+        height: max(1px, parent.height * (self.top-value - self.bottom-value) * 0.42);
+        background: Theme.warning;
+    }
+}
+
+export component FilterResponseDisplay inherits Rectangle {
+    // 0 = low-pass, 1 = band-pass, 2 = high-pass. Audio currently uses LPF.
+    in property <int> mode;
+    in property <float> cutoff;
+    in property <float> resonance;
+    in property <float> env-amount;
+    private property <int> sample-count: 160;
+    private property <float> modulated-cutoff: clamp(root.cutoff + root.env-amount * 0.602, 0, 1);
+
+    pure function response(index: int, normalized-cutoff: float) -> float {
+        let frequency = 20 * pow(1000, index / (root.sample-count - 1));
+        let cutoff-hz = 20 * pow(1000, clamp(normalized-cutoff, 0, 1));
+        // The production TPT SVF uses g = tan(pi * f / sample-rate).
+        let frequency-angle = frequency / 48000 * 180deg;
+        let cutoff-angle = cutoff-hz / 48000 * 180deg;
+        let ratio = (sin(frequency-angle) / cos(frequency-angle))
+            / max(0.0001, sin(cutoff-angle) / cos(cutoff-angle));
+        let damping = clamp(2 - clamp(root.resonance, 0, 1) * 1.9, 0.1, 2);
+        let denominator = max(0.0001, pow(pow(1 - ratio * ratio, 2) + pow(damping * ratio, 2), 0.5));
+        return root.mode == 0 ? 1 / denominator : root.mode == 1 ? ratio / denominator : ratio * ratio / denominator;
+    }
+
+    pure function plot-y(index: int, normalized-cutoff: float) -> float {
+        let magnitude = root.response(index, normalized-cutoff);
+        return magnitude >= 1
+            ? clamp(0.25 - 0.2 * (1 - 1 / magnitude), 0.04, 0.25)
+            : clamp(0.25 + 0.7 * (1 - magnitude), 0.25, 0.95);
+    }
+
+    for line in 5 : Rectangle {
+        y: line * parent.height / 4;
+        width: 100%; height: 1px;
+        background: Theme.border.with-alpha(line == 1 ? 0.65 : 0.35);
+    }
+    if abs(root.env-amount) > 0.01 : Rectangle {
+        for index in root.sample-count : Rectangle {
+            property <float> current: root.plot-y(index, root.modulated-cutoff);
+            property <float> previous: root.plot-y(max(0, index - 1), root.modulated-cutoff);
+            x: index * parent.width / root.sample-count;
+            y: min(self.current, self.previous) * parent.height;
+            width: max(1px, parent.width / root.sample-count + 0.5px);
+            height: max(1px, abs(self.current - self.previous) * parent.height);
+            background: Theme.warning.with-alpha(0.62);
+        }
+    }
+    for index in root.sample-count : Rectangle {
+        property <float> current: root.plot-y(index, root.cutoff);
+        property <float> previous: root.plot-y(max(0, index - 1), root.cutoff);
+        x: index * parent.width / root.sample-count;
+        y: min(self.current, self.previous) * parent.height;
+        width: max(1px, parent.width / root.sample-count + 0.5px);
+        height: max(1px, abs(self.current - self.previous) * parent.height);
+        background: Theme.accent;
+    }
+}

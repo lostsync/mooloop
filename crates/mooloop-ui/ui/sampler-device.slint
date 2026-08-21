@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { ParameterFader, ParameterKnob, SelectorBank, ToolButton, ValueScale } from "controls.slint";
 import { DevicePageButton } from "device-rack.slint";
+import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { StepperField } from "toolbar.slint";
 
@@ -281,15 +282,12 @@ export component SamplerDeviceFace inherits Rectangle {
                 VerticalLayout {
                     padding: 6px; spacing: 4px;
                     Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: 8px; }
-                    Rectangle {
+                    FilterResponseDisplay {
                         vertical-stretch: 1;
-                        for line in 5 : Rectangle { y: line * parent.height / 5; width: 100%; height: 1px; background: Theme.border.with-alpha(0.4); }
-                        Path {
-                            x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px;
-                            viewbox-width: 280; viewbox-height: 70;
-                            commands: "M 0 14 C 132 14 174 12 198 18 C 225 25 232 58 280 64";
-                            stroke: Theme.accent; stroke-width: 1.5px; fill: transparent;
-                        }
+                        mode: 0;
+                        cutoff: root.filter-cutoff;
+                        resonance: root.filter-resonance;
+                        env-amount: root.filter-env * 2 - 1;
                     }
                     HorizontalLayout {
                         spacing: 5px;
@@ -305,9 +303,10 @@ export component SamplerDeviceFace inherits Rectangle {
                 VerticalLayout {
                     padding: 6px; spacing: 4px;
                     Text { text: "LO-FI"; color: Theme.text-faint; font-size: 8px; }
-                    Rectangle {
+                    BitcrusherTrace {
                         vertical-stretch: 1;
-                        Path { x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px; viewbox-width: 180; viewbox-height: 70; commands: "M 0 35 L 22 35 L 22 12 L 45 12 L 45 52 L 68 52 L 68 20 L 90 20 L 90 44 L 112 44 L 112 27 L 136 27 L 136 39 L 158 39 L 158 32 L 180 32"; stroke: Theme.warning; stroke-width: 1.5px; fill: transparent; }
+                        bit-reduction: root.bit-reduction;
+                        rate-reduction: root.rate-reduction;
                     }
                     HorizontalLayout {
                         spacing: 8px;

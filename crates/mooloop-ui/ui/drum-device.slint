@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
 import { ParameterFader, ParameterKnob, SelectorBank, ValueScale } from "controls.slint";
+import { SampleTrace } from "device-displays.slint";
 import { StepperField } from "toolbar.slint";
 
 export component DrumDeviceFace inherits Rectangle {
@@ -24,6 +25,8 @@ export component DrumDeviceFace inherits Rectangle {
     in-out property <float> snare-noise-color;
     in-out property <float> hat-hp-hz;
     in-out property <float> hat-metallic;
+    in property <[float]> preview-minimums;
+    in property <[float]> preview-maximums;
     callback mode-changed(int);
     callback kick-character-changed(int);
     callback snare-character-changed(int);
@@ -139,17 +142,10 @@ export component DrumDeviceFace inherits Rectangle {
                     color: Theme.text-faint;
                     font-size: 8px;
                 }
-                Path {
+                SampleTrace {
                     x: 8px; y: 18px; width: 284px; height: 54px;
-                    viewbox-width: 180; viewbox-height: 50;
-                    commands: root.mode == 0
-                        ? "M 0 25 C 18 3 28 47 44 25 C 59 10 70 38 85 25 C 100 17 112 32 126 25 C 144 21 158 28 180 25"
-                        : root.mode == 1
-                            ? "M 0 25 L 14 10 L 20 42 L 29 4 L 38 45 L 48 18 L 58 34 L 70 13 L 82 39 L 96 19 L 112 32 L 128 21 L 146 29 L 162 23 L 180 26"
-                            : "M 0 25 L 8 8 L 16 43 L 24 12 L 32 38 L 40 6 L 48 45 L 56 14 L 64 36 L 72 9 L 80 42 L 88 16 L 96 34 L 104 11 L 112 40 L 120 15 L 128 35 L 136 12 L 144 39 L 152 17 L 160 32 L 168 20 L 180 26";
-                    stroke: Theme.accent;
-                    stroke-width: 1.4px;
-                    fill: transparent;
+                    minimums: root.preview-minimums;
+                    maximums: root.preview-maximums;
                 }
             }
         }

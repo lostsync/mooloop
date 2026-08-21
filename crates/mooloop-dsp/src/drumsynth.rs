@@ -137,6 +137,44 @@ impl DrumSynth {
         self.params.choke_group
     }
 
+    /// Render one deterministic hit through the production voice path and
+    /// reduce it to min/max bins suitable for a waveform overview.
+    pub fn preview_waveform(params: DrumSynthParams, bins: usize) -> (Vec<f32>, Vec<f32>) {
+        if bins == 0 {
+            return (Vec::new(), Vec::new());
+        }
+
+        const PREVIEW_SAMPLE_RATE: u32 = 48_000;
+        const PREVIEW_SECONDS: f32 = 0.3;
+        let frame_count = (PREVIEW_SAMPLE_RATE as f32 * PREVIEW_SECONDS) as usize;
+        let mut synth = Self::new(params, PREVIEW_SAMPLE_RATE);
+        synth.trigger(60, 127);
+        let params = synth.params;
+        let voice = &mut synth.voices[0];
+        let mut minimums = vec![f32::INFINITY; bins];
+        let mut maximums = vec![f32::NEG_INFINITY; bins];
+
+        for frame in 0..frame_count {
+            let sample = Self::render_sample(params, PREVIEW_SAMPLE_RATE, voice);
+            let bin = (frame * bins / frame_count).min(bins - 1);
+            minimums[bin] = minimums[bin].min(sample);
+            maximums[bin] = maximums[bin].max(sample);
+        }
+
+        let peak = minimums
+            .iter()
+            .chain(&maximums)
+            .fold(1.0_f32, |peak, sample| peak.max(sample.abs()));
+        for sample in minimums.iter_mut().chain(&mut maximums) {
+            if !sample.is_finite() {
+                *sample = 0.0;
+            } else {
+                *sample /= peak;
+            }
+        }
+        (minimums, maximums)
+    }
+
     /// Immediately invalidate all active voices.
     pub fn reset(&mut self) {
         for (index, voice) in self.voices.iter_mut().enumerate() {
@@ -614,5 +652,27 @@ mod tests {
         synth.process(&ctx(2048, sr), &mut bus, &events, None);
         let (pl, _) = bus.peak(2048);
         assert!(pl <= 1.0);
+    }
+
+    #[test]
+    fn preview_uses_the_production_voice_and_tracks_parameters() {
+        let plain = DrumSynth::preview_waveform(DrumSynthParams::default(), 96);
+        let altered = DrumSynth::preview_waveform(
+            DrumSynthParams {
+                kick_start_hz: 700.0,
+                kick_click: 1.0,
+                drive: 0.8,
+                ..DrumSynthParams::default()
+            },
+            96,
+        );
+        assert_eq!(plain.0.len(), 96);
+        assert_eq!(plain.1.len(), 96);
+        assert_ne!(plain, altered);
+        assert!(plain
+            .0
+            .iter()
+            .chain(&plain.1)
+            .all(|sample| (-1.0..=1.0).contains(sample)));
     }
 }
