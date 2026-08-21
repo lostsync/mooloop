@@ -7,6 +7,23 @@ work, and `docs/BUFFER_ENGINE.md` defines the buffer-centric hypothesis. Read
 is the acceptance contract for interface work. Current explicit user feedback
 and current purpose-built UI designs outrank all of these documents.
 
+## Slint version
+
+This project pins Slint `1.17.1` (see the `slint`/`slint-build` entries in
+`Cargo.toml` and `Cargo.lock`). Before writing or editing `.slint` files, the
+`slint::` Rust API, or `slint-build`, fetch the version-matched docs rather
+than relying on general/latest knowledge — Slint's language and widget API
+have changed across versions, and a mismatch reads as plausible but wrong
+code (deprecated properties, renamed callbacks, layout syntax that no longer
+compiles).
+
+Docs for this exact version live at
+`https://releases.slint.dev/1.17.1/docs/slint/` (currently redirects to
+`https://docs.slint.dev/latest/docs/slint/`, since 1.17.1 is the current
+release). If `Cargo.toml`'s pinned Slint version ever changes, update this
+URL to match — `https://releases.slint.dev/<version>/docs/slint/` is the
+general pattern for any archived version.
+
 ## Taste / design context
 
 `reference/ADAM.md` is a taste-and-aesthetic brief about Adam (sound,
