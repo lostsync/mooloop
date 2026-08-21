@@ -1,5 +1,9 @@
 # mooloop
 
+<p align="center">
+  <img src="mooloop.png" alt="Mooloop logo" width="156">
+</p>
+
 Mooloop is an experimental, Linux-native, tracker-inspired pattern instrument.
 It combines a channel rack, piano roll, playlist, sampler, and small synthesis
 engines in a workflow aimed at making rhythm-centered music quickly. It is
@@ -12,6 +16,8 @@ by human product decisions, testing, and taste. The point of the project is in
 part to find out how far that process can be taken on a technically demanding
 realtime audio application. Treat it as experimental software, not as a mature
 or dependable production tool.
+
+![Mooloop interface showing the channel rack and mono synth](mooloop-screenshot.png)
 
 ## What Works
 
