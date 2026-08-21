@@ -70,9 +70,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   where they will land. The File menu covers song, kit, and selected-channel
   save/load, the sample-embed toggle, export, and quit; Ctrl+O / Ctrl+S /
   Ctrl+Shift+S / Ctrl+E / Ctrl+Q mirror it. Help has an About dialog with the
-  crate version. Song documents use versioned directory bundles with an
-  inspectable TOML manifest and optional copied WAV assets. Missing or corrupt
-  samples warn and load as silent slots.
+  crate version. Song documents are inspectable versioned TOML files with
+  optional copied WAV assets in a sibling `.mooloop-assets` directory. Older
+  directory-style song bundles remain loadable and migrate when resaved.
+  Missing or corrupt samples warn and load as silent slots.
 - Offline export of exactly one selected-pattern pass in Pattern mode or one
   derived playlist pass in Song mode, followed by a configurable 0-30 second
   release tail. Outputs are 24-bit PCM WAV, 32-bit float WAV, or 192/256/320

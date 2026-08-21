@@ -2,31 +2,45 @@
 
 Status: format version 1, August 2026.
 
-Mooloop songs, kits, and channel presets are inspectable directory bundles. A
-bundle contains a UTF-8 TOML manifest and, when requested, ordinary copied WAV
-assets. Samples are never encoded into TOML.
+Mooloop songs are inspectable UTF-8 TOML files. When a song embeds samples,
+ordinary copied WAV files live in a sibling asset directory; samples are never
+encoded into TOML. Kits, channel documents, and preset-library entries remain
+directory bundles containing a TOML manifest and optional WAV assets.
 
 ## Bundle Layout
 
-The conventional directory suffixes are:
+The conventional suffixes are:
 
-- `name.mooloop` for a song.
-- `name.mooloop-kit` for a kit.
-- `name.mooloop-channel` for a channel preset.
+- `name.mooloop` for a song file.
+- `name.mooloop-assets/` for that song's embedded assets, when any exist.
+- `name.mooloop-kit/` for a kit directory bundle.
+- `name.mooloop-channel/` for a channel directory bundle.
 
-Every bundle contains `manifest.toml`. Embedded samples live below `samples/`:
+A song with embedded assets has this layout:
 
 ```text
-beat.mooloop/
+|-- beat.mooloop
+`-- beat.mooloop-assets/
+    `-- samples/
+        |-- 00-kick.wav
+        `-- 01-snare.wav
+```
+
+Directory bundles retain the original layout:
+
+```text
+drums.mooloop-kit/
 |-- manifest.toml
 `-- samples/
     |-- 00-kick.wav
     `-- 01-snare.wav
 ```
 
-Saving replaces the bundle through a sibling staging directory. An existing
-bundle is moved to a temporary backup until the staged bundle is in place, so
-a failed save does not leave a partially written document.
+Saving replaces a song file and its asset directory through sibling staging
+paths. Existing paths are moved to temporary backups until both replacements
+are in place, so a failed save can restore the previous document. Loading and
+resaving an older directory-style `.mooloop` song migrates it to the file and
+sidecar layout. Other bundle types retain their directory replacement flow.
 
 ## Envelope
 
@@ -159,9 +173,14 @@ path = "samples/00-kick.wav"
 embedded = true
 ```
 
-Embedded paths must remain below `samples/`; absolute paths and `..` traversal
-are rejected. Embedded saves copy WAV files byte-for-byte and deduplicate
-channels that use the same source file. Referenced saves write paths relative
+For a song file, the corresponding embedded path includes the sidecar name,
+for example `beat.mooloop-assets/samples/00-kick.wav`. Both forms are resolved
+relative to their document container and checked for path traversal.
+
+Embedded paths must remain below the document's `samples/` directory or its
+matching song sidecar; absolute paths and `..` traversal are rejected. Embedded
+saves copy WAV files byte-for-byte and deduplicate channels that use the same
+source file. Referenced saves write paths relative
 to the bundle when possible. Relative paths are resolved from the bundle
 directory when loading.
 

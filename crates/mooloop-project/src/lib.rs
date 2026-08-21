@@ -1,4 +1,4 @@
-//! Versioned mooloop directory bundles and sample-asset handling.
+//! Versioned mooloop documents and sample-asset handling.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -159,20 +159,7 @@ struct Header {
 
 pub fn save_song(path: &Path, project: &Project, mode: AssetMode) -> Result<SaveReport, Error> {
     validate_project(project)?;
-    save_with_assets(
-        path,
-        DocumentKind::Song,
-        project.clone(),
-        mode,
-        None,
-        |project| {
-            project
-                .channels
-                .iter_mut()
-                .map(|channel| &mut channel.setup.source)
-                .collect()
-        },
-    )
+    save_song_file(path, project, mode)
 }
 
 pub fn save_kit(path: &Path, kit: &Kit, mode: AssetMode) -> Result<SaveReport, Error> {
@@ -238,6 +225,221 @@ pub fn save_generator_preset(
         Some(info),
         |source| vec![source],
     )
+}
+
+fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<SaveReport, Error> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::Invalid("song path has no parent".into()))?;
+    fs::create_dir_all(parent)?;
+    let target_assets = song_assets_path(path)?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let stem = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("mooloop");
+    let staging_file = parent.join(format!(".{stem}.tmp-{}-{nonce}", std::process::id()));
+    let staging_assets = parent.join(format!(".{stem}-assets.tmp-{}-{nonce}", std::process::id()));
+
+    let result = (|| {
+        let mut document = project.clone();
+        let mut report = SaveReport::default();
+        let mut copied = HashMap::<PathBuf, PathBuf>::new();
+        for (index, channel) in document.channels.iter_mut().enumerate() {
+            prepare_song_asset(
+                index,
+                &mut channel.setup.source,
+                path,
+                &target_assets,
+                &staging_assets,
+                mode,
+                &mut copied,
+                &mut report.warnings,
+            )?;
+        }
+        let envelope = Envelope {
+            format_version: FORMAT_VERSION,
+            document_type: DocumentKind::Song.as_str().into(),
+            asset_mode: mode,
+            preset: None,
+            document,
+        };
+        fs::write(&staging_file, toml::to_string_pretty(&envelope)?)?;
+        replace_song_file(path, &staging_file, &target_assets, &staging_assets)?;
+        Ok(report)
+    })();
+
+    if staging_file.exists() {
+        let _ = fs::remove_file(&staging_file);
+    }
+    if staging_assets.exists() {
+        let _ = fs::remove_dir_all(&staging_assets);
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_song_asset(
+    channel: usize,
+    source: &mut ChannelSource,
+    target: &Path,
+    target_assets: &Path,
+    staging_assets: &Path,
+    mode: AssetMode,
+    copied: &mut HashMap<PathBuf, PathBuf>,
+    warnings: &mut Vec<AssetWarning>,
+) -> Result<(), Error> {
+    let ChannelSource::Sampler(sampler) = source else {
+        return Ok(());
+    };
+    let SampleReference::File { path, embedded } = &mut sampler.sample else {
+        return Ok(());
+    };
+
+    let source = path.clone();
+    let keep_owned = *embedded && (source.starts_with(target) || source.starts_with(target_assets));
+    let parent = target.parent().expect("validated song parent");
+    if mode == AssetMode::Referenced && !keep_owned {
+        if !source.is_file() {
+            warnings.push(AssetWarning {
+                channel,
+                path: source.clone(),
+                message: "referenced sample is missing".into(),
+            });
+        }
+        *path = pathdiff::diff_paths(&source, parent).unwrap_or(source);
+        *embedded = false;
+        return Ok(());
+    }
+
+    if !source.is_file() {
+        warnings.push(AssetWarning {
+            channel,
+            path: source.clone(),
+            message: "sample could not be embedded because it is missing".into(),
+        });
+        *path = pathdiff::diff_paths(&source, parent).unwrap_or(source);
+        *embedded = false;
+        return Ok(());
+    }
+
+    let canonical = source.canonicalize().unwrap_or_else(|_| source.clone());
+    let relative = if let Some(relative) = copied.get(&canonical) {
+        relative.clone()
+    } else {
+        let name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(sanitize_preset_name)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "sample.wav".into());
+        let asset_name = target_assets
+            .file_name()
+            .expect("song assets path has a file name");
+        let relative = PathBuf::from(asset_name)
+            .join("samples")
+            .join(format!("{channel:02}-{name}"));
+        let destination = staging_assets
+            .join("samples")
+            .join(format!("{channel:02}-{name}"));
+        fs::create_dir_all(destination.parent().expect("sample destination has parent"))?;
+        fs::copy(&source, destination)?;
+        copied.insert(canonical, relative.clone());
+        relative
+    };
+    *path = relative;
+    *embedded = true;
+    Ok(())
+}
+
+fn song_assets_path(path: &Path) -> Result<PathBuf, Error> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::Invalid("song path has no parent".into()))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| Error::Invalid("song path has no file name".into()))?;
+    let mut assets_name = name.to_os_string();
+    assets_name.push("-assets");
+    Ok(parent.join(assets_name))
+}
+
+fn remove_path(path: &Path) -> Result<(), std::io::Error> {
+    if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+fn replace_song_file(
+    target: &Path,
+    staging_file: &Path,
+    target_assets: &Path,
+    staging_assets: &Path,
+) -> Result<(), Error> {
+    let parent = target.parent().expect("validated song parent");
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("mooloop");
+    let backup = parent.join(format!(".{name}.backup-{}", std::process::id()));
+    let assets_backup = parent.join(format!(".{name}-assets.backup-{}", std::process::id()));
+    for stale in [&backup, &assets_backup] {
+        if stale.exists() {
+            remove_path(stale)?;
+        }
+    }
+
+    let had_target = target.exists();
+    let had_assets = target_assets.exists();
+    if had_target {
+        fs::rename(target, &backup)?;
+    }
+    if had_assets {
+        if let Err(error) = fs::rename(target_assets, &assets_backup) {
+            if had_target {
+                let _ = fs::rename(&backup, target);
+            }
+            return Err(Error::Io(error));
+        }
+    }
+
+    let installs_assets = staging_assets.exists();
+    if installs_assets {
+        if let Err(error) = fs::rename(staging_assets, target_assets) {
+            if had_assets {
+                let _ = fs::rename(&assets_backup, target_assets);
+            }
+            if had_target {
+                let _ = fs::rename(&backup, target);
+            }
+            return Err(Error::Io(error));
+        }
+    }
+    if let Err(error) = fs::rename(staging_file, target) {
+        if installs_assets {
+            let _ = fs::rename(target_assets, staging_assets);
+        }
+        if had_assets {
+            let _ = fs::rename(&assets_backup, target_assets);
+        }
+        if had_target {
+            let _ = fs::rename(&backup, target);
+        }
+        return Err(Error::Io(error));
+    }
+
+    if had_target {
+        remove_path(&backup)?;
+    }
+    if had_assets {
+        remove_path(&assets_backup)?;
+    }
+    Ok(())
 }
 
 fn save_with_assets<T, F>(
@@ -411,7 +613,11 @@ fn replace_bundle(target: &Path, staging: &Path) -> Result<(), Error> {
 }
 
 pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
-    let manifest_path = path.join(MANIFEST_FILE);
+    let manifest_path = if path.is_dir() {
+        path.join(MANIFEST_FILE)
+    } else {
+        path.to_path_buf()
+    };
     let manifest = fs::read_to_string(&manifest_path)?;
     let header: Header = toml::from_str(&manifest)?;
     if header.format_version != FORMAT_VERSION {
@@ -550,7 +756,7 @@ fn resolve_setup_asset(
     let SampleReference::File { path, embedded } = &mut sampler.sample else {
         return Ok(());
     };
-    if *embedded && !safe_embedded_path(path) {
+    if *embedded && !safe_embedded_path(bundle, path) {
         return Err(Error::Invalid(format!(
             "channel {channel} has unsafe embedded path {}",
             path.display()
@@ -558,8 +764,13 @@ fn resolve_setup_asset(
     }
     let resolved = if path.is_absolute() {
         path.clone()
-    } else {
+    } else if bundle.is_dir() {
         bundle.join(&*path)
+    } else {
+        bundle
+            .parent()
+            .expect("loaded song file has a parent")
+            .join(&*path)
     };
     if !resolved.is_file() {
         warnings.push(AssetWarning {
@@ -572,11 +783,20 @@ fn resolve_setup_asset(
     Ok(())
 }
 
-fn safe_embedded_path(path: &Path) -> bool {
-    path.starts_with("samples")
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+fn safe_embedded_path(bundle: &Path, path: &Path) -> bool {
+    if !path
+        .components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+    {
+        return false;
+    }
+    if bundle.is_dir() {
+        return path.starts_with("samples");
+    }
+    song_assets_path(bundle)
+        .ok()
+        .and_then(|assets| assets.file_name().map(PathBuf::from))
+        .is_some_and(|assets| path.starts_with(assets.join("samples")))
 }
 
 pub fn validate_project(project: &Project) -> Result<(), Error> {
@@ -835,6 +1055,7 @@ mod tests {
         project.current_pattern = 1;
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        assert!(bundle.is_file());
         let loaded = load_bundle(&bundle).unwrap();
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.document, LoadedDocument::Song(project));
@@ -856,7 +1077,12 @@ mod tests {
         }
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();
-        assert_eq!(fs::read_dir(bundle.join("samples")).unwrap().count(), 1);
+        assert_eq!(
+            fs::read_dir(song_assets_path(&bundle).unwrap().join("samples"))
+                .unwrap()
+                .count(),
+            1
+        );
         let loaded = load_bundle(&bundle).unwrap();
         let LoadedDocument::Song(project) = loaded.document else {
             panic!("expected song")
@@ -903,6 +1129,39 @@ mod tests {
         };
         assert!(*embedded);
         assert!(path.is_file());
+    }
+
+    #[test]
+    fn resaving_without_embedded_samples_removes_the_old_sidecar() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        fs::write(&source, b"wav bytes").unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::File {
+            path: source,
+            embedded: false,
+        };
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let assets = song_assets_path(&bundle).unwrap();
+        assert!(assets.is_dir());
+
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::default();
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        assert!(!assets.exists());
+        assert_eq!(
+            load_bundle(&bundle).unwrap().document,
+            LoadedDocument::Song(project)
+        );
     }
 
     #[test]
@@ -995,6 +1254,37 @@ mod tests {
     }
 
     #[test]
+    fn legacy_directory_song_loads_and_migrates_to_a_file() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("legacy.mooloop");
+        fs::create_dir(&bundle).unwrap();
+        let project = Project::default();
+        let envelope = Envelope {
+            format_version: FORMAT_VERSION,
+            document_type: "song".into(),
+            asset_mode: AssetMode::Referenced,
+            preset: None,
+            document: project.clone(),
+        };
+        fs::write(
+            bundle.join(MANIFEST_FILE),
+            toml::to_string_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected song")
+        };
+        assert_eq!(loaded, project);
+        save_song(&bundle, &loaded, AssetMode::Referenced).unwrap();
+        assert!(bundle.is_file());
+        assert_eq!(
+            load_bundle(&bundle).unwrap().document,
+            LoadedDocument::Song(project)
+        );
+    }
+
+    #[test]
     fn synth_sources_round_trip_without_sample_assets() {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("starter.mooloop");
@@ -1002,8 +1292,9 @@ mod tests {
 
         let report = save_song(&bundle, &project, AssetMode::Embedded).unwrap();
         assert!(report.warnings.is_empty());
-        assert!(!bundle.join("samples").exists());
-        let manifest = fs::read_to_string(bundle.join(MANIFEST_FILE)).unwrap();
+        assert!(bundle.is_file());
+        assert!(!song_assets_path(&bundle).unwrap().exists());
+        let manifest = fs::read_to_string(&bundle).unwrap();
         assert!(manifest.contains("type = \"drum_synth\""));
         assert_eq!(
             load_bundle(&bundle).unwrap().document,

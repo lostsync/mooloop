@@ -1306,7 +1306,7 @@ impl AppUi {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     }
-                    let Some(path) = pick_bundle_via_zenity("Open mooloop song") else {
+                    let Some(path) = pick_song_via_zenity("Open mooloop song") else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     };
@@ -3863,6 +3863,32 @@ fn pick_bundle_via_zenity(title: &str) -> Option<PathBuf> {
     zenity_path(command)
 }
 
+fn pick_song_via_zenity(title: &str) -> Option<PathBuf> {
+    let mut command = std::process::Command::new("zenity");
+    command
+        .arg("--file-selection")
+        .arg(format!("--title={title}"))
+        .arg("--file-filter=Mooloop songs | *.mooloop manifest.toml");
+    zenity_path(command).map(normalize_song_selection)
+}
+
+fn normalize_song_selection(path: PathBuf) -> PathBuf {
+    let is_legacy_manifest = path
+        .file_name()
+        .is_some_and(|name| name == mooloop_project::MANIFEST_FILE)
+        && path
+            .parent()
+            .and_then(Path::extension)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mooloop"));
+    if is_legacy_manifest {
+        path.parent()
+            .expect("manifest selection has a parent")
+            .into()
+    } else {
+        path
+    }
+}
+
 fn pick_save_via_zenity(title: &str, suggested: &str) -> Option<PathBuf> {
     let mut command = std::process::Command::new("zenity");
     command
@@ -4224,15 +4250,29 @@ mod tests {
         apply_sample_references(
             std::slice::from_mut(&mut channel),
             [Some(SampleReference::File {
-                path: PathBuf::from("/songs/beat.mooloop/samples/00-source.wav"),
+                path: PathBuf::from("/songs/beat.mooloop-assets/samples/00-source.wav"),
                 embedded: true,
             })],
         );
 
         assert_eq!(
             channel.sample_path,
-            Some(PathBuf::from("/songs/beat.mooloop/samples/00-source.wav"))
+            Some(PathBuf::from(
+                "/songs/beat.mooloop-assets/samples/00-source.wav"
+            ))
         );
         assert!(channel.sample_embedded);
+    }
+
+    #[test]
+    fn song_selection_accepts_new_files_and_legacy_manifests() {
+        let file = PathBuf::from("/songs/beat.mooloop");
+        assert_eq!(normalize_song_selection(file.clone()), file);
+
+        let legacy_manifest = PathBuf::from("/songs/old.mooloop/manifest.toml");
+        assert_eq!(
+            normalize_song_selection(legacy_manifest),
+            PathBuf::from("/songs/old.mooloop")
+        );
     }
 }
