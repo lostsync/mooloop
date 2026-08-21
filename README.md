@@ -1,41 +1,83 @@
 # mooloop
 
-Mooloop is a Linux-native, pattern-first sampling instrument for building
-rhythms quickly and then pushing them into detailed, unstable, buffer-based
-sound design. It is written in Rust, uses Slint for the interface, and talks to
-JACK or PipeWire's JACK compatibility layer directly.
+Mooloop is an experimental, Linux-native, tracker-inspired pattern instrument.
+It combines a channel rack, piano roll, playlist, sampler, and small synthesis
+engines in a workflow aimed at making rhythm-centered music quickly. It is
+written in Rust, uses Slint for the interface, and talks directly to JACK or
+PipeWire's JACK compatibility layer.
 
-The project is an early working prototype. It is already useful as a small
-sample groovebox, but it does not yet have project persistence, song
-arrangement, expressive note duration, channel effects, or export.
+**Mooloop is also explicitly an experiment in vibe coding.** It has been built
+primarily through natural-language collaboration with AI coding agents, guided
+by human product decisions, testing, and taste. The point of the project is in
+part to find out how far that process can be taken on a technically demanding
+realtime audio application. Treat it as experimental software, not as a mature
+or dependable production tool.
 
 ## What Works
 
-- Up to 16 sampler channels and 8 patterns.
-- Per-pattern lengths from 1 to 256 sixteenth-note steps.
+- Up to 16 channels using a sampler, drum synth, or mono synth.
+- Up to 256 patterns, each from 1 to 256 sixteenth-note steps long.
 - A step rack with pitch and velocity data.
 - A zoomable piano roll and pinned velocity lane.
+- A layered playlist with separate Pattern and Song transport modes.
 - Sample loading, folder navigation, waveform display, trim, reverse, and
   forward or ping-pong loops.
 - Sampler tuning, ADSR, resonant low-pass filtering, drive, bit reduction, and
   rate reduction.
+- Versioned song, kit, and channel-preset bundles with optional embedded
+  samples.
+- Offline WAV and MP3 export.
 - Sample-accurate event delivery inside JACK blocks.
 - A reusable Slint audio-control layer, appearance settings, and peak meters.
 
-## Product Direction
+## Known Issues And Limitations
+
+- Much of the menu bar is scaffolding. Some file operations work, but many
+  menu items are disabled, incomplete, or not wired to an implementation yet.
+- There are no channel insert effects. The sampler and synths have their own
+  tone-shaping controls, but the visible device-chain insertion point is empty
+  and there is no effect insertion, bypass, reordering, or automation.
+- There are no sends, returns, groups, sidechains, external inputs, or routing
+  controls.
+- General parameter automation does not exist. The lower parameter lane only
+  edits velocity; there are no parameter locks, probability controls, or
+  user-facing microtiming controls.
+- Mooloop is tracker-inspired, but it is not currently a tracker. In
+  particular, there is no tracker-style event editor or hexadecimal command
+  and automation entry.
+- The proposed retained-audio buffer engine is not implemented. Channels do
+  not record or retain their output, and none of the buffer playback,
+  mutation, or resampling workflow described in the design documents exists
+  in the application yet.
+- Editing is still incomplete: there is no undo, clipboard command layer,
+  autosave, crash recovery, dedicated missing-sample relinking, or playlist
+  clip dragging.
+- Metering is master-only, despite unfinished per-channel meter visuals. There
+  is no metronome.
+- The interface still has interaction and responsive-layout edge cases. Many
+  workflows are mouse-first and keyboard navigation is incomplete.
+- Linux with JACK or PipeWire's JACK compatibility layer is the only supported
+  platform and audio setup.
+
+For the detailed implementation snapshot, including smaller edge cases, see
+[docs/CURRENT.md](docs/CURRENT.md).
+
+## Proposed Direction
 
 Mooloop is not intended to become a general-purpose DAW. Its working product
 definition is in [docs/PRODUCT.md](docs/PRODUCT.md), with the dependency-ordered
 plan in [docs/ROADMAP.md](docs/ROADMAP.md).
 
-The main product hypothesis is that a channel can be more than a track with an
-instrument on it: it can own musical audio memory, with record and playback
-heads that are addressable by the same patterns and parameter lanes as notes.
-That idea is specified as a testable design in
-[docs/BUFFER_ENGINE.md](docs/BUFFER_ENGINE.md).
+One unproven product hypothesis is an insertable retained-audio buffer: a
+channel device that continuously remembers recent audio and exposes its record
+and playback heads to patterns and automation. This is a design and planned
+spike, not a feature of the current application. The hypothesis is specified
+in [docs/BUFFER_ENGINE.md](docs/BUFFER_ENGINE.md).
 
-[docs/CURRENT.md](docs/CURRENT.md) describes what the code actually does today.
-It is intentionally separate from the desired product.
+Another planned direction is tracker-like automation in the parameter lane,
+including compact hexadecimal value or command entry where that representation
+is musically useful. The exact interaction and command set have not been
+designed, and no part of this workflow is implemented yet.
 
 ## Build
 
@@ -64,15 +106,13 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## Documentation Authority
+## Project Documentation
 
-When documents disagree, use this order:
-
-1. Current, explicit decisions from Adam and current UI designs.
-2. `docs/PRODUCT.md` and accepted decisions recorded there.
-3. `docs/ROADMAP.md` for sequencing work.
-4. `docs/CURRENT.md` and the code for implemented behavior.
-5. `reference/ADAM.md` only as fallible background taste context.
+- [Current system](docs/CURRENT.md): what the code does today.
+- [Product definition](docs/PRODUCT.md): what Mooloop is trying to become.
+- [Roadmap](docs/ROADMAP.md): dependency-ordered future work.
+- [Buffer engine hypothesis](docs/BUFFER_ENGINE.md): the unimplemented
+  retained-audio experiment.
 
 ## License
 
