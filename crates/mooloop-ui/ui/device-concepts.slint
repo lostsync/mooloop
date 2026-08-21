@@ -1,0 +1,319 @@
+import { HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import {
+    InstrumentModule, ParameterKnob, SelectorBank, StereoPeakMeter, ToggleButton, ToolButton
+} from "controls.slint";
+
+component DeviceHeader inherits Rectangle {
+    in property <string> name;
+    in property <string> kind;
+    in property <color> device-color: Theme.accent;
+    in property <bool> expanded;
+
+    height: 28px;
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    z: 10;
+    background: Theme.surface-raised;
+    Rectangle { y: parent.height - 1px; width: 100%; height: 1px; background: Theme.border; }
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 6px;
+        Rectangle { width: 4px; height: 16px; border-radius: 2px; background: root.device-color; }
+        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.device-color; }
+        Text { text: root.name; color: Theme.text; font-size: 11px; vertical-alignment: center; }
+        Text { text: root.kind; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        Text { text: root.expanded ? "DETAIL" : "FACE"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+        Text { text: root.expanded ? "\u{25b2}" : "\u{25bc}"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+    }
+}
+
+component DeviceFrame inherits Rectangle {
+    in property <string> name;
+    in property <string> kind;
+    in property <color> device-color: Theme.accent;
+    in property <bool> expanded;
+
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: 3px;
+    clip: true;
+}
+
+component SignalJoin inherits Rectangle {
+    width: 20px;
+    Text { text: "\u{2192}"; color: Theme.text-muted; font-size: 16px; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+component TinyKnob inherits ParameterKnob {
+    width: 48px;
+    height: 72px;
+}
+
+component WaveDisplay inherits Rectangle {
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: 2px;
+    Path {
+        x: 8px;
+        y: 8px;
+        width: parent.width - 16px;
+        height: parent.height - 16px;
+        viewbox-width: 300;
+        viewbox-height: 70;
+        commands: "M 0 35 L 10 34 L 16 12 L 22 58 L 29 30 L 38 36 L 48 33 L 55 4 L 61 66 L 68 28 L 78 38 L 88 34 L 96 18 L 104 52 L 113 31 L 124 36 L 135 33 L 143 8 L 150 62 L 157 24 L 168 39 L 180 34 L 190 25 L 199 45 L 208 32 L 220 36 L 230 31 L 238 14 L 246 56 L 254 27 L 264 39 L 275 33 L 286 36 L 300 35";
+        stroke: Theme.accent;
+        stroke-width: 1.4px;
+        fill: transparent;
+    }
+    Rectangle { x: parent.width * 0.32; width: 1px; height: 100%; background: Theme.focus; opacity: 0.8; }
+    Rectangle { x: parent.width * 0.81; width: 1px; height: 100%; background: Theme.warning; opacity: 0.8; }
+}
+
+component BufferDisplay inherits Rectangle {
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: 2px;
+    for tick in 15: Rectangle { x: tick * parent.width / 15; width: 1px; height: 100%; background: Theme.border.with-alpha(0.35); }
+    Rectangle { x: parent.width * 0.12; y: parent.height * 0.18; width: 68%; height: 64%; background: #38bdf8.with-alpha(0.12); }
+    Rectangle { x: parent.width * 0.55; width: 2px; height: 100%; background: #38bdf8; }
+    Rectangle { x: parent.width * 0.79; width: 2px; height: 100%; background: Theme.warning; }
+    Text { x: 8px; y: 5px; text: "-2.0s"; color: Theme.text-faint; font-size: 8px; }
+    Text { x: parent.width - 32px; y: 5px; text: "LIVE"; color: Theme.warning; font-size: 8px; }
+}
+
+component EqDisplay inherits Rectangle {
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: 2px;
+    for tick in 5: Rectangle { y: tick * parent.height / 5; width: 100%; height: 1px; background: Theme.border.with-alpha(0.35); }
+    Path {
+        x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px;
+        viewbox-width: 180; viewbox-height: 70;
+        commands: "M 0 42 C 24 42 30 56 50 56 C 76 56 74 28 101 28 C 130 28 128 40 180 40";
+        stroke: #f59e0b; stroke-width: 2px; fill: transparent;
+    }
+    Rectangle { x: parent.width * 0.27; y: parent.height * 0.70; width: 7px; height: 7px; border-radius: 4px; background: #f59e0b; }
+    Rectangle { x: parent.width * 0.55; y: parent.height * 0.32; width: 7px; height: 7px; border-radius: 4px; background: #f59e0b; }
+}
+
+component SamplerFace inherits DeviceFrame {
+    name: "Sampler";
+    kind: "SOURCE / 2U";
+    device-color: Theme.accent;
+    VerticalLayout {
+        padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
+        WaveDisplay { vertical-stretch: 1; }
+        HorizontalLayout {
+            spacing: 3px;
+            TinyKnob { label: "START"; value: 0.18; value-text: "12 ms"; }
+            TinyKnob { label: "LENGTH"; value: 0.76; value-text: "76%"; }
+            TinyKnob { label: "TUNE"; value: 0.5; value-text: "0 st"; bipolar: true; }
+            TinyKnob { label: "ATTACK"; value: 0.08; value-text: "5 ms"; }
+            TinyKnob { label: "RELEASE"; value: 0.3; value-text: "150 ms"; }
+            Rectangle { horizontal-stretch: 1; }
+            VerticalLayout {
+                spacing: 3px;
+                SelectorBank { options: ["ONE", "GATE"]; selected-index: 0; segment-width: 42px; }
+                SelectorBank { options: ["OFF", "LOOP"]; selected-index: 0; segment-width: 42px; }
+            }
+        }
+    }
+    DeviceHeader { name: root.name; kind: root.kind; device-color: root.device-color; expanded: root.expanded; }
+}
+
+component BufferFace inherits DeviceFrame {
+    name: "History";
+    kind: "BUFFER / 1.5U";
+    device-color: #38bdf8;
+    VerticalLayout {
+        padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
+        BufferDisplay { vertical-stretch: 1; }
+        HorizontalLayout {
+            spacing: 2px;
+            TinyKnob { label: "OFFSET"; value: 0.58; value-text: "-480 ms"; }
+            TinyKnob { label: "WINDOW"; value: 0.3; value-text: "1/8"; }
+            TinyKnob { label: "RATE"; value: 0.5; value-text: "1.00x"; bipolar: true; }
+            TinyKnob { label: "XFADE"; value: 0.12; value-text: "8 ms"; }
+            Rectangle { horizontal-stretch: 1; }
+            VerticalLayout {
+                spacing: 3px;
+                ToggleButton { text: "REVERSE"; checked: true; min-width: 74px; max-height: 26px; }
+                ToolButton { text: "RETURN LIVE"; min-width: 74px; max-height: 26px; }
+            }
+        }
+    }
+    DeviceHeader { name: root.name; kind: root.kind; device-color: root.device-color; expanded: root.expanded; }
+}
+
+component EqFace inherits DeviceFrame {
+    name: "EQ-3";
+    kind: "EFFECT / 1U";
+    device-color: #f59e0b;
+    VerticalLayout {
+        padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
+        EqDisplay { vertical-stretch: 1; }
+        HorizontalLayout {
+            spacing: 2px;
+            TinyKnob { label: "LOW"; value: 0.42; value-text: "-2.1 dB"; bipolar: true; }
+            TinyKnob { label: "MID"; value: 0.65; value-text: "+3.2 dB"; bipolar: true; }
+            TinyKnob { label: "HIGH"; value: 0.5; value-text: "0.0 dB"; bipolar: true; }
+            TinyKnob { label: "OUT"; value: 0.5; value-text: "0.0 dB"; bipolar: true; }
+        }
+    }
+    DeviceHeader { name: root.name; kind: root.kind; device-color: root.device-color; expanded: root.expanded; }
+}
+
+component ChainChrome inherits Rectangle {
+    height: 34px;
+    background: Theme.panel;
+    Rectangle { y: parent.height - 1px; width: 100%; height: 1px; background: Theme.border; }
+    HorizontalLayout {
+        padding-left: 8px; padding-right: 8px; spacing: 8px;
+        Text { text: "DRUM 1"; color: Theme.text; font-size: 11px; vertical-alignment: center; }
+        Text { text: "DEVICE CHAIN"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        ToolButton { text: "+ DEVICE"; min-width: 70px; }
+        ToolButton { text: "\u{22ef}"; min-width: 28px; max-width: 28px; }
+    }
+}
+
+component HorizontalConcept inherits Rectangle {
+    background: Theme.background;
+    VerticalLayout {
+        spacing: 0px;
+        ChainChrome { }
+        Rectangle {
+            background: Theme.panel;
+            VerticalLayout {
+                padding: 8px; spacing: 8px;
+                Text { text: "HORIZONTAL UNIT RACK  /  FIXED 268 PX FACE HEIGHT  /  WIDTHS IN 224 PX UNITS"; color: Theme.text-muted; font-size: 9px; }
+                ScrollView {
+                    viewport-width: 1116px;
+                    viewport-height: 284px;
+                    Rectangle {
+                        width: 1116px; height: 284px;
+                        HorizontalLayout {
+                            spacing: 4px;
+                            SamplerFace { width: 440px; height: 268px; }
+                            SignalJoin { height: 268px; }
+                            BufferFace { width: 328px; height: 268px; }
+                            SignalJoin { height: 268px; }
+                            EqFace { width: 220px; height: 268px; }
+                            SignalJoin { height: 268px; }
+                            Rectangle {
+                                width: 50px; height: 268px; border-width: 1px; border-color: Theme.border; border-radius: 3px;
+                                Text { text: "+"; color: Theme.text-muted; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+    }
+}
+
+component VerticalConcept inherits Rectangle {
+    background: Theme.background;
+    VerticalLayout {
+        spacing: 0px;
+        ChainChrome { }
+        Rectangle {
+            background: Theme.panel;
+            VerticalLayout {
+                padding: 8px; spacing: 8px;
+                Text { text: "VERTICAL REASON-STYLE RACK  /  FIXED WIDTH  /  HEIGHTS IN 80 PX HALF-UNITS"; color: Theme.text-muted; font-size: 9px; }
+                ScrollView {
+                    viewport-width: 1120px;
+                    viewport-height: 680px;
+                    VerticalLayout {
+                        spacing: 4px;
+                        DeviceFrame {
+                            name: "Sampler"; kind: "SOURCE / 2U"; device-color: Theme.accent; height: 260px;
+                            HorizontalLayout {
+                                padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
+                                WaveDisplay { horizontal-stretch: 1; }
+                                InstrumentModule {
+                                    title: "PLAYBACK"; width: 300px;
+                                    HorizontalLayout {
+                                        padding: 5px; spacing: 3px;
+                                        TinyKnob { label: "START"; value: 0.18; value-text: "12 ms"; }
+                                        TinyKnob { label: "LENGTH"; value: 0.76; value-text: "76%"; }
+                                        TinyKnob { label: "TUNE"; value: 0.5; value-text: "0 st"; bipolar: true; }
+                                        TinyKnob { label: "RELEASE"; value: 0.3; value-text: "150 ms"; }
+                                    }
+                                }
+                            }
+                            DeviceHeader { name: "Sampler"; kind: "SOURCE / 2U"; device-color: Theme.accent; }
+                        }
+                        DeviceFrame {
+                            name: "History"; kind: "BUFFER / 1U"; device-color: #38bdf8; height: 164px;
+                            HorizontalLayout {
+                                padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
+                                BufferDisplay { horizontal-stretch: 1; }
+                                TinyKnob { label: "OFFSET"; value: 0.58; value-text: "-480 ms"; }
+                                TinyKnob { label: "WINDOW"; value: 0.3; value-text: "1/8"; }
+                                TinyKnob { label: "RATE"; value: 0.5; value-text: "1.00x"; bipolar: true; }
+                                Rectangle {
+                                    width: 150px;
+                                    ToolButton { y: (parent.height - 28px) / 2; width: 100%; height: 28px; text: "REVERSE"; active: true; }
+                                }
+                                Rectangle {
+                                    width: 170px;
+                                    ToolButton { y: (parent.height - 28px) / 2; width: 100%; height: 28px; text: "RETURN LIVE"; }
+                                }
+                            }
+                            DeviceHeader { name: "History"; kind: "BUFFER / 1U"; device-color: #38bdf8; }
+                        }
+                        DeviceFrame {
+                            name: "EQ-3"; kind: "EFFECT / 0.5U"; device-color: #f59e0b; height: 92px;
+                            HorizontalLayout {
+                                padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
+                                EqDisplay { horizontal-stretch: 1; }
+                                TinyKnob { label: "LOW"; value: 0.42; value-text: "-2.1 dB"; bipolar: true; }
+                                TinyKnob { label: "MID"; value: 0.65; value-text: "+3.2 dB"; bipolar: true; }
+                                TinyKnob { label: "HIGH"; value: 0.5; value-text: "0.0 dB"; bipolar: true; }
+                                TinyKnob { label: "OUT"; value: 0.5; value-text: "0.0 dB"; bipolar: true; }
+                            }
+                            DeviceHeader { name: "EQ-3"; kind: "EFFECT / 0.5U"; device-color: #f59e0b; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component DeviceRackConcepts inherits Window {
+    title: "mooloop device rack concepts";
+    preferred-width: 1200px;
+    preferred-height: 620px;
+    background: Theme.background;
+    in-out property <int> concept-index;
+
+    VerticalBox {
+        spacing: 0px;
+        Rectangle {
+            height: 44px;
+            background: Theme.surface;
+            HorizontalBox {
+                padding: 8px; spacing: 8px;
+                Text { text: "MOOLOOP / DEVICE RACK STUDY"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                ToolButton { text: "HORIZONTAL"; active: root.concept-index == 0; clicked => { root.concept-index = 0; } }
+                ToolButton { text: "VERTICAL"; active: root.concept-index == 1; clicked => { root.concept-index = 1; } }
+            }
+        }
+        if root.concept-index == 0: HorizontalConcept { }
+        if root.concept-index == 1: VerticalConcept { }
+    }
+}
