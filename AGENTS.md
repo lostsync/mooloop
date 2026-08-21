@@ -87,7 +87,10 @@ commands, when spawning a subagent for isolated work.
 
 - Working tree must be clean before you consider a task done. Run
   `git status` as a final check.
-- Run tests/build before merging.
+- Verify changes before merging, using judgment and checks proportional to
+  risk. Code changes require relevant tests/builds. Documentation, metadata,
+  and static-asset-only changes do not require compiling the workspace when
+  targeted validation covers them.
 - Merge the branch back into `main` with a fast-forward (`git merge
   --ff-only <branch>` from a `main` checkout) so history stays a single
   straight line. If `main` has moved on and a fast-forward isn't possible,
@@ -105,7 +108,7 @@ commands, when spawning a subagent for isolated work.
 
 `push --force`, `reset --hard`, rewriting published history, deleting a
 branch/worktree that has unmerged or uncommitted work, or merging into
-`main` without the tests passing.
+`main` without the verification appropriate to the change passing.
 
 ## If Adam hands you a dirty tree right now
 
