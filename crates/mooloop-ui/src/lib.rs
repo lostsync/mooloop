@@ -583,6 +583,9 @@ impl UiState {
                             pan: channel.pan,
                         },
                         source,
+                        // TODO(stage 3): mirror the real chain once the UI
+                        // tracks effect slots.
+                        effects: Vec::new(),
                     },
                     notes: channel.notes.clone(),
                     next_note_id: channel.next_note_id,

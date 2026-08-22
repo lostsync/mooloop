@@ -5,6 +5,7 @@
 
 pub mod bridge;
 pub mod channel;
+pub mod effect;
 pub mod pattern;
 pub mod playlist;
 pub mod project;
@@ -13,7 +14,8 @@ pub mod synth;
 pub mod time;
 
 pub use bridge::{EngineCommand, EngineEvent};
-pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_PATTERNS};
+pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS};
+pub use effect::{EffectKind, EffectSlotState, FilterMode, FilterParams};
 pub use pattern::{
     ChannelPattern, NoteEvent, NoteId, Pattern, Step, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, TICKS_PER_64TH, TICKS_PER_STEP,

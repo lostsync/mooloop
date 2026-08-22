@@ -1572,4 +1572,52 @@ id = "default_kick"
         let loaded: DrumSynthParams = toml::from_str(&stripped).unwrap();
         assert_eq!(loaded, DrumSynthParams::default());
     }
+
+    #[test]
+    fn song_round_trip_retains_effect_chain() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.effects.push(
+            mooloop_core::EffectSlotState::filter(mooloop_core::FilterParams {
+                cutoff_hz: 1_250.0,
+                resonance: 0.6,
+                mode: mooloop_core::FilterMode::HighPass,
+            }),
+        );
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
+
+    #[test]
+    fn song_manifest_without_effects_field_still_loads() {
+        // Songs written before effects existed have no `effects` key on their
+        // channels; `#[serde(default)]` must fill in an empty chain.
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("legacy.mooloop");
+        fs::create_dir(&bundle).unwrap();
+        let project = Project::default();
+        let envelope = Envelope {
+            format_version: FORMAT_VERSION,
+            document_type: "song".into(),
+            asset_mode: AssetMode::Referenced,
+            preset: None,
+            document: project.clone(),
+        };
+        let manifest = toml::to_string_pretty(&envelope).unwrap();
+        let stripped = manifest
+            .lines()
+            .filter(|line| !line.starts_with("effects"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(manifest, stripped, "test setup: nothing stripped");
+        fs::write(bundle.join(MANIFEST_FILE), stripped).unwrap();
+
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
 }

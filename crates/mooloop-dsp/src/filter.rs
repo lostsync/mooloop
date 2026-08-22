@@ -32,6 +32,24 @@ impl Svf {
         resonance: f32,
         sample_rate: u32,
     ) -> f32 {
+        self.tick(input, cutoff_hz, resonance, sample_rate).0
+    }
+
+    /// Process one sample, returning `(low_pass, high_pass)`. The high-pass
+    /// output is the SVF's exact complementary output
+    /// (`input - damping * band - low`), not the leaky `input - low`
+    /// approximation.
+    pub fn next_sample_lp_hp(
+        &mut self,
+        input: f32,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> (f32, f32) {
+        self.tick(input, cutoff_hz, resonance, sample_rate)
+    }
+
+    fn tick(&mut self, input: f32, cutoff_hz: f32, resonance: f32, sample_rate: u32) -> (f32, f32) {
         let sr = sample_rate as f32;
         let cutoff = cutoff_hz.clamp(20.0, sr * 0.45);
         let g = (core::f32::consts::PI * cutoff / sr).tan();
@@ -42,9 +60,10 @@ impl Svf {
         let v3 = input - self.low;
         let v1 = a1 * self.band + a2 * v3;
         let v2 = self.low + a2 * self.band + a3 * v3;
+        let high = input - damping * v1 - v2;
         self.band = 2.0 * v1 - self.band;
         self.low = 2.0 * v2 - self.low;
-        v2
+        (v2, high)
     }
 }
 

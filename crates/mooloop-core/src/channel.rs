@@ -9,6 +9,10 @@ pub const MAX_CHANNELS: usize = 16;
 /// `u8`, so 256 is the complete addressable bank rather than a UI limit.
 pub const MAX_PATTERNS: usize = u8::MAX as usize + 1;
 
+/// Upper bound on effects in one channel's chain. Chain slots cross the
+/// realtime bridge as `u8`, so this stays well under 256.
+pub const MAX_EFFECTS_PER_CHANNEL: usize = 8;
+
 /// Instrument kind for a channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

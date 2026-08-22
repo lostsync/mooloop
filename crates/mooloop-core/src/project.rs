@@ -117,6 +117,11 @@ impl ChannelSource {
 pub struct ChannelSetup {
     pub channel: Channel,
     pub source: ChannelSource,
+    /// Effect chain slots in order. Defaulted on load so songs written
+    /// before effects existed stay readable (same pattern as
+    /// `MonoSynthParams.lfo`).
+    #[serde(default)]
+    pub effects: Vec<crate::EffectSlotState>,
 }
 
 impl ChannelSetup {
@@ -124,6 +129,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::Sampler),
             source: ChannelSource::default(),
+            effects: Vec::new(),
         }
     }
 
@@ -135,6 +141,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::DrumSynth),
             source: ChannelSource::DrumSynth(DrumSynthState { params }),
+            effects: Vec::new(),
         }
     }
 
@@ -146,6 +153,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::MonoSynth),
             source: ChannelSource::MonoSynth(MonoSynthState { params }),
+            effects: Vec::new(),
         }
     }
 
