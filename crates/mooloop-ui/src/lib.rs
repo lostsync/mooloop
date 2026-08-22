@@ -3775,6 +3775,9 @@ impl AppUi {
                             state.update_document_title(&window);
                         }
                     }
+                    if std::env::var("MOOLOOP_AUTODRIVE_VERBOSE").is_ok() {
+                        eprintln!("autodrive cmd: {cmd:?}");
+                    }
                     handle.send(cmd);
                     forwarded += 1;
                 }
@@ -3889,6 +3892,17 @@ impl AppUi {
                 w.invoke_playlist_placement_added(1, 192);
                 w.invoke_playlist_placement_added(1, 768);
                 w.invoke_playlist_placement_removed(1, 768);
+                // Effect chain: add two filters, edit both, reorder, bypass,
+                // remove — the full structural/param/swap command surface.
+                w.invoke_add_effect_clicked();
+                w.invoke_add_effect_clicked();
+                w.invoke_effect_cutoff_changed(0, 0.4);
+                w.invoke_effect_resonance_changed(0, 0.5);
+                w.invoke_effect_mode_changed(1, 1.0);
+                w.invoke_reorder_effect(0, 1);
+                w.invoke_effect_bypass_toggled(0);
+                w.invoke_effect_bypass_toggled(0);
+                w.invoke_remove_effect_clicked(1);
                 w.set_song_mode(true);
                 w.invoke_playback_mode_changed(true);
                 w.set_editor_page(2);
@@ -3901,7 +3915,7 @@ impl AppUi {
                 println!("commands forwarded by pump : {forwarded}");
                 println!("saw playing=true on window : {saw_playing}");
                 println!("nonzero metering seen     : {max_peak:.4}");
-                let ok = saw_playing && forwarded >= 29;
+                let ok = saw_playing && forwarded >= 31;
                 println!(
                     "RESULT: {}",
                     if ok {
