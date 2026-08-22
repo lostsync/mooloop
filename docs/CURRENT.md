@@ -48,8 +48,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   filter with envelope depth and resonance, drive, bit reduction, and rate
   reduction. Voice controls cover one-shot/gated playback, 1-16 voices,
   restart/layer retriggering, and 16 cross-channel choke groups.
-- A horizontal lower device rack with one fixed-height 3U source face and a
-  visible insertion point for future effects. Sampler, drum synth, and mono
+- A horizontal lower device rack with one fixed-height 3U source face followed
+  by a chainable effect chain (a low-pass/high-pass filter ships first; slots
+  are added from the rack's add slot, bypassed or removed from their headers,
+  and reordered by dragging a header). Sampler, drum synth, and mono
   synth faces share the same rack chrome and preserve their dimensions at
   narrow widths through horizontal scrolling. Sampler controls are divided
   into Sample, Voice, and Tone pages; mono controls into Osc, Amp/Filter, and
@@ -104,7 +106,7 @@ UI commands -> rtrb queue -> shared render state -> transport + sequencer
                          timed events/channel
                                   |
                                   v
-selected source (sampler / drum synth / mono synth) -> empty effect vector -> gain/pan/mute
+selected source (sampler / drum synth / mono synth) -> effect chain -> gain/pan/mute
                                                            |
                                                            v
                                                     master stereo bus
@@ -192,8 +194,13 @@ through an `ArcSwapOption` slot.
 
 - Channel mute, volume, and pan are exposed, as compact knobs in the rack row.
   Metering is master-only; per-channel meters are drawn but unfed.
-- The channel effect vector is empty and there is no realtime-safe graph edit
-  protocol for inserting or reordering devices.
+- Each channel runs a fixed-size effect chain (up to 8 slots) after its
+  generator. Installing/removing nodes crosses the realtime boundary through a
+  dedicated structural ring buffer pair (boxed nodes move GUI->audio and
+  displaced boxes return for GUI-side deallocation); reorder is an in-place
+  slot swap on a plain `EngineCommand`, and knob changes arrive as
+  sample-timed `ParamValue` events. Effect chains persist in song files
+  (`ChannelSetup.effects`, serde-defaulted for older manifests).
 - There are no sends, returns, groups, sidechains, external inputs, or routing
   controls.
 
@@ -220,8 +227,9 @@ through an `ArcSwapOption` slot.
 
 1. Add probability and explicit microtiming controls without weakening the
    tick-addressed event contract before broad automation.
-2. Define fixed-capacity device and routing edits before populating the empty
-   effects vector.
+2. Fixed-capacity device edits are now defined (structural ring + slot swaps)
+   for the effect chain; extend the same protocol before adding sends, groups,
+   or a mixer bus graph.
 3. Budget channel buffer memory and specify read/write collision behavior
    before buffers become part of every strip.
 4. Add deferred reclamation for replaced samples, graphs, and future buffers.

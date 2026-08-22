@@ -41,3 +41,9 @@ work session you can recall being part of, and don't stress over precision.
 - Last seen: 2026-08-21
 - Sessions: 1
 - Notes: Set up this file at Adam's request.
+
+### Kimi k3-256k — opencode
+- First seen: 2026-08-21
+- Last seen: 2026-08-21
+- Sessions: 1
+- Notes: Implemented the effects-chain vertical slice (filter effect, end to end).
