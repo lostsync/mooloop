@@ -83,6 +83,15 @@ commands, when spawning a subagent for isolated work.
 - Never use `--no-verify`, `--amend` on already-shared commits, or rewrite
   history on a branch other agents might be using, without asking first.
 
+## Signing in
+
+Adam wants a record of which model+harness combinations have worked on this
+project, so he can credit contributors later. Before considering *any* task
+done where you made a commit, add or update your entry in
+[CONTRIBUTORS.md](./CONTRIBUTORS.md) per the instructions at the top of that
+file, then include the update in the same commit (or a trailing one) as the
+rest of your work.
+
 ## Finishing a task
 
 - Working tree must be clean before you consider a task done. Run
