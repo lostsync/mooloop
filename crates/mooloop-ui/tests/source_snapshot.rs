@@ -1,7 +1,8 @@
 use mooloop_core::{DrumMode, DrumSynthParams};
 use mooloop_dsp::DrumSynth;
-use mooloop_ui::{ChannelRow, MainWindow, StepCell};
-use slint::{ComponentHandle, LogicalSize, ModelRc, SharedString, VecModel};
+use mooloop_ui::{ChannelRow, EffectSlotRow, MainWindow, StepCell};
+use slint::platform::WindowEvent;
+use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
 fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variable: &str) {
@@ -175,4 +176,74 @@ fn render_sampler_source_editor() {
     let crushed = ui.window().take_snapshot().unwrap();
     assert_ne!(tone.as_bytes(), crushed.as_bytes());
     write_snapshot(&crushed, "MOOLOOP_SAMPLER_CRUSHED_SOURCE_SNAPSHOT");
+}
+
+fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
+    EffectSlotRow {
+        kind,
+        units,
+        bypassed: false,
+        p0: 0.5,
+        p1: 0.5,
+        p2: 0.0,
+        p3: 0.5,
+        p4: 0.5,
+        p5: 0.5,
+    }
+}
+
+/// The rack is wider than the window once a few devices are in the chain, so
+/// it has to scroll horizontally to reach them.
+///
+/// This regressed because the viewport width was a constant sized for an
+/// empty chain: every device past it was laid out but unreachable, and the
+/// view could not scroll at all because the viewport never exceeded the
+/// visible width.
+#[test]
+fn effect_rack_scrolls_horizontally_to_reach_a_long_chain() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .expect("initialize headless renderer");
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_selected_channel_name(SharedString::from("Kick"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(0);
+    // Filter, drive, bitcrush, delay (two units wide), filter: comfortably
+    // past the 960 px window even before the source device's own three units.
+    ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
+        effect_slot(0, 1),
+        effect_slot(1, 1),
+        effect_slot(2, 1),
+        effect_slot(3, 2),
+        effect_slot(0, 1),
+    ]))));
+
+    let unscrolled = ui.window().take_snapshot().unwrap();
+
+    // A point inside the device rack: below the page tabs and the device
+    // chain header, above the bottom of the dock.
+    let over_rack = LogicalPosition::new(480.0, 560.0);
+    for _ in 0..12 {
+        ui.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: over_rack,
+            delta_x: -240.0,
+            delta_y: -240.0,
+        });
+    }
+    let scrolled = ui.window().take_snapshot().unwrap();
+
+    assert_ne!(
+        unscrolled.as_bytes(),
+        scrolled.as_bytes(),
+        "the device rack did not scroll, so devices past the window are unreachable"
+    );
+    write_snapshot(&scrolled, "MOOLOOP_EFFECT_RACK_SCROLLED_SNAPSHOT");
 }

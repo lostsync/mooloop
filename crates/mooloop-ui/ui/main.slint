@@ -1451,15 +1451,19 @@ export component MainWindow inherits Window {
 
                         device-chain-scroll := ScrollView {
                             vertical-stretch: 1;
-                            viewport-width: max(self.visible-width, 758px);
+                            // Sized from the rack row's own intrinsic width, not
+                            // a constant: the chain grows as devices are added,
+                            // and faces are width-quantized in rack units, so a
+                            // fixed figure leaves later devices unreachable.
+                            viewport-width: max(self.visible-width, rack-row.preferred-width);
                             viewport-height: max(self.visible-height, 284px);
 
                             Rectangle {
-                                width: max(device-chain-scroll.visible-width, 758px);
+                                width: max(device-chain-scroll.visible-width, rack-row.preferred-width);
                                 height: 284px;
                                 background: Theme.panel;
 
-                                HorizontalLayout {
+                                rack-row := HorizontalLayout {
                                     padding: 8px;
                                     spacing: 0px;
                                     alignment: start;
