@@ -110,6 +110,19 @@ rest of your work.
     changes, release/integration work, or when explicitly requested.
 - Never run Cargo build, test, or Clippy commands concurrently on this
   workstation. Parallel rustc/link processes already run within each command.
+- Cap and deprioritise every Cargo build, test, and Clippy run:
+
+  ```
+  nice -n 19 cargo <command> -j 4
+  ```
+
+  This machine has 8 cores, and Adam is usually using it while an agent
+  works. Left uncapped, one `cargo test -p mooloop-ui` saturates all of them
+  (that crate is the worst case: a large Slint codegen plus six test binaries
+  linking at once) and has hard-locked the desktop mid-run. Half the cores
+  and the lowest scheduling priority cost roughly 1.5-2x per build and keep
+  the compositor responsive. `-j 4` is per-invocation and does not replace
+  the no-concurrent-commands rule above; it composes with it.
 - Merge the branch back into `main` with a fast-forward (`git merge
   --ff-only <branch>` from a `main` checkout) so history stays a single
   straight line. If `main` has moved on and a fast-forward isn't possible,
