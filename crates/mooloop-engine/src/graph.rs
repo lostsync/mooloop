@@ -3,63 +3,47 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use arc_swap::ArcSwapOption;
 use jack::ProcessHandler;
 use jack::{AudioOut, Client, Control, Port, ProcessScope};
-use mooloop_core::{EngineCommand, EngineEvent, Project};
-use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
+use mooloop_core::EngineEvent;
+use mooloop_dsp::MAX_BLOCK_SIZE;
 use rtrb::Consumer;
 
-use crate::meters::BusMeters;
 use crate::render::RenderState;
-use crate::{StructuralCommand, StructuralReclaim};
+use crate::{RealtimeCommand, StructuralReclaim};
 
 pub(crate) struct GraphIo {
     pub out_l: Port<AudioOut>,
     pub out_r: Port<AudioOut>,
-    pub cmd_rx: Consumer<EngineCommand>,
+    pub cmd_rx: Consumer<RealtimeCommand>,
     pub evt_tx: rtrb::Producer<EngineEvent>,
-    pub structural_rx: Consumer<StructuralCommand>,
     pub reclaim_tx: rtrb::Producer<StructuralReclaim>,
 }
 
 pub(crate) struct Graph {
-    render: RenderState,
+    render: Box<RenderState>,
     out_l: Port<AudioOut>,
     out_r: Port<AudioOut>,
-    cmd_rx: Consumer<EngineCommand>,
+    cmd_rx: Consumer<RealtimeCommand>,
     evt_tx: rtrb::Producer<EngineEvent>,
-    structural_rx: Consumer<StructuralCommand>,
     reclaim_tx: rtrb::Producer<StructuralReclaim>,
-    /// Reclaim nodes that did not fit the reclaim ring last block; retried
-    /// each block so a full ring never forces a drop on this thread.
-    reclaim_spill: Vec<StructuralReclaim>,
-    project_slot: Arc<ArcSwapOption<Project>>,
+    /// A command popped from the ordered stream while reclamation is
+    /// backpressured. No later command may pass it.
+    pending_command: Option<RealtimeCommand>,
     xrun_count: Arc<AtomicU64>,
     last_seen_xruns: u64,
 }
 
 impl Graph {
-    pub(crate) fn new(
-        sample_rate: u32,
-        io: GraphIo,
-        sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
-        project_slot: Arc<ArcSwapOption<Project>>,
-        xrun_count: Arc<AtomicU64>,
-        meters: Arc<BusMeters>,
-    ) -> Self {
-        let mut render = RenderState::new(sample_rate, sample_slots);
-        render.attach_meters(meters);
+    pub(crate) fn new(io: GraphIo, render: Box<RenderState>, xrun_count: Arc<AtomicU64>) -> Self {
         Self {
             render,
             out_l: io.out_l,
             out_r: io.out_r,
             cmd_rx: io.cmd_rx,
             evt_tx: io.evt_tx,
-            structural_rx: io.structural_rx,
             reclaim_tx: io.reclaim_tx,
-            reclaim_spill: Vec::new(),
-            project_slot,
+            pending_command: None,
             xrun_count,
             last_seen_xruns: 0,
         }
@@ -69,37 +53,56 @@ impl Graph {
 impl ProcessHandler for Graph {
     fn process(&mut self, _client: &Client, scope: &ProcessScope) -> Control {
         let frames = (scope.n_frames() as usize).min(MAX_BLOCK_SIZE);
-        while let Ok(command) = self.cmd_rx.pop() {
-            match command {
-                EngineCommand::InstallProject { generation } => {
-                    if let Some(project) = self.project_slot.load_full() {
-                        self.render.load_project(&project);
-                        drop(project);
-                    }
-                    let _ = self
-                        .evt_tx
-                        .push(EngineEvent::ProjectInstalled { generation });
+        // Value edits, structural ownership transfers, and prepared projects
+        // share one ordered stream. Only apply an ownership-changing command
+        // when its displaced object can immediately leave through the reclaim
+        // ring; otherwise retain it and let no later command cross the
+        // generation boundary.
+        loop {
+            let command = match self.pending_command.take() {
+                Some(command) => command,
+                None => match self.cmd_rx.pop() {
+                    Ok(command) => command,
+                    Err(_) => break,
+                },
+            };
+            let prepared = match command {
+                RealtimeCommand::Engine(command) => {
+                    self.render.apply_command(command);
+                    continue;
                 }
-                other => self.render.apply_command(other),
+                RealtimeCommand::Structural(command) => {
+                    if self.reclaim_tx.slots() == 0 {
+                        self.pending_command = Some(RealtimeCommand::Structural(command));
+                        break;
+                    }
+                    if let Some(node) = self.render.apply_structural(command) {
+                        match self.reclaim_tx.push(StructuralReclaim::Node(node)) {
+                            Ok(()) => {}
+                            Err(_) => {
+                                unreachable!("reclaim capacity checked before structural edit")
+                            }
+                        }
+                    }
+                    continue;
+                }
+                RealtimeCommand::InstallProject(prepared) => prepared,
+            };
+            if self.reclaim_tx.slots() == 0 {
+                self.pending_command = Some(RealtimeCommand::InstallProject(prepared));
+                break;
             }
-        }
-        while let Ok(command) = self.structural_rx.pop() {
-            self.render.apply_structural(command);
-        }
-        // Hand displaced effect nodes back to the GUI thread for disposal.
-        // Anything that does not fit this block is retried next block,
-        // reusing the spill buffer's capacity.
-        let mut outgoing = std::mem::take(&mut self.reclaim_spill);
-        outgoing.extend(
-            self.render
-                .take_reclaim()
-                .into_iter()
-                .map(StructuralReclaim::Node),
-        );
-        for node in outgoing.drain(..) {
-            if let Err(rtrb::PushError::Full(node)) = self.reclaim_tx.push(node) {
-                self.reclaim_spill.push(node);
+            let retired = std::mem::replace(&mut self.render, prepared.render);
+            match self
+                .reclaim_tx
+                .push(StructuralReclaim::RenderState(retired))
+            {
+                Ok(()) => {}
+                Err(_) => unreachable!("reclaim capacity checked before project swap"),
             }
+            let _ = self.evt_tx.push(EngineEvent::ProjectInstalled {
+                generation: prepared.generation,
+            });
         }
 
         let report = self.render.process_block(frames);

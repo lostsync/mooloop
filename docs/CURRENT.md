@@ -119,9 +119,9 @@ selected source (sampler / drum synth / mono synth) -> effect chain -> gain/pan/
                                                            v
                                              assigned mixer bus (0-16)
                                                            |
-                                          bus effect chain -> gain/pan/mute
+                                        bus effect chain -> gain/balance/mute
                                                            |
-                                            (optionally another, lower bus)
+                                             (optionally another bus)
                                                            v
                                                 master bus (bus 0)
                                                            |
@@ -141,6 +141,13 @@ Every strip preallocates all three source nodes and switches its active source
 without allocating in the callback. WAV decode, waveform construction, and
 directory scanning occur off the audio thread. A decoded sample is published
 through an `ArcSwapOption` slot.
+
+Project installation prepares a complete `RenderState`, including effect
+construction and sequencer import, on the control thread. The JACK callback
+receives that state through the ordered command stream, swaps one box at a
+block boundary, and returns the displaced state through the reclaim ring for
+control-thread destruction. Parameter commands cannot cross that generation
+boundary.
 
 ## Useful Foundations
 
@@ -215,16 +222,18 @@ through an `ArcSwapOption` slot.
   mutation rather than an allocation. Buses carry their own effect chain,
   volume, pan, and mute, and may feed another bus.
 - Any bus may feed any other. The realtime thread still never sorts a graph:
-  `mooloop_core::compile_render_order` topologically sorts the bank off the
-  audio thread (Kahn's algorithm over fixed-size arrays, no allocation) and the
-  engine walks the resulting `[u8; MAX_BUSES]` permutation. This is the model
+  `mooloop_core::compile_bus_graph` normalizes and topologically sorts the bank
+  off the audio thread (Kahn's algorithm over fixed-size arrays, no allocation)
+  and the engine walks the resulting `CompiledBusGraph`. This is the model
   REAPER and Ardour use - whoever edits the graph compiles it into a flat
   schedule, and the callback only executes that schedule.
 - The schedule is this cheap because every bus owns a permanently allocated
   buffer and no two nodes ever share one, which removes the pooled,
   reference-counted buffer assignment a general graph engine needs.
-- A routing change ships the edge and the schedule that accounts for it in one
-  `SetBusOutput` message, so no block can render an edge against a stale order.
+- Destinations and their matching render order are one fixed-size compiled
+  value. A routing change installs the whole value atomically, so no block can
+  render edges against a stale order. Short stored banks are padded and invalid
+  individual routes are repaired to the master at this compilation boundary.
 - Cycles are refused rather than delayed, at the picker (looping destinations
   are shown greyed with the reason), at the command boundary, and on load,
   where a cyclic file is flattened to everything-to-master so it still opens
@@ -238,15 +247,17 @@ through an `ArcSwapOption` slot.
   value is a peak hold that only the GUI's read clears, so a transient landing
   between two UI frames is still shown. Per-channel meters are still drawn but
   unfed.
-- The constant-power pan law is normalized to unity at centre. A signal now
-  crosses several pan stages on its way out, and the raw law charged 3 dB at
-  each, so routing a channel to a bus would otherwise have made it quieter.
+- Channels retain the historical constant-power pan law, so existing project
+  levels do not jump. Mixer buses use a distinct stereo balance law that is
+  unity at centre and never boosts an endpoint; adding centred routing stages
+  is therefore level-neutral.
 - Each channel runs a fixed-size effect chain (up to 8 slots) after its
-  generator. Installing/removing nodes crosses the realtime boundary through a
-  dedicated structural ring buffer pair (boxed nodes move GUI->audio and
-  displaced boxes return for GUI-side deallocation); reorder is an in-place
-  slot swap on a plain `EngineCommand`, and knob changes arrive as
-  sample-timed `ParamValue` events. Effect chains persist in song files
+  generator. Value edits, boxed structural edits, and prepared projects share
+  one ordered control stream, so no edit can cross a project-generation
+  boundary. Displaced nodes and whole render states return through a bounded
+  reclaim ring for control-thread destruction; reorder is an in-place slot
+  swap, and knob changes arrive as sample-timed `ParamValue` events. Effect
+  chains persist in song files
   (`ChannelSetup.effects`, serde-defaulted for older manifests).
 - Seven effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
@@ -274,13 +285,13 @@ through an `ArcSwapOption` slot.
   parallel send, return, or wet/dry split. There are no sidechains, external
   inputs, solo, or per-bus stem export, and buses cannot be renamed from the
   interface yet.
-- There is no plugin delay compensation, and `AudioNode` has no way to report
-  latency. This already matters: the drive effect's 2x oversampler uses a
-  32-tap linear-phase FIR, so it carries roughly eight samples of group delay
-  at base rate. Serial chains are unaffected, but two related signals summing
-  at a bus where only one path contains a drive will comb-filter. Free routing
-  makes that easier to stumble into, so latency reporting should land before
-  parallel sends do.
+- There is no graph-level plugin delay compensation. `AudioNode` can report
+  integer processing latency, and the drive declares the measured 15-frame
+  latency of its complete 2x interpolate/decimate path. Drive also delays its
+  internal dry path by the same amount, preventing its own wet/dry control from
+  mixing time-misaligned signals. Related channels with unequal effect latency
+  can still comb-filter when they meet at a bus; preallocated graph
+  compensation must land before parallel sends.
 
 ### Buffers And Rendering
 
@@ -305,10 +316,10 @@ through an `ArcSwapOption` slot.
 
 1. Add probability and explicit microtiming controls without weakening the
    tick-addressed event contract before broad automation.
-2. Fixed-capacity device edits are defined (structural ring + slot swaps) and
-   now address an `EffectTarget` rather than a channel, which is what let the
-   bus graph reuse them unchanged. Extend the same protocol before adding
-   parallel sends or sidechains.
+2. Extend `docs/AUDIO_ARCHITECTURE.md`'s compiled plan from the current
+   one-destination bus tree to typed audio and dependency edges before adding
+   parallel sends or sidechains. An auxiliary-input processing view is also
+   required; topology alone does not give an effect another audio input.
 3. Budget channel buffer memory and specify read/write collision behavior
    before buffers become part of every strip.
 4. Add deferred reclamation for replaced samples, graphs, and future buffers.

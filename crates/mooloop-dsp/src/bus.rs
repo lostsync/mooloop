@@ -71,22 +71,24 @@ impl StereoBus {
     }
 }
 
-/// Constant-power pan to stereo gains, normalized so centre is unity rather
-/// than -3 dB. `pan` in `[-1, 1]`; 0 is centre. Returns `(gain_l, gain_r)`;
-/// multiply by the strip's linear gain.
-///
-/// The normalization matters because a signal now passes several pan stages on
-/// its way out — channel, insert bus, possibly another bus, master. With the
-/// raw `(cos, sin)` law each of those would cost another 3 dB, so simply
-/// assigning a channel to a bus would make it quieter. Unity at centre keeps
-/// routing level-neutral; the cost is that a hard pan is 3 dB hotter on the
-/// side it lands on, which is the same trade every mixer with bus chains makes.
+/// Historical constant-power channel pan law. `pan` is in `[-1, 1]`; centre
+/// sends -3 dB to each side and the endpoints are unity. Retaining this law
+/// preserves existing project gain staging.
 pub fn pan_gains(pan: f32) -> (f32, f32) {
     let angle = (pan.clamp(-1.0, 1.0) + 1.0) * core::f32::consts::FRAC_PI_4;
-    (
-        angle.cos() * core::f32::consts::SQRT_2,
-        angle.sin() * core::f32::consts::SQRT_2,
-    )
+    (angle.cos(), angle.sin())
+}
+
+/// Level-neutral balance for an already-stereo bus. Centre is `(1, 1)`; moving
+/// toward an endpoint attenuates only the opposite side and never boosts the
+/// surviving side. This is deliberately distinct from panning a source.
+pub fn balance_gains(balance: f32) -> (f32, f32) {
+    let balance = balance.clamp(-1.0, 1.0);
+    if balance < 0.0 {
+        (1.0, (-balance * core::f32::consts::FRAC_PI_2).cos())
+    } else {
+        ((balance * core::f32::consts::FRAC_PI_2).cos(), 1.0)
+    }
 }
 
 #[cfg(test)]
@@ -108,19 +110,26 @@ mod tests {
     }
 
     #[test]
-    fn constant_power_pan_is_unity_at_centre() {
+    fn channel_pan_retains_the_historical_constant_power_law() {
         let (l, r) = pan_gains(0.0);
         assert!((l - r).abs() < 1e-6);
-        // Unity per side at centre is what makes chaining pan stages free.
-        assert!((l - 1.0).abs() < 1e-6, "centre should not attenuate: {l}");
-        // Still constant power: total power is the same at every position.
+        assert!((l * l + r * r - 1.0).abs() < 1e-5);
         for pan in [-1.0, -0.5, 0.0, 0.37, 1.0] {
             let (l, r) = pan_gains(pan);
-            assert!((l * l + r * r - 2.0).abs() < 1e-5, "power moved at {pan}");
+            assert!((l * l + r * r - 1.0).abs() < 1e-5, "power moved at {pan}");
         }
         let (l, r) = pan_gains(-1.0);
-        assert!((l - core::f32::consts::SQRT_2).abs() < 1e-6 && r < 1e-6);
+        assert!((l - 1.0).abs() < 1e-6 && r < 1e-6);
         let (l, r) = pan_gains(1.0);
-        assert!(l < 1e-6 && (r - core::f32::consts::SQRT_2).abs() < 1e-6);
+        assert!(l < 1e-6 && (r - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stereo_balance_is_unity_at_centre_without_endpoint_boost() {
+        assert_eq!(balance_gains(0.0), (1.0, 1.0));
+        let (left, right) = balance_gains(-1.0);
+        assert!((left - 1.0).abs() < 1e-6 && right.abs() < 1e-6);
+        let (left, right) = balance_gains(1.0);
+        assert!(left.abs() < 1e-6 && (right - 1.0).abs() < 1e-6);
     }
 }

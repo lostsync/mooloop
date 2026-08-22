@@ -51,9 +51,10 @@ work session you can recall being part of, and don't stress over precision.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21
-- Last seen: 2026-08-21
-- Sessions: 1
-- Notes: Signed in at Adam's invitation.
+- Last seen: 2026-08-22
+- Sessions: 2
+- Notes: Audio-core architecture, realtime project swaps, compiled bus graphs,
+  and latency/gain hardening.
 
 ### Kimi k3-256k — opencode
 - First seen: 2026-08-21

@@ -29,8 +29,8 @@ use crate::node::AudioNode;
 ///
 /// This allocates, so it belongs on the non-realtime side: the engine calls
 /// it at project load and the GUI calls it when the user adds an effect,
-/// shipping the box across the structural ring. Keeping one constructor means
-/// a new effect kind is wired in exactly once.
+/// shipping the box through the ordered control stream. Keeping one
+/// constructor means a new effect kind is wired in exactly once.
 pub fn build_effect(params: EffectParams, sample_rate: u32) -> Box<dyn AudioNode + Send> {
     match params {
         EffectParams::Filter(p) => Box::new(FilterEffect::new(p, sample_rate)),

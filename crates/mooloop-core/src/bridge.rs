@@ -10,8 +10,8 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::{
-    DeviceKind, DrumSynthParams, EffectTarget, MonoSynthParams, NoteEvent, NoteId, PlaybackMode,
-    RenderOrder, SamplerParams,
+    CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget, MonoSynthParams, NoteEvent,
+    NoteId, PlaybackMode, SamplerParams,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
@@ -61,16 +61,10 @@ pub enum EngineCommand {
     SetBusVolume { bus: u8, volume: f32 },
     /// Set a bus's stereo pan in [-1, 1].
     SetBusPan { bus: u8, pan: f32 },
-    /// Route a bus into another bus, together with the render order that
-    /// accounts for the change. The schedule is compiled by the sender (see
-    /// `mooloop_core::mixer::compile_render_order`) because the audio thread
-    /// must not sort a graph; shipping both in one message means no block can
-    /// render an edge against a stale order.
-    SetBusOutput {
-        bus: u8,
-        output: u8,
-        order: RenderOrder,
-    },
+    /// Atomically replace bus destinations and the render order compiled for
+    /// them. The audio thread installs this fixed-size value and never reasons
+    /// about editable graph topology.
+    InstallBusGraph { graph: CompiledBusGraph },
     /// Toggle or set a step. Addresses the pattern bank so edits to
     /// non-playing patterns take effect when selected.
     SetStep {
@@ -132,9 +126,6 @@ pub enum EngineCommand {
         id: u32,
         value: f32,
     },
-    /// Import the latest project snapshot published through the engine's
-    /// out-of-band ArcSwap slot into preallocated realtime storage.
-    InstallProject { generation: u64 },
 }
 
 /// audio -> GUI. Pushed sparingly (a few times per block at most) and drained

@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    compile_render_order, default_render_order, sanitize_route, ChannelSource, DeviceKind,
-    DrumSynthParams,
-    EffectTarget, EngineCommand, MonoSynthParams, Project, RenderOrder, SamplerParams,
-    DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    compile_bus_graph, ChannelSource, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
+    EngineCommand, MonoSynthParams, Project, SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_BUSES,
+    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
 };
 use mooloop_dsp::{
-    build_effect, pan_gains, AudioNode, DrumSynth, Event, EventList, MonoSynth, ProcessContext,
-    SampleData, Sampler, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
+    balance_gains, build_effect, pan_gains, AudioNode, DrumSynth, Event, EventList, MonoSynth,
+    ProcessContext, SampleData, Sampler, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
 };
 
 use crate::meters::BusMeters;
@@ -60,26 +59,30 @@ impl EffectChain {
         self.bypassed = [false; MAX_EFFECTS_PER_CHANNEL];
     }
 
-    fn install(&mut self, slot: usize, node: Box<dyn AudioNode + Send>, reclaim: &mut Reclaim) {
+    /// Install a node and return whichever box must be reclaimed. An invalid
+    /// slot returns the incoming node so it is never dropped by the realtime
+    /// caller.
+    fn install(
+        &mut self,
+        slot: usize,
+        node: Box<dyn AudioNode + Send>,
+    ) -> Option<Box<dyn AudioNode + Send>> {
         if let Some(target) = self.nodes.get_mut(slot) {
-            if let Some(old) = target.replace(node) {
-                reclaim.push(old);
-            }
+            target.replace(node)
+        } else {
+            Some(node)
         }
     }
 
-    fn remove(&mut self, slot: usize, reclaim: &mut Reclaim) {
-        if let Some(target) = self.nodes.get_mut(slot) {
-            if let Some(old) = target.take() {
-                reclaim.push(old);
-            }
-        }
+    fn remove(&mut self, slot: usize) -> Option<Box<dyn AudioNode + Send>> {
+        let removed = self.nodes.get_mut(slot).and_then(Option::take);
         if let Some(events) = self.events.get_mut(slot) {
             events.clear();
         }
         if let Some(bypassed) = self.bypassed.get_mut(slot) {
             *bypassed = false;
         }
+        removed
     }
 
     fn swap(&mut self, slot_a: usize, slot_b: usize) {
@@ -110,10 +113,17 @@ impl EffectChain {
 
     /// Load a project's saved chain. Construction allocates, so this is a
     /// load-time operation only, never a per-block one.
-    fn load(&mut self, slots: &[mooloop_core::EffectSlotState], sample_rate: u32, reclaim: &mut Reclaim) {
+    fn load(
+        &mut self,
+        slots: &[mooloop_core::EffectSlotState],
+        sample_rate: u32,
+        reclaim: &mut Reclaim,
+    ) {
         self.clear(reclaim);
         for (slot, effect) in slots.iter().take(MAX_EFFECTS_PER_CHANNEL).enumerate() {
-            self.install(slot, build_effect(effect.params, sample_rate), reclaim);
+            if let Some(displaced) = self.install(slot, build_effect(effect.params, sample_rate)) {
+                reclaim.push(displaced);
+            }
             self.bypassed[slot] = effect.bypassed;
         }
     }
@@ -133,9 +143,9 @@ impl EffectChain {
     }
 }
 
-/// Shared output stage: linear gain, constant-power pan, and a mute that stops
-/// the strip contributing without stopping it processing (so effect tails on a
-/// muted strip still decay instead of freezing).
+/// Shared output stage: linear gain, a source-pan or bus-balance application,
+/// and a mute that stops the strip contributing without stopping it processing
+/// (so effect tails on a muted strip still decay instead of freezing).
 struct OutputStage {
     gain: f32,
     pan: f32,
@@ -159,9 +169,14 @@ impl OutputStage {
         self.pan = pan.clamp(-1.0, 1.0);
     }
 
-    fn apply(&self, bus: &mut StereoBus, frames: usize) {
+    fn apply_pan(&self, bus: &mut StereoBus, frames: usize) {
         let (pan_l, pan_r) = pan_gains(self.pan);
         bus.apply_stereo_gain(self.gain * pan_l, self.gain * pan_r, frames);
+    }
+
+    fn apply_balance(&self, bus: &mut StereoBus, frames: usize) {
+        let (balance_l, balance_r) = balance_gains(self.pan);
+        bus.apply_stereo_gain(self.gain * balance_l, self.gain * balance_r, frames);
     }
 }
 
@@ -173,7 +188,6 @@ struct BusStrip {
     effects: EffectChain,
     bus: StereoBus,
     output: OutputStage,
-    destination: u8,
 }
 
 impl BusStrip {
@@ -183,14 +197,12 @@ impl BusStrip {
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             // Unity, not a channel's 0.8: see `mooloop_core::MixerBus::new`.
             output: OutputStage::new(1.0),
-            destination: MASTER_BUS,
         }
     }
 
     fn reset(&mut self, reclaim: &mut Reclaim) {
         self.effects.clear(reclaim);
         self.output = OutputStage::new(1.0);
-        self.destination = MASTER_BUS;
     }
 }
 
@@ -340,10 +352,9 @@ pub(crate) struct RenderState {
     /// The full bus bank, master first. Always `MAX_BUSES` long, so assigning
     /// a channel to any bus is a bounded mutation rather than an allocation.
     buses: Vec<BusStrip>,
-    /// Order the bank is rendered in, sources before destinations. Compiled
-    /// off the audio thread by `mooloop_core::compile_render_order`; this side
-    /// only ever walks it.
-    render_order: RenderOrder,
+    /// Destinations and their matching render order, compiled together off the
+    /// audio thread. The executor only installs or walks this value.
+    bus_graph: CompiledBusGraph,
     events: Vec<EventList>,
     sample_rate: u32,
     /// Nodes displaced from effect slots this block, awaiting handoff to the
@@ -366,7 +377,7 @@ impl RenderState {
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
             buses: (0..MAX_BUSES).map(|_| BusStrip::new()).collect(),
-            render_order: default_render_order(),
+            bus_graph: CompiledBusGraph::default(),
             events: (0..MAX_CHANNELS).map(|_| EventList::empty()).collect(),
             sample_rate,
             reclaim: Vec::new(),
@@ -424,11 +435,13 @@ impl RenderState {
                 strip.output.set_volume(channel.setup.channel.volume);
                 strip.output.set_pan(channel.setup.channel.pan);
                 strip.destination = clamp_bus(channel.setup.channel.bus);
-                // Project loading is a transport-stop/load-time operation,
-                // not a hot per-block path, so constructing the boxed nodes
-                // here is acceptable (see docs/EFFECTS_PLAN.md). Displaced
-                // nodes still go through reclaim rather than being dropped.
-                strip.effects
+                // `load_project` runs while a complete RenderState is prepared
+                // on the control thread (or for offline export), never from the
+                // JACK callback, so constructing boxed nodes is acceptable.
+                // Displaced nodes still collect in `reclaim` for callers that
+                // deliberately reuse a state off-thread.
+                strip
+                    .effects
                     .load(&channel.setup.effects, self.sample_rate, &mut self.reclaim);
             } else {
                 strip.reset_slot(DeviceKind::Sampler, &mut self.reclaim);
@@ -440,7 +453,6 @@ impl RenderState {
                     strip.output.muted = setup.bus.muted;
                     strip.output.set_volume(setup.bus.volume);
                     strip.output.set_pan(setup.bus.pan);
-                    strip.destination = setup.bus.output;
                     strip
                         .effects
                         .load(&setup.effects, self.sample_rate, &mut self.reclaim);
@@ -451,15 +463,7 @@ impl RenderState {
         // A file whose routing does not sort is repaired to everything-to-master
         // rather than rejected, so a hand-edited or future-format song still
         // opens and makes sound.
-        self.render_order = match compile_render_order(&project.buses) {
-            Some(order) => order,
-            None => {
-                for strip in &mut self.buses {
-                    strip.destination = MASTER_BUS;
-                }
-                default_render_order()
-            }
-        };
+        self.bus_graph = compile_bus_graph(&project.buses).unwrap_or_default();
     }
 
     /// Resolve an effect address to the chain that owns it. Both arms are
@@ -471,9 +475,7 @@ impl RenderState {
         target: EffectTarget,
     ) -> Option<&'a mut EffectChain> {
         match target {
-            EffectTarget::Channel(index) => {
-                strips.get_mut(index as usize).map(|s| &mut s.effects)
-            }
+            EffectTarget::Channel(index) => strips.get_mut(index as usize).map(|s| &mut s.effects),
             EffectTarget::Bus(index) => buses.get_mut(index as usize).map(|b| &mut b.effects),
         }
     }
@@ -483,30 +485,30 @@ impl RenderState {
     }
 
     /// Apply a structural change (install/remove of a boxed node). Called on
-    /// the realtime thread from the structural ring drain; the box itself was
-    /// allocated on the GUI thread.
-    pub(crate) fn apply_structural(&mut self, cmd: StructuralCommand) {
+    /// the realtime thread from the ordered control stream; the box itself was
+    /// allocated on the control thread.
+    pub(crate) fn apply_structural(
+        &mut self,
+        cmd: StructuralCommand,
+    ) -> Option<Box<dyn AudioNode + Send>> {
         match cmd {
             StructuralCommand::InstallEffect { target, slot, node } => {
                 // `chain_for` borrows the two strip vectors rather than all of
                 // `self`, so `reclaim` stays independently borrowable here.
                 if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
-                    chain.install(slot as usize, node, &mut self.reclaim);
+                    chain.install(slot as usize, node)
+                } else {
+                    Some(node)
                 }
             }
             StructuralCommand::RemoveEffect { target, slot } => {
                 if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
-                    chain.remove(slot as usize, &mut self.reclaim);
+                    chain.remove(slot as usize)
+                } else {
+                    None
                 }
             }
         }
-    }
-
-    /// Take the displaced nodes accumulated since the last call. Realtime
-    /// playback pushes these into the reclaim ring; offline rendering can
-    /// simply drop the returned vec.
-    pub(crate) fn take_reclaim(&mut self) -> Reclaim {
-        std::mem::take(&mut self.reclaim)
     }
 
     pub fn apply_command(&mut self, cmd: EngineCommand) {
@@ -587,19 +589,7 @@ impl RenderState {
                     strip.output.set_pan(pan);
                 }
             }
-            EngineCommand::SetBusOutput { bus, output, order } => {
-                if let Some(strip) = self.buses.get_mut(bus as usize) {
-                    // Sanitized again here rather than trusted from the
-                    // sender: an out-of-range destination would fall through
-                    // `mix_into`'s bounds check and silently drop this bus's
-                    // audio, which is a worse failure than mis-routing it.
-                    strip.destination = sanitize_route(bus, output);
-                }
-                // The edge and the schedule that accounts for it travel
-                // together, so no block can ever render a route with a stale
-                // order.
-                self.render_order = order;
-            }
+            EngineCommand::InstallBusGraph { graph } => self.bus_graph = graph,
             EngineCommand::SetStep {
                 pattern,
                 channel,
@@ -679,7 +669,6 @@ impl RenderState {
                     chain.queue_param(slot as usize, id, value);
                 }
             }
-            EngineCommand::InstallProject { .. } => {}
         }
     }
 
@@ -758,7 +747,7 @@ impl RenderState {
             strip.bus.clear(frames);
             strip.process(&context, &self.events[index]);
             strip.effects.process(&context, &mut strip.bus);
-            strip.output.apply(&mut strip.bus, frames);
+            strip.output.apply_pan(&mut strip.bus, frames);
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
                 destination.bus.add_from(&strip.bus, frames);
             }
@@ -770,12 +759,12 @@ impl RenderState {
         // what the caller reads.
         let mut master_peak = (0.0, 0.0);
         for slot in 0..self.buses.len() {
-            let index = self.render_order[slot] as usize;
+            let index = self.bus_graph.render_order()[slot] as usize;
             let Some(strip) = self.buses.get_mut(index) else {
                 continue;
             };
             strip.effects.process(&context, &mut strip.bus);
-            strip.output.apply(&mut strip.bus, frames);
+            strip.output.apply_balance(&mut strip.bus, frames);
             // A muted bus still processes, so a delay or reverb tail on it
             // decays instead of freezing, but contributes nothing — and meters
             // as silent, matching what is heard rather than what is running.
@@ -789,7 +778,7 @@ impl RenderState {
             if index == MASTER_BUS as usize {
                 master_peak = (peak_l, peak_r);
             } else if !strip.output.muted {
-                let destination = strip.destination as usize;
+                let destination = self.bus_graph.destination(index) as usize;
                 mix_into(&mut self.buses, index, destination, frames);
             }
         }
@@ -975,7 +964,8 @@ mod tests {
     }
 
     #[test]
-    fn mixed_source_project_renders_all_preallocated_nodes() {        let mut project = Project {
+    fn mixed_source_project_renders_all_preallocated_nodes() {
+        let mut project = Project {
             channels: vec![
                 ProjectChannel::sampler(0, 1),
                 ProjectChannel::drum_synth(1, 1),
@@ -993,15 +983,10 @@ mod tests {
 
     /// Route `bus` into `output` the way the interface does: compile the
     /// schedule for the resulting graph and send both together.
-    fn route(
-        render: &mut RenderState,
-        buses: &mut [mooloop_core::BusSetup],
-        bus: u8,
-        output: u8,
-    ) {
+    fn route(render: &mut RenderState, buses: &mut [mooloop_core::BusSetup], bus: u8, output: u8) {
         buses[bus as usize].bus.output = output;
-        let order = compile_render_order(buses).expect("test graph should be acyclic");
-        render.apply_command(EngineCommand::SetBusOutput { bus, output, order });
+        let graph = compile_bus_graph(buses).expect("test graph should be acyclic");
+        render.apply_command(EngineCommand::InstallBusGraph { graph });
     }
 
     fn rendered_energy(project: &Project, configure: impl FnOnce(&mut RenderState)) -> f32 {
@@ -1033,7 +1018,7 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let filtered = rendered_energy(&project, |render| {
-            render.apply_structural(StructuralCommand::InstallEffect {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
                 target: EffectTarget::Channel(0),
                 slot: 0,
                 node: muffling_filter(),
@@ -1094,7 +1079,7 @@ mod tests {
             }
 
             let wet = rendered_energy(&project, |render| {
-                render.apply_structural(StructuralCommand::InstallEffect {
+                let _ = render.apply_structural(StructuralCommand::InstallEffect {
                     target: EffectTarget::Channel(0),
                     slot: 0,
                     node: build_effect(params, 48_000),
@@ -1114,19 +1099,13 @@ mod tests {
     fn a_bus_effect_processes_every_channel_feeding_it() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |render| {
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 3,
-            });
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 3 });
         });
         assert!(dry > 0.0, "routing through a bus must not lose the signal");
 
         let filtered = rendered_energy(&project, |render| {
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 3,
-            });
-            render.apply_structural(StructuralCommand::InstallEffect {
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 3 });
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
                 target: EffectTarget::Bus(3),
                 slot: 0,
                 node: muffling_filter(),
@@ -1142,10 +1121,7 @@ mod tests {
     fn muting_a_bus_silences_what_feeds_it() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let muted = rendered_energy(&project, |render| {
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 2,
-            });
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 2 });
             render.apply_command(EngineCommand::SetBusMuted {
                 bus: 2,
                 muted: true,
@@ -1158,20 +1134,14 @@ mod tests {
     fn bus_volume_scales_its_contribution() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let unity = rendered_energy(&project, |render| {
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 1,
-            });
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 1 });
             render.apply_command(EngineCommand::SetBusVolume {
                 bus: 1,
                 volume: 1.0,
             });
         });
         let halved = rendered_energy(&project, |render| {
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 1,
-            });
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 1 });
             render.apply_command(EngineCommand::SetBusVolume {
                 bus: 1,
                 volume: 0.5,
@@ -1190,22 +1160,16 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let chained = rendered_energy(&project, |render| {
             let mut buses = mooloop_core::default_buses();
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 5,
-            });
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 5 });
             route(render, &mut buses, 5, 2);
         });
         assert!(chained > 0.0, "chained buses must still reach the master");
 
         let filtered = rendered_energy(&project, |render| {
             let mut buses = mooloop_core::default_buses();
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 5,
-            });
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 5 });
             route(render, &mut buses, 5, 2);
-            render.apply_structural(StructuralCommand::InstallEffect {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
                 target: EffectTarget::Bus(2),
                 slot: 0,
                 node: muffling_filter(),
@@ -1225,22 +1189,16 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let chained = rendered_energy(&project, |render| {
             let mut buses = mooloop_core::default_buses();
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 2,
-            });
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 2 });
             route(render, &mut buses, 2, 9);
         });
         assert!(chained > 0.0, "an uphill route must still reach the master");
 
         let filtered = rendered_energy(&project, |render| {
             let mut buses = mooloop_core::default_buses();
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 2,
-            });
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 2 });
             route(render, &mut buses, 2, 9);
-            render.apply_structural(StructuralCommand::InstallEffect {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
                 target: EffectTarget::Bus(9),
                 slot: 0,
                 node: muffling_filter(),
@@ -1261,17 +1219,12 @@ mod tests {
         let dry = rendered_energy(&project, |_| {});
         let routed = rendered_energy(&project, |render| {
             let mut buses = mooloop_core::default_buses();
-            render.apply_command(EngineCommand::SetChannelBus {
-                channel: 0,
-                bus: 1,
-            });
+            render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 1 });
             buses[1].bus.output = 4;
             buses[4].bus.output = 11;
             buses[11].bus.output = MASTER_BUS;
-            let order = compile_render_order(&buses).expect("acyclic");
-            for (bus, output) in [(1u8, 4u8), (4, 11), (11, MASTER_BUS)] {
-                render.apply_command(EngineCommand::SetBusOutput { bus, output, order });
-            }
+            let graph = compile_bus_graph(&buses).expect("acyclic");
+            render.apply_command(EngineCommand::InstallBusGraph { graph });
         });
         // Three unity-gain buses in series should not change the level.
         let ratio = routed / dry;
@@ -1303,6 +1256,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn malformed_and_short_bus_banks_still_reach_the_master() {
+        let dry = rendered_energy(&synth_project(ProjectChannel::sampler(0, 1)), |_| {});
+
+        let mut malformed = synth_project(ProjectChannel::sampler(0, 1));
+        malformed.channels[0].setup.channel.bus = 3;
+        malformed.buses[3].bus.output = MAX_BUSES as u8;
+        let repaired = rendered_energy(&malformed, |_| {});
+        assert!(
+            (0.9..1.1).contains(&(repaired / dry)),
+            "an invalid destination must be repaired to master"
+        );
+
+        let mut short = synth_project(ProjectChannel::sampler(0, 1));
+        short.channels[0].setup.channel.bus = 9;
+        short.buses.truncate(2);
+        let padded = rendered_energy(&short, |_| {});
+        assert!(
+            (0.9..1.1).contains(&(padded / dry)),
+            "missing bus definitions must compile as default buses"
+        );
+    }
+
     /// An out-of-range bus index must not mute the channel; it lands on the
     /// master, which is the same thing a freshly-defaulted project does.
     #[test]
@@ -1327,10 +1303,7 @@ mod tests {
         let meters = BusMeters::new();
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.attach_meters(meters.clone());
-        render.apply_command(EngineCommand::SetChannelBus {
-            channel: 0,
-            bus: 6,
-        });
+        render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 6 });
         render.play();
         render.process_block(1024);
 
@@ -1345,10 +1318,7 @@ mod tests {
         let meters = BusMeters::new();
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.attach_meters(meters.clone());
-        render.apply_command(EngineCommand::SetChannelBus {
-            channel: 0,
-            bus: 6,
-        });
+        render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 6 });
         render.apply_command(EngineCommand::SetBusMuted {
             bus: 6,
             muted: true,
@@ -1363,7 +1333,7 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let filtered = rendered_energy(&project, |render| {
-            render.apply_structural(StructuralCommand::InstallEffect {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
                 target: EffectTarget::Bus(mooloop_core::MASTER_BUS),
                 slot: 0,
                 node: muffling_filter(),
@@ -1379,14 +1349,14 @@ mod tests {
         // A wide-open filter passes (nearly) everything; closing it via a
         // queued ParamValue event must change the output.
         let open = rendered_energy(&project, |render| {
-            render.apply_structural(StructuralCommand::InstallEffect {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
                 target: EffectTarget::Channel(0),
                 slot: 0,
                 node: default_effect(mooloop_core::EffectKind::Filter),
             });
         });
         let closed = rendered_energy(&project, |render| {
-            render.apply_structural(StructuralCommand::InstallEffect {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
                 target: EffectTarget::Channel(0),
                 slot: 0,
                 node: default_effect(mooloop_core::EffectKind::Filter),
@@ -1402,7 +1372,7 @@ mod tests {
 
         // Bypass restores the dry sound.
         let bypassed = rendered_energy(&project, |render| {
-            render.apply_structural(StructuralCommand::InstallEffect {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
                 target: EffectTarget::Channel(0),
                 slot: 0,
                 node: muffling_filter(),
@@ -1422,7 +1392,7 @@ mod tests {
 
         // Swapping an occupied slot with an empty one moves the filter.
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        render.apply_structural(StructuralCommand::InstallEffect {
+        let _ = render.apply_structural(StructuralCommand::InstallEffect {
             target: EffectTarget::Channel(0),
             slot: 0,
             node: muffling_filter(),
@@ -1438,11 +1408,10 @@ mod tests {
         assert!(moved < dry * 0.5, "filter should still muffle after swap");
 
         // Removing the slot reclaims the node instead of dropping it here.
-        render.apply_structural(StructuralCommand::RemoveEffect {
+        let reclaimed = render.apply_structural(StructuralCommand::RemoveEffect {
             target: EffectTarget::Channel(0),
             slot: 3,
         });
-        assert_eq!(render.take_reclaim().len(), 1);
-        assert!(render.take_reclaim().is_empty());
+        assert!(reclaimed.is_some());
     }
 }

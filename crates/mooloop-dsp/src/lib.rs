@@ -31,7 +31,7 @@ pub mod sampler;
 pub mod shaper;
 pub mod smooth;
 
-pub use bus::{pan_gains, StereoBus, MAX_BLOCK_SIZE};
+pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;
 pub use effects::{

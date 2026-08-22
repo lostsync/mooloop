@@ -130,19 +130,21 @@ not of new DSP.
 carry `channel` from the day it is introduced so that enabling it later is a
 routing change rather than a retyping of every engine command.
 
-**True audio sidechain: still deferred, but for one reason now instead of
-three.** This originally listed bus ordering, graph topology, and latency
-compensation as blockers. The mixer supplied the first two: there is a bus
-graph, and `mooloop_core::compile_render_order` already answers "what is
-rendered before what" for free, since a sidechain source must be scheduled
-ahead of its consumer exactly like a bus feeding another bus.
+**True audio sidechain: still deferred.** The mixer supplied the first
+compiled audio graph, but not the complete sidechain contract. A sidechain is
+a dependency edge in addition to ordinary audio routing: the source must be
+scheduled before the consumer even though its signal is not summed into that
+consumer's main input. `compile_bus_graph` currently models only each bus's one
+audio destination, and `AudioNode::process` currently accepts only one in-place
+stereo bus. Extend both through the process-buffer and typed-edge design in
+`AUDIO_ARCHITECTURE.md`; do not retain a borrowed source bus inside an effect.
 
-What remains is latency compensation, and it is not hypothetical. `AudioNode`
-has no `latency()` method, and the drive effect's 2x oversampler carries about
-eight samples of group delay from its 32-tap linear-phase FIR. Nothing exposes
-that, nothing compensates for it, and it is inaudible today only because every
-chain is serial. A sidechain — or any parallel send — makes differing path
-lengths audible as comb filtering. **Do latency reporting before either.**
+Latency compensation is also required and is not hypothetical. `AudioNode`
+now reports integer latency, and the drive effect declares 15 frames for its
+complete 2x oversampling path (both 32-tap FIR stages, including the retained
+polyphase offset). Its internal dry path is aligned, but the graph does not yet
+delay neighbouring shorter paths at a sum. **Build preallocated graph
+compensation before parallel sends or true sidechain.**
 
 Control-rate ducking still does not need any of this: publish modulator
 outputs into a per-channel table read on the *following* block. One block of

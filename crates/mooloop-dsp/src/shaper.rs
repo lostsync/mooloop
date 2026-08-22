@@ -67,6 +67,11 @@ pub fn drive_compensation(curve: DriveCurve, drive: f32) -> f32 {
 const FIR_TAPS: usize = 32;
 const HALF_TAPS: usize = FIR_TAPS / 2;
 
+/// Effective base-rate latency of the complete interpolate/process/decimate
+/// path. Both 32-tap filters contribute; the retained polyphase output has its
+/// impulse peak at frame 15.
+pub const OVERSAMPLER_LATENCY_FRAMES: usize = HALF_TAPS - 1;
+
 /// A 2x oversampler for one audio channel.
 ///
 /// Zero-stuffs to twice the rate through a windowed-sinc low-pass, hands both
@@ -284,6 +289,22 @@ mod tests {
             over_alias < naive_alias * 0.5,
             "oversampled alias energy {over_alias} should be well under naive {naive_alias}"
         );
+    }
+
+    #[test]
+    fn identity_path_has_the_declared_latency() {
+        let mut oversampler = Oversampler2x::new();
+        let mut impulse = [0.0f32; 64];
+        for (frame, output) in impulse.iter_mut().enumerate() {
+            *output = oversampler.process((frame == 0) as u8 as f32, |sample| sample);
+        }
+        let peak = impulse
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| left.abs().total_cmp(&right.abs()))
+            .map(|(index, _)| index)
+            .unwrap();
+        assert_eq!(peak, OVERSAMPLER_LATENCY_FRAMES);
     }
 
     /// Single-bin DFT magnitude, normalized by length.

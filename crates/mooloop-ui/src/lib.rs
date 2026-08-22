@@ -13,15 +13,14 @@ slint::include_modules!();
 
 use meter::{MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    compile_render_order, default_buses, default_render_order, sanitize_route, would_create_cycle,
-    BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind,
-    DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectSlotState, EffectTarget,
-    EngineCommand, EngineEvent, HatCharacter,
-    KickCharacter, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
-    OscWave, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
-    SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
-    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
-    MASTER_BUS, MAX_BUSES, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
+    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BusSetup, Channel,
+    ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind,
+    EffectSlotState, EffectTarget, EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit,
+    LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave,
+    PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
+    SamplerParams, SamplerState, SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
+    DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
+    MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
     MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
@@ -46,6 +45,35 @@ const PUMP_INTERVAL_MS: u64 = 8;
 const INITIAL_BPM: i32 = 120;
 /// Fader positions for time-based params map onto [0, MAX_TIME_S] seconds.
 const MAX_TIME_S: f32 = 2.0;
+
+/// UI callbacks all run on one thread, but boxed structural edits and POD
+/// commands used to enter separate relay queues and lose their relative
+/// order. These typed senders share one queue while preserving the convenient
+/// `.send(...)` call shape used by the callback wiring below.
+enum PendingEngineMessage {
+    Command(EngineCommand),
+    Structural(StructuralCommand),
+}
+
+#[derive(Clone)]
+struct EngineCommandSender(std::sync::mpsc::Sender<PendingEngineMessage>);
+
+impl EngineCommandSender {
+    fn send(&self, command: EngineCommand) -> bool {
+        self.0.send(PendingEngineMessage::Command(command)).is_ok()
+    }
+}
+
+#[derive(Clone)]
+struct StructuralCommandSender(std::sync::mpsc::Sender<PendingEngineMessage>);
+
+impl StructuralCommandSender {
+    fn send(&self, command: StructuralCommand) -> bool {
+        self.0
+            .send(PendingEngineMessage::Structural(command))
+            .is_ok()
+    }
+}
 const WAVEFORM_BINS: usize = 256;
 const DRUM_PREVIEW_BINS: usize = 144;
 
@@ -102,7 +130,7 @@ fn normalized_buses(buses: &[BusSetup]) -> Vec<BusSetup> {
             None => BusSetup::new(index),
         })
         .collect();
-    if compile_render_order(&normalized).is_none() {
+    if compile_bus_graph(&normalized).is_none() {
         for setup in &mut normalized {
             setup.bus.output = MASTER_BUS;
         }
@@ -1083,18 +1111,17 @@ impl UiState {
     /// The chain the device rack is currently editing, channel or bus.
     fn effect_chain(&self) -> Option<&Vec<EffectSlotState>> {
         match self.effect_target {
-            EffectTarget::Channel(index) => {
-                self.channels.get(index as usize).map(|c| &c.effects)
-            }
+            EffectTarget::Channel(index) => self.channels.get(index as usize).map(|c| &c.effects),
             EffectTarget::Bus(index) => self.buses.get(index as usize).map(|b| &b.effects),
         }
     }
 
     fn effect_chain_mut(&mut self) -> Option<&mut Vec<EffectSlotState>> {
         match self.effect_target {
-            EffectTarget::Channel(index) => {
-                self.channels.get_mut(index as usize).map(|c| &mut c.effects)
-            }
+            EffectTarget::Channel(index) => self
+                .channels
+                .get_mut(index as usize)
+                .map(|c| &mut c.effects),
             EffectTarget::Bus(index) => self.buses.get_mut(index as usize).map(|b| &mut b.effects),
         }
     }
@@ -1144,8 +1171,7 @@ impl UiState {
     fn allowed_destinations(&self, bus: usize) -> ModelRc<bool> {
         let flags: Vec<bool> = (0..self.buses.len())
             .map(|candidate| {
-                candidate != bus
-                    && !would_create_cycle(&self.buses, bus as u8, candidate as u8)
+                candidate != bus && !would_create_cycle(&self.buses, bus as u8, candidate as u8)
             })
             .collect();
         ModelRc::from(Rc::new(VecModel::from(flags)))
@@ -1995,11 +2021,10 @@ impl AppUi {
             });
         }
 
-        // --- Command channel from UI closures to the pump ---
-        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<EngineCommand>();
-        // Effect install/remove hands boxed nodes to the audio thread, so it
-        // cannot ride the POD EngineCommand channel — same relay pattern.
-        let (structural_tx, structural_rx) = std::sync::mpsc::channel::<StructuralCommand>();
+        // --- Ordered command channel from UI closures to the pump ---
+        let (pending_tx, pending_rx) = std::sync::mpsc::channel::<PendingEngineMessage>();
+        let cmd_tx = EngineCommandSender(pending_tx.clone());
+        let structural_tx = StructuralCommandSender(pending_tx);
         let sample_rate = handle.sample_rate();
         // Sample slots are published out-of-band, so source replacement asks
         // the pump (which owns the EngineHandle) to restore the built-in sample.
@@ -3085,7 +3110,9 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_muted(move |bus| {
-                let Ok(index) = usize::try_from(bus) else { return };
+                let Ok(index) = usize::try_from(bus) else {
+                    return;
+                };
                 let mut guard = st.borrow_mut();
                 let Some(setup) = guard.buses.get_mut(index) else {
                     return;
@@ -3108,7 +3135,9 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_volume_changed(move |bus, volume| {
-                let Ok(index) = usize::try_from(bus) else { return };
+                let Ok(index) = usize::try_from(bus) else {
+                    return;
+                };
                 let volume = volume.clamp(0.0, 1.0);
                 let mut guard = st.borrow_mut();
                 let Some(setup) = guard.buses.get_mut(index) else {
@@ -3131,7 +3160,9 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_pan_changed(move |bus, pan| {
-                let Ok(index) = usize::try_from(bus) else { return };
+                let Ok(index) = usize::try_from(bus) else {
+                    return;
+                };
                 let pan = pan.clamp(-1.0, 1.0);
                 let mut guard = st.borrow_mut();
                 let Some(setup) = guard.buses.get_mut(index) else {
@@ -3174,27 +3205,19 @@ impl AppUi {
                     }
                     return;
                 }
-                guard.buses[index].bus.output = output;
-                let Some(order) = compile_render_order(&guard.buses) else {
-                    // Unreachable given the check above; repair rather than
-                    // leave the engine rendering a graph we cannot describe.
-                    guard.buses[index].bus.output = MASTER_BUS;
-                    let _ = tx.send(EngineCommand::SetBusOutput {
-                        bus: index as u8,
-                        output: MASTER_BUS,
-                        order: default_render_order(),
-                    });
+                let previous = std::mem::replace(&mut guard.buses[index].bus.output, output);
+                let Some(graph) = compile_bus_graph(&guard.buses) else {
+                    // Unreachable given the check above. Restore the visible
+                    // graph rather than letting UI and audio generations
+                    // diverge.
+                    guard.buses[index].bus.output = previous;
                     return;
                 };
                 // Every strip's legal destinations move when an edge does.
                 if let Some(w) = weak.upgrade() {
                     guard.sync_mixer(&w);
                 }
-                let _ = tx.send(EngineCommand::SetBusOutput {
-                    bus: index as u8,
-                    output,
-                    order,
-                });
+                let _ = tx.send(EngineCommand::InstallBusGraph { graph });
             });
         }
 
@@ -3250,7 +3273,8 @@ impl AppUi {
                 };
                 st.sync_effects();
                 // The node is boxed here, on the GUI thread, and ownership
-                // crosses to the audio thread through the structural ring.
+                // crosses to the audio thread through the ordered control
+                // stream.
                 let _ = stx.send(StructuralCommand::InstallEffect {
                     target,
                     slot: slot as u8,
@@ -3343,7 +3367,9 @@ impl AppUi {
                     return;
                 };
                 let id = descriptor.id;
-                let Some(value) = effect.params.set(id, descriptor.from_normalized(normalized))
+                let Some(value) = effect
+                    .params
+                    .set(id, descriptor.from_normalized(normalized))
                 else {
                     return;
                 };
@@ -4077,14 +4103,26 @@ impl AppUi {
                                 }
                             };
                             if let Some((project, samples, is_song)) = merged {
-                                install_project_in_ui(
+                                // UI edits are mirrored into `project` before
+                                // they enter this relay. Discard any that have
+                                // not reached the engine yet: the prepared
+                                // project already contains them (or, for a
+                                // song load, deliberately supersedes them).
+                                while pending_rx.try_recv().is_ok() {}
+                                while sample_reset_rx.try_recv().is_ok() {}
+                                if !install_project_in_ui(
                                     &mut handle,
                                     default_sample_for_pump.as_ref(),
                                     &st,
                                     &window,
                                     &project,
                                     &samples,
-                                );
+                                ) {
+                                    window.set_status_message(
+                                        "Audio engine is busy; project was not installed".into(),
+                                    );
+                                    continue;
+                                }
                                 let mut state = st.borrow_mut();
                                 if is_song {
                                     state.bundle_path = Some(path.clone());
@@ -4169,35 +4207,39 @@ impl AppUi {
                     }
                 }
                 let mut forwarded = 0usize;
-                while let Ok(cmd) = cmd_rx.try_recv() {
-                    if !matches!(
-                        cmd,
-                        EngineCommand::Play | EngineCommand::Pause | EngineCommand::Stop
-                    ) {
-                        let mut state = st.borrow_mut();
-                        state.dirty = true;
-                        state.revision = state.revision.wrapping_add(1);
-                        if let Some(window) = weak.upgrade() {
-                            state.update_document_title(&window);
+                while let Ok(message) = pending_rx.try_recv() {
+                    match message {
+                        PendingEngineMessage::Command(cmd) => {
+                            if !matches!(
+                                cmd,
+                                EngineCommand::Play | EngineCommand::Pause | EngineCommand::Stop
+                            ) {
+                                let mut state = st.borrow_mut();
+                                state.dirty = true;
+                                state.revision = state.revision.wrapping_add(1);
+                                if let Some(window) = weak.upgrade() {
+                                    state.update_document_title(&window);
+                                }
+                            }
+                            if std::env::var("MOOLOOP_AUTODRIVE_VERBOSE").is_ok() {
+                                eprintln!("autodrive cmd: {cmd:?}");
+                            }
+                            handle.send(cmd);
+                            forwarded += 1;
+                        }
+                        PendingEngineMessage::Structural(cmd) => {
+                            // Any structural change is an unsaved edit.
+                            {
+                                let mut state = st.borrow_mut();
+                                state.dirty = true;
+                                state.revision = state.revision.wrapping_add(1);
+                                if let Some(window) = weak.upgrade() {
+                                    state.update_document_title(&window);
+                                }
+                            }
+                            handle.send_structural(cmd);
                         }
                     }
-                    if std::env::var("MOOLOOP_AUTODRIVE_VERBOSE").is_ok() {
-                        eprintln!("autodrive cmd: {cmd:?}");
-                    }
-                    handle.send(cmd);
-                    forwarded += 1;
-                }
-                while let Ok(cmd) = structural_rx.try_recv() {
-                    // Any structural change is an unsaved edit.
-                    {
-                        let mut state = st.borrow_mut();
-                        state.dirty = true;
-                        state.revision = state.revision.wrapping_add(1);
-                        if let Some(window) = weak.upgrade() {
-                            state.update_document_title(&window);
-                        }
-                    }
-                    handle.send_structural(cmd);
                 }
                 let Some(w) = weak.upgrade() else { return };
                 let mut saw_nonzero = false;
@@ -4472,7 +4514,12 @@ fn install_project_in_ui(
     window: &MainWindow,
     project: &Project,
     samples: &[Option<Arc<SampleData>>],
-) {
+) -> bool {
+    // Queue the complete state first. If the bounded realtime queue is full,
+    // leave both the sample slots and visible project untouched.
+    if !handle.install_project(Arc::new(project.clone())) {
+        return false;
+    }
     for index in 0..MAX_CHANNELS {
         let sample = project
             .channels
@@ -4495,11 +4542,11 @@ fn install_project_in_ui(
             handle.clear_sample(index);
         }
     }
-    handle.install_project(Arc::new(project.clone()));
     state.borrow_mut().replace_project(project, samples, window);
     window.set_playing(false);
     window.set_playlist_position_ticks(0);
     refresh_preset_menus(state, window);
+    true
 }
 
 fn preset_menu_label(preset: &PresetSummary) -> slint::SharedString {

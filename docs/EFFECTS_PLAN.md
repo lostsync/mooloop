@@ -1,7 +1,13 @@
 # Effects units — implementation plan
 
-Status: approved plan, ready to build. Read `AGENTS.md` first (worktree/git
-rules) and `docs/UI_DESIGN.md` before touching any `.slint` file.
+Status: implemented historical plan. The ordered control stream and prepared
+project-state ownership in `AUDIO_ARCHITECTURE.md` supersede this document's
+separate structural-ring transport details. Read `AGENTS.md` first
+(worktree/git rules) and `docs/UI_DESIGN.md` before touching any `.slint` file.
+
+The implementation narrative below is retained to explain how the effect
+slice was built; it is not the current transport API. Follow
+`AUDIO_ARCHITECTURE.md` and `CURRENT.md` when extending the engine.
 
 This document tells you exactly what to build and in what order. Where a
 design question could go multiple ways, a decision has already been made

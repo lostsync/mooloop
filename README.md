@@ -56,10 +56,10 @@ or dependable production tool.
   cycles are refused, so there is no feedback routing yet. There are no
   sidechains, external inputs, solo, or per-bus stem export, and buses cannot
   be renamed yet.
-- There is no plugin delay compensation, and effects cannot report latency.
-  The drive's 2x oversampling already carries about eight samples of delay,
-  which is inaudible in a serial chain but can comb-filter if two related
-  signals reach the same bus down paths of differing length.
+- There is no graph-level plugin delay compensation. Effects can report
+  latency, and drive declares and internally aligns the 15-frame delay of its
+  complete 2x oversampling path, but related signals can still comb-filter if
+  they reach the same bus down paths with different effect latency.
 - General parameter automation does not exist. Effect parameters are built for
   it — every parameter has a stable ID, a declared range, and a sample-timed
   event path — but nothing drives them yet, so there are no automation lanes,
@@ -90,7 +90,9 @@ For the detailed implementation snapshot, including smaller edge cases, see
 
 Mooloop is not intended to become a general-purpose DAW. Its working product
 definition is in [docs/PRODUCT.md](docs/PRODUCT.md), with the dependency-ordered
-plan in [docs/ROADMAP.md](docs/ROADMAP.md).
+plan in [docs/ROADMAP.md](docs/ROADMAP.md). The control-plane, graph compiler,
+realtime executor, timing, and latency contracts are defined in
+[docs/AUDIO_ARCHITECTURE.md](docs/AUDIO_ARCHITECTURE.md).
 
 One unproven product hypothesis is an insertable retained-audio buffer: a
 channel device that continuously remembers recent audio and exposes its record
@@ -142,6 +144,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 - [Current system](docs/CURRENT.md): what the code does today.
 - [Product definition](docs/PRODUCT.md): what Mooloop is trying to become.
 - [Roadmap](docs/ROADMAP.md): dependency-ordered future work.
+- [Audio core architecture](docs/AUDIO_ARCHITECTURE.md): the target boundary
+  between editable projects, compiled render plans, and realtime execution.
 - [Modulation plan](docs/MODULATION_PLAN.md): the approved parameter,
   modulation, and effect-suite design.
 - [Buffer engine hypothesis](docs/BUFFER_ENGINE.md): the unimplemented

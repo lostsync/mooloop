@@ -6,8 +6,8 @@
 //! is bus 0; it always exists and its own `output` is unused.
 //!
 //! Any bus may feed any other. The realtime thread still never sorts a graph:
-//! `compile_render_order` topologically sorts the bank here, off the audio
-//! thread, and the engine walks the resulting permutation. This is how REAPER
+//! `compile_bus_graph` validates and topologically sorts the bank here, off the
+//! audio thread, and the engine walks the resulting plan. This is how REAPER
 //! and Ardour work — the graph is compiled into a flat schedule by whoever
 //! edits it, and the audio callback only ever executes that schedule.
 //!
@@ -50,8 +50,8 @@ pub struct MixerBus {
     pub volume: f32,
     /// Stereo pan in [-1, 1].
     pub pan: f32,
-    /// Destination bus index. Must be lower than this bus's own index; the
-    /// master's value is unused.
+    /// Destination bus index. Any other bus is legal when it does not close a
+    /// cycle; the master's value is unused.
     pub output: u8,
 }
 
@@ -109,7 +109,7 @@ pub fn is_legal_route(bus: u8, output: u8) -> bool {
 }
 
 /// Coerce an individually nonsensical routing (an older or hand-edited file)
-/// to the master. This does not consider cycles; use `compile_render_order`
+/// to the master. This does not consider cycles; use `compile_bus_graph`
 /// for that, since a cycle is a property of the whole graph rather than of
 /// one edge.
 pub fn sanitize_route(bus: u8, output: u8) -> u8 {
@@ -149,6 +149,38 @@ pub fn would_create_cycle(buses: &[BusSetup], bus: u8, output: u8) -> bool {
 /// Order in which the engine renders the bank, sources before destinations.
 pub type RenderOrder = [u8; MAX_BUSES];
 
+/// A complete, fixed-capacity bus execution plan. Destinations and their
+/// topological order are one value so the realtime executor can never observe
+/// an edge from one graph generation with the schedule from another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledBusGraph {
+    destinations: [u8; MAX_BUSES],
+    render_order: RenderOrder,
+}
+
+impl CompiledBusGraph {
+    pub fn destination(&self, bus: usize) -> u8 {
+        self.destinations.get(bus).copied().unwrap_or(MASTER_BUS)
+    }
+
+    pub fn destinations(&self) -> &[u8; MAX_BUSES] {
+        &self.destinations
+    }
+
+    pub fn render_order(&self) -> &RenderOrder {
+        &self.render_order
+    }
+}
+
+impl Default for CompiledBusGraph {
+    fn default() -> Self {
+        Self {
+            destinations: [MASTER_BUS; MAX_BUSES],
+            render_order: default_render_order(),
+        }
+    }
+}
+
 /// The order that always works: every bus straight to the master, highest
 /// index first. Used for a fresh bank and as the repair for a cyclic one.
 pub fn default_render_order() -> RenderOrder {
@@ -159,6 +191,58 @@ pub fn default_render_order() -> RenderOrder {
     order
 }
 
+/// Compile editable bus data into the complete plan consumed by the engine.
+///
+/// Short banks are padded with default buses, while invalid individual edges
+/// are repaired to the master. A genuine multi-bus cycle has no valid plan and
+/// returns `None`.
+pub fn compile_bus_graph(buses: &[BusSetup]) -> Option<CompiledBusGraph> {
+    let mut destinations = [MASTER_BUS; MAX_BUSES];
+    for (index, setup) in buses.iter().take(MAX_BUSES).enumerate().skip(1) {
+        destinations[index] = sanitize_route(index as u8, setup.bus.output);
+    }
+
+    // Number of buses feeding each bus. Channels are not counted: they are all
+    // rendered before any bus, so they constrain nothing.
+    let mut feeding = [0u8; MAX_BUSES];
+    for &destination in destinations.iter().skip(1) {
+        feeding[destination as usize] += 1;
+    }
+
+    let mut queue = [MASTER_BUS; MAX_BUSES];
+    let (mut head, mut tail) = (0usize, 0usize);
+    for (index, count) in feeding.iter().enumerate() {
+        if *count == 0 {
+            queue[tail] = index as u8;
+            tail += 1;
+        }
+    }
+
+    let mut render_order = [MASTER_BUS; MAX_BUSES];
+    let mut emitted = 0usize;
+    while head < tail {
+        let node = queue[head];
+        head += 1;
+        render_order[emitted] = node;
+        emitted += 1;
+
+        if node == MASTER_BUS {
+            continue;
+        }
+        let destination = destinations[node as usize] as usize;
+        feeding[destination] -= 1;
+        if feeding[destination] == 0 {
+            queue[tail] = destination as u8;
+            tail += 1;
+        }
+    }
+
+    (emitted == MAX_BUSES).then_some(CompiledBusGraph {
+        destinations,
+        render_order,
+    })
+}
+
 /// Topologically sort the bank so every bus is rendered before the bus it
 /// feeds. Returns `None` if the routing contains a cycle.
 ///
@@ -167,57 +251,7 @@ pub fn default_render_order() -> RenderOrder {
 /// audio thread, but deliberately is not — the point is that the realtime
 /// side receives a finished schedule and never reasons about the graph.
 pub fn compile_render_order(buses: &[BusSetup]) -> Option<RenderOrder> {
-    let count = buses.len().min(MAX_BUSES);
-    if count == 0 {
-        return Some(default_render_order());
-    }
-
-    // Number of buses feeding each bus. Channels are not counted: they are all
-    // rendered before any bus, so they constrain nothing.
-    let mut feeding = [0u8; MAX_BUSES];
-    for (index, setup) in buses.iter().take(count).enumerate() {
-        if index == MASTER_BUS as usize {
-            continue;
-        }
-        let destination = setup.bus.output as usize;
-        if destination < count {
-            feeding[destination] += 1;
-        }
-    }
-
-    let mut queue = [0u8; MAX_BUSES];
-    let (mut head, mut tail) = (0usize, 0usize);
-    for (index, count) in feeding.iter().take(count).enumerate() {
-        if *count == 0 {
-            queue[tail] = index as u8;
-            tail += 1;
-        }
-    }
-
-    let mut order = [MASTER_BUS; MAX_BUSES];
-    let mut emitted = 0usize;
-    while head < tail {
-        let node = queue[head];
-        head += 1;
-        order[emitted] = node;
-        emitted += 1;
-
-        if node == MASTER_BUS {
-            continue;
-        }
-        let destination = buses[node as usize].bus.output as usize;
-        if destination < count {
-            feeding[destination] -= 1;
-            if feeding[destination] == 0 {
-                queue[tail] = destination as u8;
-                tail += 1;
-            }
-        }
-    }
-
-    // Kahn's algorithm emits every node exactly when the graph is acyclic; a
-    // short result means some buses are stuck in a loop.
-    (emitted == count).then_some(order)
+    compile_bus_graph(buses).map(|graph| *graph.render_order())
 }
 
 #[cfg(test)]
@@ -299,6 +333,28 @@ mod tests {
     fn a_fresh_bank_sorts() {
         let order = compile_render_order(&default_buses()).expect("default bank is acyclic");
         assert_eq!(order[MAX_BUSES - 1], MASTER_BUS);
+    }
+
+    #[test]
+    fn a_short_bank_compiles_to_a_complete_plan() {
+        let buses = vec![BusSetup::new(MASTER_BUS as usize), BusSetup::new(1)];
+        let graph = compile_bus_graph(&buses).expect("padded default bank is acyclic");
+        let mut seen = [false; MAX_BUSES];
+        for &bus in graph.render_order() {
+            assert!(!seen[bus as usize], "bus {bus} appeared twice");
+            seen[bus as usize] = true;
+        }
+        assert!(seen.into_iter().all(|present| present));
+        assert_eq!(graph.destination(MAX_BUSES - 1), MASTER_BUS);
+    }
+
+    #[test]
+    fn malformed_edges_are_repaired_inside_the_compiled_plan() {
+        let buses = routed(&[(3, MAX_BUSES as u8), (7, 7)]);
+        let graph = compile_bus_graph(&buses).expect("individual bad edges are repairable");
+        assert_eq!(graph.destination(3), MASTER_BUS);
+        assert_eq!(graph.destination(7), MASTER_BUS);
+        assert_eq!(graph.render_order()[MAX_BUSES - 1], MASTER_BUS);
     }
 
     #[test]

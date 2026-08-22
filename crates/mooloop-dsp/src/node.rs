@@ -17,9 +17,9 @@
 //! The engine owns all buses and decides what each node's buffer means —
 //! today every channel strip is `instrument -> [effects] -> gain/pan ->
 //! master`. Future routing (send/return buses, sidechain inputs) hangs off
-//! the engine's bus management, not this trait: a node needing an external
-//! signal (e.g. a sidechain compressor) will receive a bus reference from
-//! the engine at construction, exactly like LV2's sidechain port groups.
+//! the engine's bus management, not a node retaining someone else's storage.
+//! A future process-buffer view will provide auxiliary inputs such as a
+//! sidechain for the duration of each call, exactly like plugin port groups.
 //!
 //! ## Realtime safety contract
 //!
@@ -57,6 +57,14 @@ pub struct ProcessContext {
 
 /// A realtime audio node (instrument or effect).
 pub trait AudioNode {
+    /// Processing latency of the active path in base-rate frames. The value is
+    /// queried while a graph is prepared, never from a hot inner sample loop.
+    /// Nodes with internal parallel paths must align them before reporting the
+    /// resulting external latency.
+    fn latency_frames(&self) -> u32 {
+        0
+    }
+
     /// Process one block in place on `bus`. `events_in` is sorted by sample
     /// offset; nodes that respond to events must split rendering at those
     /// offsets. `events_out` is provided when the engine wants events back

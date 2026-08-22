@@ -28,6 +28,7 @@ mod sequencer;
 mod transport;
 
 use graph::{AsyncClient, Graph};
+use render::RenderState;
 
 pub use meters::BusMeters;
 pub use offline::{
@@ -37,9 +38,9 @@ pub use offline::{
 
 /// GUI -> audio. Carries ownership of a heap-allocated effect node into the
 /// realtime thread. This lives here rather than in `mooloop-core`'s
-/// `EngineCommand` for two reasons: `Box` is not `Copy` (the command ring is
-/// POD-only), and `AudioNode` comes from `mooloop-dsp`, which `mooloop-core`
-/// must not depend on.
+/// `EngineCommand` because `AudioNode` comes from `mooloop-dsp`, which
+/// `mooloop-core` must not depend on. `RealtimeCommand` carries this enum and
+/// POD commands in one ordered engine-private stream.
 pub enum StructuralCommand {
     /// Install `node` at `slot` on `target`, replacing whatever was there.
     /// The replaced node (if any) comes back via the reclaim ring — the
@@ -57,8 +58,29 @@ pub enum StructuralCommand {
 /// audio -> GUI. Hands back a displaced node so the GUI thread can drop it
 /// (deallocate) safely, off the realtime thread. Drained as a side effect of
 /// `EngineHandle::poll` — there is nothing to inspect.
-pub enum StructuralReclaim {
+pub(crate) enum StructuralReclaim {
     Node(Box<dyn AudioNode + Send>),
+    /// A complete executor displaced by a project install. Keeping it boxed
+    /// lets the realtime thread swap ownership without allocating; the box is
+    /// destroyed when `EngineHandle::poll` drains this variant.
+    RenderState(Box<RenderState>),
+}
+
+/// A project that has already been instantiated and allocated off the audio
+/// thread. The realtime callback only swaps the box and acknowledges its
+/// generation.
+pub(crate) struct PreparedProject {
+    pub generation: u64,
+    pub render: Box<RenderState>,
+}
+
+/// The ordered control stream consumed at block boundaries. Project swaps
+/// share this queue with value commands so edits before and after a load can
+/// never cross the generation boundary.
+pub(crate) enum RealtimeCommand {
+    Engine(EngineCommand),
+    Structural(StructuralCommand),
+    InstallProject(PreparedProject),
 }
 
 const QUEUE_CAPACITY: usize = 1024;
@@ -100,14 +122,10 @@ impl Engine {
             .map_err(|e| Error::ClientOpen(e.to_string()))?;
         let sample_rate = client.sample_rate();
 
-        let (cmd_tx, cmd_rx): (Producer<EngineCommand>, Consumer<EngineCommand>) =
+        let (cmd_tx, cmd_rx): (Producer<RealtimeCommand>, Consumer<RealtimeCommand>) =
             rtrb::RingBuffer::new(QUEUE_CAPACITY);
         let (evt_tx, evt_rx): (Producer<EngineEvent>, Consumer<EngineEvent>) =
             rtrb::RingBuffer::new(QUEUE_CAPACITY);
-        let (structural_tx, structural_rx): (
-            Producer<StructuralCommand>,
-            Consumer<StructuralCommand>,
-        ) = rtrb::RingBuffer::new(QUEUE_CAPACITY);
         let (reclaim_tx, reclaim_rx): (Producer<StructuralReclaim>, Consumer<StructuralReclaim>) =
             rtrb::RingBuffer::new(QUEUE_CAPACITY);
 
@@ -128,25 +146,16 @@ impl Engine {
 
         let xrun_count = Arc::new(AtomicU64::new(0));
         let bus_meters = BusMeters::new();
-        let project_slot = Arc::new(ArcSwapOption::from(Some(Arc::new(
-            mooloop_core::Project::default(),
-        ))));
+        let mut render = RenderState::new(sample_rate, sample_slots.clone());
+        render.attach_meters(bus_meters.clone());
         let io = graph::GraphIo {
             out_l,
             out_r,
             cmd_rx,
             evt_tx,
-            structural_rx,
             reclaim_tx,
         };
-        let graph = Graph::new(
-            sample_rate,
-            io,
-            sample_slots.clone(),
-            project_slot.clone(),
-            xrun_count.clone(),
-            bus_meters.clone(),
-        );
+        let graph = Graph::new(io, Box::new(render), xrun_count.clone());
 
         let async_client = client
             .activate_async(graph::Notifications { xrun_count }, graph)
@@ -174,46 +183,41 @@ impl Engine {
             EngineHandle {
                 cmd_tx,
                 evt_rx,
-                structural_tx,
                 reclaim_rx,
                 bus_meters,
                 sample_slots,
-                project_slot,
                 sample_rate,
                 install_generation: 0,
-                retired_projects: Vec::new(),
             },
         ))
     }
 }
 
-/// The GUI's handle into the engine. Safe to keep on the UI thread; all
-/// operations are lock-free.
+/// The control thread's handle into the engine. Realtime communication is
+/// bounded and non-blocking; project installation also performs allocation
+/// and node construction here before publishing a prepared executor.
 pub struct EngineHandle {
-    cmd_tx: Producer<EngineCommand>,
+    cmd_tx: Producer<RealtimeCommand>,
     evt_rx: Consumer<EngineEvent>,
-    structural_tx: Producer<StructuralCommand>,
     reclaim_rx: Consumer<StructuralReclaim>,
     bus_meters: Arc<BusMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
-    project_slot: Arc<ArcSwapOption<mooloop_core::Project>>,
     sample_rate: u32,
     install_generation: u64,
-    retired_projects: Vec<(u64, Arc<mooloop_core::Project>)>,
 }
 
 impl EngineHandle {
     /// Queue a command for the audio thread. Non-blocking; drops on overflow
     /// (which should not happen at sane UI event rates).
     pub fn send(&mut self, cmd: EngineCommand) {
-        let _ = self.cmd_tx.push(cmd);
+        let _ = self.cmd_tx.push(RealtimeCommand::Engine(cmd));
     }
 
     /// Hand a heap-allocated structural change (effect install/remove) to the
     /// audio thread. Non-blocking; on overflow the command is dropped, which
     /// for `InstallEffect` drops the node back on this (GUI) thread.
     pub fn send_structural(&mut self, cmd: StructuralCommand) {
-        let _ = self.structural_tx.push(cmd);
+        let _ = self.cmd_tx.push(RealtimeCommand::Structural(cmd));
     }
 
     /// Pop one event if available.
@@ -221,15 +225,15 @@ impl EngineHandle {
         // Reclaim displaced effect nodes first: dropping the boxes here frees
         // them off the realtime thread, which is the entire point of the
         // reclaim ring.
-        while let Ok(StructuralReclaim::Node(node)) = self.reclaim_rx.pop() {
-            drop(node);
+        while let Ok(reclaim) = self.reclaim_rx.pop() {
+            match reclaim {
+                StructuralReclaim::Node(node) => drop(node),
+                StructuralReclaim::RenderState(render) => drop(render),
+            }
         }
         loop {
             match self.evt_rx.pop().ok()? {
-                EngineEvent::ProjectInstalled { generation } => {
-                    self.retired_projects
-                        .retain(|(retire_after, _)| *retire_after > generation);
-                }
+                EngineEvent::ProjectInstalled { .. } => {}
                 event => return Some(event),
             }
         }
@@ -254,22 +258,36 @@ impl EngineHandle {
         }
     }
 
-    /// Publish a validated project snapshot and import it on the next block.
-    /// Replaced snapshots remain owned here until the audio callback
-    /// acknowledges the generation, so their allocations are reclaimed on
-    /// this non-realtime thread.
-    pub fn install_project(&mut self, project: Arc<mooloop_core::Project>) {
-        self.install_generation = self
+    /// Prepare a complete executor from a validated project on this
+    /// non-realtime thread, then queue an ownership swap for the next block.
+    /// The displaced executor returns through the reclaim ring and is dropped
+    /// by `poll`, never by the audio callback.
+    #[must_use]
+    pub fn install_project(&mut self, project: Arc<mooloop_core::Project>) -> bool {
+        let generation = self
             .install_generation
             .checked_add(1)
             .expect("project install generation exhausted");
-        if let Some(retired) = self.project_slot.swap(Some(project)) {
-            self.retired_projects
-                .push((self.install_generation, retired));
+        let mut render = RenderState::new(self.sample_rate, self.sample_slots.clone());
+        render.attach_meters(self.bus_meters.clone());
+        render.load_project(&project);
+        let prepared = PreparedProject {
+            generation,
+            render: Box::new(render),
+        };
+        // A full queue leaves `prepared` on this thread, so dropping it is
+        // realtime-safe. Project loads are rare and the queue has the same
+        // generous capacity as other engine control paths.
+        if self
+            .cmd_tx
+            .push(RealtimeCommand::InstallProject(prepared))
+            .is_ok()
+        {
+            self.install_generation = generation;
+            true
+        } else {
+            false
         }
-        self.send(EngineCommand::InstallProject {
-            generation: self.install_generation,
-        });
     }
 
     /// Read and clear one bus's held peak. Wait-free; see `meters` for why

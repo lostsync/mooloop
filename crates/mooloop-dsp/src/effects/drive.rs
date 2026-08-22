@@ -13,7 +13,7 @@ use mooloop_core::{
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::node::{AudioNode, ProcessContext};
-use crate::shaper::{drive_compensation, shape, Oversampler2x};
+use crate::shaper::{drive_compensation, shape, Oversampler2x, OVERSAMPLER_LATENCY_FRAMES};
 
 /// Corner frequency of the tilt filter's low/high split.
 const TONE_SPLIT_HZ: f32 = 1_500.0;
@@ -25,6 +25,11 @@ pub struct DriveEffect {
     sample_rate: u32,
     left: Oversampler2x,
     right: Oversampler2x,
+    /// The wet oversampling path is delayed. Keep the dry path at the same
+    /// arrival time so partial mixes do not comb-filter inside the effect.
+    dry_l: [f32; OVERSAMPLER_LATENCY_FRAMES],
+    dry_r: [f32; OVERSAMPLER_LATENCY_FRAMES],
+    dry_pos: usize,
     /// One-pole low-pass state for the tone tilt, per channel.
     tone_lp_l: f32,
     tone_lp_r: f32,
@@ -38,6 +43,9 @@ impl DriveEffect {
             sample_rate,
             left: Oversampler2x::new(),
             right: Oversampler2x::new(),
+            dry_l: [0.0; OVERSAMPLER_LATENCY_FRAMES],
+            dry_r: [0.0; OVERSAMPLER_LATENCY_FRAMES],
+            dry_pos: 0,
             tone_lp_l: 0.0,
             tone_lp_r: 0.0,
             tone_coeff: tone_coeff(sample_rate),
@@ -101,8 +109,14 @@ impl DriveEffect {
             self.tone_lp_l = tone_l;
             self.tone_lp_r = tone_r;
 
-            bus.l[i] = (dry_l + (wet_l - dry_l) * mix) * output;
-            bus.r[i] = (dry_r + (wet_r - dry_r) * mix) * output;
+            let aligned_l = self.dry_l[self.dry_pos];
+            let aligned_r = self.dry_r[self.dry_pos];
+            self.dry_l[self.dry_pos] = dry_l;
+            self.dry_r[self.dry_pos] = dry_r;
+            self.dry_pos = (self.dry_pos + 1) % OVERSAMPLER_LATENCY_FRAMES;
+
+            bus.l[i] = (aligned_l + (wet_l - aligned_l) * mix) * output;
+            bus.r[i] = (aligned_r + (wet_r - aligned_r) * mix) * output;
         }
     }
 }
@@ -113,6 +127,10 @@ fn tone_coeff(sample_rate: u32) -> f32 {
 }
 
 impl AudioNode for DriveEffect {
+    fn latency_frames(&self) -> u32 {
+        OVERSAMPLER_LATENCY_FRAMES as u32
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,
@@ -193,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_mix_leaves_the_signal_alone() {
+    fn zero_mix_preserves_the_signal_at_the_declared_latency() {
         let frames = 2_048;
         let mut bus = sine_bus(frames, 440.0, 0.5);
         let reference = bus.l[..frames].to_vec();
@@ -206,7 +224,12 @@ mod tests {
             48_000,
         );
         effect.process(&context(frames), &mut bus, &EventList::empty(), None);
-        for (i, expected) in reference.iter().enumerate() {
+        assert_eq!(effect.latency_frames(), OVERSAMPLER_LATENCY_FRAMES as u32);
+        assert!(bus.l[..OVERSAMPLER_LATENCY_FRAMES]
+            .iter()
+            .all(|sample| sample.abs() < 1e-6));
+        for i in OVERSAMPLER_LATENCY_FRAMES..frames {
+            let expected = reference[i - OVERSAMPLER_LATENCY_FRAMES];
             assert!(
                 (bus.l[i] - expected).abs() < 1e-6,
                 "dry path altered at {i}: {} vs {expected}",
