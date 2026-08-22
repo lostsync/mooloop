@@ -13,7 +13,8 @@ slint::include_modules!();
 
 use meter::{MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    default_buses, sanitize_route, BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind,
+    compile_render_order, default_buses, default_render_order, sanitize_route, would_create_cycle,
+    BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind,
     DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectSlotState, EffectTarget,
     EngineCommand, EngineEvent, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
@@ -86,8 +87,12 @@ fn sync_appearance_properties(window: &MainWindow, appearance: &AppearanceSettin
 /// Coerce a loaded bus bank to the fixed size the engine preallocates,
 /// padding a short one and repairing any routing an older or hand-edited file
 /// left illegal. Everything downstream can then index the bank directly.
+///
+/// Per-edge nonsense is fixed first, then the graph as a whole: a file whose
+/// routing contains a loop is flattened to everything-to-master rather than
+/// rejected, matching what the engine does with the same file.
 fn normalized_buses(buses: &[BusSetup]) -> Vec<BusSetup> {
-    (0..MAX_BUSES)
+    let mut normalized: Vec<BusSetup> = (0..MAX_BUSES)
         .map(|index| match buses.get(index) {
             Some(setup) => {
                 let mut setup = setup.clone();
@@ -96,7 +101,13 @@ fn normalized_buses(buses: &[BusSetup]) -> Vec<BusSetup> {
             }
             None => BusSetup::new(index),
         })
-        .collect()
+        .collect();
+    if compile_render_order(&normalized).is_none() {
+        for setup in &mut normalized {
+            setup.bus.output = MASTER_BUS;
+        }
+    }
+    normalized
 }
 
 struct ChannelState {
@@ -1127,6 +1138,19 @@ impl UiState {
         self.sync_bus_editor(window);
     }
 
+    /// Destinations `bus` may be routed to, indexed by bus. The engine trusts
+    /// the schedule it is sent, so refusing a loop is this side's job; the
+    /// mask lets the picker show *why* rather than silently declining.
+    fn allowed_destinations(&self, bus: usize) -> ModelRc<bool> {
+        let flags: Vec<bool> = (0..self.buses.len())
+            .map(|candidate| {
+                candidate != bus
+                    && !would_create_cycle(&self.buses, bus as u8, candidate as u8)
+            })
+            .collect();
+        ModelRc::from(Rc::new(VecModel::from(flags)))
+    }
+
     fn mixer_strip_row(&self, index: usize, setup: &BusSetup) -> MixerStripRow {
         MixerStripRow {
             name: setup.bus.name.as_str().into(),
@@ -1137,6 +1161,7 @@ impl UiState {
             selected: self.effect_target == EffectTarget::Bus(index as u8),
             is_master: index == MASTER_BUS as usize,
             feed_count: self.bus_feed_count(index) as i32,
+            allowed: self.allowed_destinations(index),
             // Levels are owned by the metering timer, which writes them in
             // place; rebuilding a row must not stamp them back to silence.
             left_db: self
@@ -1192,6 +1217,7 @@ impl UiState {
         window.set_editing_bus_pan(setup.bus.pan);
         window.set_editing_bus_output(setup.bus.output as i32);
         window.set_editing_bus_feed_count(self.bus_feed_count(index) as i32);
+        window.set_editing_bus_allowed(self.allowed_destinations(index));
     }
 
     /// Refresh the bottom editor's properties from `selected`.
@@ -3131,21 +3157,43 @@ impl AppUi {
                 let (Ok(index), Ok(output)) = (usize::try_from(bus), u8::try_from(output)) else {
                     return;
                 };
-                // The picker only offers legal destinations, but sanitize
-                // anyway: this is the boundary the engine's invariant rests on.
                 let output = sanitize_route(index as u8, output);
                 let mut guard = st.borrow_mut();
-                let Some(setup) = guard.buses.get_mut(index) else {
+                if guard.buses.get(index).is_none() {
+                    return;
+                }
+                // The picker greys out looping destinations, but this is the
+                // boundary the engine's schedule rests on, so refuse here too
+                // rather than shipping a graph that cannot be sorted.
+                if would_create_cycle(&guard.buses, index as u8, output) {
+                    if let Some(w) = weak.upgrade() {
+                        let name = guard.buses[output as usize].bus.name.clone();
+                        w.set_status_message(
+                            format!("{name} already feeds this bus - routing would loop").into(),
+                        );
+                    }
+                    return;
+                }
+                guard.buses[index].bus.output = output;
+                let Some(order) = compile_render_order(&guard.buses) else {
+                    // Unreachable given the check above; repair rather than
+                    // leave the engine rendering a graph we cannot describe.
+                    guard.buses[index].bus.output = MASTER_BUS;
+                    let _ = tx.send(EngineCommand::SetBusOutput {
+                        bus: index as u8,
+                        output: MASTER_BUS,
+                        order: default_render_order(),
+                    });
                     return;
                 };
-                setup.bus.output = output;
-                guard.sync_mixer_strip(index);
+                // Every strip's legal destinations move when an edge does.
                 if let Some(w) = weak.upgrade() {
-                    guard.sync_bus_editor(&w);
+                    guard.sync_mixer(&w);
                 }
                 let _ = tx.send(EngineCommand::SetBusOutput {
                     bus: index as u8,
                     output,
+                    order,
                 });
             });
         }

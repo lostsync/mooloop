@@ -30,7 +30,8 @@ pub use effect::{
     LIMITER_PARAM_CEILING_DB, LIMITER_PARAM_GAIN_DB, LIMITER_PARAM_RELEASE_MS,
 };
 pub use mixer::{
-    default_buses, is_legal_route, EffectTarget, sanitize_route, BusSetup, MixerBus, INSERT_BUSES, MASTER_BUS,
+    compile_render_order, default_buses, default_render_order, is_legal_route, sanitize_route,
+    would_create_cycle, BusSetup, EffectTarget, MixerBus, RenderOrder, INSERT_BUSES, MASTER_BUS,
     MAX_BUSES,
 };
 pub use pattern::{

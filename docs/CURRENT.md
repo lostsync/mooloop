@@ -214,12 +214,23 @@ through an `ArcSwapOption` slot.
   inserts, all preallocated, so assigning a channel to any bus is a bounded
   mutation rather than an allocation. Buses carry their own effect chain,
   volume, pan, and mute, and may feed another bus.
-- Bus routing is constrained to be acyclic by construction: the master is bus
-  0, and a bus may only feed a lower-numbered bus. The engine therefore renders
-  the bank in one descending pass with no topological sort, cycle check, or
-  scratch buffer in the audio callback. Uphill routes are rejected to the
-  master rather than silently forming a one-block feedback path, both at the
-  command boundary and on load.
+- Any bus may feed any other. The realtime thread still never sorts a graph:
+  `mooloop_core::compile_render_order` topologically sorts the bank off the
+  audio thread (Kahn's algorithm over fixed-size arrays, no allocation) and the
+  engine walks the resulting `[u8; MAX_BUSES]` permutation. This is the model
+  REAPER and Ardour use - whoever edits the graph compiles it into a flat
+  schedule, and the callback only executes that schedule.
+- The schedule is this cheap because every bus owns a permanently allocated
+  buffer and no two nodes ever share one, which removes the pooled,
+  reference-counted buffer assignment a general graph engine needs.
+- A routing change ships the edge and the schedule that accounts for it in one
+  `SetBusOutput` message, so no block can render an edge against a stale order.
+- Cycles are refused rather than delayed, at the picker (looping destinations
+  are shown greyed with the reason), at the command boundary, and on load,
+  where a cyclic file is flattened to everything-to-master so it still opens
+  and plays. Feedback routing would mean reading a bus's previous block, which
+  is a deliberate feature rather than a fallback and needs a latency story this
+  engine does not have.
 - A muted bus still processes, so effect tails on it decay rather than freeze,
   but contributes no audio and meters as silent.
 - Per-bus peaks reach the GUI through a shared array of atomics rather than the
@@ -263,6 +274,13 @@ through an `ArcSwapOption` slot.
   parallel send, return, or wet/dry split. There are no sidechains, external
   inputs, solo, or per-bus stem export, and buses cannot be renamed from the
   interface yet.
+- There is no plugin delay compensation, and `AudioNode` has no way to report
+  latency. This already matters: the drive effect's 2x oversampler uses a
+  32-tap linear-phase FIR, so it carries roughly eight samples of group delay
+  at base rate. Serial chains are unaffected, but two related signals summing
+  at a bus where only one path contains a drive will comb-filter. Free routing
+  makes that easier to stumble into, so latency reporting should land before
+  parallel sends do.
 
 ### Buffers And Rendering
 

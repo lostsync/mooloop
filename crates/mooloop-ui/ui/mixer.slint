@@ -18,6 +18,9 @@ export struct MixerStripRow {
     // Sequencer channels feeding this bus directly. Drawn so an empty bus is
     // distinguishable from a loaded one at a glance.
     feed-count: int,
+    // Destinations this bus may be routed to, indexed by bus. False where the
+    // connection would close a loop. Computed in Rust, which owns the graph.
+    allowed: [bool],
     left-db: float,
     right-db: float,
 }
@@ -25,14 +28,15 @@ export struct MixerStripRow {
 // Shared bus chooser. Used both to assign a channel to a bus and to route one
 // bus into another; the two differ only in which destinations are offered.
 //
-// `limit` is exclusive: a channel may name any bus, so it passes the bank
-// size, while a bus may only name a lower-numbered one and passes its own
-// index. That asymmetry is the routing rule from mooloop-core::mixer, applied
-// at the point where the user could otherwise ask for a cycle.
+// `allowed` masks the destinations that would close a loop, which only Rust
+// can work out because it is a property of the whole graph rather than of one
+// edge. An empty mask permits everything, which is the channel case: a channel
+// is never part of a bus cycle. Disallowed entries are shown greyed rather
+// than hidden, so the reason a destination is unavailable stays visible.
 export component BusPicker inherits Rectangle {
     in property <[string]> bus-names;
     in property <int> value;
-    in property <int> limit: 99;
+    in property <[bool]> allowed;
     in property <string> tooltip: "Destination bus";
     in property <bool> enabled: true;
     callback picked(int);
@@ -68,7 +72,7 @@ export component BusPicker inherits Rectangle {
         x: 0px;
         y: root.height + 2px;
         width: 96px;
-        height: min(root.limit, root.bus-names.length) * 21px + 8px;
+        height: root.bus-names.length * 21px + 8px;
         close-policy: close-on-click;
         Rectangle {
             background: Theme.surface;
@@ -79,16 +83,18 @@ export component BusPicker inherits Rectangle {
                 padding: 4px;
                 spacing: 1px;
                 for name[i] in root.bus-names : Rectangle {
-                    // Destinations at or above the limit would be a cycle, so
-                    // they are not offered rather than offered and rejected.
-                    height: i < root.limit ? 20px : 0px;
-                    visible: i < root.limit;
+                    property <bool> permitted:
+                        root.allowed.length == 0 || root.allowed[i];
+                    height: 20px;
                     ToolButton {
                         width: 100%;
                         height: 20px;
                         text: name;
                         active: i == root.value;
-                        tooltip: "Send to " + name;
+                        enabled: parent.permitted;
+                        tooltip: parent.permitted
+                            ? "Send to " + name
+                            : name + " already leads back here";
                         clicked => {
                             bus-menu.close();
                             root.picked(i);
@@ -196,7 +202,7 @@ component MixerStrip inherits Rectangle {
                 x: (parent.width - 30px) / 2;
                 bus-names: root.bus-names;
                 value: root.strip.output;
-                limit: root.index;
+                allowed: root.strip.allowed;
                 tooltip: "Bus this one feeds";
                 picked(i) => { root.output-picked(i); }
             }

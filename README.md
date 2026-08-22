@@ -38,9 +38,9 @@ or dependable production tool.
   gate, compressor, and limiter. Effect chains save with the song.
 - A mixer of one master plus sixteen insert buses, toggled into the same pane
   as the step grid. Every channel names a bus; buses carry their own effect
-  chain, fader, pan, mute, and live meter, and can feed other buses. Selecting
-  a bus points the device rack at it, so building a chain across a group of
-  channels works exactly like building one on a channel.
+  chain, fader, pan, mute, and live meter, and can feed any other bus in any
+  order. Selecting a bus points the device rack at it, so building a chain
+  across a group of channels works exactly like building one on a channel.
 - Versioned song, kit, and channel-preset bundles with optional embedded
   samples.
 - Offline WAV and MP3 export.
@@ -52,10 +52,14 @@ or dependable production tool.
 - Much of the menu bar is scaffolding. Some file operations work, but many
   menu items are disabled, incomplete, or not wired to an implementation yet.
 - Mixer buses are insert points, not sends: a channel feeds exactly one, with
-  no parallel send, return, or wet/dry split. Bus routing is deliberately
-  restricted to be acyclic — a bus can only feed a lower-numbered one — so
-  there is no feedback routing. There are no sidechains, external inputs,
-  solo, or per-bus stem export, and buses cannot be renamed yet.
+  no parallel send, return, or wet/dry split. Any bus can feed any other, but
+  cycles are refused, so there is no feedback routing yet. There are no
+  sidechains, external inputs, solo, or per-bus stem export, and buses cannot
+  be renamed yet.
+- There is no plugin delay compensation, and effects cannot report latency.
+  The drive's 2x oversampling already carries about eight samples of delay,
+  which is inaudible in a serial chain but can comb-filter if two related
+  signals reach the same bus down paths of differing length.
 - General parameter automation does not exist. Effect parameters are built for
   it — every parameter has a stable ID, a declared range, and a sample-timed
   event path — but nothing drives them yet, so there are no automation lanes,

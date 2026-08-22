@@ -87,23 +87,25 @@ fn render_playlist_snapshot() {
     assert_eq!(pixel(159, 450), clip_color);
     assert_ne!(pixel(160, 450), clip_color);
 
-    // The step grid starts after the rack row's name, mute and the volume/pan
-    // knobs, so these x coordinates move whenever that prefix is resized. The
-    // first cell spans 192..=215 and the second 219..=242 at 24px per cell.
-    const FIRST_CELL_X: usize = 193;
-    const FIRST_CELL_LAST_X: usize = 215;
-    const CELL_GAP_X: usize = 216;
-    const SECOND_CELL_X: usize = 220;
-    // Likewise these y values track the combined height of the menu bar and
-    // toolbar, since the rack sits directly beneath them. FILL_Y crosses both
-    // cells' fills; VELOCITY_Y is high enough that only the louder step
-    // reaches it.
-    const FILL_Y: usize = 127;
-    const VELOCITY_Y: usize = 113;
+    // The step grid starts after the rack row's name, mute, the volume/pan
+    // knobs and the mixer-bus picker, so these x coordinates move whenever
+    // that prefix is resized -- the picker's 30px plus its 6px of spacing is
+    // why they sit 36px further right than they used to. The first cell spans
+    // 228..=251 and the second 255..=278 at 24px per cell.
+    const FIRST_CELL_X: usize = 229;
+    const FIRST_CELL_LAST_X: usize = 251;
+    const CELL_GAP_X: usize = 252;
+    const SECOND_CELL_X: usize = 256;
+    // Likewise these y values track the combined height of the menu bar, the
+    // toolbar, and the work surface's Steps/Mixer header, since the rack sits
+    // directly beneath them. FILL_Y crosses both cells' fills; VELOCITY_Y is
+    // high enough that only the louder step reaches it.
+    const FILL_Y: usize = 154;
+    const VELOCITY_Y: usize = 140;
     // Cell one covers all four 64ths but is struck only on the first, so its
     // slots render at two different intensities.
     const ONSET_X: usize = FIRST_CELL_X;
-    const HELD_X: usize = 205;
+    const HELD_X: usize = 241;
 
     // A struck 64th is solid, one that is only being held is dim, and the gap
     // between cells is background. That ordering is the whole reason a

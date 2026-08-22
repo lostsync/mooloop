@@ -74,6 +74,11 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
                     5 => 1,
                     _ => 0,
                 },
+                // Nothing is routed bus-to-bus here, so every destination
+                // except the strip itself is reachable without looping.
+                allowed: ModelRc::from(Rc::new(VecModel::from(
+                    (0..MAX_BUSES).map(|other| other != index).collect::<Vec<_>>(),
+                ))),
                 left_db: if index == 0 { -6.0 } else { -60.0 },
                 right_db: if index == 0 { -8.0 } else { -60.0 },
             })

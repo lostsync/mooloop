@@ -17,6 +17,7 @@ export component BusDeviceFace inherits Rectangle {
     in property <int> index;
     in property <int> feed-count;
     in property <[string]> bus-names;
+    in property <[bool]> allowed;
     in property <float> left-db: -60;
     in property <float> right-db: -60;
     callback volume-changed(float);
@@ -130,7 +131,7 @@ export component BusDeviceFace inherits Rectangle {
                         BusPicker {
                             bus-names: root.bus-names;
                             value: root.output;
-                            limit: root.index;
+                            allowed: root.allowed;
                             tooltip: "Bus this one feeds";
                             picked(i) => { root.output-picked(i); }
                         }

@@ -130,13 +130,24 @@ not of new DSP.
 carry `channel` from the day it is introduced so that enabling it later is a
 routing change rather than a retyping of every engine command.
 
-**True audio sidechain: deferred.** A detector fed from another channel's
-audio needs bus ordering, graph topology, and latency compensation. It
-collides with the buffer-device work and has a smaller musical payoff than
-control-rate ducking. When inter-channel control data does land, do it by
-publishing modulator outputs into a per-channel table read on the *following*
-block — one block of latency, deterministic, identical offline and realtime,
-and it makes graph order irrelevant.
+**True audio sidechain: still deferred, but for one reason now instead of
+three.** This originally listed bus ordering, graph topology, and latency
+compensation as blockers. The mixer supplied the first two: there is a bus
+graph, and `mooloop_core::compile_render_order` already answers "what is
+rendered before what" for free, since a sidechain source must be scheduled
+ahead of its consumer exactly like a bus feeding another bus.
+
+What remains is latency compensation, and it is not hypothetical. `AudioNode`
+has no `latency()` method, and the drive effect's 2x oversampler carries about
+eight samples of group delay from its 32-tap linear-phase FIR. Nothing exposes
+that, nothing compensates for it, and it is inaudible today only because every
+chain is serial. A sidechain — or any parallel send — makes differing path
+lengths audible as comb filtering. **Do latency reporting before either.**
+
+Control-rate ducking still does not need any of this: publish modulator
+outputs into a per-channel table read on the *following* block. One block of
+latency, deterministic, identical offline and realtime, and it makes graph
+order irrelevant. That remains the cheaper and more musical first move.
 
 **UI:** no patch cords. The assignment gesture is a labeled source chip on
 each modulator: click it, assignable knobs light up, drag one to set depth.

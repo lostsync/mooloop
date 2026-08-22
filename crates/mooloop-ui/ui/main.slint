@@ -274,6 +274,7 @@ export component MainWindow inherits Window {
     in property <float> editing-bus-pan;
     in property <int> editing-bus-output;
     in property <int> editing-bus-feed-count;
+    in property <[bool]> editing-bus-allowed;
     in property <float> editing-bus-left-db: -60;
     in property <float> editing-bus-right-db: -60;
 
@@ -1036,7 +1037,6 @@ export component MainWindow inherits Window {
                     BusPicker {
                         bus-names: root.bus-names;
                         value: row.bus;
-                        limit: root.bus-names.length;
                         tooltip: "Mixer bus for this channel";
                         picked(b) => { root.channel-bus-changed(ch, b); }
                     }
@@ -1599,6 +1599,7 @@ export component MainWindow inherits Window {
                                             index: root.editing-bus-index;
                                             feed-count: root.editing-bus-feed-count;
                                             bus-names: root.bus-names;
+                                            allowed: root.editing-bus-allowed;
                                             left-db: root.editing-bus-left-db;
                                             right-db: root.editing-bus-right-db;
                                             volume-changed(v) => { root.bus-volume-changed(root.editing-bus-index, v); }

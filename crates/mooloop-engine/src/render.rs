@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    sanitize_route, ChannelSource, DeviceKind, DrumSynthParams, EffectTarget, EngineCommand,
-    MonoSynthParams, Project, SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
-    MAX_EFFECTS_PER_CHANNEL,
+    compile_render_order, default_render_order, sanitize_route, ChannelSource, DeviceKind,
+    DrumSynthParams,
+    EffectTarget, EngineCommand, MonoSynthParams, Project, RenderOrder, SamplerParams,
+    DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
 };
 use mooloop_dsp::{
     build_effect, pan_gains, AudioNode, DrumSynth, Event, EventList, MonoSynth, ProcessContext,
@@ -266,6 +267,23 @@ impl ChannelStrip {
     }
 }
 
+/// Sum one bus into another. The two indices are unrelated now that routing
+/// is arbitrary, so the disjoint borrow is taken by splitting at whichever is
+/// higher rather than assuming the destination is lower.
+fn mix_into(buses: &mut [BusStrip], from: usize, into: usize, frames: usize) {
+    if from == into || from >= buses.len() || into >= buses.len() {
+        return;
+    }
+    let (left, right) = buses.split_at_mut(from.max(into));
+    if from < into {
+        let source = &left[from];
+        right[0].bus.add_from(&source.bus, frames);
+    } else {
+        let source = &right[0];
+        left[into].bus.add_from(&source.bus, frames);
+    }
+}
+
 /// Keep a channel's bus assignment inside the bank. A stale index from the GUI
 /// lands on the master rather than silently muting the channel.
 fn clamp_bus(bus: u8) -> u8 {
@@ -322,6 +340,10 @@ pub(crate) struct RenderState {
     /// The full bus bank, master first. Always `MAX_BUSES` long, so assigning
     /// a channel to any bus is a bounded mutation rather than an allocation.
     buses: Vec<BusStrip>,
+    /// Order the bank is rendered in, sources before destinations. Compiled
+    /// off the audio thread by `mooloop_core::compile_render_order`; this side
+    /// only ever walks it.
+    render_order: RenderOrder,
     events: Vec<EventList>,
     sample_rate: u32,
     /// Nodes displaced from effect slots this block, awaiting handoff to the
@@ -344,6 +366,7 @@ impl RenderState {
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
             buses: (0..MAX_BUSES).map(|_| BusStrip::new()).collect(),
+            render_order: default_render_order(),
             events: (0..MAX_CHANNELS).map(|_| EventList::empty()).collect(),
             sample_rate,
             reclaim: Vec::new(),
@@ -417,7 +440,7 @@ impl RenderState {
                     strip.output.muted = setup.bus.muted;
                     strip.output.set_volume(setup.bus.volume);
                     strip.output.set_pan(setup.bus.pan);
-                    strip.destination = sanitize_route(index as u8, setup.bus.output);
+                    strip.destination = setup.bus.output;
                     strip
                         .effects
                         .load(&setup.effects, self.sample_rate, &mut self.reclaim);
@@ -425,6 +448,18 @@ impl RenderState {
                 None => strip.reset(&mut self.reclaim),
             }
         }
+        // A file whose routing does not sort is repaired to everything-to-master
+        // rather than rejected, so a hand-edited or future-format song still
+        // opens and makes sound.
+        self.render_order = match compile_render_order(&project.buses) {
+            Some(order) => order,
+            None => {
+                for strip in &mut self.buses {
+                    strip.destination = MASTER_BUS;
+                }
+                default_render_order()
+            }
+        };
     }
 
     /// Resolve an effect address to the chain that owns it. Both arms are
@@ -552,10 +587,18 @@ impl RenderState {
                     strip.output.set_pan(pan);
                 }
             }
-            EngineCommand::SetBusOutput { bus, output } => {
+            EngineCommand::SetBusOutput { bus, output, order } => {
                 if let Some(strip) = self.buses.get_mut(bus as usize) {
+                    // Sanitized again here rather than trusted from the
+                    // sender: an out-of-range destination would fall through
+                    // `mix_into`'s bounds check and silently drop this bus's
+                    // audio, which is a worse failure than mis-routing it.
                     strip.destination = sanitize_route(bus, output);
                 }
+                // The edge and the schedule that accounts for it travel
+                // together, so no block can ever render a route with a stale
+                // order.
+                self.render_order = order;
             }
             EngineCommand::SetStep {
                 pattern,
@@ -721,39 +764,36 @@ impl RenderState {
             }
         }
 
-        // Inserts render high index to low. Every bus's destination is
-        // strictly lower than itself, so one descending pass is enough: a
-        // bus's input is complete by the time it is reached, and its output
-        // has not been rendered yet. The master (bus 0) is last and keeps its
-        // audio, since it is what the caller reads.
-        for index in (1..self.buses.len()).rev() {
-            let (lower, upper) = self.buses.split_at_mut(index);
-            let strip = &mut upper[0];
+        // Walk the compiled schedule. Every bus is guaranteed to appear after
+        // everything feeding it, so one pass suffices whatever the routing
+        // looks like; the master sorts last and keeps its audio, since it is
+        // what the caller reads.
+        let mut master_peak = (0.0, 0.0);
+        for slot in 0..self.buses.len() {
+            let index = self.render_order[slot] as usize;
+            let Some(strip) = self.buses.get_mut(index) else {
+                continue;
+            };
             strip.effects.process(&context, &mut strip.bus);
             strip.output.apply(&mut strip.bus, frames);
             // A muted bus still processes, so a delay or reverb tail on it
             // decays instead of freezing, but contributes nothing — and meters
             // as silent, matching what is heard rather than what is running.
-            if strip.output.muted {
-                self.meters.publish(index, 0.0, 0.0);
+            let (peak_l, peak_r) = if strip.output.muted {
+                (0.0, 0.0)
             } else {
-                let (peak_l, peak_r) = strip.bus.peak(frames);
-                self.meters.publish(index, peak_l, peak_r);
-                if let Some(destination) = lower.get_mut(strip.destination as usize) {
-                    destination.bus.add_from(&strip.bus, frames);
-                }
+                strip.bus.peak(frames)
+            };
+            self.meters.publish(index, peak_l, peak_r);
+
+            if index == MASTER_BUS as usize {
+                master_peak = (peak_l, peak_r);
+            } else if !strip.output.muted {
+                let destination = strip.destination as usize;
+                mix_into(&mut self.buses, index, destination, frames);
             }
         }
-        let master = &mut self.buses[MASTER_BUS as usize];
-        master.effects.process(&context, &mut master.bus);
-        master.output.apply(&mut master.bus, frames);
-        let (peak_l, peak_r) = if master.output.muted {
-            (0.0, 0.0)
-        } else {
-            master.bus.peak(frames)
-        };
-        self.meters
-            .publish(MASTER_BUS as usize, peak_l, peak_r);
+        let (peak_l, peak_r) = master_peak;
         RenderReport {
             position_tick: self.transport.position_ticks as u64,
             beat_in_bar: self.transport.beat_in_bar(),
@@ -951,6 +991,19 @@ mod tests {
         assert!(render.process_block(512).peak_l > 0.01);
     }
 
+    /// Route `bus` into `output` the way the interface does: compile the
+    /// schedule for the resulting graph and send both together.
+    fn route(
+        render: &mut RenderState,
+        buses: &mut [mooloop_core::BusSetup],
+        bus: u8,
+        output: u8,
+    ) {
+        buses[bus as usize].bus.output = output;
+        let order = compile_render_order(buses).expect("test graph should be acyclic");
+        render.apply_command(EngineCommand::SetBusOutput { bus, output, order });
+    }
+
     fn rendered_energy(project: &Project, configure: impl FnOnce(&mut RenderState)) -> f32 {
         let mut render = RenderState::from_project(48_000, project, &[]);
         configure(&mut render);
@@ -1129,27 +1182,29 @@ mod tests {
         assert!((0.2..0.3).contains(&ratio), "expected ~0.25, got {ratio}");
     }
 
-    /// The descending render pass is only correct if a bus's input is complete
-    /// before it runs. Chain two of them and put the filter on the *second*
-    /// hop: it can only be heard if bus 5 was rendered before bus 2.
+    /// A bus's input must be complete before it runs. Chain two and put the
+    /// filter on the *second* hop: it can only be heard if the schedule
+    /// rendered bus 5 first.
     #[test]
     fn a_bus_can_feed_another_bus() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let chained = rendered_energy(&project, |render| {
+            let mut buses = mooloop_core::default_buses();
             render.apply_command(EngineCommand::SetChannelBus {
                 channel: 0,
                 bus: 5,
             });
-            render.apply_command(EngineCommand::SetBusOutput { bus: 5, output: 2 });
+            route(render, &mut buses, 5, 2);
         });
         assert!(chained > 0.0, "chained buses must still reach the master");
 
         let filtered = rendered_energy(&project, |render| {
+            let mut buses = mooloop_core::default_buses();
             render.apply_command(EngineCommand::SetChannelBus {
                 channel: 0,
                 bus: 5,
             });
-            render.apply_command(EngineCommand::SetBusOutput { bus: 5, output: 2 });
+            route(render, &mut buses, 5, 2);
             render.apply_structural(StructuralCommand::InstallEffect {
                 target: EffectTarget::Bus(2),
                 slot: 0,
@@ -1162,30 +1217,89 @@ mod tests {
         );
     }
 
-    /// Uphill routing would let two buses feed each other, which the single
-    /// descending pass cannot express. It is rejected to the master instead of
-    /// silently producing a one-block feedback path.
+    /// The whole point of compiling a schedule: routing a low-numbered bus
+    /// into a high-numbered one is ordinary now. The old descending pass could
+    /// not express this at all, and rewrote the edge to the master.
     #[test]
-    fn uphill_routing_falls_back_to_the_master() {
+    fn a_bus_can_feed_a_higher_numbered_bus() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
-        let dry = rendered_energy(&project, |_| {});
-        let attempted = rendered_energy(&project, |render| {
+        let chained = rendered_energy(&project, |render| {
+            let mut buses = mooloop_core::default_buses();
             render.apply_command(EngineCommand::SetChannelBus {
                 channel: 0,
                 bus: 2,
             });
-            // Illegal: bus 2 may only feed a lower-numbered bus.
-            render.apply_command(EngineCommand::SetBusOutput { bus: 2, output: 5 });
+            route(render, &mut buses, 2, 9);
+        });
+        assert!(chained > 0.0, "an uphill route must still reach the master");
+
+        let filtered = rendered_energy(&project, |render| {
+            let mut buses = mooloop_core::default_buses();
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 2,
+            });
+            route(render, &mut buses, 2, 9);
             render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Bus(5),
+                target: EffectTarget::Bus(9),
                 slot: 0,
                 node: muffling_filter(),
             });
         });
-        let ratio = attempted / dry;
+        assert!(
+            filtered < chained * 0.5,
+            "bus 9's filter must be in the path: {chained} -> {filtered}"
+        );
+    }
+
+    /// A three-hop chain that runs against index order end to end, to prove
+    /// the schedule is genuinely driving the pass rather than index order
+    /// happening to agree with it.
+    #[test]
+    fn a_chain_that_runs_entirely_against_index_order_still_sums() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let dry = rendered_energy(&project, |_| {});
+        let routed = rendered_energy(&project, |render| {
+            let mut buses = mooloop_core::default_buses();
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 1,
+            });
+            buses[1].bus.output = 4;
+            buses[4].bus.output = 11;
+            buses[11].bus.output = MASTER_BUS;
+            let order = compile_render_order(&buses).expect("acyclic");
+            for (bus, output) in [(1u8, 4u8), (4, 11), (11, MASTER_BUS)] {
+                render.apply_command(EngineCommand::SetBusOutput { bus, output, order });
+            }
+        });
+        // Three unity-gain buses in series should not change the level.
+        let ratio = routed / dry;
         assert!(
             (0.9..1.1).contains(&ratio),
-            "bus 5's filter must not be in the path: {attempted} vs {dry}"
+            "1 -> 4 -> 11 -> master should be level-neutral: {routed} vs {dry}"
+        );
+    }
+
+    /// A cyclic project cannot be scheduled, so loading one must fall back to
+    /// everything-to-master rather than dropping the audio or looping.
+    #[test]
+    fn a_cyclic_project_loads_as_everything_to_master() {
+        let mut project = synth_project(ProjectChannel::sampler(0, 1));
+        project.channels[0].setup.channel.bus = 3;
+        project.buses[3].bus.output = 6;
+        project.buses[6].bus.output = 3;
+
+        let dry = {
+            let mut clean = synth_project(ProjectChannel::sampler(0, 1));
+            clean.buses = mooloop_core::default_buses();
+            rendered_energy(&clean, |_| {})
+        };
+        let repaired = rendered_energy(&project, |_| {});
+        let ratio = repaired / dry;
+        assert!(
+            (0.9..1.1).contains(&ratio),
+            "a cyclic file should still play: {repaired} vs {dry}"
         );
     }
 
