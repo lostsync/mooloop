@@ -56,6 +56,7 @@ fn render_playlist_snapshot() {
         volume: 0.8,
         pan: 0.0,
         selected: true,
+        bus: 0,
         steps: ModelRc::from(step_model),
     }]))));
     ui.set_playlist_clips(ModelRc::from(std::rc::Rc::new(VecModel::from(vec![

@@ -11,7 +11,7 @@ mod settings;
 
 slint::include_modules!();
 
-use meter::MeterBallistics;
+use meter::{MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
     default_buses, sanitize_route, BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind,
     DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectSlotState, EffectTarget,
@@ -558,6 +558,7 @@ struct UiState {
     playlist_model: Rc<VecModel<PlaylistClip>>,
     waveform_model: Rc<VecModel<f32>>,
     effect_slot_model: Rc<VecModel<EffectSlotRow>>,
+    mixer_strip_model: Rc<VecModel<MixerStripRow>>,
     default_waveform: Vec<f32>,
     default_sample_description: String,
     default_sample_duration: f32,
@@ -570,6 +571,11 @@ struct UiState {
     song_mode: bool,
     current_pattern: usize,
     selected: usize,
+    /// Which effect chain the device rack edits. Selecting a channel in the
+    /// step grid points it at that channel; selecting a strip in the mixer
+    /// points it at a bus. `selected` stays put either way, because the piano
+    /// roll, the step grid, and the sampler all still mean a channel.
+    effect_target: EffectTarget,
     selected_note_id: Option<NoteId>,
     bundle_path: Option<PathBuf>,
     dirty: bool,
@@ -850,6 +856,9 @@ impl UiState {
         self.song_mode = project.playback_mode == PlaybackMode::Song;
         self.current_pattern = project.current_pattern as usize;
         self.selected = project.selected_channel as usize;
+        // A load points the device rack back at a channel; the bus the
+        // previous document had open means nothing in this one.
+        self.effect_target = EffectTarget::Channel(project.selected_channel);
         self.selected_note_id = None;
         self.channels = channels;
         self.step_models = self
@@ -873,6 +882,7 @@ impl UiState {
                 volume: channel.volume,
                 pan: channel.pan,
                 selected: index == self.selected,
+                bus: channel.bus as i32,
                 steps: ModelRc::from(self.step_models[index].clone()),
             })
             .collect();
@@ -885,6 +895,7 @@ impl UiState {
         window.set_pattern_length(self.pattern_lengths[self.current_pattern] as i32);
         window.set_selected_channel(self.selected as i32);
         self.sync_row_flags();
+        self.sync_mixer(window);
         self.sync_playlist(window);
         self.refresh_editor(window);
     }
@@ -913,6 +924,7 @@ impl UiState {
                 row.muted = ch.muted;
                 row.volume = ch.volume;
                 row.pan = ch.pan;
+                row.bus = ch.bus as i32;
                 row.name = ch.name.as_str().into();
                 self.rows.set_row_data(i, row);
             }
@@ -1057,16 +1069,129 @@ impl UiState {
         window.set_selected_duration_ticks(note.duration_ticks as i32);
     }
 
-    /// Rebuild the selected channel's effect-chain rows. The model itself is
-    /// installed on the window once; this refreshes its contents after
-    /// structural changes (add/remove/reorder) and channel switches.
+    /// The chain the device rack is currently editing, channel or bus.
+    fn effect_chain(&self) -> Option<&Vec<EffectSlotState>> {
+        match self.effect_target {
+            EffectTarget::Channel(index) => {
+                self.channels.get(index as usize).map(|c| &c.effects)
+            }
+            EffectTarget::Bus(index) => self.buses.get(index as usize).map(|b| &b.effects),
+        }
+    }
+
+    fn effect_chain_mut(&mut self) -> Option<&mut Vec<EffectSlotState>> {
+        match self.effect_target {
+            EffectTarget::Channel(index) => {
+                self.channels.get_mut(index as usize).map(|c| &mut c.effects)
+            }
+            EffectTarget::Bus(index) => self.buses.get_mut(index as usize).map(|b| &mut b.effects),
+        }
+    }
+
+    /// Rebuild the edited chain's rows. The model itself is installed on the
+    /// window once; this refreshes its contents after structural changes
+    /// (add/remove/reorder) and after the rack is pointed somewhere else.
     fn sync_effects(&self) {
         let rows: Vec<EffectSlotRow> = self
-            .channels
-            .get(self.selected)
-            .map(|channel| channel.effects.iter().map(effect_slot_row).collect())
+            .effect_chain()
+            .map(|effects| effects.iter().map(effect_slot_row).collect())
             .unwrap_or_default();
         self.effect_slot_model.set_vec(rows);
+    }
+
+    /// Sequencer channels feeding `bus` directly. Buses routed into it are not
+    /// counted: the number answers "what lands here", not "what reaches here".
+    fn bus_feed_count(&self, bus: usize) -> usize {
+        self.channels
+            .iter()
+            .filter(|channel| channel.bus as usize == bus)
+            .count()
+    }
+
+    /// Rebuild every mixer strip and the shared name list. Called after a load
+    /// or any change that moves channels between buses.
+    fn sync_mixer(&self, window: &MainWindow) {
+        let names: Vec<slint::SharedString> = self
+            .buses
+            .iter()
+            .map(|setup| setup.bus.name.as_str().into())
+            .collect();
+        window.set_bus_names(ModelRc::from(Rc::new(VecModel::from(names))));
+        let strips: Vec<MixerStripRow> = self
+            .buses
+            .iter()
+            .enumerate()
+            .map(|(index, setup)| self.mixer_strip_row(index, setup))
+            .collect();
+        self.mixer_strip_model.set_vec(strips);
+        self.sync_bus_editor(window);
+    }
+
+    fn mixer_strip_row(&self, index: usize, setup: &BusSetup) -> MixerStripRow {
+        MixerStripRow {
+            name: setup.bus.name.as_str().into(),
+            muted: setup.bus.muted,
+            volume: setup.bus.volume,
+            pan: setup.bus.pan,
+            output: setup.bus.output as i32,
+            selected: self.effect_target == EffectTarget::Bus(index as u8),
+            is_master: index == MASTER_BUS as usize,
+            feed_count: self.bus_feed_count(index) as i32,
+            // Levels are owned by the metering timer, which writes them in
+            // place; rebuilding a row must not stamp them back to silence.
+            left_db: self
+                .mixer_strip_model
+                .row_data(index)
+                .map(|row| row.left_db)
+                .unwrap_or(METER_FLOOR_DB),
+            right_db: self
+                .mixer_strip_model
+                .row_data(index)
+                .map(|row| row.right_db)
+                .unwrap_or(METER_FLOOR_DB),
+        }
+    }
+
+    /// Refresh one strip's controls without disturbing the rest.
+    fn sync_mixer_strip(&self, index: usize) {
+        let Some(setup) = self.buses.get(index) else {
+            return;
+        };
+        self.mixer_strip_model
+            .set_row_data(index, self.mixer_strip_row(index, setup));
+    }
+
+    /// Push the selection flag to every strip, so exactly one reads selected.
+    fn sync_mixer_selection(&self) {
+        for index in 0..self.mixer_strip_model.row_count() {
+            if let Some(mut row) = self.mixer_strip_model.row_data(index) {
+                row.selected = self.effect_target == EffectTarget::Bus(index as u8);
+                self.mixer_strip_model.set_row_data(index, row);
+            }
+        }
+    }
+
+    /// Mirror the edited bus onto the device rack's head face. When a channel
+    /// is being edited this only clears the flag; the source face takes over.
+    fn sync_bus_editor(&self, window: &MainWindow) {
+        let EffectTarget::Bus(index) = self.effect_target else {
+            window.set_editing_bus(false);
+            return;
+        };
+        let index = index as usize;
+        let Some(setup) = self.buses.get(index) else {
+            window.set_editing_bus(false);
+            return;
+        };
+        window.set_editing_bus(true);
+        window.set_editing_bus_index(index as i32);
+        window.set_editing_bus_name(setup.bus.name.as_str().into());
+        window.set_editing_bus_is_master(index == MASTER_BUS as usize);
+        window.set_editing_bus_muted(setup.bus.muted);
+        window.set_editing_bus_volume(setup.bus.volume);
+        window.set_editing_bus_pan(setup.bus.pan);
+        window.set_editing_bus_output(setup.bus.output as i32);
+        window.set_editing_bus_feed_count(self.bus_feed_count(index) as i32);
     }
 
     /// Refresh the bottom editor's properties from `selected`.
@@ -1313,16 +1438,19 @@ impl AppUi {
             volume: first.volume,
             pan: first.pan,
             selected: true,
+            bus: first.bus as i32,
             steps: ModelRc::from(step_model.clone()),
         };
         let rows_model = Rc::new(VecModel::from(vec![row]));
         let waveform_model = Rc::new(VecModel::from(first.waveform.clone()));
         let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
+        let mixer_strip_model = Rc::new(VecModel::from(Vec::<MixerStripRow>::new()));
         window.set_channels(ModelRc::from(rows_model.clone()));
         window.set_notes(ModelRc::from(note_model.clone()));
         window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
         window.set_waveform(ModelRc::from(waveform_model.clone()));
         window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
+        window.set_mixer_strips(ModelRc::from(mixer_strip_model.clone()));
         window.set_pattern_count(1);
 
         let state = Rc::new(RefCell::new(UiState {
@@ -1333,6 +1461,7 @@ impl AppUi {
             playlist_model,
             waveform_model,
             effect_slot_model,
+            mixer_strip_model,
             default_waveform,
             default_sample_description,
             default_sample_duration,
@@ -1343,6 +1472,7 @@ impl AppUi {
             song_mode: false,
             current_pattern: 0,
             selected: 0,
+            effect_target: EffectTarget::Channel(0),
             selected_note_id: None,
             bundle_path: None,
             dirty: false,
@@ -1364,6 +1494,7 @@ impl AppUi {
         );
         state.borrow().update_document_title(&window);
         state.borrow().sync_pattern_menu(&window);
+        state.borrow().sync_mixer(&window);
         window.set_app_version(env!("CARGO_PKG_VERSION").into());
 
         let (document_tx, document_rx) = std::sync::mpsc::channel::<DocumentResult>();
@@ -2701,16 +2832,25 @@ impl AppUi {
                 let ch = ch as usize;
                 {
                     let mut guard = st.borrow_mut();
-                    if ch >= guard.channels.len() || ch == guard.selected {
+                    // Re-clicking the selected channel is still meaningful
+                    // when the rack is showing a bus: it points it back.
+                    let already_here = ch == guard.selected
+                        && guard.effect_target == EffectTarget::Channel(ch as u8);
+                    if ch >= guard.channels.len() || already_here {
                         return;
                     }
                     guard.selected = ch;
+                    guard.effect_target = EffectTarget::Channel(ch as u8);
                     guard.selected_note_id = None;
                 }
                 if let Some(w) = weak.upgrade() {
                     w.set_selected_channel(ch as i32);
-                    st.borrow().sync_row_flags();
-                    st.borrow().refresh_editor(&w);
+                    let guard = st.borrow();
+                    guard.sync_row_flags();
+                    guard.sync_mixer_selection();
+                    guard.sync_bus_editor(&w);
+                    guard.refresh_editor(&w);
+                    drop(guard);
                     refresh_preset_menus(&st, &w);
                 }
             });
@@ -2831,6 +2971,7 @@ impl AppUi {
                 st.channels.push(ch);
                 st.reset_channel_source(index, source);
                 st.selected = index;
+                st.effect_target = EffectTarget::Channel(index as u8);
                 st.selected_note_id = None;
                 let ch = &st.channels[index];
                 let row = ChannelRow {
@@ -2839,12 +2980,14 @@ impl AppUi {
                     volume: ch.volume,
                     pan: ch.pan,
                     selected: true,
+                    bus: ch.bus as i32,
                     steps: ModelRc::from(model.clone()),
                 };
                 st.rows.push(row);
                 st.step_models.push(model);
                 st.sync_row_flags();
                 if let Some(window) = weak.upgrade() {
+                    st.sync_mixer(&window);
                     window.set_selected_channel(index as i32);
                     st.refresh_editor(&window);
                 }
@@ -2873,15 +3016,169 @@ impl AppUi {
                         w.set_selected_channel(st.selected as i32);
                     }
                 }
+                // The rack cannot keep pointing at a channel that is gone.
+                if let EffectTarget::Channel(index) = st.effect_target {
+                    if index as usize >= st.channels.len() {
+                        st.effect_target = EffectTarget::Channel(st.selected as u8);
+                    }
+                }
                 st.sync_row_flags();
                 if let Some(w) = weak.upgrade() {
+                    // A removed channel changes its bus's feed count.
+                    st.sync_mixer(&w);
                     st.refresh_editor(&w);
                 }
                 let _ = tx.send(EngineCommand::RemoveChannel);
             });
         }
 
-        // --- Effect chain callbacks (edit the selected channel) ---
+        // --- Mixer: bus selection, strip controls, and routing ---
+        {
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_selected(move |bus| {
+                let Ok(bus) = u8::try_from(bus) else { return };
+                {
+                    let mut guard = st.borrow_mut();
+                    if bus as usize >= guard.buses.len() {
+                        return;
+                    }
+                    guard.effect_target = EffectTarget::Bus(bus);
+                }
+                let guard = st.borrow();
+                guard.sync_mixer_selection();
+                guard.sync_effects();
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_muted(move |bus| {
+                let Ok(index) = usize::try_from(bus) else { return };
+                let mut guard = st.borrow_mut();
+                let Some(setup) = guard.buses.get_mut(index) else {
+                    return;
+                };
+                setup.bus.muted = !setup.bus.muted;
+                let muted = setup.bus.muted;
+                guard.sync_mixer_strip(index);
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(EngineCommand::SetBusMuted {
+                    bus: index as u8,
+                    muted,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_volume_changed(move |bus, volume| {
+                let Ok(index) = usize::try_from(bus) else { return };
+                let volume = volume.clamp(0.0, 1.0);
+                let mut guard = st.borrow_mut();
+                let Some(setup) = guard.buses.get_mut(index) else {
+                    return;
+                };
+                setup.bus.volume = volume;
+                guard.sync_mixer_strip(index);
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(EngineCommand::SetBusVolume {
+                    bus: index as u8,
+                    volume,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_pan_changed(move |bus, pan| {
+                let Ok(index) = usize::try_from(bus) else { return };
+                let pan = pan.clamp(-1.0, 1.0);
+                let mut guard = st.borrow_mut();
+                let Some(setup) = guard.buses.get_mut(index) else {
+                    return;
+                };
+                setup.bus.pan = pan;
+                guard.sync_mixer_strip(index);
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(EngineCommand::SetBusPan {
+                    bus: index as u8,
+                    pan,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_output_changed(move |bus, output| {
+                let (Ok(index), Ok(output)) = (usize::try_from(bus), u8::try_from(output)) else {
+                    return;
+                };
+                // The picker only offers legal destinations, but sanitize
+                // anyway: this is the boundary the engine's invariant rests on.
+                let output = sanitize_route(index as u8, output);
+                let mut guard = st.borrow_mut();
+                let Some(setup) = guard.buses.get_mut(index) else {
+                    return;
+                };
+                setup.bus.output = output;
+                guard.sync_mixer_strip(index);
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(EngineCommand::SetBusOutput {
+                    bus: index as u8,
+                    output,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_channel_bus_changed(move |channel, bus| {
+                let (Ok(channel), Ok(bus)) = (usize::try_from(channel), u8::try_from(bus)) else {
+                    return;
+                };
+                if bus as usize >= MAX_BUSES {
+                    return;
+                }
+                let mut guard = st.borrow_mut();
+                let Some(state) = guard.channels.get_mut(channel) else {
+                    return;
+                };
+                state.bus = bus;
+                guard.sync_row_flags();
+                // Feed counts moved, so both the old and new bus restate them.
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_mixer(&w);
+                }
+                let _ = tx.send(EngineCommand::SetChannelBus {
+                    channel: channel as u8,
+                    bus,
+                });
+            });
+        }
+
+        // --- Effect chain callbacks (edit whatever the rack is pointed at) ---
         {
             let stx = structural_tx.clone();
             let st = state.clone();
@@ -2890,24 +3187,24 @@ impl AppUi {
                     return;
                 };
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
+                let target = st.effect_target;
                 let (slot, params) = {
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let Some(effects) = st.effect_chain_mut() else {
                         return;
                     };
-                    if channel.effects.len() >= MAX_EFFECTS_PER_CHANNEL {
+                    if effects.len() >= MAX_EFFECTS_PER_CHANNEL {
                         return;
                     }
                     let effect = EffectSlotState::of_kind(kind);
-                    let slot = channel.effects.len();
-                    channel.effects.push(effect);
+                    let slot = effects.len();
+                    effects.push(effect);
                     (slot, effect.params)
                 };
                 st.sync_effects();
                 // The node is boxed here, on the GUI thread, and ownership
                 // crosses to the audio thread through the structural ring.
                 let _ = stx.send(StructuralCommand::InstallEffect {
-                    target: EffectTarget::Channel(ch as u8),
+                    target,
                     slot: slot as u8,
                     node: build_effect(params, sample_rate),
                 });
@@ -2920,30 +3217,30 @@ impl AppUi {
             let st = state.clone();
             window.on_remove_effect_clicked(move |slot| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
+                let target = st.effect_target;
                 let slot = slot as usize;
                 let removed_tail = {
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let Some(effects) = st.effect_chain_mut() else {
                         return;
                     };
-                    if slot >= channel.effects.len() {
+                    if slot >= effects.len() {
                         return;
                     }
-                    channel.effects.remove(slot);
-                    channel.effects.len()
+                    effects.remove(slot);
+                    effects.len()
                 };
                 st.sync_effects();
                 // Mirror on the engine with its two primitives: shift later
                 // slots down by adjacent swaps, then drop the vacated tail.
                 for j in (slot + 1)..=removed_tail {
                     let _ = tx.send(EngineCommand::SwapEffectSlots {
-                        target: EffectTarget::Channel(ch as u8),
+                        target,
                         slot_a: j as u8,
                         slot_b: j as u8 - 1,
                     });
                 }
                 let _ = stx.send(StructuralCommand::RemoveEffect {
-                    target: EffectTarget::Channel(ch as u8),
+                    target,
                     slot: removed_tail as u8,
                 });
             });
@@ -2954,12 +3251,12 @@ impl AppUi {
             let st = state.clone();
             window.on_effect_bypass_toggled(move |slot| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
+                let target = st.effect_target;
                 let slot = slot as usize;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let Some(effects) = st.effect_chain_mut() else {
                     return;
                 };
-                let Some(effect) = channel.effects.get_mut(slot) else {
+                let Some(effect) = effects.get_mut(slot) else {
                     return;
                 };
                 effect.bypassed = !effect.bypassed;
@@ -2967,7 +3264,7 @@ impl AppUi {
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot, row);
                 let _ = tx.send(EngineCommand::SetEffectBypassed {
-                    target: EffectTarget::Channel(ch as u8),
+                    target,
                     slot: slot as u8,
                     bypassed,
                 });
@@ -2983,12 +3280,12 @@ impl AppUi {
             // and the DSP use.
             window.on_effect_param_changed(move |slot, param_index, normalized| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
+                let target = st.effect_target;
                 let slot = slot as usize;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let Some(effects) = st.effect_chain_mut() else {
                     return;
                 };
-                let Some(effect) = channel.effects.get_mut(slot) else {
+                let Some(effect) = effects.get_mut(slot) else {
                     return;
                 };
                 let Ok(param_index) = usize::try_from(param_index) else {
@@ -3005,7 +3302,7 @@ impl AppUi {
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot, row);
                 let _ = tx.send(EngineCommand::SetEffectParam {
-                    target: EffectTarget::Channel(ch as u8),
+                    target,
                     slot: slot as u8,
                     id,
                     value,
@@ -3018,18 +3315,18 @@ impl AppUi {
             let st = state.clone();
             window.on_reorder_effect(move |from, to| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
+                let target = st.effect_target;
                 let (from, to) = (from as usize, to as usize);
                 {
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let Some(effects) = st.effect_chain_mut() else {
                         return;
                     };
-                    let len = channel.effects.len();
+                    let len = effects.len();
                     if from >= len || to >= len || from == to {
                         return;
                     }
-                    let effect = channel.effects.remove(from);
-                    channel.effects.insert(to, effect);
+                    let effect = effects.remove(from);
+                    effects.insert(to, effect);
                 }
                 st.sync_effects();
                 // The engine's only reorder primitive is an adjacent-slot
@@ -3037,7 +3334,7 @@ impl AppUi {
                 if from < to {
                     for i in from..to {
                         let _ = tx.send(EngineCommand::SwapEffectSlots {
-                            target: EffectTarget::Channel(ch as u8),
+                            target,
                             slot_a: i as u8,
                             slot_b: i as u8 + 1,
                         });
@@ -3045,7 +3342,7 @@ impl AppUi {
                 } else {
                     for i in (to + 1..=from).rev() {
                         let _ = tx.send(EngineCommand::SwapEffectSlots {
-                            target: EffectTarget::Channel(ch as u8),
+                            target,
                             slot_a: i as u8,
                             slot_b: i as u8 - 1,
                         });
@@ -3558,6 +3855,9 @@ impl AppUi {
         let stats_in = stats.clone();
         let mut left_meter = MeterBallistics::default();
         let mut right_meter = MeterBallistics::default();
+        // One pair per bus, so a strip's decay is its own rather than shared.
+        let mut bus_meters: Vec<(MeterBallistics, MeterBallistics)> =
+            (0..MAX_BUSES).map(|_| Default::default()).collect();
         let mut last_meter_update = std::time::Instant::now();
         pump.start(
             TimerMode::Repeated,
@@ -3909,6 +4209,32 @@ impl AppUi {
                 w.set_meter_r_held_db(right.held_db);
                 w.set_meter_l_clipping(left.clipping);
                 w.set_meter_r_clipping(right.clipping);
+
+                // Bus peaks come from the shared atomic array, not the event
+                // ring. Always drain them, even while the mixer is hidden, so
+                // a strip does not open showing a peak from minutes ago; only
+                // write the models when something is actually displaying them.
+                let showing_mixer = w.get_mixer_visible();
+                let editing_bus = w.get_editing_bus();
+                let edited_bus = w.get_editing_bus_index().max(0) as usize;
+                for (bus, meters) in bus_meters.iter_mut().enumerate() {
+                    let (peak_l, peak_r) = handle.take_bus_peak(bus);
+                    let left = meters.0.update(peak_l, elapsed);
+                    let right = meters.1.update(peak_r, elapsed);
+                    if showing_mixer {
+                        let strips = st.borrow();
+                        if let Some(mut row) = strips.mixer_strip_model.row_data(bus) {
+                            row.left_db = left.level_db;
+                            row.right_db = right.level_db;
+                            strips.mixer_strip_model.set_row_data(bus, row);
+                        }
+                    }
+                    if editing_bus && bus == edited_bus {
+                        w.set_editing_bus_left_db(left.level_db);
+                        w.set_editing_bus_right_db(right.level_db);
+                    }
+                }
+
                 let (mp, sp, cf) = stats_in.get();
                 let new_mp = if saw_nonzero { mp.max(1.0) } else { mp };
                 let new_sp = sp || w.get_playing();
@@ -3983,6 +4309,28 @@ impl AppUi {
                 w.invoke_effect_bypass_toggled(0);
                 w.invoke_effect_bypass_toggled(0);
                 w.invoke_remove_effect_clicked(1);
+                // Mixer: assign channels to buses, chain one bus into
+                // another, and build an effect chain on a bus rather than a
+                // channel. This is the surface the routing rule guards, so
+                // include the uphill route it must refuse.
+                w.set_mixer_visible(true);
+                w.invoke_channel_bus_changed(0, 3);
+                w.invoke_channel_bus_changed(1, 3);
+                w.invoke_bus_output_changed(3, 1);
+                w.invoke_bus_output_changed(1, 9); // uphill: must fall back
+                w.invoke_bus_volume_changed(3, 0.7);
+                w.invoke_bus_pan_changed(3, -0.4);
+                w.invoke_bus_muted(3);
+                w.invoke_bus_muted(3);
+                w.invoke_bus_selected(3);
+                w.invoke_add_effect_clicked(5); // compressor on the bus
+                w.invoke_effect_param_changed(0, 0, 0.45);
+                w.invoke_effect_param_changed(0, 1, 0.6);
+                w.invoke_bus_selected(0); // master
+                w.invoke_add_effect_clicked(6); // limiter on the master
+                w.invoke_effect_param_changed(0, 0, 0.95);
+                w.invoke_channel_selected(0); // back to a channel's chain
+                w.set_mixer_visible(false);
                 w.set_song_mode(true);
                 w.invoke_playback_mode_changed(true);
                 w.set_editor_page(2);

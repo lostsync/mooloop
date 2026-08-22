@@ -1,0 +1,165 @@
+import { Theme } from "theme.slint";
+import { MixerFader, MiniKnob, MuteButton, SectionLabel } from "controls.slint";
+import { ChannelMeter } from "meters.slint";
+import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { BusPicker } from "mixer.slint";
+
+// The head of a bus's device chain, standing where a channel's source face
+// stands. A bus has no generator, so what occupies that position is the thing
+// a bus actually is: an output stage and a destination.
+export component BusDeviceFace inherits Rectangle {
+    in property <string> name;
+    in property <bool> is-master;
+    in property <bool> muted;
+    in property <float> volume;
+    in property <float> pan;
+    in property <int> output;
+    in property <int> index;
+    in property <int> feed-count;
+    in property <[string]> bus-names;
+    in property <float> left-db: -60;
+    in property <float> right-db: -60;
+    callback volume-changed(float);
+    callback pan-changed(float);
+    callback mute-toggled();
+    callback output-picked(int);
+
+    VerticalLayout {
+        padding: 8px;
+        padding-top: DeviceRackMetrics.header-height + 8px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            vertical-stretch: 1;
+
+            Rectangle {
+                width: 116px;
+                background: Theme.panel;
+                border-radius: 2px;
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 4px;
+                    SectionLabel { text: "OUTPUT"; }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        vertical-stretch: 1;
+                        alignment: center;
+                        ChannelMeter {
+                            width: 22px;
+                            segments: 16;
+                            left-db: root.left-db;
+                            right-db: root.right-db;
+                            held-left-db: root.left-db;
+                            held-right-db: root.right-db;
+                        }
+                        MixerFader {
+                            width: 30px;
+                            value: root.volume;
+                            default-value: 1.0;
+                            tooltip: root.name + " level";
+                            value-text: round(root.volume * 100) + "%";
+                            changed(v) => { root.volume-changed(v); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 92px;
+                background: Theme.panel;
+                border-radius: 2px;
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 4px;
+                    SectionLabel { text: "STRIP"; }
+                    HorizontalLayout {
+                        alignment: center;
+                        MiniKnob {
+                            label: "Pan";
+                            value: root.pan;
+                            minimum: -1;
+                            maximum: 1;
+                            default-value: 0;
+                            bipolar: true;
+                            value-text: abs(root.pan) < 0.01 ? "Center"
+                                : root.pan < 0 ? "L " + round(abs(root.pan) * 100)
+                                : "R " + round(root.pan * 100);
+                            changed(v) => { root.pan-changed(v); }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        MuteButton {
+                            muted: root.muted;
+                            clicked => { root.mute-toggled(); }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            Rectangle {
+                background: Theme.panel;
+                border-radius: 2px;
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 4px;
+                    SectionLabel { text: "ROUTING"; }
+                    Text {
+                        text: root.feed-count == 0
+                            ? "No channels feed this bus"
+                            : root.feed-count + (root.feed-count == 1
+                                ? " channel feeds this bus" : " channels feed this bus");
+                        color: root.feed-count == 0 ? Theme.text-faint : Theme.text-muted;
+                        font-size: 9px;
+                        wrap: word-wrap;
+                    }
+                    // The master is the end of the chain, so it offers no
+                    // destination rather than a disabled-looking one.
+                    if !root.is-master : HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Text {
+                            text: "Sends to";
+                            color: Theme.text-muted;
+                            font-size: 9px;
+                            vertical-alignment: center;
+                        }
+                        BusPicker {
+                            bus-names: root.bus-names;
+                            value: root.output;
+                            limit: root.index;
+                            tooltip: "Bus this one feeds";
+                            picked(i) => { root.output-picked(i); }
+                        }
+                        Text {
+                            text: root.bus-names[root.output];
+                            color: Theme.text;
+                            font-size: 9px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if root.is-master : Text {
+                        text: "Sends to the audio outputs";
+                        color: Theme.text-muted;
+                        font-size: 9px;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+    }
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: root.name;
+        kind: "BUS / 2U";
+        role: "BUS";
+        device-color: root.is-master ? Theme.warning : Theme.accent;
+        enabled: !root.muted;
+    }
+}

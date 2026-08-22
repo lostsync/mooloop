@@ -48,6 +48,7 @@ fn harness() -> MainWindow {
         volume: 0.8,
         pan: 0.0,
         selected: true,
+        bus: 0,
         steps: ModelRc::from(Rc::new(VecModel::from(steps))),
     }]))));
     ui

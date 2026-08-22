@@ -27,12 +27,15 @@ import { DelayDeviceFace } from "delay-device.slint";
 import { GateDeviceFace } from "gate-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
 import { LimiterDeviceFace } from "limiter-device.slint";
+import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
+import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 export { Theme }
 export { ControlGallery } from "gallery.slint";
 export { MockupCanvas, MockupItem } from "mockup.slint";
 export { DeviceRackConcepts } from "device-concepts.slint";
+export { MixerStripRow }
 
 // One step cell used in the step-grid models.
 struct StepCell {
@@ -75,6 +78,8 @@ struct ChannelRow {
     volume: float,
     pan: float,
     selected: bool,
+    // Mixer bus this channel feeds; 0 is the master.
+    bus: int,
     steps: [StepCell],
 }
 
@@ -236,6 +241,7 @@ export component MainWindow inherits Window {
     callback channel-muted(int);
     callback channel-volume-changed(int, float);
     callback channel-pan-changed(int, float);
+    callback channel-bus-changed(int, int); // channel, bus
     callback add-channel-clicked(int); // 0=Sampler, 1=Drum, 2=Mono
     callback remove-channel-clicked();
     callback add-pattern-clicked();
@@ -244,6 +250,32 @@ export component MainWindow inherits Window {
     callback playback-mode-changed(bool);
     callback playlist-placement-added(int, int);   // pattern, absolute start tick
     callback playlist-placement-removed(int, int); // pattern, tick covered by clip
+
+    // ---- mixer ----
+    // The work surface shows either the step grid or the mixer; the bottom
+    // device rack follows whichever strip is selected in the visible one.
+    in-out property <bool> mixer-visible;
+    in property <[MixerStripRow]> mixer-strips;
+    // Full bus names, master first, indexed by bus. Shared by every picker.
+    in property <[string]> bus-names;
+    callback bus-selected(int);
+    callback bus-muted(int);
+    callback bus-volume-changed(int, float);
+    callback bus-pan-changed(int, float);
+    callback bus-output-changed(int, int);
+
+    // ---- the bus the device rack is editing, when it is editing one ----
+    in property <bool> editing-bus;
+    in property <int> editing-bus-index;
+    in property <string> editing-bus-name;
+    in property <bool> editing-bus-is-master;
+    in property <bool> editing-bus-muted;
+    in property <float> editing-bus-volume: 1.0;
+    in property <float> editing-bus-pan;
+    in property <int> editing-bus-output;
+    in property <int> editing-bus-feed-count;
+    in property <float> editing-bus-left-db: -60;
+    in property <float> editing-bus-right-db: -60;
 
     // ---- lower editor ----
     in-out property <int> editor-page;      // 0=Source, 1=Notes, 2=Playlist
@@ -891,10 +923,52 @@ export component MainWindow inherits Window {
 
         Rectangle { height: 1px; background: Theme.border; }
 
-        // ===== Channel rack: one step-grid row per channel =====
-        ScrollView {
+        // ===== Work surface: the step grid or the mixer =====
+        Rectangle {
+            height: 26px;
+            background: Theme.surface;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-top: 3px;
+                padding-bottom: 3px;
+                spacing: 6px;
+                SelectorBank {
+                    options: ["Steps", "Mixer"];
+                    selected-index: root.mixer-visible ? 1 : 0;
+                    segment-width: 54px;
+                    tooltip: "Show the step grid or the mixer";
+                    selected(i) => { root.mixer-visible = i == 1; }
+                }
+                Text {
+                    text: root.mixer-visible
+                        ? "Click a bus to put effects on it"
+                        : "Each channel's bus field picks where it lands";
+                    color: Theme.text-faint;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border; }
+
+        if root.mixer-visible : MixerPane {
             vertical-stretch: 1;
-            viewport-width: max(self.visible-width, 300px + root.pattern-length * 27px);
+            strips: root.mixer-strips;
+            bus-names: root.bus-names;
+            bus-selected(i) => { root.bus-selected(i); }
+            bus-muted(i) => { root.bus-muted(i); }
+            bus-volume-changed(i, v) => { root.bus-volume-changed(i, v); }
+            bus-pan-changed(i, v) => { root.bus-pan-changed(i, v); }
+            bus-output-changed(i, o) => { root.bus-output-changed(i, o); }
+        }
+
+        // ===== Channel rack: one step-grid row per channel =====
+        if !root.mixer-visible : ScrollView {
+            vertical-stretch: 1;
+            viewport-width: max(self.visible-width, 340px + root.pattern-length * 27px);
             viewport-height: max(self.visible-height, root.channels.length * 32px + 48px);
 
             VerticalBox {
@@ -954,6 +1028,17 @@ export component MainWindow inherits Window {
                             : row.pan < 0 ? "L " + round(abs(row.pan) * 100)
                             : "R " + round(row.pan * 100);
                         changed(v) => { root.channel-pan-changed(ch, v); }
+                    }
+
+                    // Where this channel lands in the mixer. It sits with the
+                    // other output controls rather than in the mixer pane,
+                    // because it is a property of the channel.
+                    BusPicker {
+                        bus-names: root.bus-names;
+                        value: row.bus;
+                        limit: root.bus-names.length;
+                        tooltip: "Mixer bus for this channel";
+                        picked(b) => { root.channel-bus-changed(ch, b); }
                     }
 
                     // Beat grouping remains visible at any pattern length.
@@ -1172,13 +1257,15 @@ export component MainWindow inherits Window {
                         }
                         Rectangle { width: 8px; }
                         Text {
-                            text: root.editor-page == 2 ? "SONG ARRANGEMENT" : root.selected-channel-name;
+                            text: root.editor-page == 2 ? "SONG ARRANGEMENT"
+                                : root.editing-bus ? root.editing-bus-name
+                                : root.selected-channel-name;
                             color: Theme.text-muted;
                             font-size: 10px;
                             vertical-alignment: center;
                         }
                         Rectangle { horizontal-stretch: 1; }
-                        if root.editor-page != 2 : MenuField {
+                        if root.editor-page != 2 && !root.editing-bus : MenuField {
                             label: "CHANNEL PRESET";
                             options: root.channel-preset-options;
                             selected-index: -1;
@@ -1188,7 +1275,7 @@ export component MainWindow inherits Window {
                             tooltip: "Load a saved whole-channel preset (source + mixer)";
                             selected(i) => { root.channel-preset-selected(i); }
                         }
-                        if root.editor-page != 2 : IconButton {
+                        if root.editor-page != 2 && !root.editing-bus : IconButton {
                             text: "💾";
                             tooltip: "Save this channel (source + mixer) as a preset";
                             size: 24px;
@@ -1423,7 +1510,7 @@ export component MainWindow inherits Window {
                                     font-size: 9px;
                                     vertical-alignment: center;
                                 }
-                                SelectorBank {
+                                if !root.editing-bus : SelectorBank {
                                     options: ["Sampler", "Drum", "Mono"];
                                     selected-index <=> root.source-kind;
                                     segment-width: 62px;
@@ -1433,8 +1520,8 @@ export component MainWindow inherits Window {
                                         root.channel-source-changed(i);
                                     }
                                 }
-                                Rectangle { width: 6px; }
-                                MenuField {
+                                if !root.editing-bus : Rectangle { width: 6px; }
+                                if !root.editing-bus : MenuField {
                                     label: "PRESET";
                                     options: root.generator-preset-options;
                                     selected-index: -1;
@@ -1444,11 +1531,27 @@ export component MainWindow inherits Window {
                                     tooltip: "Load a preset for this source device";
                                     selected(i) => { root.generator-preset-selected(i); }
                                 }
-                                IconButton {
+                                if !root.editing-bus : IconButton {
                                     text: "💾";
                                     tooltip: "Save the current source as a preset";
                                     size: 24px;
                                     clicked => { root.save-generator-preset-requested(); }
+                                }
+                                // A bus has no generator and no generator
+                                // preset, so the row states what it is instead.
+                                if root.editing-bus : Text {
+                                    text: root.editing-bus-name;
+                                    color: Theme.text;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                                if root.editing-bus : Text {
+                                    text: root.editing-bus-is-master
+                                        ? "Everything lands here"
+                                        : "Effects here shape every channel routed to this bus";
+                                    color: Theme.text-faint;
+                                    font-size: 9px;
+                                    vertical-alignment: center;
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                             }
@@ -1473,11 +1576,38 @@ export component MainWindow inherits Window {
                                     spacing: 0px;
                                     alignment: start;
 
+                                    // The head of the chain: a channel's
+                                    // generator, or the bus's own output stage
+                                    // when the rack is following the mixer.
                                     source-device := DeviceFrame {
-                                        width: DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap;
+                                        width: root.editing-bus
+                                            ? DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap
+                                            : DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap;
                                         height: DeviceRackMetrics.face-height;
 
-                                        if root.source-kind == 0 : SamplerDeviceFace {
+                                        if root.editing-bus : BusDeviceFace {
+                                            x: 0px;
+                                            y: 0px;
+                                            width: parent.width;
+                                            height: parent.height;
+                                            name: root.editing-bus-name;
+                                            is-master: root.editing-bus-is-master;
+                                            muted: root.editing-bus-muted;
+                                            volume: root.editing-bus-volume;
+                                            pan: root.editing-bus-pan;
+                                            output: root.editing-bus-output;
+                                            index: root.editing-bus-index;
+                                            feed-count: root.editing-bus-feed-count;
+                                            bus-names: root.bus-names;
+                                            left-db: root.editing-bus-left-db;
+                                            right-db: root.editing-bus-right-db;
+                                            volume-changed(v) => { root.bus-volume-changed(root.editing-bus-index, v); }
+                                            pan-changed(v) => { root.bus-pan-changed(root.editing-bus-index, v); }
+                                            mute-toggled => { root.bus-muted(root.editing-bus-index); }
+                                            output-picked(o) => { root.bus-output-changed(root.editing-bus-index, o); }
+                                        }
+
+                                        if !root.editing-bus && root.source-kind == 0 : SamplerDeviceFace {
                                             x: 0px;
                                             y: DeviceRackMetrics.header-height;
                                             width: parent.width;
@@ -1539,7 +1669,7 @@ export component MainWindow inherits Window {
                                             next-sample-clicked => { root.next-sample-clicked(); }
                                         }
 
-                                        if root.source-kind == 1 : DrumDeviceFace {
+                                        if !root.editing-bus && root.source-kind == 1 : DrumDeviceFace {
                                             x: 0px;
                                             y: DeviceRackMetrics.header-height;
                                             width: parent.width;
@@ -1590,7 +1720,7 @@ export component MainWindow inherits Window {
                                             hat-metallic-changed(v) => { root.drum-hat-metallic-changed(v); }
                                         }
 
-                                        if root.source-kind == 2 : MonoDeviceFace {
+                                        if !root.editing-bus && root.source-kind == 2 : MonoDeviceFace {
                                             x: 0px;
                                             y: DeviceRackMetrics.header-height;
                                             width: parent.width;
@@ -1612,7 +1742,7 @@ export component MainWindow inherits Window {
                                             lfo-pitch-changed(v) => { root.mono-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.mono-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.mono-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.mono-lfo-amp-changed(v); }
                                         }
 
-                                        DeviceHeader {
+                                        if !root.editing-bus : DeviceHeader {
                                             x: 0px; y: 0px; width: parent.width;
                                             name: root.source-kind == 0 ? "Sampler"
                                                 : root.source-kind == 1 ? "Drum Synth" : "Mono Synth";

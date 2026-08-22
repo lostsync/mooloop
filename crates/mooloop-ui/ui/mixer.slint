@@ -1,0 +1,271 @@
+import { Theme } from "theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { MixerFader, MiniKnob, MuteButton, ToolButton } from "controls.slint";
+import { ChannelMeter } from "meters.slint";
+
+// One mixer bus as the pane and the Rust side exchange it. Levels arrive
+// already in dB so the strip never has to know the meter's floor.
+export struct MixerStripRow {
+    name: string,
+    muted: bool,
+    volume: float,
+    pan: float,
+    // Destination bus index; 0 is the master.
+    output: int,
+    selected: bool,
+    // The master is bus 0. It has no output of its own and cannot be routed.
+    is-master: bool,
+    // Sequencer channels feeding this bus directly. Drawn so an empty bus is
+    // distinguishable from a loaded one at a glance.
+    feed-count: int,
+    left-db: float,
+    right-db: float,
+}
+
+// Shared bus chooser. Used both to assign a channel to a bus and to route one
+// bus into another; the two differ only in which destinations are offered.
+//
+// `limit` is exclusive: a channel may name any bus, so it passes the bank
+// size, while a bus may only name a lower-numbered one and passes its own
+// index. That asymmetry is the routing rule from mooloop-core::mixer, applied
+// at the point where the user could otherwise ask for a cycle.
+export component BusPicker inherits Rectangle {
+    in property <[string]> bus-names;
+    in property <int> value;
+    in property <int> limit: 99;
+    in property <string> tooltip: "Destination bus";
+    in property <bool> enabled: true;
+    callback picked(int);
+
+    // The mute button on the same strip already reads "M", so the
+    // destination carries an arrow rather than repeating a bare letter.
+    private property <string> short-label: "\u{2192}" + (root.value == 0 ? "M" : root.value);
+
+    width: 30px;
+    height: 22px;
+    border-radius: 3px;
+    background: pick-touch.has-hover && root.enabled ? Theme.surface-active : Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    Text {
+        text: root.short-label;
+        color: root.enabled ? Theme.text-muted : Theme.text-faint;
+        font-size: 10px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    pick-touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { bus-menu.show(); }
+    }
+
+    Tooltip { text: @markdown("\{root.tooltip}"); }
+
+    bus-menu := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: 96px;
+        height: min(root.limit, root.bus-names.length) * 21px + 8px;
+        close-policy: close-on-click;
+        Rectangle {
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 3px;
+            VerticalLayout {
+                padding: 4px;
+                spacing: 1px;
+                for name[i] in root.bus-names : Rectangle {
+                    // Destinations at or above the limit would be a cycle, so
+                    // they are not offered rather than offered and rejected.
+                    height: i < root.limit ? 20px : 0px;
+                    visible: i < root.limit;
+                    ToolButton {
+                        width: 100%;
+                        height: 20px;
+                        text: name;
+                        active: i == root.value;
+                        tooltip: "Send to " + name;
+                        clicked => {
+                            bus-menu.close();
+                            root.picked(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component MixerStrip inherits Rectangle {
+    in property <MixerStripRow> strip;
+    in property <int> index;
+    in property <[string]> bus-names;
+    callback selected();
+    callback mute-toggled();
+    callback volume-changed(float);
+    callback pan-changed(float);
+    callback output-picked(int);
+
+    width: 62px;
+    background: root.strip.selected ? Theme.surface-active : Theme.surface;
+    border-width: 1px;
+    border-color: root.strip.selected ? Theme.accent : Theme.border;
+    border-radius: 3px;
+
+    VerticalLayout {
+        padding: 4px;
+        spacing: 4px;
+
+        // Name plate. Clicking it is the gesture that points the device rack
+        // below at this bus, so it covers the full width of the strip.
+        Rectangle {
+            height: 20px;
+            border-radius: 2px;
+            background: root.strip.selected ? Theme.accent-active : Theme.surface-raised;
+            Text {
+                text: root.strip.name;
+                color: root.strip.selected ? Theme.text : Theme.text-muted;
+                font-size: 9px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+                width: parent.width - 4px;
+                x: 2px;
+            }
+            name-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.selected(); }
+            }
+            Tooltip {
+                text: @markdown("Edit **\{root.strip.name}** in the device rack");
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 2px;
+            alignment: center;
+            ChannelMeter {
+                width: 22px;
+                segments: 14;
+                left-db: root.strip.left-db;
+                right-db: root.strip.right-db;
+                held-left-db: root.strip.left-db;
+                held-right-db: root.strip.right-db;
+            }
+            MixerFader {
+                width: 30px;
+                value: root.strip.volume;
+                default-value: 1.0;
+                tooltip: root.strip.name + " level";
+                value-text: round(root.strip.volume * 100) + "%";
+                changed(v) => { root.volume-changed(v); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: center;
+            MiniKnob {
+                label: "Pan";
+                value: root.strip.pan;
+                minimum: -1;
+                maximum: 1;
+                default-value: 0;
+                bipolar: true;
+                value-text: abs(root.strip.pan) < 0.01 ? "Center"
+                    : root.strip.pan < 0 ? "L " + round(abs(root.strip.pan) * 100)
+                    : "R " + round(root.strip.pan * 100);
+                changed(v) => { root.pan-changed(v); }
+            }
+            MuteButton {
+                muted: root.strip.muted;
+                clicked => { root.mute-toggled(); }
+            }
+        }
+
+        // The master has nowhere to send, so the row below it carries a feed
+        // count instead of an empty control.
+        Rectangle {
+            height: 22px;
+            if !root.strip.is-master : BusPicker {
+                x: (parent.width - 30px) / 2;
+                bus-names: root.bus-names;
+                value: root.strip.output;
+                limit: root.index;
+                tooltip: "Bus this one feeds";
+                picked(i) => { root.output-picked(i); }
+            }
+            if root.strip.is-master : Text {
+                text: "OUT";
+                color: Theme.text-faint;
+                font-size: 8px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+            }
+        }
+
+        Rectangle {
+            height: 10px;
+            Text {
+                text: root.strip.feed-count == 0 ? "\u{2014}"
+                    : root.strip.feed-count + (root.strip.feed-count == 1 ? " ch" : " chs");
+                color: root.strip.feed-count == 0 ? Theme.text-faint : Theme.text-muted;
+                font-size: 8px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+            }
+        }
+    }
+}
+
+// The mixer work surface: the master, then every insert bus, scrolling
+// horizontally the same way the device rack does.
+export component MixerPane inherits Rectangle {
+    in property <[MixerStripRow]> strips;
+    in property <[string]> bus-names;
+    callback bus-selected(int);
+    callback bus-muted(int);
+    callback bus-volume-changed(int, float);
+    callback bus-pan-changed(int, float);
+    callback bus-output-changed(int, int);
+
+    background: Theme.panel;
+
+    mixer-scroll := ScrollView {
+        width: 100%;
+        height: 100%;
+        // Derived from the row, not a constant: the bank is fixed today but a
+        // hardcoded width is exactly what left the device rack unscrollable.
+        viewport-width: max(self.visible-width, strip-row.preferred-width);
+        viewport-height: max(self.visible-height, 200px);
+
+        Rectangle {
+            width: max(mixer-scroll.visible-width, strip-row.preferred-width);
+            height: max(mixer-scroll.visible-height, 200px);
+
+            strip-row := HorizontalLayout {
+                padding: 8px;
+                spacing: 4px;
+                alignment: start;
+
+                for strip[i] in root.strips : MixerStrip {
+                    strip: strip;
+                    index: i;
+                    bus-names: root.bus-names;
+                    selected => { root.bus-selected(i); }
+                    mute-toggled => { root.bus-muted(i); }
+                    volume-changed(v) => { root.bus-volume-changed(i, v); }
+                    pan-changed(v) => { root.bus-pan-changed(i, v); }
+                    output-picked(o) => { root.bus-output-changed(i, o); }
+                }
+            }
+        }
+    }
+}

@@ -1,4 +1,6 @@
-const MIN_DB: f32 = -60.0;
+/// Bottom of every meter's scale. Shared so the mixer's strips start at the
+/// same floor the master meter uses.
+pub(crate) const MIN_DB: f32 = -60.0;
 const DECAY_DB_PER_SECOND: f32 = 20.0;
 const HOLD_SECONDS: f32 = 1.0;
 const CLIP_LATCH_SECONDS: f32 = 2.0;
