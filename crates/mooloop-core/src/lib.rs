@@ -16,12 +16,17 @@ pub mod time;
 pub use bridge::{EngineCommand, EngineEvent};
 pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS};
 pub use effect::{
-    BitcrushParams, DelayMode, DelayParams, DriveCurve, DriveParams, EffectKind, EffectParams,
-    EffectSlotState, FilterMode, FilterParams, ParamCurve, ParamDescriptor, BITCRUSH_PARAM_BITS,
+    BitcrushParams, CompressorParams, DelayMode, DelayParams, DriveCurve, DriveParams,
+    EffectKind, EffectParams, EffectSlotState, FilterMode, FilterParams, GateParams, LimiterParams,
+    ParamCurve, ParamDescriptor, BITCRUSH_PARAM_BITS,
     BITCRUSH_PARAM_DOWNSAMPLE, BITCRUSH_PARAM_MIX, DELAY_MAX_TIME_MS, DELAY_PARAM_CROSS,
     DELAY_PARAM_FEEDBACK, DELAY_PARAM_MIX, DELAY_PARAM_MODE, DELAY_PARAM_TIME_MS,
     DELAY_PARAM_TONE, DRIVE_PARAM_CURVE, DRIVE_PARAM_DRIVE, DRIVE_PARAM_MIX, DRIVE_PARAM_OUTPUT,
     DRIVE_PARAM_TONE, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_MODE, FILTER_PARAM_RESONANCE,
+    COMP_PARAM_ATTACK_MS, COMP_PARAM_KNEE_DB, COMP_PARAM_MAKEUP_DB, COMP_PARAM_RATIO,
+    COMP_PARAM_RELEASE_MS, COMP_PARAM_THRESHOLD_DB, GATE_PARAM_ATTACK_MS, GATE_PARAM_HOLD_MS,
+    GATE_PARAM_RANGE_DB, GATE_PARAM_RELEASE_MS, GATE_PARAM_THRESHOLD_DB,
+    LIMITER_PARAM_CEILING_DB, LIMITER_PARAM_GAIN_DB, LIMITER_PARAM_RELEASE_MS,
 };
 pub use pattern::{
     ChannelPattern, NoteEvent, NoteId, Pattern, Step, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,

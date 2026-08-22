@@ -24,6 +24,9 @@ import { FilterDeviceFace } from "filter-device.slint";
 import { DriveDeviceFace } from "drive-device.slint";
 import { BitcrushDeviceFace } from "bitcrush-device.slint";
 import { DelayDeviceFace } from "delay-device.slint";
+import { GateDeviceFace } from "gate-device.slint";
+import { CompressorDeviceFace } from "compressor-device.slint";
+import { LimiterDeviceFace } from "limiter-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 export { Theme }
@@ -90,7 +93,9 @@ struct PlaylistClip {
 // the descriptor defines. Keeping the row positional means adding an effect
 // kind costs a device face and nothing here.
 struct EffectSlotRow {
-    kind: int,        // matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay
+    // Matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay,
+    // 4=Gate, 5=Compressor, 6=Limiter.
+    kind: int,
     // Rack units this device's face occupies. Devices with more working
     // controls get more width rather than compressing their controls.
     units: int,
@@ -1711,6 +1716,70 @@ export component MainWindow inherits Window {
                                                 remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
+                                            if slot.kind == 4 : GateDeviceFace {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: parent.width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                threshold: slot.p0;
+                                                attack: slot.p1;
+                                                hold: slot.p2;
+                                                release: slot.p3;
+                                                range: slot.p4;
+                                                threshold-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                attack-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                hold-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                release-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                range-changed(v) => { root.effect-param-changed(index, 4, v); }
+                                                bypass-toggled => { root.effect-bypass-toggled(index); }
+                                                remove-clicked => { root.remove-effect-clicked(index); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
+                                            if slot.kind == 5 : CompressorDeviceFace {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: parent.width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                threshold: slot.p0;
+                                                ratio: slot.p1;
+                                                attack: slot.p2;
+                                                release: slot.p3;
+                                                knee: slot.p4;
+                                                makeup: slot.p5;
+                                                threshold-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                ratio-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                attack-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                release-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                knee-changed(v) => { root.effect-param-changed(index, 4, v); }
+                                                makeup-changed(v) => { root.effect-param-changed(index, 5, v); }
+                                                bypass-toggled => { root.effect-bypass-toggled(index); }
+                                                remove-clicked => { root.remove-effect-clicked(index); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
+                                            if slot.kind == 6 : LimiterDeviceFace {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: parent.width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                ceiling: slot.p0;
+                                                release: slot.p1;
+                                                gain: slot.p2;
+                                                ceiling-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                release-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                gain-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                bypass-toggled => { root.effect-bypass-toggled(index); }
+                                                remove-clicked => { root.remove-effect-clicked(index); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
                                         }
                                         DeviceJoin { x: parent.face-width; y: 0px; }
                                     }
@@ -1729,7 +1798,7 @@ export component MainWindow inherits Window {
                                             x: 0px;
                                             y: 44px;
                                             width: 148px;
-                                            height: 106px;
+                                            height: 178px;
                                             close-policy: close-on-click;
                                             Rectangle {
                                                 background: Theme.surface;
@@ -1743,6 +1812,9 @@ export component MainWindow inherits Window {
                                                     ToolButton { text: "Drive"; tooltip: "Add saturation or distortion"; clicked => { add-effect-menu.close(); root.add-effect-clicked(1); } }
                                                     ToolButton { text: "Bitcrush"; tooltip: "Add bit and rate reduction"; clicked => { add-effect-menu.close(); root.add-effect-clicked(2); } }
                                                     ToolButton { text: "Delay"; tooltip: "Add a delay"; clicked => { add-effect-menu.close(); root.add-effect-clicked(3); } }
+                                                    ToolButton { text: "Gate"; tooltip: "Add a noise gate"; clicked => { add-effect-menu.close(); root.add-effect-clicked(4); } }
+                                                    ToolButton { text: "Comp"; tooltip: "Add a compressor"; clicked => { add-effect-menu.close(); root.add-effect-clicked(5); } }
+                                                    ToolButton { text: "Limiter"; tooltip: "Add a limiter"; clicked => { add-effect-menu.close(); root.add-effect-clicked(6); } }
                                                 }
                                             }
                                         }

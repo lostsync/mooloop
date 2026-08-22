@@ -833,6 +833,19 @@ mod tests {
                     params.set(mooloop_core::BITCRUSH_PARAM_BITS, 1.0);
                     params.set(mooloop_core::BITCRUSH_PARAM_DOWNSAMPLE, 32.0);
                 }
+                mooloop_core::EffectKind::Gate => {
+                    // Threshold at the top of its range shuts on anything.
+                    params.set(mooloop_core::GATE_PARAM_THRESHOLD_DB, 0.0);
+                    params.set(mooloop_core::GATE_PARAM_ATTACK_MS, 0.05);
+                }
+                mooloop_core::EffectKind::Compressor => {
+                    params.set(mooloop_core::COMP_PARAM_THRESHOLD_DB, -40.0);
+                    params.set(mooloop_core::COMP_PARAM_RATIO, 20.0);
+                    params.set(mooloop_core::COMP_PARAM_ATTACK_MS, 0.05);
+                }
+                mooloop_core::EffectKind::Limiter => {
+                    params.set(mooloop_core::LIMITER_PARAM_CEILING_DB, -24.0);
+                }
                 mooloop_core::EffectKind::Delay => {
                     // Short enough that a repeat lands inside the rendered
                     // block, fully wet so the dry signal cannot mask it.

@@ -49,9 +49,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   reduction. Voice controls cover one-shot/gated playback, 1-16 voices,
   restart/layer retriggering, and 16 cross-channel choke groups.
 - A horizontal lower device rack with one fixed-height 3U source face followed
-  by a chainable effect chain (filter, drive, bitcrush, and delay; slots are
-  added by kind from the rack's add slot, bypassed or removed from their
-  headers,
+  by a chainable effect chain (filter, drive, bitcrush, delay, gate,
+  compressor, and limiter; slots are added by kind from the rack's add slot,
+  bypassed or removed from their headers,
   and reordered by dragging a header). Sampler, drum synth, and mono
   synth faces share the same rack chrome and preserve their dimensions at
   narrow widths through horizontal scrolling. Sampler controls are divided
@@ -202,11 +202,18 @@ through an `ArcSwapOption` slot.
   slot swap on a plain `EngineCommand`, and knob changes arrive as
   sample-timed `ParamValue` events. Effect chains persist in song files
   (`ChannelSetup.effects`, serde-defaulted for older manifests).
-- Four effect kinds ship: a low-pass/high-pass filter, a drive/saturation
+- Seven effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
-  oversampled, and a stereo delay with damped cross-feedable feedback and
-  digital/tape/reverse responses to a moving delay time. Device faces are
-  width-quantized in rack units; the delay takes 2U for its six controls. Each kind publishes a static `ParamDescriptor` table
+  oversampled, a stereo delay with damped cross-feedable feedback and
+  digital/tape/reverse responses to a moving delay time, and a gate,
+  compressor, and limiter sharing one detector and gain-computer module.
+  Device faces are width-quantized in rack units; the delay, gate, and
+  compressor take 2U.
+- The dynamics effects detect on the louder of the two channels and apply one
+  gain to both, so compression cannot walk the stereo image around. The
+  limiter has no lookahead on purpose: the engine has no plugin-delay
+  compensation, so lookahead latency would shift a channel against its
+  neighbours. Each kind publishes a static `ParamDescriptor` table
   (range, curve, unit, default) in `mooloop-core`, which is the single source
   of truth for normalization and clamping; `Event::ParamValue` carries natural
   units so nodes never handle curves. `EffectSlotState.params` is a tagged

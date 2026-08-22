@@ -15,15 +15,21 @@ pub enum EffectKind {
     Drive,
     Bitcrush,
     Delay,
+    Gate,
+    Compressor,
+    Limiter,
 }
 
 impl EffectKind {
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 4] = [
+    pub const ALL: [EffectKind; 7] = [
         EffectKind::Filter,
         EffectKind::Drive,
         EffectKind::Bitcrush,
         EffectKind::Delay,
+        EffectKind::Gate,
+        EffectKind::Compressor,
+        EffectKind::Limiter,
     ];
 
     /// Display name for device headers and the add-effect picker.
@@ -33,6 +39,9 @@ impl EffectKind {
             Self::Drive => "Drive",
             Self::Bitcrush => "Bitcrush",
             Self::Delay => "Delay",
+            Self::Gate => "Gate",
+            Self::Compressor => "Comp",
+            Self::Limiter => "Limiter",
         }
     }
 
@@ -44,6 +53,9 @@ impl EffectKind {
             Self::Drive => &DRIVE_DESCRIPTORS,
             Self::Bitcrush => &BITCRUSH_DESCRIPTORS,
             Self::Delay => &DELAY_DESCRIPTORS,
+            Self::Gate => &GATE_DESCRIPTORS,
+            Self::Compressor => &COMPRESSOR_DESCRIPTORS,
+            Self::Limiter => &LIMITER_DESCRIPTORS,
         }
     }
 
@@ -59,6 +71,9 @@ impl EffectKind {
             Self::Drive => EffectParams::Drive(DriveParams::default()),
             Self::Bitcrush => EffectParams::Bitcrush(BitcrushParams::default()),
             Self::Delay => EffectParams::Delay(DelayParams::default()),
+            Self::Gate => EffectParams::Gate(GateParams::default()),
+            Self::Compressor => EffectParams::Compressor(CompressorParams::default()),
+            Self::Limiter => EffectParams::Limiter(LimiterParams::default()),
         }
     }
 }
@@ -553,6 +568,237 @@ impl Default for DelayParams {
     }
 }
 
+// --- Dynamics --------------------------------------------------------------
+//
+// Gate, compressor, and limiter share the detector and gain computers in
+// `mooloop_dsp::dynamics`. They are separate kinds rather than one device
+// with a mode, because their controls barely overlap and a mode switch that
+// swaps every knob is not a device face.
+
+/// `Event::ParamValue` ids for [`GateParams`].
+pub const GATE_PARAM_THRESHOLD_DB: u32 = 0;
+pub const GATE_PARAM_ATTACK_MS: u32 = 1;
+pub const GATE_PARAM_HOLD_MS: u32 = 2;
+pub const GATE_PARAM_RELEASE_MS: u32 = 3;
+pub const GATE_PARAM_RANGE_DB: u32 = 4;
+
+static GATE_DESCRIPTORS: [ParamDescriptor; 5] = [
+    ParamDescriptor {
+        id: GATE_PARAM_THRESHOLD_DB,
+        name: "Thresh",
+        unit: "dB",
+        min: -80.0,
+        max: 0.0,
+        curve: ParamCurve::Linear,
+        default: -40.0,
+    },
+    ParamDescriptor {
+        id: GATE_PARAM_ATTACK_MS,
+        name: "Attack",
+        unit: "ms",
+        min: 0.05,
+        max: 100.0,
+        curve: ParamCurve::Exponential,
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: GATE_PARAM_HOLD_MS,
+        name: "Hold",
+        unit: "ms",
+        min: 0.0,
+        max: 500.0,
+        curve: ParamCurve::Linear,
+        default: 10.0,
+    },
+    ParamDescriptor {
+        id: GATE_PARAM_RELEASE_MS,
+        name: "Release",
+        unit: "ms",
+        min: 1.0,
+        max: 2_000.0,
+        curve: ParamCurve::Exponential,
+        default: 100.0,
+    },
+    ParamDescriptor {
+        id: GATE_PARAM_RANGE_DB,
+        name: "Range",
+        unit: "dB",
+        min: -80.0,
+        max: 0.0,
+        curve: ParamCurve::Linear,
+        default: -80.0,
+    },
+];
+
+/// Parameters for the gate effect (`GateEffect` in `mooloop-dsp`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GateParams {
+    pub threshold_db: f32,
+    pub attack_ms: f32,
+    /// How long the gate stays open after the level falls back below the
+    /// threshold. Stops it chattering on material that hovers at the line.
+    pub hold_ms: f32,
+    pub release_ms: f32,
+    /// Attenuation applied while shut. 0 dB makes the gate inaudible.
+    pub range_db: f32,
+}
+
+impl Default for GateParams {
+    fn default() -> Self {
+        Self {
+            threshold_db: -40.0,
+            attack_ms: 1.0,
+            hold_ms: 10.0,
+            release_ms: 100.0,
+            range_db: -80.0,
+        }
+    }
+}
+
+/// `Event::ParamValue` ids for [`CompressorParams`].
+pub const COMP_PARAM_THRESHOLD_DB: u32 = 0;
+pub const COMP_PARAM_RATIO: u32 = 1;
+pub const COMP_PARAM_ATTACK_MS: u32 = 2;
+pub const COMP_PARAM_RELEASE_MS: u32 = 3;
+pub const COMP_PARAM_KNEE_DB: u32 = 4;
+pub const COMP_PARAM_MAKEUP_DB: u32 = 5;
+
+static COMPRESSOR_DESCRIPTORS: [ParamDescriptor; 6] = [
+    ParamDescriptor {
+        id: COMP_PARAM_THRESHOLD_DB,
+        name: "Thresh",
+        unit: "dB",
+        min: -60.0,
+        max: 0.0,
+        curve: ParamCurve::Linear,
+        default: -18.0,
+    },
+    ParamDescriptor {
+        id: COMP_PARAM_RATIO,
+        name: "Ratio",
+        unit: ":1",
+        min: 1.0,
+        max: 20.0,
+        curve: ParamCurve::Exponential,
+        default: 4.0,
+    },
+    ParamDescriptor {
+        id: COMP_PARAM_ATTACK_MS,
+        name: "Attack",
+        unit: "ms",
+        min: 0.05,
+        max: 200.0,
+        curve: ParamCurve::Exponential,
+        default: 10.0,
+    },
+    ParamDescriptor {
+        id: COMP_PARAM_RELEASE_MS,
+        name: "Release",
+        unit: "ms",
+        min: 5.0,
+        max: 2_000.0,
+        curve: ParamCurve::Exponential,
+        default: 120.0,
+    },
+    ParamDescriptor {
+        id: COMP_PARAM_KNEE_DB,
+        name: "Knee",
+        unit: "dB",
+        min: 0.0,
+        max: 24.0,
+        curve: ParamCurve::Linear,
+        default: 6.0,
+    },
+    ParamDescriptor {
+        id: COMP_PARAM_MAKEUP_DB,
+        name: "Makeup",
+        unit: "dB",
+        min: 0.0,
+        max: 24.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+];
+
+/// Parameters for the compressor effect (`CompressorEffect` in `mooloop-dsp`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CompressorParams {
+    pub threshold_db: f32,
+    pub ratio: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
+    /// Width of the soft knee around the threshold. 0 is a hard corner.
+    pub knee_db: f32,
+    pub makeup_db: f32,
+}
+
+impl Default for CompressorParams {
+    fn default() -> Self {
+        Self {
+            threshold_db: -18.0,
+            ratio: 4.0,
+            attack_ms: 10.0,
+            release_ms: 120.0,
+            knee_db: 6.0,
+            makeup_db: 0.0,
+        }
+    }
+}
+
+/// `Event::ParamValue` ids for [`LimiterParams`].
+pub const LIMITER_PARAM_CEILING_DB: u32 = 0;
+pub const LIMITER_PARAM_RELEASE_MS: u32 = 1;
+pub const LIMITER_PARAM_GAIN_DB: u32 = 2;
+
+static LIMITER_DESCRIPTORS: [ParamDescriptor; 3] = [
+    ParamDescriptor {
+        id: LIMITER_PARAM_CEILING_DB,
+        name: "Ceiling",
+        unit: "dB",
+        min: -24.0,
+        max: 0.0,
+        curve: ParamCurve::Linear,
+        default: -0.3,
+    },
+    ParamDescriptor {
+        id: LIMITER_PARAM_RELEASE_MS,
+        name: "Release",
+        unit: "ms",
+        min: 1.0,
+        max: 500.0,
+        curve: ParamCurve::Exponential,
+        default: 50.0,
+    },
+    ParamDescriptor {
+        id: LIMITER_PARAM_GAIN_DB,
+        name: "Gain",
+        unit: "dB",
+        min: 0.0,
+        max: 24.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+];
+
+/// Parameters for the limiter effect (`LimiterEffect` in `mooloop-dsp`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LimiterParams {
+    pub ceiling_db: f32,
+    pub release_ms: f32,
+    /// Input gain driven into the ceiling: this is the loudness control.
+    pub gain_db: f32,
+}
+
+impl Default for LimiterParams {
+    fn default() -> Self {
+        Self {
+            ceiling_db: -0.3,
+            release_ms: 50.0,
+            gain_db: 0.0,
+        }
+    }
+}
+
 // --- Slot state ------------------------------------------------------------
 
 /// Per-kind parameter set. Tagged with the same serde shape as
@@ -564,6 +810,9 @@ pub enum EffectParams {
     Drive(DriveParams),
     Bitcrush(BitcrushParams),
     Delay(DelayParams),
+    Gate(GateParams),
+    Compressor(CompressorParams),
+    Limiter(LimiterParams),
 }
 
 impl EffectParams {
@@ -573,6 +822,9 @@ impl EffectParams {
             Self::Drive(_) => EffectKind::Drive,
             Self::Bitcrush(_) => EffectKind::Bitcrush,
             Self::Delay(_) => EffectKind::Delay,
+            Self::Gate(_) => EffectKind::Gate,
+            Self::Compressor(_) => EffectKind::Compressor,
+            Self::Limiter(_) => EffectKind::Limiter,
         }
     }
 
@@ -600,6 +852,27 @@ impl EffectParams {
     pub fn delay(&self) -> Option<&DelayParams> {
         match self {
             Self::Delay(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn gate(&self) -> Option<&GateParams> {
+        match self {
+            Self::Gate(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn compressor(&self) -> Option<&CompressorParams> {
+        match self {
+            Self::Compressor(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn limiter(&self) -> Option<&LimiterParams> {
+        match self {
+            Self::Limiter(p) => Some(p),
             _ => None,
         }
     }
@@ -638,6 +911,29 @@ impl EffectParams {
                 DELAY_PARAM_CROSS => Some(p.cross),
                 DELAY_PARAM_TONE => Some(p.tone),
                 DELAY_PARAM_MIX => Some(p.mix),
+                _ => None,
+            },
+            Self::Gate(p) => match id {
+                GATE_PARAM_THRESHOLD_DB => Some(p.threshold_db),
+                GATE_PARAM_ATTACK_MS => Some(p.attack_ms),
+                GATE_PARAM_HOLD_MS => Some(p.hold_ms),
+                GATE_PARAM_RELEASE_MS => Some(p.release_ms),
+                GATE_PARAM_RANGE_DB => Some(p.range_db),
+                _ => None,
+            },
+            Self::Compressor(p) => match id {
+                COMP_PARAM_THRESHOLD_DB => Some(p.threshold_db),
+                COMP_PARAM_RATIO => Some(p.ratio),
+                COMP_PARAM_ATTACK_MS => Some(p.attack_ms),
+                COMP_PARAM_RELEASE_MS => Some(p.release_ms),
+                COMP_PARAM_KNEE_DB => Some(p.knee_db),
+                COMP_PARAM_MAKEUP_DB => Some(p.makeup_db),
+                _ => None,
+            },
+            Self::Limiter(p) => match id {
+                LIMITER_PARAM_CEILING_DB => Some(p.ceiling_db),
+                LIMITER_PARAM_RELEASE_MS => Some(p.release_ms),
+                LIMITER_PARAM_GAIN_DB => Some(p.gain_db),
                 _ => None,
             },
         }
@@ -682,6 +978,29 @@ impl EffectParams {
                 DELAY_PARAM_CROSS => p.cross = value,
                 DELAY_PARAM_TONE => p.tone = value,
                 DELAY_PARAM_MIX => p.mix = value,
+                _ => return None,
+            },
+            Self::Gate(p) => match id {
+                GATE_PARAM_THRESHOLD_DB => p.threshold_db = value,
+                GATE_PARAM_ATTACK_MS => p.attack_ms = value,
+                GATE_PARAM_HOLD_MS => p.hold_ms = value,
+                GATE_PARAM_RELEASE_MS => p.release_ms = value,
+                GATE_PARAM_RANGE_DB => p.range_db = value,
+                _ => return None,
+            },
+            Self::Compressor(p) => match id {
+                COMP_PARAM_THRESHOLD_DB => p.threshold_db = value,
+                COMP_PARAM_RATIO => p.ratio = value,
+                COMP_PARAM_ATTACK_MS => p.attack_ms = value,
+                COMP_PARAM_RELEASE_MS => p.release_ms = value,
+                COMP_PARAM_KNEE_DB => p.knee_db = value,
+                COMP_PARAM_MAKEUP_DB => p.makeup_db = value,
+                _ => return None,
+            },
+            Self::Limiter(p) => match id {
+                LIMITER_PARAM_CEILING_DB => p.ceiling_db = value,
+                LIMITER_PARAM_RELEASE_MS => p.release_ms = value,
+                LIMITER_PARAM_GAIN_DB => p.gain_db = value,
                 _ => return None,
             },
         }
@@ -744,6 +1063,18 @@ impl EffectSlotState {
 
     pub fn delay(params: DelayParams) -> Self {
         Self::new(EffectParams::Delay(params))
+    }
+
+    pub fn gate(params: GateParams) -> Self {
+        Self::new(EffectParams::Gate(params))
+    }
+
+    pub fn compressor(params: CompressorParams) -> Self {
+        Self::new(EffectParams::Compressor(params))
+    }
+
+    pub fn limiter(params: LimiterParams) -> Self {
+        Self::new(EffectParams::Limiter(params))
     }
 
     pub fn kind(&self) -> EffectKind {

@@ -22,6 +22,9 @@ import { FilterDeviceFace } from "filter-device.slint";
 import { DriveDeviceFace } from "drive-device.slint";
 import { BitcrushDeviceFace } from "bitcrush-device.slint";
 import { DelayDeviceFace } from "delay-device.slint";
+import { GateDeviceFace } from "gate-device.slint";
+import { CompressorDeviceFace } from "compressor-device.slint";
+import { LimiterDeviceFace } from "limiter-device.slint";
 
 export component ControlGallery inherits Window {
     title: "mooloop control gallery";
@@ -478,7 +481,7 @@ export component ControlGallery inherits Window {
                             width: parent.width;
                             height: parent.height;
                             slot-index: 0;
-                            slot-count: 5;
+                            slot-count: 8;
                             cutoff: 0.62;
                             resonance: 0.45;
                         }
@@ -492,7 +495,7 @@ export component ControlGallery inherits Window {
                             width: parent.width;
                             height: parent.height;
                             slot-index: 1;
-                            slot-count: 5;
+                            slot-count: 8;
                             bypassed: true;
                             mode: 1;
                             cutoff: 0.3;
@@ -508,7 +511,7 @@ export component ControlGallery inherits Window {
                             width: parent.width;
                             height: parent.height;
                             slot-index: 2;
-                            slot-count: 5;
+                            slot-count: 8;
                             curve: 2;
                             drive: 0.55;
                             tone: 0.7;
@@ -525,7 +528,7 @@ export component ControlGallery inherits Window {
                             width: parent.width;
                             height: parent.height;
                             slot-index: 3;
-                            slot-count: 5;
+                            slot-count: 8;
                             bits: 0.25;
                             downsample: 0.4;
                             mix: 1.0;
@@ -540,13 +543,42 @@ export component ControlGallery inherits Window {
                             width: parent.width;
                             height: parent.height;
                             slot-index: 4;
-                            slot-count: 5;
+                            slot-count: 8;
                             mode: 0;
                             time: 0.7815;
                             feedback: 0.62;
                             cross: 1.0;
                             tone: 0.6;
                             mix: 0.35;
+                        }
+                    }
+                    DeviceFrame {
+                        width: DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap;
+                        height: DeviceRackMetrics.face-height;
+                        GateDeviceFace {
+                            x: 0px; y: 0px; width: parent.width; height: parent.height;
+                            slot-index: 5; slot-count: 8;
+                            threshold: 0.5; attack: 0.3941; hold: 0.02;
+                            release: 0.6058; range: 0.15;
+                        }
+                    }
+                    DeviceFrame {
+                        width: DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap;
+                        height: DeviceRackMetrics.face-height;
+                        CompressorDeviceFace {
+                            x: 0px; y: 0px; width: parent.width; height: parent.height;
+                            slot-index: 6; slot-count: 8;
+                            threshold: 0.55; ratio: 0.6; attack: 0.6388;
+                            release: 0.5304; knee: 0.5; makeup: 0.25;
+                        }
+                    }
+                    DeviceFrame {
+                        width: DeviceRackMetrics.unit-width;
+                        height: DeviceRackMetrics.face-height;
+                        LimiterDeviceFace {
+                            x: 0px; y: 0px; width: parent.width; height: parent.height;
+                            slot-index: 7; slot-count: 8;
+                            ceiling: 0.75; release: 0.6294; gain: 0.5;
                         }
                     }
                     DeviceAddSlot { }

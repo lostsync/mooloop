@@ -1,0 +1,144 @@
+import { Theme } from "theme.slint";
+import { IconButton, ParameterKnob } from "controls.slint";
+import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { DynamicsCurveDisplay } from "device-displays.slint";
+
+// Limiter device face. Gate, compressor, and limiter share one transfer-curve
+// display because they are the same kind of plot; only their controls differ.
+export component LimiterDeviceFace inherits Rectangle {
+    in property <int> slot-index;
+    in property <int> slot-count;
+    in property <bool> bypassed;
+    in-out property <float> ceiling;  // normalized 0..1 (-24..0 dB)
+    in-out property <float> release;  // normalized 0..1 (1..500 ms)
+    in-out property <float> gain;     // normalized 0..1 (0..24 dB)
+    callback ceiling-changed(float);
+    callback release-changed(float);
+    callback gain-changed(float);
+    callback bypass-toggled();
+    callback remove-clicked();
+    callback reorder-requested(int);
+
+    // Normalized -> natural, matching the descriptor tables in mooloop-core.
+    private property <float> ceiling-db: -24 + root.ceiling * 24;
+    private property <float> release-ms: pow(500, root.release);
+    private property <float> gain-db: root.gain * 24;
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text {
+                text: "LIMITER";
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle {
+            height: 104px;
+            background: Theme.panel;
+            border-radius: 2px;
+            DynamicsCurveDisplay {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                mode: 2;
+                threshold-db: root.ceiling-db;
+                ratio: 1;
+                knee-db: 0;
+                extra-db: root.gain-db;
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 69px;
+                diameter: 38px;
+                label: "Ceiling";
+                tooltip: "Level nothing is allowed past";
+                value <=> root.ceiling;
+                default-value: 0.9875;
+                value-text: round(root.ceiling-db * 10) / 10 + " dB";
+                changed(v) => { root.ceiling-changed(v); }
+            }
+            ParameterKnob {
+                width: 69px;
+                diameter: 38px;
+                label: "Release";
+                tooltip: "How fast the limiter lets go";
+                value <=> root.release;
+                default-value: 0.6294;
+                value-text: round(root.release-ms) + " ms";
+                changed(v) => { root.release-changed(v); }
+            }
+            ParameterKnob {
+                width: 69px;
+                diameter: 38px;
+                label: "Gain";
+                tooltip: "Level driven into the ceiling";
+                value <=> root.gain;
+                default-value: 0.0;
+                value-text: round(root.gain-db * 10) / 10 + " dB";
+                changed(v) => { root.gain-changed(v); }
+            }
+        }
+    }
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: "Limiter";
+        kind: "FX / 1U";
+        role: "FX";
+        device-color: Theme.warning;
+        enabled: !root.bypassed;
+    }
+
+    drag := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: parent.width - 52px;
+        height: DeviceRackMetrics.header-height;
+        mouse-cursor: move;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up {
+                let pitch = DeviceRackMetrics.unit-width + 20px;
+                let delta = round((self.mouse-x - self.pressed-x) / pitch);
+                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
+                if target != root.slot-index {
+                    root.reorder-requested(target);
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: parent.width - 52px;
+        y: 0px;
+        width: 52px;
+        height: DeviceRackMetrics.header-height;
+        HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            IconButton {
+                text: root.bypassed ? "\u{25CB}" : "\u{25CF}";
+                tooltip: root.bypassed ? "Enable this limiter" : "Bypass this limiter";
+                size: 22px;
+                active: !root.bypassed;
+                clicked => { root.bypass-toggled(); }
+            }
+            IconButton {
+                text: "\u{2715}";
+                tooltip: "Remove this limiter";
+                size: 22px;
+                clicked => { root.remove-clicked(); }
+            }
+        }
+    }
+}

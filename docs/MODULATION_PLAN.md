@@ -122,7 +122,9 @@ one node short.
 
 **Within a channel:** the mod matrix covers it. Effects may expose outlet
 signals (a compressor's gain reduction, an envelope follower's output, a
-gate's open state) as modulator sources.
+gate's open state) as modulator sources. The dynamics effects already compute
+exactly these internally; exposing them is a matter of publishing the value,
+not of new DSP.
 
 **Across channels: deferred, by decision.** Not in this pass. `ParamAddr` will
 carry `channel` from the day it is introduced so that enabling it later is a
@@ -146,7 +148,8 @@ Inlets and outlets exist in the data model without being drawn as wires.
 2. ~~**Drive/saturation and bitcrush** — stateless, cheap, immediately
    useful.~~ Done.
 3. ~~**Delay**~~ Done, on the shared primitive described below.
-4. **Dynamics: gate, compressor, limiter** — one shared envelope detector.
+4. ~~**Dynamics: gate, compressor, limiter** — one shared envelope
+   detector.~~ Done, sharing `mooloop_dsp::dynamics`.
 5. **EQ** — cheap; `Svf` already exists.
 6. **Chorus and phaser** — need the modulation rack to exist first.
 7. **Reverb** — last; hardest to make good rather than merely present.

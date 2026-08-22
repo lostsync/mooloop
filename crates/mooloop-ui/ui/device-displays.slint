@@ -299,3 +299,67 @@ export component DelayEchoDisplay inherits Rectangle {
         background: Theme.warning;
     }
 }
+
+// Static transfer curve shared by the gate, compressor, and limiter: input
+// level on x, output level on y, both -60..0 dB, with the unity diagonal for
+// reference. The gain computers are the same ones in mooloop_dsp::dynamics,
+// so the plotted corner is the corner the audio actually has.
+export component DynamicsCurveDisplay inherits Rectangle {
+    in property <int> mode;            // 0 = gate, 1 = compressor, 2 = limiter
+    // Gate and compressor: the threshold. Limiter: the ceiling.
+    in property <float> threshold-db;
+    in property <float> ratio;
+    in property <float> knee-db;
+    // Gate: range. Compressor: makeup. Limiter: input gain.
+    in property <float> extra-db;
+    private property <int> sample-count: 140;
+    private property <float> floor-db: -60;
+
+    pure function comp-gain(input-db: float) -> float {
+        let slope = 1 - 1 / max(1, root.ratio);
+        let over = input-db - root.threshold-db;
+        let half = max(0, root.knee-db) / 2;
+        return over <= -half ? 0
+            : (half <= 0 ? (over > 0 ? -slope * over : 0)
+            : (over >= half ? -slope * over
+            : -slope * (over + half) * (over + half) / (4 * half)));
+    }
+
+    pure function output-db(input-db: float) -> float {
+        return root.mode == 0
+            ? (input-db >= root.threshold-db ? input-db : input-db + root.extra-db)
+            : (root.mode == 2
+                ? min(input-db + root.extra-db, root.threshold-db)
+                : input-db + root.comp-gain(input-db) + root.extra-db);
+    }
+
+    pure function plot-y(index: int) -> float {
+        let input-db = root.floor-db + (0 - root.floor-db) * index / (root.sample-count - 1);
+        let out = clamp(root.output-db(input-db), root.floor-db, 0);
+        return -out / -root.floor-db;
+    }
+
+    for line in 5 : Rectangle {
+        y: line * parent.height / 4;
+        width: 100%; height: 1px;
+        background: Theme.border.with-alpha(0.35);
+    }
+    // Unity reference: what the signal would do untouched.
+    for index in root.sample-count : Rectangle {
+        property <float> unity: 1 - index / (root.sample-count - 1);
+        x: index * parent.width / root.sample-count;
+        y: self.unity * parent.height;
+        width: max(1px, parent.width / root.sample-count + 0.5px);
+        height: 1px;
+        background: Theme.border.with-alpha(0.8);
+    }
+    for index in root.sample-count : Rectangle {
+        property <float> current: root.plot-y(index);
+        property <float> previous: root.plot-y(max(0, index - 1));
+        x: index * parent.width / root.sample-count;
+        y: min(self.current, self.previous) * parent.height;
+        width: max(1px, parent.width / root.sample-count + 0.5px);
+        height: max(1px, abs(self.current - self.previous) * parent.height);
+        background: Theme.warning;
+    }
+}

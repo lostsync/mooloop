@@ -1,0 +1,183 @@
+import { Theme } from "theme.slint";
+import { IconButton, ParameterKnob } from "controls.slint";
+import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { DynamicsCurveDisplay } from "device-displays.slint";
+
+// Comp device face. Gate, compressor, and limiter share one transfer-curve
+// display because they are the same kind of plot; only their controls differ.
+export component CompressorDeviceFace inherits Rectangle {
+    in property <int> slot-index;
+    in property <int> slot-count;
+    in property <bool> bypassed;
+    in-out property <float> threshold; // normalized 0..1 (-60..0 dB)
+    in-out property <float> ratio;     // normalized 0..1 (1..20 :1)
+    in-out property <float> attack;    // normalized 0..1 (0.05..200 ms)
+    in-out property <float> release;   // normalized 0..1 (5..2000 ms)
+    in-out property <float> knee;      // normalized 0..1 (0..24 dB)
+    in-out property <float> makeup;    // normalized 0..1 (0..24 dB)
+    callback threshold-changed(float);
+    callback ratio-changed(float);
+    callback attack-changed(float);
+    callback release-changed(float);
+    callback knee-changed(float);
+    callback makeup-changed(float);
+    callback bypass-toggled();
+    callback remove-clicked();
+    callback reorder-requested(int);
+
+    // Normalized -> natural, matching the descriptor tables in mooloop-core.
+    private property <float> threshold-db: -60 + root.threshold * 60;
+    private property <float> ratio-value: pow(20, root.ratio);
+    private property <float> attack-ms: 0.05 * pow(4000, root.attack);
+    private property <float> release-ms: 5 * pow(400, root.release);
+    private property <float> knee-db: root.knee * 24;
+    private property <float> makeup-db: root.makeup * 24;
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text {
+                text: "COMPRESSOR";
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle {
+            height: 104px;
+            background: Theme.panel;
+            border-radius: 2px;
+            DynamicsCurveDisplay {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                mode: 1;
+                threshold-db: root.threshold-db;
+                ratio: root.ratio-value;
+                knee-db: root.knee-db;
+                extra-db: root.makeup-db;
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 71px;
+                diameter: 38px;
+                label: "Thresh";
+                tooltip: "Level compression starts at";
+                value <=> root.threshold;
+                default-value: 0.7;
+                value-text: round(root.threshold-db) + " dB";
+                changed(v) => { root.threshold-changed(v); }
+            }
+            ParameterKnob {
+                width: 71px;
+                diameter: 38px;
+                label: "Ratio";
+                tooltip: "How hard the signal is held above the threshold";
+                value <=> root.ratio;
+                default-value: 0.4627;
+                value-text: round(root.ratio-value * 10) / 10 + ":1";
+                changed(v) => { root.ratio-changed(v); }
+            }
+            ParameterKnob {
+                width: 71px;
+                diameter: 38px;
+                label: "Attack";
+                tooltip: "How fast the compressor responds";
+                value <=> root.attack;
+                default-value: 0.6388;
+                value-text: round(root.attack-ms * 100) / 100 + " ms";
+                changed(v) => { root.attack-changed(v); }
+            }
+            ParameterKnob {
+                width: 71px;
+                diameter: 38px;
+                label: "Release";
+                tooltip: "How fast it lets go";
+                value <=> root.release;
+                default-value: 0.5304;
+                value-text: round(root.release-ms) + " ms";
+                changed(v) => { root.release-changed(v); }
+            }
+            ParameterKnob {
+                width: 71px;
+                diameter: 38px;
+                label: "Knee";
+                tooltip: "Width of the soft transition at the threshold";
+                value <=> root.knee;
+                default-value: 0.25;
+                value-text: round(root.knee-db * 10) / 10 + " dB";
+                changed(v) => { root.knee-changed(v); }
+            }
+            ParameterKnob {
+                width: 71px;
+                diameter: 38px;
+                label: "Makeup";
+                tooltip: "Gain added after compression";
+                value <=> root.makeup;
+                default-value: 0.0;
+                value-text: round(root.makeup-db * 10) / 10 + " dB";
+                changed(v) => { root.makeup-changed(v); }
+            }
+        }
+    }
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: "Comp";
+        kind: "FX / 2U";
+        role: "FX";
+        device-color: Theme.warning;
+        enabled: !root.bypassed;
+    }
+
+    drag := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: parent.width - 52px;
+        height: DeviceRackMetrics.header-height;
+        mouse-cursor: move;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up {
+                let pitch = DeviceRackMetrics.unit-width + 20px;
+                let delta = round((self.mouse-x - self.pressed-x) / pitch);
+                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
+                if target != root.slot-index {
+                    root.reorder-requested(target);
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: parent.width - 52px;
+        y: 0px;
+        width: 52px;
+        height: DeviceRackMetrics.header-height;
+        HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            IconButton {
+                text: root.bypassed ? "\u{25CB}" : "\u{25CF}";
+                tooltip: root.bypassed ? "Enable this compressor" : "Bypass this compressor";
+                size: 22px;
+                active: !root.bypassed;
+                clicked => { root.bypass-toggled(); }
+            }
+            IconButton {
+                text: "\u{2715}";
+                tooltip: "Remove this compressor";
+                size: 22px;
+                clicked => { root.remove-clicked(); }
+            }
+        }
+    }
+}

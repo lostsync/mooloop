@@ -12,11 +12,13 @@
 mod bitcrush;
 mod delay;
 mod drive;
+mod dynamics;
 mod filter;
 
 pub use bitcrush::BitcrushEffect;
 pub use delay::DelayEffect;
 pub use drive::DriveEffect;
+pub use dynamics::{CompressorEffect, GateEffect, LimiterEffect};
 pub use filter::FilterEffect;
 
 use mooloop_core::EffectParams;
@@ -35,5 +37,8 @@ pub fn build_effect(params: EffectParams, sample_rate: u32) -> Box<dyn AudioNode
         EffectParams::Drive(p) => Box::new(DriveEffect::new(p, sample_rate)),
         EffectParams::Bitcrush(p) => Box::new(BitcrushEffect::new(p)),
         EffectParams::Delay(p) => Box::new(DelayEffect::new(p, sample_rate)),
+        EffectParams::Gate(p) => Box::new(GateEffect::new(p, sample_rate)),
+        EffectParams::Compressor(p) => Box::new(CompressorEffect::new(p, sample_rate)),
+        EffectParams::Limiter(p) => Box::new(LimiterEffect::new(p, sample_rate)),
     }
 }

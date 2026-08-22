@@ -1,0 +1,170 @@
+import { Theme } from "theme.slint";
+import { IconButton, ParameterKnob } from "controls.slint";
+import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { DynamicsCurveDisplay } from "device-displays.slint";
+
+// Gate device face. Gate, compressor, and limiter share one transfer-curve
+// display because they are the same kind of plot; only their controls differ.
+export component GateDeviceFace inherits Rectangle {
+    in property <int> slot-index;
+    in property <int> slot-count;
+    in property <bool> bypassed;
+    in-out property <float> threshold;  // normalized 0..1 (-80..0 dB)
+    in-out property <float> attack;     // normalized 0..1 (0.05..100 ms)
+    in-out property <float> hold;       // normalized 0..1 (0..500 ms)
+    in-out property <float> release;    // normalized 0..1 (1..2000 ms)
+    in-out property <float> range;      // normalized 0..1 (-80..0 dB)
+    callback threshold-changed(float);
+    callback attack-changed(float);
+    callback hold-changed(float);
+    callback release-changed(float);
+    callback range-changed(float);
+    callback bypass-toggled();
+    callback remove-clicked();
+    callback reorder-requested(int);
+
+    // Normalized -> natural, matching the descriptor tables in mooloop-core.
+    private property <float> threshold-db: -80 + root.threshold * 80;
+    private property <float> attack-ms: 0.05 * pow(2000, root.attack);
+    private property <float> hold-ms: root.hold * 500;
+    private property <float> release-ms: pow(2000, root.release);
+    private property <float> range-db: -80 + root.range * 80;
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text {
+                text: "GATE";
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle {
+            height: 104px;
+            background: Theme.panel;
+            border-radius: 2px;
+            DynamicsCurveDisplay {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                mode: 0;
+                threshold-db: root.threshold-db;
+                ratio: 1;
+                knee-db: 0;
+                extra-db: root.range-db;
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 85px;
+                diameter: 38px;
+                label: "Thresh";
+                tooltip: "Level the gate opens at";
+                value <=> root.threshold;
+                default-value: 0.5;
+                value-text: round(root.threshold-db) + " dB";
+                changed(v) => { root.threshold-changed(v); }
+            }
+            ParameterKnob {
+                width: 85px;
+                diameter: 38px;
+                label: "Attack";
+                tooltip: "How fast the gate opens";
+                value <=> root.attack;
+                default-value: 0.3941;
+                value-text: round(root.attack-ms * 100) / 100 + " ms";
+                changed(v) => { root.attack-changed(v); }
+            }
+            ParameterKnob {
+                width: 85px;
+                diameter: 38px;
+                label: "Hold";
+                tooltip: "How long it stays open after the level drops";
+                value <=> root.hold;
+                default-value: 0.02;
+                value-text: round(root.hold-ms) + " ms";
+                changed(v) => { root.hold-changed(v); }
+            }
+            ParameterKnob {
+                width: 85px;
+                diameter: 38px;
+                label: "Release";
+                tooltip: "How fast the gate shuts";
+                value <=> root.release;
+                default-value: 0.6058;
+                value-text: round(root.release-ms) + " ms";
+                changed(v) => { root.release-changed(v); }
+            }
+            ParameterKnob {
+                width: 85px;
+                diameter: 38px;
+                label: "Range";
+                tooltip: "Attenuation while shut";
+                value <=> root.range;
+                default-value: 0.0;
+                value-text: round(root.range-db) + " dB";
+                changed(v) => { root.range-changed(v); }
+            }
+        }
+    }
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: "Gate";
+        kind: "FX / 2U";
+        role: "FX";
+        device-color: Theme.warning;
+        enabled: !root.bypassed;
+    }
+
+    drag := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: parent.width - 52px;
+        height: DeviceRackMetrics.header-height;
+        mouse-cursor: move;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up {
+                let pitch = DeviceRackMetrics.unit-width + 20px;
+                let delta = round((self.mouse-x - self.pressed-x) / pitch);
+                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
+                if target != root.slot-index {
+                    root.reorder-requested(target);
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: parent.width - 52px;
+        y: 0px;
+        width: 52px;
+        height: DeviceRackMetrics.header-height;
+        HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            IconButton {
+                text: root.bypassed ? "\u{25CB}" : "\u{25CF}";
+                tooltip: root.bypassed ? "Enable this gate" : "Bypass this gate";
+                size: 22px;
+                active: !root.bypassed;
+                clicked => { root.bypass-toggled(); }
+            }
+            IconButton {
+                text: "\u{2715}";
+                tooltip: "Remove this gate";
+                size: 22px;
+                clicked => { root.remove-clicked(); }
+            }
+        }
+    }
+}

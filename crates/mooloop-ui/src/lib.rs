@@ -242,6 +242,9 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Drive => 1,
         EffectKind::Bitcrush => 2,
         EffectKind::Delay => 3,
+        EffectKind::Gate => 4,
+        EffectKind::Compressor => 5,
+        EffectKind::Limiter => 6,
     }
 }
 
@@ -250,8 +253,8 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
 /// "Device Rack Layout").
 fn effect_kind_units(kind: EffectKind) -> i32 {
     match kind {
-        EffectKind::Filter | EffectKind::Drive | EffectKind::Bitcrush => 1,
-        EffectKind::Delay => 2,
+        EffectKind::Filter | EffectKind::Drive | EffectKind::Bitcrush | EffectKind::Limiter => 1,
+        EffectKind::Delay | EffectKind::Gate | EffectKind::Compressor => 2,
     }
 }
 
@@ -3939,6 +3942,15 @@ impl AppUi {
                 w.invoke_effect_param_changed(3, 1, 0.5); // delay feedback
                 w.invoke_effect_param_changed(3, 2, 1.0); // delay -> reverse
                 w.invoke_effect_param_changed(3, 3, 1.0); // delay ping-pong
+                w.invoke_add_effect_clicked(4);
+                w.invoke_effect_param_changed(4, 0, 0.4); // gate threshold
+                w.invoke_effect_param_changed(4, 4, 0.2); // gate range
+                w.invoke_add_effect_clicked(5);
+                w.invoke_effect_param_changed(5, 0, 0.5); // comp threshold
+                w.invoke_effect_param_changed(5, 1, 0.8); // comp ratio
+                w.invoke_add_effect_clicked(6);
+                w.invoke_effect_param_changed(6, 0, 0.9); // limiter ceiling
+                w.invoke_effect_param_changed(6, 2, 0.4); // limiter gain
                 w.invoke_reorder_effect(0, 2);
                 w.invoke_effect_bypass_toggled(0);
                 w.invoke_effect_bypass_toggled(0);

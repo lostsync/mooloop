@@ -18,6 +18,7 @@
 pub mod bus;
 pub mod delayline;
 pub mod drumsynth;
+pub mod dynamics;
 pub mod effects;
 pub mod env;
 pub mod event;
@@ -33,7 +34,10 @@ pub mod smooth;
 pub use bus::{pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;
-pub use effects::{build_effect, BitcrushEffect, DelayEffect, DriveEffect, FilterEffect};
+pub use effects::{
+    build_effect, BitcrushEffect, CompressorEffect, DelayEffect, DriveEffect, FilterEffect,
+    GateEffect, LimiterEffect,
+};
 pub use event::{Event, EventList, TimedEvent};
 pub use monosynth::MonoSynth;
 pub use node::{AudioNode, ProcessContext};
