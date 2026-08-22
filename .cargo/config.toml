@@ -1,8 +1,15 @@
 [build]
-# This T14 has 4 physical cores/8 threads and 16 GiB RAM. Eight concurrent
-# Slint-heavy rustc/link jobs exhausted memory; six leaves two threads and
-# enough memory headroom for the desktop while making better use of the CPU.
-jobs = 6
+# This T14 has 4 physical cores/8 threads and 16 GiB RAM, and what exhausts it
+# is concurrent *linking*, not compilation. `cargo test -p mooloop-ui` produces
+# seven binaries; each is ~217 MB even with dev debug info capped (measured,
+# down from ~450 MB before the cap), because most of that bulk is Slint's
+# generated code rather than DWARF.
+#
+# Eight jobs hard-locked the desktop. So did six. So did four, while the
+# binaries were still 450 MB. Three is the first setting that has held with
+# roughly 10 GB still available throughout, so it is the default; drop to
+# `-j 2` explicitly for a full `--workspace` run.
+jobs = 3
 # All task worktrees use this persistent cache instead of rebuilding Slint and
 # the dependency graph into a new target directory for every branch. Cargo
 # commands must remain sequential as required by AGENTS.md.

@@ -33,8 +33,17 @@ toml = "1"
 [profile.release]
 debug = true
 
-# mooloop-ui's Slint-generated code is the heaviest thing in the workspace to
-# compile; full debuginfo on it is what tends to push dev builds/tests over
-# the edge on a 16GB workstation. Line tables are enough for backtraces.
-[profile.dev.package.mooloop-ui]
+# Dev debug info is capped workspace-wide, not just on our own crates. A
+# per-package override only thins that package's own code; every dependency
+# rlib linked into a binary still carried full DWARF, which is why a single
+# mooloop-ui test binary reached ~450 MB. Seven of those link during
+# `cargo test -p mooloop-ui`, and the concurrent link peak was enough to
+# stall a 16 GB workstation into swap.
+#
+# `line-tables-only` keeps file names and line numbers in panics and
+# backtraces, which is what this project actually reads; it gives up variable
+# inspection under a debugger. `unpacked` then leaves that debug info in the
+# object files instead of copying it into every linked binary.
+[profile.dev]
 debug = "line-tables-only"
+split-debuginfo = "unpacked"

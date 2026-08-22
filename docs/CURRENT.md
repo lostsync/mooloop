@@ -265,10 +265,11 @@ or snapshot that covers the behavior, as specified in `AGENTS.md`. Run these
 commands sequentially when full integration coverage is warranted.
 
 ```sh
-nice -n 19 cargo test --workspace -j 4
-nice -n 19 cargo clippy --workspace --all-targets -j 4 -- -D warnings
-nice -n 19 cargo run -p mooloop-app --bin engine-selftest -j 4
-MOOLOOP_AUTODRIVE=1 nice -n 19 cargo run -p mooloop-app --bin mooloop -j 4
+cargo test --workspace -j 2
+cargo clippy --workspace --all-targets -j 2 -- -D warnings
+cargo run -p mooloop-app --bin engine-selftest -j 2
+MOOLOOP_AUTODRIVE=1 cargo run -p mooloop-app --bin mooloop -j 2
 ```
 
-The `nice -n 19` / `-j 4` prefix is not optional; see `AGENTS.md` for why.
+The `-j 2` cap is not optional on Adam's workstation, and neither is the
+capped `[profile.dev]` debug info these rely on; see `AGENTS.md` for why.

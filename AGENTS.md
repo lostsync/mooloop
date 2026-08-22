@@ -110,19 +110,38 @@ rest of your work.
     changes, release/integration work, or when explicitly requested.
 - Never run Cargo build, test, or Clippy commands concurrently on this
   workstation. Parallel rustc/link processes already run within each command.
-- Cap and deprioritise every Cargo build, test, and Clippy run:
+- Cargo runs on this machine are limited by **memory, not CPU**. Adam is
+  usually using the laptop while an agent works, and it has 15 GB with
+  several GB already in use. What locks it up is concurrent *linking*:
+  `cargo test -p mooloop-ui` produces seven binaries, each around 217 MB even
+  with the dev profile capped (measured; they were ~450 MB before).
 
-  ```
-  nice -n 19 cargo <command> -j 4
-  ```
+  Two things follow, and the first matters far more than the second:
 
-  This machine has 8 cores, and Adam is usually using it while an agent
-  works. Left uncapped, one `cargo test -p mooloop-ui` saturates all of them
-  (that crate is the worst case: a large Slint codegen plus six test binaries
-  linking at once) and has hard-locked the desktop mid-run. Half the cores
-  and the lowest scheduling priority cost roughly 1.5-2x per build and keep
-  the compositor responsive. `-j 4` is per-invocation and does not replace
-  the no-concurrent-commands rule above; it composes with it.
+  1. Keep dev debug info capped. `[profile.dev]` in the workspace
+     `Cargo.toml` sets `debug = "line-tables-only"` and
+     `split-debuginfo = "unpacked"`. Do not raise these to chase a debugger
+     session without putting them back. A per-package override is not
+     enough — it only thins that package's own code, while every dependency
+     rlib linked into the binary keeps full DWARF. This is worth about 2.2x,
+     not the order of magnitude it looks like it should be: most of a
+     mooloop-ui binary is Slint's generated code, not debug info.
+  2. Cap parallelism on the heavy crates:
+
+     ```
+     cargo test -p mooloop-ui -j 2
+     ```
+
+     `.cargo/config.toml` sets `jobs = 3` as the floor for anything that
+     forgets an explicit `-j`. Eight, six, and four have each locked this
+     machine up; three has held. Prefer a single named target
+     (`--test mixer_snapshot`) over building every test binary in a package
+     when you only need one.
+
+  `nice` does **not** help here and is not a substitute for either: it
+  adjusts CPU scheduling priority, while memory allocation and page reclaim
+  ignore it entirely. This composes with the no-concurrent-commands rule
+  above rather than replacing it.
 - Merge the branch back into `main` with a fast-forward (`git merge
   --ff-only <branch>` from a `main` checkout) so history stays a single
   straight line. If `main` has moved on and a fast-forward isn't possible,
