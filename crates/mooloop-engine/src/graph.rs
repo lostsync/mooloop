@@ -10,6 +10,7 @@ use mooloop_core::{EngineCommand, EngineEvent, Project};
 use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
 use rtrb::Consumer;
 
+use crate::meters::BusMeters;
 use crate::render::RenderState;
 use crate::{StructuralCommand, StructuralReclaim};
 
@@ -45,9 +46,12 @@ impl Graph {
         sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
         project_slot: Arc<ArcSwapOption<Project>>,
         xrun_count: Arc<AtomicU64>,
+        meters: Arc<BusMeters>,
     ) -> Self {
+        let mut render = RenderState::new(sample_rate, sample_slots);
+        render.attach_meters(meters);
         Self {
-            render: RenderState::new(sample_rate, sample_slots),
+            render,
             out_l: io.out_l,
             out_r: io.out_r,
             cmd_rx: io.cmd_rx,

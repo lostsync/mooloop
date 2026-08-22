@@ -21,6 +21,7 @@ use mooloop_dsp::{AudioNode, SampleData};
 use rtrb::{Consumer, Producer};
 
 mod graph;
+mod meters;
 mod offline;
 mod render;
 mod sequencer;
@@ -28,6 +29,7 @@ mod transport;
 
 use graph::{AsyncClient, Graph};
 
+pub use meters::BusMeters;
 pub use offline::{
     ExportError, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, RenderSummary,
     WavEncoding,
@@ -125,6 +127,7 @@ impl Engine {
         );
 
         let xrun_count = Arc::new(AtomicU64::new(0));
+        let bus_meters = BusMeters::new();
         let project_slot = Arc::new(ArcSwapOption::from(Some(Arc::new(
             mooloop_core::Project::default(),
         ))));
@@ -142,6 +145,7 @@ impl Engine {
             sample_slots.clone(),
             project_slot.clone(),
             xrun_count.clone(),
+            bus_meters.clone(),
         );
 
         let async_client = client
@@ -172,6 +176,7 @@ impl Engine {
                 evt_rx,
                 structural_tx,
                 reclaim_rx,
+                bus_meters,
                 sample_slots,
                 project_slot,
                 sample_rate,
@@ -189,6 +194,7 @@ pub struct EngineHandle {
     evt_rx: Consumer<EngineEvent>,
     structural_tx: Producer<StructuralCommand>,
     reclaim_rx: Consumer<StructuralReclaim>,
+    bus_meters: Arc<BusMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     project_slot: Arc<ArcSwapOption<mooloop_core::Project>>,
     sample_rate: u32,
@@ -264,6 +270,12 @@ impl EngineHandle {
         self.send(EngineCommand::InstallProject {
             generation: self.install_generation,
         });
+    }
+
+    /// Read and clear one bus's held peak. Wait-free; see `meters` for why
+    /// this is an atomic array rather than another event.
+    pub fn take_bus_peak(&self, bus: usize) -> (f32, f32) {
+        self.bus_meters.take(bus)
     }
 
     pub fn sample_rate(&self) -> u32 {

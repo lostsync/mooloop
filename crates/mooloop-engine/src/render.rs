@@ -13,6 +13,7 @@ use mooloop_dsp::{
     SampleData, Sampler, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
 };
 
+use crate::meters::BusMeters;
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
 use crate::StructuralCommand;
@@ -326,6 +327,10 @@ pub(crate) struct RenderState {
     /// Nodes displaced from effect slots this block, awaiting handoff to the
     /// reclaim ring (realtime playback) or plain drop (offline render).
     reclaim: Reclaim,
+    /// Where per-bus peaks are published for the mixer. Offline renders keep
+    /// their own unread instance rather than paying for an `Option` check per
+    /// bus per block.
+    meters: Arc<BusMeters>,
 }
 
 impl RenderState {
@@ -342,7 +347,14 @@ impl RenderState {
             events: (0..MAX_CHANNELS).map(|_| EventList::empty()).collect(),
             sample_rate,
             reclaim: Vec::new(),
+            meters: BusMeters::new(),
         }
+    }
+
+    /// Point bus metering at the array the GUI reads. Called once at startup,
+    /// before the realtime thread exists.
+    pub(crate) fn attach_meters(&mut self, meters: Arc<BusMeters>) {
+        self.meters = meters;
     }
 
     pub fn from_project(
@@ -720,8 +732,13 @@ impl RenderState {
             strip.effects.process(&context, &mut strip.bus);
             strip.output.apply(&mut strip.bus, frames);
             // A muted bus still processes, so a delay or reverb tail on it
-            // decays instead of freezing, but contributes nothing.
-            if !strip.output.muted {
+            // decays instead of freezing, but contributes nothing — and meters
+            // as silent, matching what is heard rather than what is running.
+            if strip.output.muted {
+                self.meters.publish(index, 0.0, 0.0);
+            } else {
+                let (peak_l, peak_r) = strip.bus.peak(frames);
+                self.meters.publish(index, peak_l, peak_r);
                 if let Some(destination) = lower.get_mut(strip.destination as usize) {
                     destination.bus.add_from(&strip.bus, frames);
                 }
@@ -735,6 +752,8 @@ impl RenderState {
         } else {
             master.bus.peak(frames)
         };
+        self.meters
+            .publish(MASTER_BUS as usize, peak_l, peak_r);
         RenderReport {
             position_tick: self.transport.position_ticks as u64,
             beat_in_bar: self.transport.beat_in_bar(),
@@ -1183,6 +1202,46 @@ mod tests {
             });
         });
         assert_eq!(clamped, dry);
+    }
+
+    /// The mixer's strips are only useful if the bus they name is the one
+    /// being metered, so check that the audio shows up on the routed bus and
+    /// the master and nowhere else.
+    #[test]
+    fn peaks_are_published_for_the_bus_that_carries_the_audio() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let meters = BusMeters::new();
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.attach_meters(meters.clone());
+        render.apply_command(EngineCommand::SetChannelBus {
+            channel: 0,
+            bus: 6,
+        });
+        render.play();
+        render.process_block(1024);
+
+        assert!(meters.take(6).0 > 0.001, "the routed bus should meter");
+        assert!(meters.take(MASTER_BUS as usize).0 > 0.001);
+        assert_eq!(meters.take(5), (0.0, 0.0), "an unused bus must read silent");
+    }
+
+    #[test]
+    fn a_muted_bus_meters_silent() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let meters = BusMeters::new();
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.attach_meters(meters.clone());
+        render.apply_command(EngineCommand::SetChannelBus {
+            channel: 0,
+            bus: 6,
+        });
+        render.apply_command(EngineCommand::SetBusMuted {
+            bus: 6,
+            muted: true,
+        });
+        render.play();
+        render.process_block(1024);
+        assert_eq!(meters.take(6), (0.0, 0.0));
     }
 
     #[test]
