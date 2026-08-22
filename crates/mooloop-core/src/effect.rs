@@ -14,11 +14,17 @@ pub enum EffectKind {
     Filter,
     Drive,
     Bitcrush,
+    Delay,
 }
 
 impl EffectKind {
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 3] = [EffectKind::Filter, EffectKind::Drive, EffectKind::Bitcrush];
+    pub const ALL: [EffectKind; 4] = [
+        EffectKind::Filter,
+        EffectKind::Drive,
+        EffectKind::Bitcrush,
+        EffectKind::Delay,
+    ];
 
     /// Display name for device headers and the add-effect picker.
     pub fn label(self) -> &'static str {
@@ -26,6 +32,7 @@ impl EffectKind {
             Self::Filter => "Filter",
             Self::Drive => "Drive",
             Self::Bitcrush => "Bitcrush",
+            Self::Delay => "Delay",
         }
     }
 
@@ -36,6 +43,7 @@ impl EffectKind {
             Self::Filter => &FILTER_DESCRIPTORS,
             Self::Drive => &DRIVE_DESCRIPTORS,
             Self::Bitcrush => &BITCRUSH_DESCRIPTORS,
+            Self::Delay => &DELAY_DESCRIPTORS,
         }
     }
 
@@ -50,6 +58,7 @@ impl EffectKind {
             Self::Filter => EffectParams::Filter(FilterParams::default()),
             Self::Drive => EffectParams::Drive(DriveParams::default()),
             Self::Bitcrush => EffectParams::Bitcrush(BitcrushParams::default()),
+            Self::Delay => EffectParams::Delay(DelayParams::default()),
         }
     }
 }
@@ -400,6 +409,150 @@ impl Default for BitcrushParams {
     }
 }
 
+// --- Delay -----------------------------------------------------------------
+
+/// `Event::ParamValue` ids for [`DelayParams`].
+pub const DELAY_PARAM_TIME_MS: u32 = 0;
+pub const DELAY_PARAM_FEEDBACK: u32 = 1;
+pub const DELAY_PARAM_MODE: u32 = 2;
+pub const DELAY_PARAM_CROSS: u32 = 3;
+pub const DELAY_PARAM_TONE: u32 = 4;
+pub const DELAY_PARAM_MIX: u32 = 5;
+
+/// Longest delay time, and therefore the ring the effect allocates per slot:
+/// two seconds of stereo `f32` is about 768 KiB at 48 kHz.
+pub const DELAY_MAX_TIME_MS: f32 = 2_000.0;
+
+static DELAY_DESCRIPTORS: [ParamDescriptor; 6] = [
+    ParamDescriptor {
+        id: DELAY_PARAM_TIME_MS,
+        name: "Time",
+        unit: "ms",
+        min: 1.0,
+        max: DELAY_MAX_TIME_MS,
+        curve: ParamCurve::Exponential,
+        default: 375.0,
+    },
+    ParamDescriptor {
+        id: DELAY_PARAM_FEEDBACK,
+        name: "Fdbk",
+        unit: "",
+        // Stops short of 1.0: unity feedback with any damping still runs away
+        // once the wet path is summed back in.
+        min: 0.0,
+        max: 0.98,
+        curve: ParamCurve::Linear,
+        default: 0.35,
+    },
+    ParamDescriptor {
+        id: DELAY_PARAM_MODE,
+        name: "Mode",
+        unit: "",
+        min: 0.0,
+        max: 2.0,
+        curve: ParamCurve::Stepped(3),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: DELAY_PARAM_CROSS,
+        name: "Cross",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: DELAY_PARAM_TONE,
+        name: "Tone",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.6,
+    },
+    ParamDescriptor {
+        id: DELAY_PARAM_MIX,
+        name: "Mix",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.35,
+    },
+];
+
+/// How the read head responds when the delay time moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelayMode {
+    /// Crossfade to the new time. The repeats keep their pitch.
+    #[default]
+    Digital,
+    /// Glide to the new time, so the buffered audio repitches on the way —
+    /// the tape-delay behaviour.
+    Tape,
+    /// Read the recent history backwards in windows the length of the delay
+    /// time.
+    Reverse,
+}
+
+impl DelayMode {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Tape,
+            2 => Self::Reverse,
+            _ => Self::Digital,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Digital => 0,
+            Self::Tape => 1,
+            Self::Reverse => 2,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Digital => "DIGI",
+            Self::Tape => "TAPE",
+            Self::Reverse => "REV",
+        }
+    }
+}
+
+/// Parameters for the delay effect (`DelayEffect` in `mooloop-dsp`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DelayParams {
+    pub time_ms: f32,
+    /// Feedback gain in `[0, 0.98]`.
+    pub feedback: f32,
+    pub mode: DelayMode,
+    /// How much of the feedback path crosses to the other channel. At 1.0 the
+    /// repeats alternate sides (ping-pong).
+    pub cross: f32,
+    /// Damping of the feedback path in `[0, 1]`: 0 darkens each repeat
+    /// heavily, 1 leaves it open.
+    pub tone: f32,
+    /// Dry/wet blend in `[0, 1]`.
+    pub mix: f32,
+}
+
+impl Default for DelayParams {
+    fn default() -> Self {
+        Self {
+            time_ms: 375.0,
+            feedback: 0.35,
+            mode: DelayMode::default(),
+            cross: 0.0,
+            tone: 0.6,
+            mix: 0.35,
+        }
+    }
+}
+
 // --- Slot state ------------------------------------------------------------
 
 /// Per-kind parameter set. Tagged with the same serde shape as
@@ -410,6 +563,7 @@ pub enum EffectParams {
     Filter(FilterParams),
     Drive(DriveParams),
     Bitcrush(BitcrushParams),
+    Delay(DelayParams),
 }
 
 impl EffectParams {
@@ -418,6 +572,7 @@ impl EffectParams {
             Self::Filter(_) => EffectKind::Filter,
             Self::Drive(_) => EffectKind::Drive,
             Self::Bitcrush(_) => EffectKind::Bitcrush,
+            Self::Delay(_) => EffectKind::Delay,
         }
     }
 
@@ -438,6 +593,13 @@ impl EffectParams {
     pub fn bitcrush(&self) -> Option<&BitcrushParams> {
         match self {
             Self::Bitcrush(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn delay(&self) -> Option<&DelayParams> {
+        match self {
+            Self::Delay(p) => Some(p),
             _ => None,
         }
     }
@@ -467,6 +629,15 @@ impl EffectParams {
                 BITCRUSH_PARAM_BITS => Some(p.bits),
                 BITCRUSH_PARAM_DOWNSAMPLE => Some(p.downsample),
                 BITCRUSH_PARAM_MIX => Some(p.mix),
+                _ => None,
+            },
+            Self::Delay(p) => match id {
+                DELAY_PARAM_TIME_MS => Some(p.time_ms),
+                DELAY_PARAM_FEEDBACK => Some(p.feedback),
+                DELAY_PARAM_MODE => Some(p.mode.to_index() as f32),
+                DELAY_PARAM_CROSS => Some(p.cross),
+                DELAY_PARAM_TONE => Some(p.tone),
+                DELAY_PARAM_MIX => Some(p.mix),
                 _ => None,
             },
         }
@@ -502,6 +673,15 @@ impl EffectParams {
                 BITCRUSH_PARAM_BITS => p.bits = value,
                 BITCRUSH_PARAM_DOWNSAMPLE => p.downsample = value,
                 BITCRUSH_PARAM_MIX => p.mix = value,
+                _ => return None,
+            },
+            Self::Delay(p) => match id {
+                DELAY_PARAM_TIME_MS => p.time_ms = value,
+                DELAY_PARAM_FEEDBACK => p.feedback = value,
+                DELAY_PARAM_MODE => p.mode = DelayMode::from_index(value.round() as i32),
+                DELAY_PARAM_CROSS => p.cross = value,
+                DELAY_PARAM_TONE => p.tone = value,
+                DELAY_PARAM_MIX => p.mix = value,
                 _ => return None,
             },
         }
@@ -560,6 +740,10 @@ impl EffectSlotState {
 
     pub fn bitcrush(params: BitcrushParams) -> Self {
         Self::new(EffectParams::Bitcrush(params))
+    }
+
+    pub fn delay(params: DelayParams) -> Self {
+        Self::new(EffectParams::Delay(params))
     }
 
     pub fn kind(&self) -> EffectKind {

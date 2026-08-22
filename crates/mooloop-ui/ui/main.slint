@@ -23,6 +23,7 @@ import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
 import { DriveDeviceFace } from "drive-device.slint";
 import { BitcrushDeviceFace } from "bitcrush-device.slint";
+import { DelayDeviceFace } from "delay-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 export { Theme }
@@ -89,7 +90,10 @@ struct PlaylistClip {
 // the descriptor defines. Keeping the row positional means adding an effect
 // kind costs a device face and nothing here.
 struct EffectSlotRow {
-    kind: int,        // matches EffectKind: 0 = Filter, 1 = Drive, 2 = Bitcrush
+    kind: int,        // matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay
+    // Rack units this device's face occupies. Devices with more working
+    // controls get more width rather than compressing their controls.
+    units: int,
     bypassed: bool,
     p0: float,
     p1: float,
@@ -1611,12 +1615,15 @@ export component MainWindow inherits Window {
                                     DeviceJoin { }
 
                                     for slot[index] in root.effect-slots : Rectangle {
-                                        width: DeviceRackMetrics.unit-width + 20px;
+                                        property <length> face-width:
+                                            DeviceRackMetrics.unit-width * slot.units
+                                            + DeviceRackMetrics.half-gap * (slot.units - 1);
+                                        width: self.face-width + 20px;
                                         height: DeviceRackMetrics.face-height;
                                         DeviceFrame {
                                             x: 0px;
                                             y: 0px;
-                                            width: DeviceRackMetrics.unit-width;
+                                            width: parent.face-width;
                                             height: DeviceRackMetrics.face-height;
                                             if slot.kind == 0 : FilterDeviceFace {
                                                 x: 0px;
@@ -1676,8 +1683,32 @@ export component MainWindow inherits Window {
                                                 remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
+                                            if slot.kind == 3 : DelayDeviceFace {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: parent.width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                time: slot.p0;
+                                                feedback: slot.p1;
+                                                mode: round(slot.p2 * 2);
+                                                cross: slot.p3;
+                                                tone: slot.p4;
+                                                mix: slot.p5;
+                                                time-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                feedback-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                mode-changed(i) => { root.effect-param-changed(index, 2, i * 1.0 / 2.0); }
+                                                cross-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                tone-changed(v) => { root.effect-param-changed(index, 4, v); }
+                                                mix-changed(v) => { root.effect-param-changed(index, 5, v); }
+                                                bypass-toggled => { root.effect-bypass-toggled(index); }
+                                                remove-clicked => { root.remove-effect-clicked(index); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
                                         }
-                                        DeviceJoin { x: DeviceRackMetrics.unit-width; y: 0px; }
+                                        DeviceJoin { x: parent.face-width; y: 0px; }
                                     }
 
                                     Rectangle {
@@ -1694,7 +1725,7 @@ export component MainWindow inherits Window {
                                             x: 0px;
                                             y: 44px;
                                             width: 148px;
-                                            height: 82px;
+                                            height: 106px;
                                             close-policy: close-on-click;
                                             Rectangle {
                                                 background: Theme.surface;
@@ -1707,6 +1738,7 @@ export component MainWindow inherits Window {
                                                     ToolButton { text: "Filter"; tooltip: "Add a low/high-pass filter"; clicked => { add-effect-menu.close(); root.add-effect-clicked(0); } }
                                                     ToolButton { text: "Drive"; tooltip: "Add saturation or distortion"; clicked => { add-effect-menu.close(); root.add-effect-clicked(1); } }
                                                     ToolButton { text: "Bitcrush"; tooltip: "Add bit and rate reduction"; clicked => { add-effect-menu.close(); root.add-effect-clicked(2); } }
+                                                    ToolButton { text: "Delay"; tooltip: "Add a delay"; clicked => { add-effect-menu.close(); root.add-effect-clicked(3); } }
                                                 }
                                             }
                                         }

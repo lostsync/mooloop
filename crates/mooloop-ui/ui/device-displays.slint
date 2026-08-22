@@ -232,3 +232,70 @@ export component BitcrushTrace inherits Rectangle {
         background: Theme.warning;
     }
 }
+
+// Echo train of the delay effect: one bar per repeat, spaced by the delay
+// time and decaying by the feedback gain. Left-channel energy is drawn above
+// the centre line and right below, so cross-feed reads as the repeats
+// alternating sides.
+//
+// The channel split is the closed form of the feedback mixing matrix
+// [[1-c, c], [c, 1-c]] applied n times: the total still decays as fb^n while
+// the difference between channels decays as (1-2c)^n. At c = 1 that gives
+// exact ping-pong.
+export component DelayEchoDisplay inherits Rectangle {
+    in property <float> time-ms;   // natural, 1..2000
+    in property <float> feedback;  // 0..0.98
+    in property <float> cross;     // 0..1
+    private property <int> repeat-count: 12;
+    // Fixed window across the parameter's full range, so moving the time
+    // control visibly moves the repeats instead of rescaling the axis.
+    private property <float> span-ms: 2000;
+
+    // The first repeat is the direct tap: it is heard at full level on its
+    // own channel, because feedback and cross-feed only act on the repeats
+    // that follow it. Both therefore run to the power n - 1.
+    pure function balance(n: int) -> float {
+        let a = 1 - 2 * clamp(root.cross, 0, 1);
+        let magnitude = pow(abs(a), n - 1);
+        return a < 0 && mod(n - 1, 2) == 1 ? -magnitude : magnitude;
+    }
+
+    pure function amplitude(n: int) -> float {
+        return pow(clamp(root.feedback, 0, 0.999), n - 1);
+    }
+
+    pure function left-height(n: int) -> float {
+        return root.amplitude(n) * (1 + root.balance(n)) / 2;
+    }
+
+    pure function right-height(n: int) -> float {
+        return root.amplitude(n) * (1 - root.balance(n)) / 2;
+    }
+
+    pure function position(n: int) -> float {
+        return clamp(n * root.time-ms / root.span-ms, 0, 1);
+    }
+
+    Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border.with-alpha(0.55); }
+    // Dry impulse at the origin, for scale.
+    Rectangle {
+        x: 0px;
+        y: parent.height * 0.06;
+        width: 2px;
+        height: parent.height * 0.44;
+        background: Theme.text-faint;
+    }
+    for n in root.repeat-count : Rectangle {
+        // `for n in count` yields 0..count-1; repeats start at 1.
+        property <int> index: n + 1;
+        property <bool> visible-repeat: root.position(self.index) < 1
+            && root.amplitude(self.index) > 0.004;
+        x: root.position(self.index) * (parent.width - 2px);
+        width: 2px;
+        y: parent.height * (0.5 - root.left-height(self.index) * 0.44);
+        height: self.visible-repeat
+            ? parent.height * (root.left-height(self.index) + root.right-height(self.index)) * 0.44
+            : 0px;
+        background: Theme.warning;
+    }
+}

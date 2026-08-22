@@ -10,10 +10,12 @@
 //! `docs/MODULATION_PLAN.md` for why the split falls there.
 
 mod bitcrush;
+mod delay;
 mod drive;
 mod filter;
 
 pub use bitcrush::BitcrushEffect;
+pub use delay::DelayEffect;
 pub use drive::DriveEffect;
 pub use filter::FilterEffect;
 
@@ -32,5 +34,6 @@ pub fn build_effect(params: EffectParams, sample_rate: u32) -> Box<dyn AudioNode
         EffectParams::Filter(p) => Box::new(FilterEffect::new(p, sample_rate)),
         EffectParams::Drive(p) => Box::new(DriveEffect::new(p, sample_rate)),
         EffectParams::Bitcrush(p) => Box::new(BitcrushEffect::new(p)),
+        EffectParams::Delay(p) => Box::new(DelayEffect::new(p, sample_rate)),
     }
 }

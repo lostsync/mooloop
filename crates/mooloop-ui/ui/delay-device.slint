@@ -1,0 +1,177 @@
+import { Theme } from "theme.slint";
+import { IconButton, ParameterKnob, SelectorBank } from "controls.slint";
+import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { DelayEchoDisplay } from "device-displays.slint";
+
+// One delay in a channel's device rack. Two units wide: six working controls
+// do not fit the 1U face the other effects use, and UI_DESIGN.md quantizes
+// device width rather than compressing controls.
+export component DelayDeviceFace inherits Rectangle {
+    in property <int> slot-index;
+    in property <int> slot-count;
+    in property <bool> bypassed;
+    in-out property <int> mode;      // 0 = digital, 1 = tape, 2 = reverse
+    in-out property <float> time;     // normalized 0..1 (1 ms .. 2000 ms)
+    in-out property <float> feedback; // normalized 0..1
+    in-out property <float> cross;    // normalized 0..1
+    in-out property <float> tone;     // normalized 0..1
+    in-out property <float> mix;      // normalized 0..1
+    callback time-changed(float);
+    callback feedback-changed(float);
+    callback mode-changed(int);
+    callback cross-changed(float);
+    callback tone-changed(float);
+    callback mix-changed(float);
+    callback bypass-toggled();
+    callback remove-clicked();
+    callback reorder-requested(int);
+
+    // Normalized -> natural, matching ParamCurve::Exponential over [1, 2000].
+    private property <float> time-natural: pow(2000, root.time);
+    private property <float> feedback-natural: root.feedback * 0.98;
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text {
+                text: "DELAY";
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            SelectorBank {
+                options: ["DIGI", "TAPE", "REV"];
+                selected-index <=> root.mode;
+                segment-width: 38px;
+                tooltip: "How the repeats respond when the time moves";
+                selected(i) => { root.mode-changed(i); }
+            }
+        }
+        Rectangle {
+            height: 104px;
+            background: Theme.panel;
+            border-radius: 2px;
+            DelayEchoDisplay {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                time-ms: root.time-natural;
+                feedback: root.feedback-natural;
+                cross: root.cross;
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 85px;
+                diameter: 40px;
+                label: "Time";
+                tooltip: "Delay time";
+                value <=> root.time;
+                default-value: 0.7815;
+                value-text: root.time-natural >= 100
+                    ? round(root.time-natural) + " ms"
+                    : round(root.time-natural * 10) / 10 + " ms";
+                changed(v) => { root.time-changed(v); }
+            }
+            ParameterKnob {
+                width: 85px;
+                diameter: 40px;
+                label: "Fdbk";
+                tooltip: "How much of each repeat feeds the next";
+                value <=> root.feedback;
+                default-value: 0.3571;
+                value-text: round(root.feedback-natural * 100) + "%";
+                changed(v) => { root.feedback-changed(v); }
+            }
+            ParameterKnob {
+                width: 85px;
+                diameter: 40px;
+                label: "Cross";
+                tooltip: "Feedback crossing to the other channel; full is ping-pong";
+                value <=> root.cross;
+                default-value: 0.0;
+                value-text: round(root.cross * 100) + "%";
+                changed(v) => { root.cross-changed(v); }
+            }
+            ParameterKnob {
+                width: 85px;
+                diameter: 40px;
+                label: "Tone";
+                tooltip: "Damping of the repeats: dark to open";
+                value <=> root.tone;
+                default-value: 0.6;
+                value-text: round(root.tone * 100) + "%";
+                changed(v) => { root.tone-changed(v); }
+            }
+            ParameterKnob {
+                width: 85px;
+                diameter: 40px;
+                label: "Mix";
+                tooltip: "Dry/wet blend";
+                value <=> root.mix;
+                default-value: 0.35;
+                value-text: round(root.mix * 100) + "%";
+                changed(v) => { root.mix-changed(v); }
+            }
+        }
+    }
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: "Delay";
+        kind: "FX / 2U";
+        role: "FX";
+        device-color: Theme.warning;
+        enabled: !root.bypassed;
+    }
+
+    drag := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: parent.width - 52px;
+        height: DeviceRackMetrics.header-height;
+        mouse-cursor: move;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up {
+                let pitch = DeviceRackMetrics.unit-width + 20px;
+                let delta = round((self.mouse-x - self.pressed-x) / pitch);
+                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
+                if target != root.slot-index {
+                    root.reorder-requested(target);
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: parent.width - 52px;
+        y: 0px;
+        width: 52px;
+        height: DeviceRackMetrics.header-height;
+        HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            IconButton {
+                text: root.bypassed ? "○" : "●";
+                tooltip: root.bypassed ? "Enable this delay" : "Bypass this delay";
+                size: 22px;
+                active: !root.bypassed;
+                clicked => { root.bypass-toggled(); }
+            }
+            IconButton {
+                text: "✕";
+                tooltip: "Remove this delay";
+                size: 22px;
+                clicked => { root.remove-clicked(); }
+            }
+        }
+    }
+}

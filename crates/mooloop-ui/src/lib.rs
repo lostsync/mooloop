@@ -241,6 +241,17 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Filter => 0,
         EffectKind::Drive => 1,
         EffectKind::Bitcrush => 2,
+        EffectKind::Delay => 3,
+    }
+}
+
+/// Rack units a kind's device face occupies. Devices with more working
+/// controls take more width rather than compressing them (docs/UI_DESIGN.md,
+/// "Device Rack Layout").
+fn effect_kind_units(kind: EffectKind) -> i32 {
+    match kind {
+        EffectKind::Filter | EffectKind::Drive | EffectKind::Bitcrush => 1,
+        EffectKind::Delay => 2,
     }
 }
 
@@ -274,6 +285,7 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
     );
     EffectSlotRow {
         kind: effect_kind_index(kind),
+        units: effect_kind_units(kind),
         bypassed: slot.bypassed,
         p0: p[0],
         p1: p[1],
@@ -3922,6 +3934,11 @@ impl AppUi {
                 w.invoke_effect_param_changed(1, 3, 0.8); // drive mix
                 w.invoke_effect_param_changed(2, 0, 0.2); // bitcrush bits
                 w.invoke_effect_param_changed(2, 1, 0.6); // bitcrush rate
+                w.invoke_add_effect_clicked(3);
+                w.invoke_effect_param_changed(3, 0, 0.6); // delay time
+                w.invoke_effect_param_changed(3, 1, 0.5); // delay feedback
+                w.invoke_effect_param_changed(3, 2, 1.0); // delay -> reverse
+                w.invoke_effect_param_changed(3, 3, 1.0); // delay ping-pong
                 w.invoke_reorder_effect(0, 2);
                 w.invoke_effect_bypass_toggled(0);
                 w.invoke_effect_bypass_toggled(0);

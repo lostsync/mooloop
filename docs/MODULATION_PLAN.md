@@ -142,10 +142,10 @@ Inlets and outlets exist in the data model without being drawn as wires.
 
 ## Effect build order
 
-1. **Foundation** — `EffectParams` tagged enum, descriptor tables. (This pass.)
-2. **Drive/saturation and bitcrush** — stateless, cheap, immediately useful.
-   (This pass.)
-3. **Delay** — see the shared-primitive note below.
+1. ~~**Foundation** — `EffectParams` tagged enum, descriptor tables.~~ Done.
+2. ~~**Drive/saturation and bitcrush** — stateless, cheap, immediately
+   useful.~~ Done.
+3. ~~**Delay**~~ Done, on the shared primitive described below.
 4. **Dynamics: gate, compressor, limiter** — one shared envelope detector.
 5. **EQ** — cheap; `Svf` already exists.
 6. **Chorus and phaser** — need the modulation rack to exist first.
@@ -153,18 +153,28 @@ Inlets and outlets exist in the data model without being drawn as wires.
 
 ### The delay line is shared with the buffer device
 
-When the delay is built, its ring buffer must be a **reusable primitive**, not
-private to the delay effect. `BUFFER_ENGINE.md`'s read-head requirements
-(offset behind write head, window length, rate, reverse, hold, return-live,
-crossfade at discontinuities) are a superset of what a delay needs.
+This landed as `mooloop_dsp::delayline` (`DelayLine` + `ReadHead`). It is a
+shared primitive, not part of the delay effect: `BUFFER_ENGINE.md`'s read-head
+requirements are a superset of what a delay needs, so the buffer device should
+build on it rather than growing a second ring.
 
-Requirements for that primitive: allocation only in the constructor, cubic
-Hermite interpolation (linear aliases audibly under rate change and reverse),
-crossfade on head discontinuity with a configurable window where length 0 is
-legal, and documented behavior when a read head meets the write head.
+What it provides: allocation only in the constructor, cubic Hermite
+interpolation (linear aliases audibly under rate change and reverse),
+equal-power crossfade on head discontinuity with a length-0 hard jump left
+legal, and a documented minimum approach distance to the write head
+(`MIN_READ_OFFSET`).
 
-If the delay ships with a bespoke private ring, the buffer-device spike starts
-by rewriting it. Don't do that.
+`ReadHead` deliberately does **not** know about playback rate or direction.
+The caller passes how far the offset should drift per frame — `1 - rate`
+forward, `1 + rate` reverse, because the write head is also moving. That one
+decision is what lets a fixed delay tap, a repitching tape delay, a reverse
+window, and the buffer device's detached heads all be the same type. The delay
+effect exercises all three behaviors today, so the primitive is proven rather
+than speculative.
+
+What the buffer device still has to add: window length, explicit hold and
+return-live operations, and freeze/snapshot. None of those need changes to
+`DelayLine`.
 
 ## Anti-aliasing policy
 

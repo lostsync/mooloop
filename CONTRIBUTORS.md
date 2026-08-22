@@ -38,9 +38,9 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-21
+- Last seen: 2026-08-22
 - Sessions: 1
-- Notes: Parameter descriptors, the modulation design, drive and bitcrush.
+- Notes: Parameter descriptors, the modulation design, and four effects.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

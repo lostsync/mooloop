@@ -16,9 +16,11 @@ pub mod time;
 pub use bridge::{EngineCommand, EngineEvent};
 pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS};
 pub use effect::{
-    BitcrushParams, DriveCurve, DriveParams, EffectKind, EffectParams, EffectSlotState, FilterMode,
-    FilterParams, ParamCurve, ParamDescriptor, BITCRUSH_PARAM_BITS, BITCRUSH_PARAM_DOWNSAMPLE,
-    BITCRUSH_PARAM_MIX, DRIVE_PARAM_CURVE, DRIVE_PARAM_DRIVE, DRIVE_PARAM_MIX, DRIVE_PARAM_OUTPUT,
+    BitcrushParams, DelayMode, DelayParams, DriveCurve, DriveParams, EffectKind, EffectParams,
+    EffectSlotState, FilterMode, FilterParams, ParamCurve, ParamDescriptor, BITCRUSH_PARAM_BITS,
+    BITCRUSH_PARAM_DOWNSAMPLE, BITCRUSH_PARAM_MIX, DELAY_MAX_TIME_MS, DELAY_PARAM_CROSS,
+    DELAY_PARAM_FEEDBACK, DELAY_PARAM_MIX, DELAY_PARAM_MODE, DELAY_PARAM_TIME_MS,
+    DELAY_PARAM_TONE, DRIVE_PARAM_CURVE, DRIVE_PARAM_DRIVE, DRIVE_PARAM_MIX, DRIVE_PARAM_OUTPUT,
     DRIVE_PARAM_TONE, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_MODE, FILTER_PARAM_RESONANCE,
 };
 pub use pattern::{

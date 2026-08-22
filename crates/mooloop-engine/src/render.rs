@@ -833,6 +833,13 @@ mod tests {
                     params.set(mooloop_core::BITCRUSH_PARAM_BITS, 1.0);
                     params.set(mooloop_core::BITCRUSH_PARAM_DOWNSAMPLE, 32.0);
                 }
+                mooloop_core::EffectKind::Delay => {
+                    // Short enough that a repeat lands inside the rendered
+                    // block, fully wet so the dry signal cannot mask it.
+                    params.set(mooloop_core::DELAY_PARAM_TIME_MS, 5.0);
+                    params.set(mooloop_core::DELAY_PARAM_FEEDBACK, 0.6);
+                    params.set(mooloop_core::DELAY_PARAM_MIX, 1.0);
+                }
             }
 
             let wet = rendered_energy(&project, |render| {
