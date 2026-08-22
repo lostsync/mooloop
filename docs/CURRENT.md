@@ -48,6 +48,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   filter with envelope depth and resonance, drive, bit reduction, and rate
   reduction. Voice controls cover one-shot/gated playback, 1-16 voices,
   restart/layer retriggering, and 16 cross-channel choke groups.
+- A mixer sharing the work surface with the step grid, behind a Steps/Mixer
+  toggle. It is a strip per bus - master first, then sixteen inserts - with a
+  name plate, live stereo meter, fader, pan, mute, destination, and a count of
+  the channels feeding it. Clicking a strip's name plate points the device rack
+  below at that bus, so a chain on a group of channels is built with the same
+  gesture as a chain on one channel. Channels name their bus from a picker in
+  their rack row, beside their other output controls.
 - A horizontal lower device rack with one fixed-height 3U source face followed
   by a chainable effect chain (filter, drive, bitcrush, delay, gate,
   compressor, and limiter; slots are added by kind from the rack's add slot,
@@ -110,7 +117,15 @@ UI commands -> rtrb queue -> shared render state -> transport + sequencer
 selected source (sampler / drum synth / mono synth) -> effect chain -> gain/pan/mute
                                                            |
                                                            v
-                                                    master stereo bus
+                                             assigned mixer bus (0-16)
+                                                           |
+                                          bus effect chain -> gain/pan/mute
+                                                           |
+                                            (optionally another, lower bus)
+                                                           v
+                                                master bus (bus 0)
+                                                           |
+                                            master effect chain -> gain/pan
                                                            |
                                                            v
                                                        JACK outputs
@@ -193,8 +208,28 @@ through an `ArcSwapOption` slot.
 
 ### Mixing, Routing, And Effects
 
-- Channel mute, volume, and pan are exposed, as compact knobs in the rack row.
-  Metering is master-only; per-channel meters are drawn but unfed.
+- Channel mute, volume, and pan are exposed, as compact knobs in the rack row,
+  alongside the bus the channel feeds.
+- Every channel names one mixer bus. The bank is the master plus sixteen
+  inserts, all preallocated, so assigning a channel to any bus is a bounded
+  mutation rather than an allocation. Buses carry their own effect chain,
+  volume, pan, and mute, and may feed another bus.
+- Bus routing is constrained to be acyclic by construction: the master is bus
+  0, and a bus may only feed a lower-numbered bus. The engine therefore renders
+  the bank in one descending pass with no topological sort, cycle check, or
+  scratch buffer in the audio callback. Uphill routes are rejected to the
+  master rather than silently forming a one-block feedback path, both at the
+  command boundary and on load.
+- A muted bus still processes, so effect tails on it decay rather than freeze,
+  but contributes no audio and meters as silent.
+- Per-bus peaks reach the GUI through a shared array of atomics rather than the
+  event ring, which the ring's drain rate could not keep up with. The published
+  value is a peak hold that only the GUI's read clears, so a transient landing
+  between two UI frames is still shown. Per-channel meters are still drawn but
+  unfed.
+- The constant-power pan law is normalized to unity at centre. A signal now
+  crosses several pan stages on its way out, and the raw law charged 3 dB at
+  each, so routing a channel to a bus would otherwise have made it quieter.
 - Each channel runs a fixed-size effect chain (up to 8 slots) after its
   generator. Installing/removing nodes crosses the realtime boundary through a
   dedicated structural ring buffer pair (boxed nodes move GUI->audio and
@@ -224,8 +259,10 @@ through an `ArcSwapOption` slot.
   device is meant to be the second rather than growing its own ring.
 - Modulation, automation, and a general parameter address type do not exist
   yet. `docs/MODULATION_PLAN.md` records the approved design for them.
-- There are no sends, returns, groups, sidechains, external inputs, or routing
-  controls.
+- Buses are insert points, not sends: a channel feeds exactly one, with no
+  parallel send, return, or wet/dry split. There are no sidechains, external
+  inputs, solo, or per-bus stem export, and buses cannot be renamed from the
+  interface yet.
 
 ### Buffers And Rendering
 
@@ -250,9 +287,10 @@ through an `ArcSwapOption` slot.
 
 1. Add probability and explicit microtiming controls without weakening the
    tick-addressed event contract before broad automation.
-2. Fixed-capacity device edits are now defined (structural ring + slot swaps)
-   for the effect chain; extend the same protocol before adding sends, groups,
-   or a mixer bus graph.
+2. Fixed-capacity device edits are defined (structural ring + slot swaps) and
+   now address an `EffectTarget` rather than a channel, which is what let the
+   bus graph reuse them unchanged. Extend the same protocol before adding
+   parallel sends or sidechains.
 3. Budget channel buffer memory and specify read/write collision behavior
    before buffers become part of every strip.
 4. Add deferred reclamation for replaced samples, graphs, and future buffers.
