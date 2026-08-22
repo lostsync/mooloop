@@ -505,7 +505,7 @@ pub enum DelayMode {
     #[default]
     Digital,
     /// Glide to the new time, so the buffered audio repitches on the way —
-    /// the tape-delay behaviour.
+    /// the tape-delay behavior.
     Tape,
     /// Read the recent history backwards in windows the length of the delay
     /// time.

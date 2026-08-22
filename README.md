@@ -30,6 +30,12 @@ or dependable production tool.
   forward or ping-pong loops.
 - Sampler tuning, ADSR, resonant low-pass filtering, drive, bit reduction, and
   rate reduction.
+- A horizontal device rack per channel: one source device followed by an
+  insert chain of up to eight effects, added by kind, bypassed, removed, and
+  reordered by dragging their headers.
+- Seven effects: low-pass/high-pass filter, drive/saturation with four curves,
+  bitcrush, stereo delay with digital, tape, and reverse behavior, and a
+  gate, compressor, and limiter. Effect chains save with the song.
 - Versioned song, kit, and channel-preset bundles with optional embedded
   samples.
 - Offline WAV and MP3 export.
@@ -40,13 +46,13 @@ or dependable production tool.
 
 - Much of the menu bar is scaffolding. Some file operations work, but many
   menu items are disabled, incomplete, or not wired to an implementation yet.
-- There are no channel insert effects. The sampler and synths have their own
-  tone-shaping controls, but the visible device-chain insertion point is empty
-  and there is no effect insertion, bypass, reordering, or automation.
 - There are no sends, returns, groups, sidechains, external inputs, or routing
-  controls.
-- General parameter automation does not exist. The lower parameter lane only
-  edits velocity; there are no parameter locks, probability controls, or
+  controls. Effects are per-channel inserts only, and there is no mixer view.
+- General parameter automation does not exist. Effect parameters are built for
+  it — every parameter has a stable ID, a declared range, and a sample-timed
+  event path — but nothing drives them yet, so there are no automation lanes,
+  LFOs, step modulators, or modulation routing. The lower parameter lane only
+  edits velocity, and there are no parameter locks, probability controls, or
   user-facing microtiming controls.
 - Mooloop is tracker-inspired, but it is not currently a tracker. In
   particular, there is no tracker-style event editor or hexadecimal command
@@ -79,6 +85,12 @@ channel device that continuously remembers recent audio and exposes its record
 and playback heads to patterns and automation. This is a design and planned
 spike, not a feature of the current application. The hypothesis is specified
 in [docs/BUFFER_ENGINE.md](docs/BUFFER_ENGINE.md).
+
+The approved design for parameter automation and modulation — a per-channel
+modulator rack, a modulation matrix, and the parameter model they share — is
+in [docs/MODULATION_PLAN.md](docs/MODULATION_PLAN.md). The parameter and
+effect groundwork it depends on is in place; the modulators themselves are not
+built yet.
 
 Another planned direction is tracker-like automation in the parameter lane,
 including compact hexadecimal value or command entry where that representation
@@ -118,6 +130,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 - [Current system](docs/CURRENT.md): what the code does today.
 - [Product definition](docs/PRODUCT.md): what Mooloop is trying to become.
 - [Roadmap](docs/ROADMAP.md): dependency-ordered future work.
+- [Modulation plan](docs/MODULATION_PLAN.md): the approved parameter,
+  modulation, and effect-suite design.
 - [Buffer engine hypothesis](docs/BUFFER_ENGINE.md): the unimplemented
   retained-audio experiment.
 
