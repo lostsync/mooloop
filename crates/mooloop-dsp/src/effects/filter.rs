@@ -1,21 +1,13 @@
-//! Chainable effect nodes. Effects implement `AudioNode` like instruments
-//! do, but read and modify the bus in place (see `node.rs`'s processing
-//! model) and stay ignorant of channel-strip concepts (gain/pan/mute) so the
-//! same node can later run on a master or send bus without changes.
+//! Stereo low-pass/high-pass filter effect, built on two `Svf` instances.
 
-use mooloop_core::{FilterMode, FilterParams};
+use mooloop_core::{
+    FilterMode, FilterParams, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_MODE, FILTER_PARAM_RESONANCE,
+};
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::filter::Svf;
 use crate::node::{AudioNode, ProcessContext};
-
-/// `Event::ParamValue` id for `FilterParams::cutoff_hz`.
-pub const FILTER_PARAM_CUTOFF_HZ: u32 = 0;
-/// `Event::ParamValue` id for `FilterParams::resonance`.
-pub const FILTER_PARAM_RESONANCE: u32 = 1;
-/// `Event::ParamValue` id for `FilterParams::mode` (0 = low-pass, >= 0.5 = high-pass).
-pub const FILTER_PARAM_MODE: u32 = 2;
 
 /// A stereo low-pass/high-pass filter built on two `Svf` instances, one per
 /// channel. Parameter changes arrive as sample-timed `ParamValue` events

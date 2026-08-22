@@ -1,0 +1,162 @@
+import { Theme } from "theme.slint";
+import { IconButton, ParameterKnob, SelectorBank } from "controls.slint";
+import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { DriveTransferDisplay } from "device-displays.slint";
+
+// One drive/saturation effect in a channel's device rack. Same outer geometry
+// and header/drag/action contract as `FilterDeviceFace`; only the working
+// controls differ.
+export component DriveDeviceFace inherits Rectangle {
+    in property <int> slot-index;
+    in property <int> slot-count;
+    in property <bool> bypassed;
+    in-out property <int> curve;       // 0 = soft, 1 = hard, 2 = fold, 3 = tape
+    in-out property <float> drive;      // normalized 0..1 (1x .. 64x)
+    in-out property <float> tone;       // normalized 0..1 (-1 .. 1)
+    in-out property <float> mix;        // normalized 0..1
+    in-out property <float> output;     // normalized 0..1 (0x .. 2x)
+    callback drive-changed(float);
+    callback curve-changed(int);
+    callback tone-changed(float);
+    callback mix-changed(float);
+    callback output-changed(float);
+    callback bypass-toggled();
+    callback remove-clicked();
+    callback reorder-requested(int);
+
+    // Normalized knob position -> the natural value the plot and readout use,
+    // matching `ParamCurve::Exponential` over [1, 64] in mooloop-core.
+    private property <float> drive-natural: pow(64, root.drive);
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text {
+                text: "DRIVE";
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            SelectorBank {
+                options: ["SOFT", "HARD", "FOLD", "TAPE"];
+                selected-index <=> root.curve;
+                segment-width: 34px;
+                tooltip: "Saturation curve";
+                selected(i) => { root.curve-changed(i); }
+            }
+        }
+        Rectangle {
+            height: 104px;
+            background: Theme.panel;
+            border-radius: 2px;
+            DriveTransferDisplay {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                drive: root.drive-natural;
+                curve: root.curve;
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 52px;
+                diameter: 36px;
+                label: "Drive";
+                tooltip: "Input gain into the shaping curve";
+                value <=> root.drive;
+                default-value: 0.1667;
+                value-text: round(root.drive-natural * 10) / 10 + "x";
+                changed(v) => { root.drive-changed(v); }
+            }
+            ParameterKnob {
+                width: 52px;
+                diameter: 36px;
+                label: "Tone";
+                tooltip: "Post-shaper tilt: dark to bright";
+                value <=> root.tone;
+                default-value: 0.5;
+                value-text: round((root.tone * 2 - 1) * 100) + "%";
+                changed(v) => { root.tone-changed(v); }
+            }
+            ParameterKnob {
+                width: 52px;
+                diameter: 36px;
+                label: "Mix";
+                tooltip: "Dry/wet blend";
+                value <=> root.mix;
+                default-value: 1.0;
+                value-text: round(root.mix * 100) + "%";
+                changed(v) => { root.mix-changed(v); }
+            }
+            ParameterKnob {
+                width: 52px;
+                diameter: 36px;
+                label: "Out";
+                tooltip: "Output trim";
+                value <=> root.output;
+                default-value: 0.5;
+                value-text: round(root.output * 2 * 100) / 100 + "x";
+                changed(v) => { root.output-changed(v); }
+            }
+        }
+    }
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: "Drive";
+        kind: "FX / 1U";
+        role: "FX";
+        device-color: Theme.warning;
+        enabled: !root.bypassed;
+    }
+
+    drag := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: parent.width - 52px;
+        height: DeviceRackMetrics.header-height;
+        mouse-cursor: move;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up {
+                let pitch = DeviceRackMetrics.unit-width + 20px;
+                let delta = round((self.mouse-x - self.pressed-x) / pitch);
+                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
+                if target != root.slot-index {
+                    root.reorder-requested(target);
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: parent.width - 52px;
+        y: 0px;
+        width: 52px;
+        height: DeviceRackMetrics.header-height;
+        HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            IconButton {
+                text: root.bypassed ? "○" : "●";
+                tooltip: root.bypassed ? "Enable this drive" : "Bypass this drive";
+                size: 22px;
+                active: !root.bypassed;
+                clicked => { root.bypass-toggled(); }
+            }
+            IconButton {
+                text: "✕";
+                tooltip: "Remove this drive";
+                size: 22px;
+                clicked => { root.remove-clicked(); }
+            }
+        }
+    }
+}

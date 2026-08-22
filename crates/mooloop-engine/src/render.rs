@@ -8,7 +8,7 @@ use mooloop_core::{
     SamplerParams, DEFAULT_STEPS, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
 };
 use mooloop_dsp::{
-    pan_gains, AudioNode, DrumSynth, Event, EventList, FilterEffect, MonoSynth, ProcessContext,
+    build_effect, pan_gains, AudioNode, DrumSynth, Event, EventList, MonoSynth, ProcessContext,
     SampleData, Sampler, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
 };
 
@@ -161,18 +161,6 @@ impl ChannelStrip {
     }
 }
 
-/// Construct the DSP node for a persisted effect slot. Used at project load
-/// (a sanctioned non-hot path); live insertion instead builds the node on the
-/// GUI thread and ships it through the structural ring.
-fn build_effect(
-    effect: &mooloop_core::EffectSlotState,
-    sample_rate: u32,
-) -> Box<dyn AudioNode + Send> {
-    match effect.kind {
-        mooloop_core::EffectKind::Filter => Box::new(FilterEffect::new(effect.params, sample_rate)),
-    }
-}
-
 fn inject_choke_events(choke_groups: &[u8], events: &mut [EventList]) {
     let active = choke_groups.len().min(events.len());
     for source in 0..active {
@@ -296,7 +284,7 @@ impl RenderState {
                     .take(MAX_EFFECTS_PER_CHANNEL)
                     .enumerate()
                 {
-                    let node = build_effect(effect, self.sample_rate);
+                    let node = build_effect(effect.params, self.sample_rate);
                     strip.install_effect(slot, node, &mut self.reclaim);
                     strip.effect_bypassed[slot] = effect.bypassed;
                 }
@@ -788,14 +776,18 @@ mod tests {
     }
 
     fn muffling_filter() -> Box<dyn AudioNode + Send> {
-        Box::new(FilterEffect::new(
-            mooloop_core::FilterParams {
+        build_effect(
+            mooloop_core::EffectParams::Filter(mooloop_core::FilterParams {
                 cutoff_hz: 100.0,
                 resonance: 0.0,
                 mode: mooloop_core::FilterMode::LowPass,
-            },
+            }),
             48_000,
-        ))
+        )
+    }
+
+    fn default_effect(kind: mooloop_core::EffectKind) -> Box<dyn AudioNode + Send> {
+        build_effect(kind.default_params(), 48_000)
     }
 
     #[test]
@@ -816,6 +808,48 @@ mod tests {
         );
     }
 
+    /// Every effect kind must be constructible through the shared builder and
+    /// audibly change the signal at a setting that is obviously not neutral.
+    /// This is the test a new kind trips if it is added to `EffectKind` but
+    /// never wired into `build_effect`.
+    #[test]
+    fn every_effect_kind_installs_and_alters_the_signal() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let dry = rendered_energy(&project, |_| {});
+        assert!(dry > 0.0, "reference render was silent");
+
+        for kind in mooloop_core::EffectKind::ALL {
+            // Push each kind well away from neutral; defaults are chosen to
+            // be transparent, so they would prove nothing here.
+            let mut params = kind.default_params();
+            match kind {
+                mooloop_core::EffectKind::Filter => {
+                    params.set(mooloop_core::FILTER_PARAM_CUTOFF_HZ, 100.0);
+                }
+                mooloop_core::EffectKind::Drive => {
+                    params.set(mooloop_core::DRIVE_PARAM_DRIVE, 64.0);
+                }
+                mooloop_core::EffectKind::Bitcrush => {
+                    params.set(mooloop_core::BITCRUSH_PARAM_BITS, 1.0);
+                    params.set(mooloop_core::BITCRUSH_PARAM_DOWNSAMPLE, 32.0);
+                }
+            }
+
+            let wet = rendered_energy(&project, |render| {
+                render.apply_structural(StructuralCommand::InstallEffect {
+                    channel: 0,
+                    slot: 0,
+                    node: build_effect(params, 48_000),
+                });
+            });
+            assert!(
+                (wet - dry).abs() > dry * 0.01,
+                "{} left the signal unchanged: dry {dry}, wet {wet}",
+                kind.label()
+            );
+        }
+    }
+
     #[test]
     fn effect_param_bypass_and_reorder_plumbing() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
@@ -826,25 +860,19 @@ mod tests {
             render.apply_structural(StructuralCommand::InstallEffect {
                 channel: 0,
                 slot: 0,
-                node: Box::new(FilterEffect::new(
-                    mooloop_core::FilterParams::default(),
-                    48_000,
-                )),
+                node: default_effect(mooloop_core::EffectKind::Filter),
             });
         });
         let closed = rendered_energy(&project, |render| {
             render.apply_structural(StructuralCommand::InstallEffect {
                 channel: 0,
                 slot: 0,
-                node: Box::new(FilterEffect::new(
-                    mooloop_core::FilterParams::default(),
-                    48_000,
-                )),
+                node: default_effect(mooloop_core::EffectKind::Filter),
             });
             render.apply_command(EngineCommand::SetEffectParam {
                 channel: 0,
                 slot: 0,
-                id: mooloop_dsp::FILTER_PARAM_CUTOFF_HZ,
+                id: mooloop_core::FILTER_PARAM_CUTOFF_HZ,
                 value: 100.0,
             });
         });

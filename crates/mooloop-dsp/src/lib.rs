@@ -7,9 +7,9 @@
 //! - [`drumsynth`]: the percussive synth (kick / snare / hat).
 //! - [`monosynth`]: the three-oscillator mono synth.
 //! - [`effects`]: chainable effects that run after a channel's generator
-//!   (filter first; see `docs/EFFECTS_PLAN.md`).
-//! - [`env`], [`osc`], [`lfo`], [`filter`], [`smooth`]: building blocks shared
-//!   by the synths.
+//!   (see `docs/EFFECTS_PLAN.md` and `docs/MODULATION_PLAN.md`).
+//! - [`env`], [`osc`], [`lfo`], [`filter`], [`shaper`], [`smooth`]: building
+//!   blocks shared by the synths and effects.
 //!
 //! The synths implement `AudioNode` but are not yet wired into channels or
 //! the UI; that integration is a later step. Effects implement the same
@@ -26,11 +26,12 @@ pub mod monosynth;
 pub mod node;
 pub mod osc;
 pub mod sampler;
+pub mod shaper;
 pub mod smooth;
 
 pub use bus::{pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use drumsynth::DrumSynth;
-pub use effects::{FilterEffect, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_MODE, FILTER_PARAM_RESONANCE};
+pub use effects::{build_effect, BitcrushEffect, DriveEffect, FilterEffect};
 pub use event::{Event, EventList, TimedEvent};
 pub use monosynth::MonoSynth;
 pub use node::{AudioNode, ProcessContext};

@@ -1593,6 +1593,73 @@ id = "default_kick"
     }
 
     #[test]
+    fn song_round_trip_retains_a_mixed_effect_chain() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        // One slot per kind, so a kind whose tagged serde shape is broken
+        // fails here rather than silently round-tripping as its default.
+        for kind in mooloop_core::EffectKind::ALL {
+            let mut slot = mooloop_core::EffectSlotState::of_kind(kind);
+            for descriptor in kind.descriptors() {
+                // Move every parameter off its default.
+                let shifted = descriptor.from_normalized(
+                    (descriptor.to_normalized(descriptor.default) + 0.37) % 1.0,
+                );
+                slot.params.set(descriptor.id, shifted);
+            }
+            slot.bypassed = kind == mooloop_core::EffectKind::Drive;
+            project.channels[0].setup.effects.push(slot);
+        }
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
+
+    #[test]
+    fn song_manifest_with_untagged_filter_params_still_loads() {
+        // Songs written while `Filter` was the only effect kind stored
+        // `params` as a bare `FilterParams` table with a sibling `kind` key.
+        // `EffectParams` is tagged now; the old shape must still load.
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("legacy-effects.mooloop");
+        let mut project = Project::default();
+        project.channels[0]
+            .setup
+            .effects
+            .push(mooloop_core::EffectSlotState::filter(
+                mooloop_core::FilterParams {
+                    cutoff_hz: 1_250.0,
+                    resonance: 0.6,
+                    mode: mooloop_core::FilterMode::HighPass,
+                },
+            ));
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+
+        // Rewrite the tagged effect table back into the pre-tag shape.
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        let legacy = manifest
+            .replace(
+                "[document.channels.setup.effects.params]\ntype = \"filter\"\n\n\
+                 [document.channels.setup.effects.params.state]",
+                "[document.channels.setup.effects.params]",
+            )
+            .replace("bypassed = false", "kind = \"filter\"\nbypassed = false");
+        assert_ne!(manifest, legacy, "test setup: nothing was rewritten");
+        assert!(
+            !legacy.contains("params.state"),
+            "test setup: the tagged table survived the rewrite"
+        );
+        fs::write(&bundle, legacy).unwrap();
+
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
+
+    #[test]
     fn song_manifest_without_effects_field_still_loads() {
         // Songs written before effects existed have no `effects` key on their
         // channels; `#[serde(default)]` must fill in an empty chain.

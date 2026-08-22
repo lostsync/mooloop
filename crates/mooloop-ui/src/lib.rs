@@ -14,7 +14,7 @@ slint::include_modules!();
 use meter::MeterBallistics;
 use mooloop_core::{
     Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState,
-    EffectKind, EffectSlotState, EngineCommand, EngineEvent, FilterMode, FilterParams, HatCharacter,
+    EffectKind, EffectSlotState, EngineCommand, EngineEvent, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
     OscWave, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
     SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
@@ -23,10 +23,7 @@ use mooloop_core::{
     MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
-use mooloop_dsp::{
-    DrumSynth, FilterEffect, SampleData, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_MODE,
-    FILTER_PARAM_RESONANCE,
-};
+use mooloop_dsp::{build_effect, DrumSynth, SampleData};
 use mooloop_engine::{
     EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope,
     StructuralCommand, WavEncoding,
@@ -235,39 +232,55 @@ fn time_to_norm(t: f32) -> f32 {
     t / MAX_TIME_S
 }
 
-/// Perceptual 0..1 knob position <-> filter cutoff in Hz, matching the
-/// mapping used by `FilterResponseDisplay` and the synth filters
-/// (20 Hz * 1000^norm, i.e. 20 Hz .. 20 kHz).
-fn norm_to_cutoff_hz(v: f32) -> f32 {
-    20.0 * 1000f32.powf(v.clamp(0.0, 1.0))
-}
-fn cutoff_hz_to_norm(hz: f32) -> f32 {
-    (hz.max(20.0) / 20.0).log(1000.0).clamp(0.0, 1.0)
-}
+/// Number of positional parameter fields `EffectSlotRow` carries. Raising it
+/// means adding matching `pN` fields to the Slint struct too.
+const EFFECT_ROW_PARAMS: usize = 6;
 
-fn filter_mode_from_int(i: i32) -> FilterMode {
-    if i == 1 {
-        FilterMode::HighPass
-    } else {
-        FilterMode::LowPass
-    }
-}
-fn filter_mode_to_int(mode: FilterMode) -> i32 {
-    match mode {
-        FilterMode::LowPass => 0,
-        FilterMode::HighPass => 1,
+fn effect_kind_index(kind: EffectKind) -> i32 {
+    match kind {
+        EffectKind::Filter => 0,
+        EffectKind::Drive => 1,
+        EffectKind::Bitcrush => 2,
     }
 }
 
+fn effect_kind_from_index(index: i32) -> Option<EffectKind> {
+    EffectKind::ALL
+        .iter()
+        .copied()
+        .find(|kind| effect_kind_index(*kind) == index)
+}
+
+/// Project a slot into the flat, positional row the rack renders. Values are
+/// normalized through the kind's descriptor table in descriptor order, so a
+/// new effect kind needs a device face and no change here.
 fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
+    let kind = slot.kind();
+    let mut p = [0.0f32; EFFECT_ROW_PARAMS];
+    for (index, descriptor) in kind
+        .descriptors()
+        .iter()
+        .take(EFFECT_ROW_PARAMS)
+        .enumerate()
+    {
+        if let Some(natural) = slot.params.get(descriptor.id) {
+            p[index] = descriptor.to_normalized(natural);
+        }
+    }
+    debug_assert!(
+        kind.descriptors().len() <= EFFECT_ROW_PARAMS,
+        "{} has more parameters than EffectSlotRow can carry",
+        kind.label()
+    );
     EffectSlotRow {
-        kind: match slot.kind {
-            EffectKind::Filter => 0,
-        },
+        kind: effect_kind_index(kind),
         bypassed: slot.bypassed,
-        mode: filter_mode_to_int(slot.params.mode),
-        cutoff: cutoff_hz_to_norm(slot.params.cutoff_hz),
-        resonance: slot.params.resonance,
+        p0: p[0],
+        p1: p[1],
+        p2: p[2],
+        p3: p[3],
+        p4: p[4],
+        p5: p[5],
     }
 }
 
@@ -2829,20 +2842,23 @@ impl AppUi {
         {
             let stx = structural_tx.clone();
             let st = state.clone();
-            window.on_add_effect_clicked(move || {
+            window.on_add_effect_clicked(move |kind_index| {
+                let Some(kind) = effect_kind_from_index(kind_index) else {
+                    return;
+                };
                 let mut st = st.borrow_mut();
                 let ch = st.selected;
-                let (slot, effect) = {
+                let (slot, params) = {
                     let Some(channel) = st.channels.get_mut(ch) else {
                         return;
                     };
                     if channel.effects.len() >= MAX_EFFECTS_PER_CHANNEL {
                         return;
                     }
-                    let effect = EffectSlotState::filter(FilterParams::default());
+                    let effect = EffectSlotState::of_kind(kind);
                     let slot = channel.effects.len();
-                    channel.effects.push(effect.clone());
-                    (slot, effect)
+                    channel.effects.push(effect);
+                    (slot, effect.params)
                 };
                 st.sync_effects();
                 // The node is boxed here, on the GUI thread, and ownership
@@ -2850,7 +2866,7 @@ impl AppUi {
                 let _ = stx.send(StructuralCommand::InstallEffect {
                     channel: ch as u8,
                     slot: slot as u8,
-                    node: Box::new(FilterEffect::new(effect.params, sample_rate)),
+                    node: build_effect(params, sample_rate),
                 });
             });
         }
@@ -2915,45 +2931,44 @@ impl AppUi {
             });
         }
 
-        macro_rules! wire_effect_param {
-            ($on:ident, $id:expr, $apply:expr) => {{
-                let tx = cmd_tx.clone();
-                let st = state.clone();
-                window.$on(move |slot: i32, v: f32| {
-                    let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let slot = slot as usize;
-                    let Some(channel) = st.channels.get_mut(ch) else {
-                        return;
-                    };
-                    let Some(effect) = channel.effects.get_mut(slot) else {
-                        return;
-                    };
-                    let apply: &dyn Fn(&mut EffectSlotState, f32) -> f32 = &$apply;
-                    let value = apply(effect, v);
-                    let row = effect_slot_row(effect);
-                    st.effect_slot_model.set_row_data(slot, row);
-                    let _ = tx.send(EngineCommand::SetEffectParam {
-                        channel: ch as u8,
-                        slot: slot as u8,
-                        id: $id,
-                        value,
-                    });
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            // One callback for every parameter of every effect kind: the
+            // rack sends a descriptor index and a normalized position, and
+            // the descriptor table converts to the natural units the wire
+            // and the DSP use.
+            window.on_effect_param_changed(move |slot, param_index, normalized| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let slot = slot as usize;
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                let Some(effect) = channel.effects.get_mut(slot) else {
+                    return;
+                };
+                let Ok(param_index) = usize::try_from(param_index) else {
+                    return;
+                };
+                let Some(descriptor) = effect.kind().descriptors().get(param_index) else {
+                    return;
+                };
+                let id = descriptor.id;
+                let Some(value) = effect.params.set(id, descriptor.from_normalized(normalized))
+                else {
+                    return;
+                };
+                let row = effect_slot_row(effect);
+                st.effect_slot_model.set_row_data(slot, row);
+                let _ = tx.send(EngineCommand::SetEffectParam {
+                    channel: ch as u8,
+                    slot: slot as u8,
+                    id,
+                    value,
                 });
-            }};
+            });
         }
-        wire_effect_param!(on_effect_cutoff_changed, FILTER_PARAM_CUTOFF_HZ, |e: &mut EffectSlotState, v| {
-            e.params.cutoff_hz = norm_to_cutoff_hz(v);
-            e.params.cutoff_hz
-        });
-        wire_effect_param!(on_effect_resonance_changed, FILTER_PARAM_RESONANCE, |e: &mut EffectSlotState, v| {
-            e.params.resonance = v.clamp(0.0, 1.0);
-            e.params.resonance
-        });
-        wire_effect_param!(on_effect_mode_changed, FILTER_PARAM_MODE, |e: &mut EffectSlotState, v| {
-            e.params.mode = filter_mode_from_int(v as i32);
-            v
-        });
 
         {
             let tx = cmd_tx.clone();
@@ -3892,14 +3907,22 @@ impl AppUi {
                 w.invoke_playlist_placement_added(1, 192);
                 w.invoke_playlist_placement_added(1, 768);
                 w.invoke_playlist_placement_removed(1, 768);
-                // Effect chain: add two filters, edit both, reorder, bypass,
-                // remove — the full structural/param/swap command surface.
-                w.invoke_add_effect_clicked();
-                w.invoke_add_effect_clicked();
-                w.invoke_effect_cutoff_changed(0, 0.4);
-                w.invoke_effect_resonance_changed(0, 0.5);
-                w.invoke_effect_mode_changed(1, 1.0);
-                w.invoke_reorder_effect(0, 1);
+                // Effect chain: one slot of every kind, edited across their
+                // descriptor tables, then reordered, bypassed, and removed.
+                // Covers the full structural/param/swap command surface and
+                // proves each kind is constructible from the UI path.
+                w.invoke_add_effect_clicked(0);
+                w.invoke_add_effect_clicked(1);
+                w.invoke_add_effect_clicked(2);
+                w.invoke_effect_param_changed(0, 0, 0.4); // filter cutoff
+                w.invoke_effect_param_changed(0, 1, 0.5); // filter resonance
+                w.invoke_effect_param_changed(0, 2, 1.0); // filter -> high-pass
+                w.invoke_effect_param_changed(1, 0, 0.75); // drive amount
+                w.invoke_effect_param_changed(1, 1, 2.0 / 3.0); // drive -> fold
+                w.invoke_effect_param_changed(1, 3, 0.8); // drive mix
+                w.invoke_effect_param_changed(2, 0, 0.2); // bitcrush bits
+                w.invoke_effect_param_changed(2, 1, 0.6); // bitcrush rate
+                w.invoke_reorder_effect(0, 2);
                 w.invoke_effect_bypass_toggled(0);
                 w.invoke_effect_bypass_toggled(0);
                 w.invoke_remove_effect_clicked(1);

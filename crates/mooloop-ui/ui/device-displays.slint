@@ -141,3 +141,94 @@ export component FilterResponseDisplay inherits Rectangle {
         background: Theme.accent;
     }
 }
+
+// Transfer curve of the drive effect: input on x, shaped output on y. Mirrors
+// `mooloop_dsp::shaper` exactly — same curves, same drive compensation — so
+// the plot is parameter feedback rather than decoration.
+export component DriveTransferDisplay inherits Rectangle {
+    in property <float> drive;   // natural, 1..64
+    in property <int> curve;     // 0 = soft, 1 = hard, 2 = fold, 3 = tape
+    private property <int> sample-count: 140;
+    // tanh(0.12), the DC the tape curve subtracts back out.
+    private property <float> tape-dc: 0.1194273;
+
+    pure function tanh-of(x: float) -> float {
+        let e = pow(2.718281828, 2 * clamp(x, -8, 8));
+        return (e - 1) / (e + 1);
+    }
+
+    pure function fold-of(x: float) -> float {
+        let p = x * 0.25 + 0.25;
+        return 1 - 4 * abs((p - floor(p)) - 0.5);
+    }
+
+    pure function tape-of(x: float) -> float {
+        return (root.tanh-of(x + 0.12) - root.tape-dc) / (1 + root.tape-dc);
+    }
+
+    pure function shaped(x: float) -> float {
+        let driven = x * root.drive;
+        return root.curve == 1 ? clamp(driven, -1, 1)
+            : root.curve == 2 ? root.fold-of(driven)
+            : root.curve == 3 ? root.tape-of(driven)
+            : root.tanh-of(driven);
+    }
+
+    pure function compensation() -> float {
+        let d = max(1, root.drive);
+        return root.curve == 1 ? 1
+            : root.curve == 2 ? 1 / pow(d, 0.5)
+            : root.curve == 3 ? 1 / max(0.1, root.tape-of(d))
+            : 1 / max(0.1, root.tanh-of(d));
+    }
+
+    pure function plot-y(index: int) -> float {
+        let x = index / (root.sample-count - 1) * 2 - 1;
+        let y = clamp(root.shaped(x) * root.compensation(), -1, 1);
+        return 0.5 - y * 0.46;
+    }
+
+    // Unity axes: the diagonal a fully clean signal would follow.
+    Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border.with-alpha(0.55); }
+    Rectangle { x: parent.width / 2; width: 1px; height: 100%; background: Theme.border.with-alpha(0.55); }
+    for index in root.sample-count : Rectangle {
+        property <float> current: root.plot-y(index);
+        property <float> previous: root.plot-y(max(0, index - 1));
+        x: index * parent.width / root.sample-count;
+        y: min(self.current, self.previous) * parent.height;
+        width: max(1px, parent.width / root.sample-count + 0.5px);
+        height: max(1px, abs(self.current - self.previous) * parent.height);
+        background: Theme.warning;
+    }
+}
+
+// Quantization staircase of the bitcrush effect, using the effect's own
+// natural units rather than the sampler's normalized lo-fi controls: step
+// size is `2 / 2^bits` and the hold span is `downsample` input samples,
+// matching `mooloop_dsp::effects::bitcrush`.
+export component BitcrushTrace inherits Rectangle {
+    in property <float> bits;        // natural, 1..16
+    in property <float> downsample;  // natural, 1..64
+    private property <int> sample-count: 120;
+    private property <float> step: 2 / pow(2, clamp(root.bits, 1, 16));
+
+    pure function sample(index: int) -> float {
+        let hold = max(1, root.downsample);
+        let held-index = floor(index / hold) * hold;
+        let source = sin(held-index * 2.5 * 360deg / (root.sample-count - 1));
+        return clamp(round(source / root.step) * root.step, -1, 1);
+    }
+
+    Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border.with-alpha(0.55); }
+    for index in root.sample-count : Rectangle {
+        property <float> current: root.sample(index);
+        property <float> previous: root.sample(max(0, index - 1));
+        property <float> top-value: max(self.current, self.previous);
+        property <float> bottom-value: min(self.current, self.previous);
+        x: index * parent.width / root.sample-count;
+        y: parent.height * (0.5 - self.top-value * 0.44);
+        width: max(1px, parent.width / root.sample-count + 0.5px);
+        height: max(1px, parent.height * (self.top-value - self.bottom-value) * 0.44);
+        background: Theme.warning;
+    }
+}

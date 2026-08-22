@@ -21,6 +21,8 @@ import {
 } from "device-rack.slint";
 import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
+import { DriveDeviceFace } from "drive-device.slint";
+import { BitcrushDeviceFace } from "bitcrush-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 export { Theme }
@@ -80,12 +82,21 @@ struct PlaylistClip {
 }
 
 // One effect slot in the selected channel's chain, in signal order.
+//
+// Parameters are positional and normalized: `p0` is the first entry in this
+// kind's descriptor table in mooloop-core, `p1` the second, and so on, each
+// in 0..1. Faces convert to natural units for display using the same mapping
+// the descriptor defines. Keeping the row positional means adding an effect
+// kind costs a device face and nothing here.
 struct EffectSlotRow {
-    kind: int,        // 0 = Filter (matches EffectKind)
+    kind: int,        // matches EffectKind: 0 = Filter, 1 = Drive, 2 = Bitcrush
     bypassed: bool,
-    mode: int,        // filter: 0 = low-pass, 1 = high-pass
-    cutoff: float,    // perceptual 0..1
-    resonance: float, // 0..1
+    p0: float,
+    p1: float,
+    p2: float,
+    p3: float,
+    p4: float,
+    p5: float,
 }
 
 component FlatButton inherits ToolButton { }
@@ -234,12 +245,12 @@ export component MainWindow inherits Window {
 
     // ---- effect chain of the selected channel ----
     in property <[EffectSlotRow]> effect-slots;
-    callback add-effect-clicked();
+    callback add-effect-clicked(int);               // EffectKind index
     callback remove-effect-clicked(int);            // slot
     callback effect-bypass-toggled(int);            // slot
-    callback effect-cutoff-changed(int, float);     // slot, perceptual 0..1
-    callback effect-resonance-changed(int, float);  // slot, 0..1
-    callback effect-mode-changed(int, float);       // slot, 0=LP 1=HP
+    // slot, descriptor index within the kind, normalized 0..1. One callback
+    // covers every parameter of every effect kind.
+    callback effect-param-changed(int, int, float);
     callback reorder-effect(int, int);              // from slot, to slot
     in-out property <int> selected-note-step;
     in-out property <int> selected-note;
@@ -1607,7 +1618,7 @@ export component MainWindow inherits Window {
                                             y: 0px;
                                             width: DeviceRackMetrics.unit-width;
                                             height: DeviceRackMetrics.face-height;
-                                            FilterDeviceFace {
+                                            if slot.kind == 0 : FilterDeviceFace {
                                                 x: 0px;
                                                 y: 0px;
                                                 width: parent.width;
@@ -1615,12 +1626,52 @@ export component MainWindow inherits Window {
                                                 slot-index: index;
                                                 slot-count: root.effect-slots.length;
                                                 bypassed: slot.bypassed;
-                                                mode: slot.mode;
-                                                cutoff: slot.cutoff;
-                                                resonance: slot.resonance;
-                                                cutoff-changed(v) => { root.effect-cutoff-changed(index, v); }
-                                                resonance-changed(v) => { root.effect-resonance-changed(index, v); }
-                                                mode-changed(v) => { root.effect-mode-changed(index, v); }
+                                                cutoff: slot.p0;
+                                                resonance: slot.p1;
+                                                mode: slot.p2 >= 0.5 ? 1 : 0;
+                                                cutoff-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                resonance-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                mode-changed(v) => { root.effect-param-changed(index, 2, v * 1.0); }
+                                                bypass-toggled => { root.effect-bypass-toggled(index); }
+                                                remove-clicked => { root.remove-effect-clicked(index); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
+                                            if slot.kind == 1 : DriveDeviceFace {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: parent.width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                drive: slot.p0;
+                                                curve: round(slot.p1 * 3);
+                                                tone: slot.p2;
+                                                mix: slot.p3;
+                                                output: slot.p4;
+                                                drive-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                curve-changed(i) => { root.effect-param-changed(index, 1, i * 1.0 / 3.0); }
+                                                tone-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                mix-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                output-changed(v) => { root.effect-param-changed(index, 4, v); }
+                                                bypass-toggled => { root.effect-bypass-toggled(index); }
+                                                remove-clicked => { root.remove-effect-clicked(index); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
+                                            if slot.kind == 2 : BitcrushDeviceFace {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: parent.width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                bits: slot.p0;
+                                                downsample: slot.p1;
+                                                mix: slot.p2;
+                                                bits-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                downsample-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                mix-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                 bypass-toggled => { root.effect-bypass-toggled(index); }
                                                 remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
@@ -1629,9 +1680,36 @@ export component MainWindow inherits Window {
                                         DeviceJoin { x: DeviceRackMetrics.unit-width; y: 0px; }
                                     }
 
-                                    DeviceAddSlot {
-                                        enabled: root.effect-slots.length < 8;
-                                        clicked => { root.add-effect-clicked(); }
+                                    Rectangle {
+                                        width: 50px;
+                                        height: DeviceRackMetrics.face-height;
+                                        DeviceAddSlot {
+                                            enabled: root.effect-slots.length < 8;
+                                            clicked => { add-effect-menu.show(); }
+                                        }
+                                        // Effect kinds are a growing set, so the
+                                        // add action opens a menu rather than
+                                        // spending rack width on a selector bank.
+                                        add-effect-menu := PopupWindow {
+                                            x: 0px;
+                                            y: 44px;
+                                            width: 148px;
+                                            height: 82px;
+                                            close-policy: close-on-click;
+                                            Rectangle {
+                                                background: Theme.surface;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                border-radius: 3px;
+                                                VerticalLayout {
+                                                    padding: 4px;
+                                                    spacing: 1px;
+                                                    ToolButton { text: "Filter"; tooltip: "Add a low/high-pass filter"; clicked => { add-effect-menu.close(); root.add-effect-clicked(0); } }
+                                                    ToolButton { text: "Drive"; tooltip: "Add saturation or distortion"; clicked => { add-effect-menu.close(); root.add-effect-clicked(1); } }
+                                                    ToolButton { text: "Bitcrush"; tooltip: "Add bit and rate reduction"; clicked => { add-effect-menu.close(); root.add-effect-clicked(2); } }
+                                                }
+                                            }
+                                        }
                                     }
                                     Rectangle { horizontal-stretch: 1; }
                                 }
