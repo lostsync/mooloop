@@ -36,6 +36,12 @@ work session you can recall being part of, and don't stress over precision.
 
 ## Roster
 
+### Claude Opus 5 — Claude Code
+- First seen: 2026-08-21
+- Last seen: 2026-08-21
+- Sessions: 1
+- Notes: Parameter descriptors, the modulation design, drive and bitcrush.
+
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-21

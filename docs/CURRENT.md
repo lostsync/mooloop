@@ -49,8 +49,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   reduction. Voice controls cover one-shot/gated playback, 1-16 voices,
   restart/layer retriggering, and 16 cross-channel choke groups.
 - A horizontal lower device rack with one fixed-height 3U source face followed
-  by a chainable effect chain (a low-pass/high-pass filter ships first; slots
-  are added from the rack's add slot, bypassed or removed from their headers,
+  by a chainable effect chain (filter, drive, and bitcrush; slots are added
+  by kind from the rack's add slot, bypassed or removed from their headers,
   and reordered by dragging a header). Sampler, drum synth, and mono
   synth faces share the same rack chrome and preserve their dimensions at
   narrow widths through horizontal scrolling. Sampler controls are divided
@@ -201,6 +201,15 @@ through an `ArcSwapOption` slot.
   slot swap on a plain `EngineCommand`, and knob changes arrive as
   sample-timed `ParamValue` events. Effect chains persist in song files
   (`ChannelSetup.effects`, serde-defaulted for older manifests).
+- Three effect kinds ship: a low-pass/high-pass filter, a drive/saturation
+  with four curves at 2x oversampling, and a bitcrush that is deliberately
+  not oversampled. Each kind publishes a static `ParamDescriptor` table
+  (range, curve, unit, default) in `mooloop-core`, which is the single source
+  of truth for normalization and clamping; `Event::ParamValue` carries natural
+  units so nodes never handle curves. `EffectSlotState.params` is a tagged
+  `EffectParams` enum, and the pre-tag untagged filter shape still loads.
+- Modulation, automation, and a general parameter address type do not exist
+  yet. `docs/MODULATION_PLAN.md` records the approved design for them.
 - There are no sends, returns, groups, sidechains, external inputs, or routing
   controls.
 
