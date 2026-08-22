@@ -193,8 +193,37 @@ fn clicking_a_strip_name_selects_that_bus() {
     assert_eq!(picked.get(), -1, "the gutter must not select a bus");
 }
 
+/// A channel owns its mixer destination even while the mixer pane is hidden.
+/// Exercise the real popup rather than invoking the Rust callback directly:
+/// this is the path that previously made every channel appear stuck on Master.
+#[test]
+fn channel_bus_picker_reports_the_selected_destination() {
+    let ui = headless();
+    ui.set_mixer_visible(false);
+
+    let picked = Rc::new(Cell::new(-1));
+    let sink = picked.clone();
+    ui.on_channel_bus_changed(move |channel, bus| {
+        assert_eq!(channel, 0);
+        sink.set(bus);
+    });
+
+    // The first rack row's destination picker, then the fourth item in its
+    // popup (Master, Bus 1, Bus 2, Bus 3).
+    click(&ui, CHANNEL_BUS_PICKER_X, CHANNEL_ROW_Y);
+    click(&ui, CHANNEL_BUS_PICKER_X, CHANNEL_MENU_BUS_3_Y);
+    assert_eq!(picked.get(), 3);
+}
+
 /// Vertical centre of a strip's name plate, below the menu bar, both toolbar
 /// rows, and the work surface's Steps/Mixer header.
 const NAME_PLATE_Y: f32 = 136.0;
 /// Strip width plus the layout gap between two strips.
 const STRIP_PITCH: f32 = 66.0;
+
+/// Centre of the first channel row's bus picker in the normal work surface.
+const CHANNEL_BUS_PICKER_X: f32 = 202.0;
+const CHANNEL_ROW_Y: f32 = 143.0;
+/// Centre of Bus 3 in the picker popup. The menu opens directly below its
+/// 22px owner and each option is 21px tall after 4px top padding.
+const CHANNEL_MENU_BUS_3_Y: f32 = 243.0;

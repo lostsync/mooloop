@@ -73,7 +73,12 @@ export component BusPicker inherits Rectangle {
         y: root.height + 2px;
         width: 96px;
         height: root.bus-names.length * 21px + 8px;
-        close-policy: close-on-click;
+        // A destination is chosen by clicking *inside* this popup. With
+        // `close-on-click`, Slint consumes that click to dismiss the popup
+        // before the row's ToolButton can report `picked`, leaving every
+        // channel apparently stuck on Master. Close explicitly after the
+        // button reports its selection; only outside clicks auto-dismiss.
+        close-policy: close-on-click-outside;
         Rectangle {
             background: Theme.surface;
             border-width: 1px;
