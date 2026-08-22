@@ -11,12 +11,15 @@ use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
 use rtrb::Consumer;
 
 use crate::render::RenderState;
+use crate::{StructuralCommand, StructuralReclaim};
 
 pub(crate) struct GraphIo {
     pub out_l: Port<AudioOut>,
     pub out_r: Port<AudioOut>,
     pub cmd_rx: Consumer<EngineCommand>,
     pub evt_tx: rtrb::Producer<EngineEvent>,
+    pub structural_rx: Consumer<StructuralCommand>,
+    pub reclaim_tx: rtrb::Producer<StructuralReclaim>,
 }
 
 pub(crate) struct Graph {
@@ -25,6 +28,11 @@ pub(crate) struct Graph {
     out_r: Port<AudioOut>,
     cmd_rx: Consumer<EngineCommand>,
     evt_tx: rtrb::Producer<EngineEvent>,
+    structural_rx: Consumer<StructuralCommand>,
+    reclaim_tx: rtrb::Producer<StructuralReclaim>,
+    /// Reclaim nodes that did not fit the reclaim ring last block; retried
+    /// each block so a full ring never forces a drop on this thread.
+    reclaim_spill: Vec<StructuralReclaim>,
     project_slot: Arc<ArcSwapOption<Project>>,
     xrun_count: Arc<AtomicU64>,
     last_seen_xruns: u64,
@@ -44,6 +52,9 @@ impl Graph {
             out_r: io.out_r,
             cmd_rx: io.cmd_rx,
             evt_tx: io.evt_tx,
+            structural_rx: io.structural_rx,
+            reclaim_tx: io.reclaim_tx,
+            reclaim_spill: Vec::new(),
             project_slot,
             xrun_count,
             last_seen_xruns: 0,
@@ -66,6 +77,24 @@ impl ProcessHandler for Graph {
                         .push(EngineEvent::ProjectInstalled { generation });
                 }
                 other => self.render.apply_command(other),
+            }
+        }
+        while let Ok(command) = self.structural_rx.pop() {
+            self.render.apply_structural(command);
+        }
+        // Hand displaced effect nodes back to the GUI thread for disposal.
+        // Anything that does not fit this block is retried next block,
+        // reusing the spill buffer's capacity.
+        let mut outgoing = std::mem::take(&mut self.reclaim_spill);
+        outgoing.extend(
+            self.render
+                .take_reclaim()
+                .into_iter()
+                .map(StructuralReclaim::Node),
+        );
+        for node in outgoing.drain(..) {
+            if let Err(rtrb::PushError::Full(node)) = self.reclaim_tx.push(node) {
+                self.reclaim_spill.push(node);
             }
         }
 

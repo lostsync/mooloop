@@ -17,7 +17,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwapOption;
 use jack::{AudioOut, Client, ClientOptions};
 use mooloop_core::{EngineCommand, EngineEvent, MAX_CHANNELS};
-use mooloop_dsp::SampleData;
+use mooloop_dsp::{AudioNode, SampleData};
 use rtrb::{Consumer, Producer};
 
 mod graph;
@@ -32,6 +32,32 @@ pub use offline::{
     ExportError, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, RenderSummary,
     WavEncoding,
 };
+
+/// GUI -> audio. Carries ownership of a heap-allocated effect node into the
+/// realtime thread. This lives here rather than in `mooloop-core`'s
+/// `EngineCommand` for two reasons: `Box` is not `Copy` (the command ring is
+/// POD-only), and `AudioNode` comes from `mooloop-dsp`, which `mooloop-core`
+/// must not depend on.
+pub enum StructuralCommand {
+    /// Install `node` at `slot` on `channel`, replacing whatever was there.
+    /// The replaced node (if any) comes back via the reclaim ring — the
+    /// realtime thread never drops a `Box` itself (that would be a
+    /// deallocation on the audio thread).
+    InstallEffect {
+        channel: u8,
+        slot: u8,
+        node: Box<dyn AudioNode + Send>,
+    },
+    /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
+    RemoveEffect { channel: u8, slot: u8 },
+}
+
+/// audio -> GUI. Hands back a displaced node so the GUI thread can drop it
+/// (deallocate) safely, off the realtime thread. Drained as a side effect of
+/// `EngineHandle::poll` — there is nothing to inspect.
+pub enum StructuralReclaim {
+    Node(Box<dyn AudioNode + Send>),
+}
 
 const QUEUE_CAPACITY: usize = 1024;
 const CLIENT_NAME: &str = "mooloop";
@@ -76,6 +102,12 @@ impl Engine {
             rtrb::RingBuffer::new(QUEUE_CAPACITY);
         let (evt_tx, evt_rx): (Producer<EngineEvent>, Consumer<EngineEvent>) =
             rtrb::RingBuffer::new(QUEUE_CAPACITY);
+        let (structural_tx, structural_rx): (
+            Producer<StructuralCommand>,
+            Consumer<StructuralCommand>,
+        ) = rtrb::RingBuffer::new(QUEUE_CAPACITY);
+        let (reclaim_tx, reclaim_rx): (Producer<StructuralReclaim>, Consumer<StructuralReclaim>) =
+            rtrb::RingBuffer::new(QUEUE_CAPACITY);
 
         let out_l = client
             .register_port("out_l", AudioOut::default())
@@ -101,6 +133,8 @@ impl Engine {
             out_r,
             cmd_rx,
             evt_tx,
+            structural_rx,
+            reclaim_tx,
         };
         let graph = Graph::new(
             sample_rate,
@@ -136,6 +170,8 @@ impl Engine {
             EngineHandle {
                 cmd_tx,
                 evt_rx,
+                structural_tx,
+                reclaim_rx,
                 sample_slots,
                 project_slot,
                 sample_rate,
@@ -151,6 +187,8 @@ impl Engine {
 pub struct EngineHandle {
     cmd_tx: Producer<EngineCommand>,
     evt_rx: Consumer<EngineEvent>,
+    structural_tx: Producer<StructuralCommand>,
+    reclaim_rx: Consumer<StructuralReclaim>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     project_slot: Arc<ArcSwapOption<mooloop_core::Project>>,
     sample_rate: u32,
@@ -165,8 +203,21 @@ impl EngineHandle {
         let _ = self.cmd_tx.push(cmd);
     }
 
+    /// Hand a heap-allocated structural change (effect install/remove) to the
+    /// audio thread. Non-blocking; on overflow the command is dropped, which
+    /// for `InstallEffect` drops the node back on this (GUI) thread.
+    pub fn send_structural(&mut self, cmd: StructuralCommand) {
+        let _ = self.structural_tx.push(cmd);
+    }
+
     /// Pop one event if available.
     pub fn poll(&mut self) -> Option<EngineEvent> {
+        // Reclaim displaced effect nodes first: dropping the boxes here frees
+        // them off the realtime thread, which is the entire point of the
+        // reclaim ring.
+        while let Ok(StructuralReclaim::Node(node)) = self.reclaim_rx.pop() {
+            drop(node);
+        }
         loop {
             match self.evt_rx.pop().ok()? {
                 EngineEvent::ProjectInstalled { generation } => {

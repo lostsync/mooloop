@@ -88,6 +88,27 @@ pub enum EngineCommand {
         channel: u8,
         params: MonoSynthParams,
     },
+    /// Swap two slots in a channel's effect chain (drag reorder). Swapping
+    /// array entries moves pointers only, so this is safe on the realtime
+    /// thread — installing/removing nodes is not, and goes through the
+    /// engine's structural command ring instead.
+    SwapEffectSlots { channel: u8, slot_a: u8, slot_b: u8 },
+    /// Bypass or re-enable one effect slot. While bypassed the slot's
+    /// parameter events keep accumulating and flush on re-enable.
+    SetEffectBypassed {
+        channel: u8,
+        slot: u8,
+        bypassed: bool,
+    },
+    /// Queue one sample-timed parameter change for one effect slot. Delivered
+    /// to the node as `Event::ParamValue` at the next block, so effect kinds
+    /// need no bespoke command per parameter.
+    SetEffectParam {
+        channel: u8,
+        slot: u8,
+        id: u32,
+        value: f32,
+    },
     /// Import the latest project snapshot published through the engine's
     /// out-of-band ArcSwap slot into preallocated realtime storage.
     InstallProject { generation: u64 },
