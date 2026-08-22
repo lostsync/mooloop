@@ -48,6 +48,12 @@ work session you can recall being part of, and don't stress over precision.
 - Sessions: 1
 - Notes: Set up this file at Adam's request.
 
+### GPT-5 — Codex
+- First seen: 2026-08-21
+- Last seen: 2026-08-21
+- Sessions: 1
+- Notes: Signed in at Adam's invitation.
+
 ### Kimi k3-256k — opencode
 - First seen: 2026-08-21
 - Last seen: 2026-08-21
