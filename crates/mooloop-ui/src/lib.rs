@@ -14,17 +14,22 @@ slint::include_modules!();
 use meter::MeterBallistics;
 use mooloop_core::{
     Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState,
-    EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit, LfoWave, LoopMode,
-    MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, PatternPlacement, PlaybackMode,
-    Ppq, Project, ProjectChannel, RetriggerMode, SampleReference, SamplerParams, SamplerState,
-    SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT,
-    MAX_CHANNELS, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
-    MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR,
-    TICKS_PER_STEP,
+    EffectKind, EffectSlotState, EngineCommand, EngineEvent, FilterMode, FilterParams, HatCharacter,
+    KickCharacter, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
+    OscWave, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
+    SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
+    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
+    MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
+    MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
+    TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
-use mooloop_dsp::{DrumSynth, SampleData};
+use mooloop_dsp::{
+    DrumSynth, FilterEffect, SampleData, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_MODE,
+    FILTER_PARAM_RESONANCE,
+};
 use mooloop_engine::{
-    EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, WavEncoding,
+    EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope,
+    StructuralCommand, WavEncoding,
 };
 use mooloop_project::{
     AssetMode, AssetWarning, LoadReport, LoadedDocument, PresetInfo, PresetSummary, SaveReport,
@@ -100,6 +105,7 @@ struct ChannelState {
     can_next_sample: bool,
     notes: Vec<Vec<NoteEvent>>,
     next_note_id: NoteId,
+    effects: Vec<EffectSlotState>,
 }
 
 impl ChannelState {
@@ -129,6 +135,7 @@ impl ChannelState {
             can_next_sample: false,
             notes: vec![Vec::new()],
             next_note_id: 1,
+            effects: Vec::new(),
         }
     }
 
@@ -226,6 +233,42 @@ fn norm_to_time(v: f32) -> f32 {
 }
 fn time_to_norm(t: f32) -> f32 {
     t / MAX_TIME_S
+}
+
+/// Perceptual 0..1 knob position <-> filter cutoff in Hz, matching the
+/// mapping used by `FilterResponseDisplay` and the synth filters
+/// (20 Hz * 1000^norm, i.e. 20 Hz .. 20 kHz).
+fn norm_to_cutoff_hz(v: f32) -> f32 {
+    20.0 * 1000f32.powf(v.clamp(0.0, 1.0))
+}
+fn cutoff_hz_to_norm(hz: f32) -> f32 {
+    (hz.max(20.0) / 20.0).log(1000.0).clamp(0.0, 1.0)
+}
+
+fn filter_mode_from_int(i: i32) -> FilterMode {
+    if i == 1 {
+        FilterMode::HighPass
+    } else {
+        FilterMode::LowPass
+    }
+}
+fn filter_mode_to_int(mode: FilterMode) -> i32 {
+    match mode {
+        FilterMode::LowPass => 0,
+        FilterMode::HighPass => 1,
+    }
+}
+
+fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
+    EffectSlotRow {
+        kind: match slot.kind {
+            EffectKind::Filter => 0,
+        },
+        bypassed: slot.bypassed,
+        mode: filter_mode_to_int(slot.params.mode),
+        cutoff: cutoff_hz_to_norm(slot.params.cutoff_hz),
+        resonance: slot.params.resonance,
+    }
 }
 
 fn loop_mode_from_int(i: i32) -> LoopMode {
@@ -466,6 +509,7 @@ struct UiState {
     note_model: Rc<VecModel<NoteCell>>,
     playlist_model: Rc<VecModel<PlaylistClip>>,
     waveform_model: Rc<VecModel<f32>>,
+    effect_slot_model: Rc<VecModel<EffectSlotRow>>,
     default_waveform: Vec<f32>,
     default_sample_description: String,
     default_sample_duration: f32,
@@ -583,9 +627,7 @@ impl UiState {
                             pan: channel.pan,
                         },
                         source,
-                        // TODO(stage 3): mirror the real chain once the UI
-                        // tracks effect slots.
-                        effects: Vec::new(),
+                        effects: channel.effects.clone(),
                     },
                     notes: channel.notes.clone(),
                     next_note_id: channel.next_note_id,
@@ -738,6 +780,7 @@ impl UiState {
                     can_next_sample: can_next,
                     notes: project_channel.notes.clone(),
                     next_note_id: project_channel.next_note_id,
+                    effects: setup.effects.clone(),
                 }
             })
             .collect::<Vec<_>>();
@@ -959,6 +1002,18 @@ impl UiState {
         window.set_selected_duration_ticks(note.duration_ticks as i32);
     }
 
+    /// Rebuild the selected channel's effect-chain rows. The model itself is
+    /// installed on the window once; this refreshes its contents after
+    /// structural changes (add/remove/reorder) and channel switches.
+    fn sync_effects(&self) {
+        let rows: Vec<EffectSlotRow> = self
+            .channels
+            .get(self.selected)
+            .map(|channel| channel.effects.iter().map(effect_slot_row).collect())
+            .unwrap_or_default();
+        self.effect_slot_model.set_vec(rows);
+    }
+
     /// Refresh the bottom editor's properties from `selected`.
     fn refresh_editor(&self, window: &MainWindow) {
         let Some(ch) = self.channels.get(self.selected) else {
@@ -969,6 +1024,7 @@ impl UiState {
         let mono = ch.mono_params;
         window.set_selected_channel_name(ch.name.as_str().into());
         window.set_source_kind(device_kind_to_int(ch.kind));
+        self.sync_effects();
         window.set_drum_mode(drum_mode_to_int(drum.mode));
         window.set_drum_kick_character(kick_character_to_int(drum.kick_character));
         window.set_drum_snare_character(snare_character_to_int(drum.snare_character));
@@ -1206,10 +1262,12 @@ impl AppUi {
         };
         let rows_model = Rc::new(VecModel::from(vec![row]));
         let waveform_model = Rc::new(VecModel::from(first.waveform.clone()));
+        let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
         window.set_channels(ModelRc::from(rows_model.clone()));
         window.set_notes(ModelRc::from(note_model.clone()));
         window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
         window.set_waveform(ModelRc::from(waveform_model.clone()));
+        window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
         window.set_pattern_count(1);
 
         let state = Rc::new(RefCell::new(UiState {
@@ -1219,6 +1277,7 @@ impl AppUi {
             note_model,
             playlist_model,
             waveform_model,
+            effect_slot_model,
             default_waveform,
             default_sample_description,
             default_sample_duration,
@@ -1725,6 +1784,10 @@ impl AppUi {
 
         // --- Command channel from UI closures to the pump ---
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<EngineCommand>();
+        // Effect install/remove hands boxed nodes to the audio thread, so it
+        // cannot ride the POD EngineCommand channel — same relay pattern.
+        let (structural_tx, structural_rx) = std::sync::mpsc::channel::<StructuralCommand>();
+        let sample_rate = handle.sample_rate();
         // Sample slots are published out-of-band, so source replacement asks
         // the pump (which owns the EngineHandle) to restore the built-in sample.
         let (sample_reset_tx, sample_reset_rx) = std::sync::mpsc::channel::<usize>();
@@ -2762,6 +2825,177 @@ impl AppUi {
             });
         }
 
+        // --- Effect chain callbacks (edit the selected channel) ---
+        {
+            let stx = structural_tx.clone();
+            let st = state.clone();
+            window.on_add_effect_clicked(move || {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let (slot, effect) = {
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    if channel.effects.len() >= MAX_EFFECTS_PER_CHANNEL {
+                        return;
+                    }
+                    let effect = EffectSlotState::filter(FilterParams::default());
+                    let slot = channel.effects.len();
+                    channel.effects.push(effect.clone());
+                    (slot, effect)
+                };
+                st.sync_effects();
+                // The node is boxed here, on the GUI thread, and ownership
+                // crosses to the audio thread through the structural ring.
+                let _ = stx.send(StructuralCommand::InstallEffect {
+                    channel: ch as u8,
+                    slot: slot as u8,
+                    node: Box::new(FilterEffect::new(effect.params, sample_rate)),
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
+            let st = state.clone();
+            window.on_remove_effect_clicked(move |slot| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let slot = slot as usize;
+                let removed_tail = {
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    if slot >= channel.effects.len() {
+                        return;
+                    }
+                    channel.effects.remove(slot);
+                    channel.effects.len()
+                };
+                st.sync_effects();
+                // Mirror on the engine with its two primitives: shift later
+                // slots down by adjacent swaps, then drop the vacated tail.
+                for j in (slot + 1)..=removed_tail {
+                    let _ = tx.send(EngineCommand::SwapEffectSlots {
+                        channel: ch as u8,
+                        slot_a: j as u8,
+                        slot_b: j as u8 - 1,
+                    });
+                }
+                let _ = stx.send(StructuralCommand::RemoveEffect {
+                    channel: ch as u8,
+                    slot: removed_tail as u8,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_effect_bypass_toggled(move |slot| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let slot = slot as usize;
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                let Some(effect) = channel.effects.get_mut(slot) else {
+                    return;
+                };
+                effect.bypassed = !effect.bypassed;
+                let bypassed = effect.bypassed;
+                let row = effect_slot_row(effect);
+                st.effect_slot_model.set_row_data(slot, row);
+                let _ = tx.send(EngineCommand::SetEffectBypassed {
+                    channel: ch as u8,
+                    slot: slot as u8,
+                    bypassed,
+                });
+            });
+        }
+
+        macro_rules! wire_effect_param {
+            ($on:ident, $id:expr, $apply:expr) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$on(move |slot: i32, v: f32| {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let slot = slot as usize;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    let Some(effect) = channel.effects.get_mut(slot) else {
+                        return;
+                    };
+                    let apply: &dyn Fn(&mut EffectSlotState, f32) -> f32 = &$apply;
+                    let value = apply(effect, v);
+                    let row = effect_slot_row(effect);
+                    st.effect_slot_model.set_row_data(slot, row);
+                    let _ = tx.send(EngineCommand::SetEffectParam {
+                        channel: ch as u8,
+                        slot: slot as u8,
+                        id: $id,
+                        value,
+                    });
+                });
+            }};
+        }
+        wire_effect_param!(on_effect_cutoff_changed, FILTER_PARAM_CUTOFF_HZ, |e: &mut EffectSlotState, v| {
+            e.params.cutoff_hz = norm_to_cutoff_hz(v);
+            e.params.cutoff_hz
+        });
+        wire_effect_param!(on_effect_resonance_changed, FILTER_PARAM_RESONANCE, |e: &mut EffectSlotState, v| {
+            e.params.resonance = v.clamp(0.0, 1.0);
+            e.params.resonance
+        });
+        wire_effect_param!(on_effect_mode_changed, FILTER_PARAM_MODE, |e: &mut EffectSlotState, v| {
+            e.params.mode = filter_mode_from_int(v as i32);
+            v
+        });
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_reorder_effect(move |from, to| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let (from, to) = (from as usize, to as usize);
+                {
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    let len = channel.effects.len();
+                    if from >= len || to >= len || from == to {
+                        return;
+                    }
+                    let effect = channel.effects.remove(from);
+                    channel.effects.insert(to, effect);
+                }
+                st.sync_effects();
+                // The engine's only reorder primitive is an adjacent-slot
+                // swap (pointer swap, realtime-safe); a move is a run of them.
+                if from < to {
+                    for i in from..to {
+                        let _ = tx.send(EngineCommand::SwapEffectSlots {
+                            channel: ch as u8,
+                            slot_a: i as u8,
+                            slot_b: i as u8 + 1,
+                        });
+                    }
+                } else {
+                    for i in (to + 1..=from).rev() {
+                        let _ = tx.send(EngineCommand::SwapEffectSlots {
+                            channel: ch as u8,
+                            slot_a: i as u8,
+                            slot_b: i as u8 - 1,
+                        });
+                    }
+                }
+            });
+        }
+
         // --- Sampler parameter callbacks (edit the selected channel) ---
         macro_rules! wire_time_param {
             ($on:ident, $field:ident) => {{
@@ -3543,6 +3777,18 @@ impl AppUi {
                     }
                     handle.send(cmd);
                     forwarded += 1;
+                }
+                while let Ok(cmd) = structural_rx.try_recv() {
+                    // Any structural change is an unsaved edit.
+                    {
+                        let mut state = st.borrow_mut();
+                        state.dirty = true;
+                        state.revision = state.revision.wrapping_add(1);
+                        if let Some(window) = weak.upgrade() {
+                            state.update_document_title(&window);
+                        }
+                    }
+                    handle.send_structural(cmd);
                 }
                 let Some(w) = weak.upgrade() else { return };
                 let mut saw_nonzero = false;

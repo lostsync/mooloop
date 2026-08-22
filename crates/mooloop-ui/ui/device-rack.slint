@@ -22,6 +22,8 @@ export component DeviceHeader inherits Rectangle {
     in property <string> kind;
     in property <color> device-color: Theme.accent;
     in property <bool> enabled: true;
+    // Right-edge role tag: "SOURCE" for generators, "FX" for effects.
+    in property <string> role: "SOURCE";
 
     height: DeviceRackMetrics.header-height;
     background: Theme.surface-raised;
@@ -61,7 +63,7 @@ export component DeviceHeader inherits Rectangle {
         }
         Rectangle { horizontal-stretch: 1; }
         Text {
-            text: "SOURCE";
+            text: root.role;
             color: Theme.text-faint;
             font-size: 8px;
             vertical-alignment: center;

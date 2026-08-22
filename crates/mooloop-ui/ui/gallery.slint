@@ -15,6 +15,10 @@ import {
     ToolbarLabel, ToolbarRule, ToolIcons, ToolModeButton
 } from "toolbar.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
+import {
+    DeviceAddSlot, DeviceFrame, DeviceRackMetrics
+} from "device-rack.slint";
+import { FilterDeviceFace } from "filter-device.slint";
 
 export component ControlGallery inherits Window {
     title: "mooloop control gallery";
@@ -456,6 +460,43 @@ export component ControlGallery inherits Window {
                         }
                         Rectangle { horizontal-stretch: 1; }
                     }
+                }
+
+                SectionLabel { text: "DEVICE FACES"; }
+                HorizontalBox {
+                    spacing: 4px;
+                    alignment: start;
+                    DeviceFrame {
+                        width: DeviceRackMetrics.unit-width;
+                        height: DeviceRackMetrics.face-height;
+                        FilterDeviceFace {
+                            x: 0px;
+                            y: 0px;
+                            width: parent.width;
+                            height: parent.height;
+                            slot-index: 0;
+                            slot-count: 2;
+                            cutoff: 0.62;
+                            resonance: 0.45;
+                        }
+                    }
+                    DeviceFrame {
+                        width: DeviceRackMetrics.unit-width;
+                        height: DeviceRackMetrics.face-height;
+                        FilterDeviceFace {
+                            x: 0px;
+                            y: 0px;
+                            width: parent.width;
+                            height: parent.height;
+                            slot-index: 1;
+                            slot-count: 2;
+                            bypassed: true;
+                            mode: 1;
+                            cutoff: 0.3;
+                            resonance: 0.1;
+                        }
+                    }
+                    DeviceAddSlot { }
                 }
 
                 SectionLabel { text: "CURSOR TOOLS AND STEPPERS"; }

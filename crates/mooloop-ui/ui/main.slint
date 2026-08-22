@@ -20,6 +20,7 @@ import {
     DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics
 } from "device-rack.slint";
 import { DrumDeviceFace } from "drum-device.slint";
+import { FilterDeviceFace } from "filter-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 export { Theme }
@@ -76,6 +77,15 @@ struct PlaylistClip {
     pattern: int,
     start-tick: int,
     length-steps: int,
+}
+
+// One effect slot in the selected channel's chain, in signal order.
+struct EffectSlotRow {
+    kind: int,        // 0 = Filter (matches EffectKind)
+    bypassed: bool,
+    mode: int,        // filter: 0 = low-pass, 1 = high-pass
+    cutoff: float,    // perceptual 0..1
+    resonance: float, // 0..1
 }
 
 component FlatButton inherits ToolButton { }
@@ -221,6 +231,16 @@ export component MainWindow inherits Window {
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
     callback channel-source-changed(int);
+
+    // ---- effect chain of the selected channel ----
+    in property <[EffectSlotRow]> effect-slots;
+    callback add-effect-clicked();
+    callback remove-effect-clicked(int);            // slot
+    callback effect-bypass-toggled(int);            // slot
+    callback effect-cutoff-changed(int, float);     // slot, perceptual 0..1
+    callback effect-resonance-changed(int, float);  // slot, 0..1
+    callback effect-mode-changed(int, float);       // slot, 0=LP 1=HP
+    callback reorder-effect(int, int);              // from slot, to slot
     in-out property <int> selected-note-step;
     in-out property <int> selected-note;
     in-out property <int> selected-velocity;
@@ -1578,7 +1598,41 @@ export component MainWindow inherits Window {
                                     }
 
                                     DeviceJoin { }
-                                    DeviceAddSlot { enabled: false; }
+
+                                    for slot[index] in root.effect-slots : Rectangle {
+                                        width: DeviceRackMetrics.unit-width + 20px;
+                                        height: DeviceRackMetrics.face-height;
+                                        DeviceFrame {
+                                            x: 0px;
+                                            y: 0px;
+                                            width: DeviceRackMetrics.unit-width;
+                                            height: DeviceRackMetrics.face-height;
+                                            FilterDeviceFace {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: parent.width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                mode: slot.mode;
+                                                cutoff: slot.cutoff;
+                                                resonance: slot.resonance;
+                                                cutoff-changed(v) => { root.effect-cutoff-changed(index, v); }
+                                                resonance-changed(v) => { root.effect-resonance-changed(index, v); }
+                                                mode-changed(v) => { root.effect-mode-changed(index, v); }
+                                                bypass-toggled => { root.effect-bypass-toggled(index); }
+                                                remove-clicked => { root.remove-effect-clicked(index); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
+                                        }
+                                        DeviceJoin { x: DeviceRackMetrics.unit-width; y: 0px; }
+                                    }
+
+                                    DeviceAddSlot {
+                                        enabled: root.effect-slots.length < 8;
+                                        clicked => { root.add-effect-clicked(); }
+                                    }
                                     Rectangle { horizontal-stretch: 1; }
                                 }
                             }

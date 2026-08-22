@@ -1,0 +1,142 @@
+import { Theme } from "theme.slint";
+import { IconButton, ParameterKnob, SelectorBank } from "controls.slint";
+import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { FilterResponseDisplay } from "device-displays.slint";
+
+// One filter effect in a channel's device rack. Includes its own header so
+// the header can double as the drag handle for reordering, with bypass and
+// remove as small action buttons at the header's right edge (per
+// docs/UI_DESIGN.md's Rack Actions rule).
+export component FilterDeviceFace inherits Rectangle {
+    in property <int> slot-index;
+    in property <int> slot-count;
+    in property <bool> bypassed;
+    in-out property <int> mode;         // 0 = low-pass, 1 = high-pass
+    in-out property <float> cutoff;     // perceptual 0..1 (20 Hz .. 20 kHz)
+    in-out property <float> resonance;  // 0..1
+    callback cutoff-changed(float);
+    callback resonance-changed(float);
+    callback mode-changed(int);
+    callback bypass-toggled();
+    callback remove-clicked();
+    callback reorder-requested(int);     // target slot index
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text {
+                text: "FILTER";
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            SelectorBank {
+                options: ["LP", "HP"];
+                selected-index <=> root.mode;
+                segment-width: 30px;
+                tooltip: "Filter mode";
+                selected(i) => { root.mode-changed(i); }
+            }
+        }
+        Rectangle {
+            height: 104px;
+            background: Theme.panel;
+            border-radius: 2px;
+            FilterResponseDisplay {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                mode: root.mode == 0 ? 0 : 2;
+                cutoff: root.cutoff;
+                resonance: root.resonance;
+                env-amount: 0;
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 52px;
+                diameter: 36px;
+                label: "Cutoff";
+                tooltip: "Filter cutoff frequency";
+                value <=> root.cutoff;
+                default-value: 0.9;
+                value-text: root.cutoff >= 0.999 ? "Open" : round(20 * pow(1000, root.cutoff)) + " Hz";
+                changed(v) => { root.cutoff-changed(v); }
+            }
+            ParameterKnob {
+                width: 52px;
+                diameter: 36px;
+                label: "Reso";
+                tooltip: "Filter resonance";
+                value <=> root.resonance;
+                default-value: 0;
+                value-text: round(root.resonance * 100) + "%";
+                changed(v) => { root.resonance-changed(v); }
+            }
+        }
+    }
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: "Filter";
+        kind: "FX / 1U";
+        role: "FX";
+        device-color: Theme.warning;
+        enabled: !root.bypassed;
+    }
+
+    // Drag-to-reorder handle: covers the header left of the action buttons.
+    // On release, a horizontal delta past half a slot pitch (device + join)
+    // moves the device; smaller movements are ignored.
+    drag := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: parent.width - 52px;
+        height: DeviceRackMetrics.header-height;
+        mouse-cursor: move;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up {
+                let pitch = DeviceRackMetrics.unit-width + 20px;
+                let delta = round((self.mouse-x - self.pressed-x) / pitch);
+                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
+                if target != root.slot-index {
+                    root.reorder-requested(target);
+                }
+            }
+        }
+    }
+
+    // Rack actions: bypass (power) and remove, compact buttons on the
+    // header's right edge.
+    Rectangle {
+        x: parent.width - 52px;
+        y: 0px;
+        width: 52px;
+        height: DeviceRackMetrics.header-height;
+        HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            IconButton {
+                text: root.bypassed ? "○" : "●";
+                tooltip: root.bypassed ? "Enable this filter" : "Bypass this filter";
+                size: 22px;
+                active: !root.bypassed;
+                clicked => { root.bypass-toggled(); }
+            }
+            IconButton {
+                text: "✕";
+                tooltip: "Remove this filter";
+                size: 22px;
+                clicked => { root.remove-clicked(); }
+            }
+        }
+    }
+}

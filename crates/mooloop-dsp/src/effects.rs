@@ -14,6 +14,8 @@ use crate::node::{AudioNode, ProcessContext};
 pub const FILTER_PARAM_CUTOFF_HZ: u32 = 0;
 /// `Event::ParamValue` id for `FilterParams::resonance`.
 pub const FILTER_PARAM_RESONANCE: u32 = 1;
+/// `Event::ParamValue` id for `FilterParams::mode` (0 = low-pass, >= 0.5 = high-pass).
+pub const FILTER_PARAM_MODE: u32 = 2;
 
 /// A stereo low-pass/high-pass filter built on two `Svf` instances, one per
 /// channel. Parameter changes arrive as sample-timed `ParamValue` events
@@ -49,6 +51,13 @@ impl FilterEffect {
         match id {
             FILTER_PARAM_CUTOFF_HZ => self.params.cutoff_hz = value.max(0.0),
             FILTER_PARAM_RESONANCE => self.params.resonance = value.clamp(0.0, 1.0),
+            FILTER_PARAM_MODE => {
+                self.params.mode = if value >= 0.5 {
+                    FilterMode::HighPass
+                } else {
+                    FilterMode::LowPass
+                };
+            }
             _ => {}
         }
     }

@@ -30,7 +30,7 @@ pub mod smooth;
 
 pub use bus::{pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use drumsynth::DrumSynth;
-pub use effects::{FilterEffect, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_RESONANCE};
+pub use effects::{FilterEffect, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_MODE, FILTER_PARAM_RESONANCE};
 pub use event::{Event, EventList, TimedEvent};
 pub use monosynth::MonoSynth;
 pub use node::{AudioNode, ProcessContext};
