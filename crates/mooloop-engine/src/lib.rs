@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use jack::{AudioOut, Client, ClientOptions};
-use mooloop_core::{EngineCommand, EngineEvent, MAX_CHANNELS};
+use mooloop_core::{EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS};
 use mooloop_dsp::{AudioNode, SampleData};
 use rtrb::{Consumer, Producer};
 
@@ -39,17 +39,17 @@ pub use offline::{
 /// POD-only), and `AudioNode` comes from `mooloop-dsp`, which `mooloop-core`
 /// must not depend on.
 pub enum StructuralCommand {
-    /// Install `node` at `slot` on `channel`, replacing whatever was there.
+    /// Install `node` at `slot` on `target`, replacing whatever was there.
     /// The replaced node (if any) comes back via the reclaim ring — the
     /// realtime thread never drops a `Box` itself (that would be a
     /// deallocation on the audio thread).
     InstallEffect {
-        channel: u8,
+        target: EffectTarget,
         slot: u8,
         node: Box<dyn AudioNode + Send>,
     },
     /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
-    RemoveEffect { channel: u8, slot: u8 },
+    RemoveEffect { target: EffectTarget, slot: u8 },
 }
 
 /// audio -> GUI. Hands back a displaced node so the GUI thread can drop it

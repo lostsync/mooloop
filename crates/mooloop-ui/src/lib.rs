@@ -13,13 +13,14 @@ slint::include_modules!();
 
 use meter::MeterBallistics;
 use mooloop_core::{
-    Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState,
-    EffectKind, EffectSlotState, EngineCommand, EngineEvent, HatCharacter,
+    default_buses, sanitize_route, BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind,
+    DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectSlotState, EffectTarget,
+    EngineCommand, EngineEvent, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
     OscWave, PatternPlacement, PlaybackMode, Ppq, Project, ProjectChannel, RetriggerMode,
     SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
-    MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
+    MASTER_BUS, MAX_BUSES, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
     MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
@@ -82,6 +83,22 @@ fn sync_appearance_properties(window: &MainWindow, appearance: &AppearanceSettin
 }
 
 /// UI-side state for one channel. `notes` is the pattern bank.
+/// Coerce a loaded bus bank to the fixed size the engine preallocates,
+/// padding a short one and repairing any routing an older or hand-edited file
+/// left illegal. Everything downstream can then index the bank directly.
+fn normalized_buses(buses: &[BusSetup]) -> Vec<BusSetup> {
+    (0..MAX_BUSES)
+        .map(|index| match buses.get(index) {
+            Some(setup) => {
+                let mut setup = setup.clone();
+                setup.bus.output = sanitize_route(index as u8, setup.bus.output);
+                setup
+            }
+            None => BusSetup::new(index),
+        })
+        .collect()
+}
+
 struct ChannelState {
     name: String,
     kind: DeviceKind,
@@ -103,6 +120,8 @@ struct ChannelState {
     notes: Vec<Vec<NoteEvent>>,
     next_note_id: NoteId,
     effects: Vec<EffectSlotState>,
+    /// Mixer bus this channel feeds; 0 is the master.
+    bus: u8,
 }
 
 impl ChannelState {
@@ -133,6 +152,7 @@ impl ChannelState {
             notes: vec![Vec::new()],
             next_note_id: 1,
             effects: Vec::new(),
+            bus: MASTER_BUS,
         }
     }
 
@@ -541,6 +561,9 @@ struct UiState {
     default_waveform: Vec<f32>,
     default_sample_description: String,
     default_sample_duration: f32,
+    /// Mirror of the project's bus bank, master first. Always `MAX_BUSES`
+    /// long, matching the engine's preallocated bank.
+    buses: Vec<BusSetup>,
     pattern_lengths: Vec<usize>,
     pattern_names: Vec<String>,
     playlist: Vec<PatternPlacement>,
@@ -653,6 +676,7 @@ impl UiState {
                             muted: channel.muted,
                             volume: channel.volume,
                             pan: channel.pan,
+                            bus: channel.bus,
                         },
                         source,
                         effects: channel.effects.clone(),
@@ -676,6 +700,7 @@ impl UiState {
             current_pattern: self.current_pattern as u16,
             selected_channel: self.selected as u8,
             channels,
+            buses: self.buses.clone(),
             pattern_lengths: self
                 .pattern_lengths
                 .iter()
@@ -809,10 +834,12 @@ impl UiState {
                     notes: project_channel.notes.clone(),
                     next_note_id: project_channel.next_note_id,
                     effects: setup.effects.clone(),
+                    bus: setup.channel.bus,
                 }
             })
             .collect::<Vec<_>>();
 
+        self.buses = normalized_buses(&project.buses);
         self.pattern_lengths = project
             .pattern_lengths
             .iter()
@@ -1309,6 +1336,7 @@ impl AppUi {
             default_waveform,
             default_sample_description,
             default_sample_duration,
+            buses: default_buses(),
             pattern_lengths: vec![DEFAULT_STEPS as usize],
             pattern_names: vec![String::new()],
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
@@ -2879,7 +2907,7 @@ impl AppUi {
                 // The node is boxed here, on the GUI thread, and ownership
                 // crosses to the audio thread through the structural ring.
                 let _ = stx.send(StructuralCommand::InstallEffect {
-                    channel: ch as u8,
+                    target: EffectTarget::Channel(ch as u8),
                     slot: slot as u8,
                     node: build_effect(params, sample_rate),
                 });
@@ -2909,13 +2937,13 @@ impl AppUi {
                 // slots down by adjacent swaps, then drop the vacated tail.
                 for j in (slot + 1)..=removed_tail {
                     let _ = tx.send(EngineCommand::SwapEffectSlots {
-                        channel: ch as u8,
+                        target: EffectTarget::Channel(ch as u8),
                         slot_a: j as u8,
                         slot_b: j as u8 - 1,
                     });
                 }
                 let _ = stx.send(StructuralCommand::RemoveEffect {
-                    channel: ch as u8,
+                    target: EffectTarget::Channel(ch as u8),
                     slot: removed_tail as u8,
                 });
             });
@@ -2939,7 +2967,7 @@ impl AppUi {
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot, row);
                 let _ = tx.send(EngineCommand::SetEffectBypassed {
-                    channel: ch as u8,
+                    target: EffectTarget::Channel(ch as u8),
                     slot: slot as u8,
                     bypassed,
                 });
@@ -2977,7 +3005,7 @@ impl AppUi {
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot, row);
                 let _ = tx.send(EngineCommand::SetEffectParam {
-                    channel: ch as u8,
+                    target: EffectTarget::Channel(ch as u8),
                     slot: slot as u8,
                     id,
                     value,
@@ -3009,7 +3037,7 @@ impl AppUi {
                 if from < to {
                     for i in from..to {
                         let _ = tx.send(EngineCommand::SwapEffectSlots {
-                            channel: ch as u8,
+                            target: EffectTarget::Channel(ch as u8),
                             slot_a: i as u8,
                             slot_b: i as u8 + 1,
                         });
@@ -3017,7 +3045,7 @@ impl AppUi {
                 } else {
                     for i in (to + 1..=from).rev() {
                         let _ = tx.send(EngineCommand::SwapEffectSlots {
-                            channel: ch as u8,
+                            target: EffectTarget::Channel(ch as u8),
                             slot_a: i as u8,
                             slot_b: i as u8 - 1,
                         });

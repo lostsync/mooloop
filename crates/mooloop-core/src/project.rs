@@ -3,8 +3,9 @@
 use std::path::PathBuf;
 
 use crate::{
-    Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter, MonoSynthParams, NoteEvent,
-    NoteId, PatternPlacement, PlaybackMode, SamplerParams, SnareCharacter, DEFAULT_STEPS,
+    default_buses, BusSetup, Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter,
+    MonoSynthParams, NoteEvent, NoteId, PatternPlacement, PlaybackMode, SamplerParams,
+    SnareCharacter, DEFAULT_STEPS,
 };
 
 pub const MIN_SWING_PERCENT: u8 = 50;
@@ -265,6 +266,10 @@ pub struct Project {
     pub current_pattern: u16,
     pub selected_channel: u8,
     pub channels: Vec<ProjectChannel>,
+    /// Mixer buses, master first. Defaulted on load so songs written before
+    /// the mixer existed get the full bank with everything on the master.
+    #[serde(default = "default_buses")]
+    pub buses: Vec<BusSetup>,
     pub pattern_lengths: Vec<u16>,
     pub playlist: Vec<PatternPlacement>,
 }
@@ -280,6 +285,7 @@ impl Default for Project {
             current_pattern: 0,
             selected_channel: 0,
             channels: vec![ProjectChannel::sampler(0, 1)],
+            buses: default_buses(),
             pattern_lengths: vec![DEFAULT_STEPS],
             playlist: Vec::new(),
         }

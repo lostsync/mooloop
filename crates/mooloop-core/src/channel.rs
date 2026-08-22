@@ -1,5 +1,5 @@
-//! Channel model. A channel is a mixer strip with an instrument device chain
-//! (Phase 2: a single sampler per channel; effect chaining lands in Phase 3).
+//! Channel model. A channel is a source, its own insert chain, and an output
+//! stage that feeds one mixer bus. The buses themselves live in `mixer`.
 
 /// Upper bound on simultaneous channels. The engine pre-allocates its pools
 /// to this size so channel add/remove never allocates on the RT thread.
@@ -32,6 +32,10 @@ pub struct Channel {
     pub volume: f32,
     /// Stereo pan in [-1, 1].
     pub pan: f32,
+    /// Mixer bus this channel feeds. Defaulted on load so songs written before
+    /// the mixer existed land on the master.
+    #[serde(default)]
+    pub bus: u8,
 }
 
 impl Channel {
@@ -42,6 +46,7 @@ impl Channel {
             muted: false,
             volume: 0.8,
             pan: 0.0,
+            bus: crate::MASTER_BUS,
         }
     }
 }

@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    ChannelSource, DeviceKind, DrumSynthParams, EngineCommand, MonoSynthParams, Project,
-    SamplerParams, DEFAULT_STEPS, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    sanitize_route, ChannelSource, DeviceKind, DrumSynthParams, EffectTarget, EngineCommand,
+    MonoSynthParams, Project, SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
+    MAX_EFFECTS_PER_CHANNEL,
 };
 use mooloop_dsp::{
     build_effect, pan_gains, AudioNode, DrumSynth, Event, EventList, MonoSynth, ProcessContext,
@@ -20,38 +21,129 @@ use crate::StructuralCommand;
 /// can drop them. The realtime thread must never free a `Box` itself.
 type Reclaim = Vec<Box<dyn AudioNode + Send>>;
 
-struct ChannelStrip {
-    sampler: Sampler,
-    drum_synth: DrumSynth,
-    mono_synth: MonoSynth,
-    active_source: DeviceKind,
-    /// Fixed array of optional effect slots, processed in order after the
-    /// generator. Slots are `None` until a node is installed structurally.
-    effect_chain: [Option<Box<dyn AudioNode + Send>>; MAX_EFFECTS_PER_CHANNEL],
+/// A fixed-size chain of optional effect nodes plus the per-slot machinery
+/// that feeds them. Channels and mixer buses both own one, which is the whole
+/// reason effect commands address an `EffectTarget` rather than a channel.
+struct EffectChain {
+    /// Processed in order after whatever produced the audio. Slots are `None`
+    /// until a node is installed structurally.
+    nodes: [Option<Box<dyn AudioNode + Send>>; MAX_EFFECTS_PER_CHANNEL],
     /// Per-slot parameter events, queued between blocks by
     /// `EngineCommand::SetEffectParam` and consumed by the next block. Kept
     /// separate from the note-event lists so slot addressing is trivial and
     /// generators never see effect events.
-    effect_events: [EventList; MAX_EFFECTS_PER_CHANNEL],
-    effect_bypassed: [bool; MAX_EFFECTS_PER_CHANNEL],
-    bus: StereoBus,
+    events: [EventList; MAX_EFFECTS_PER_CHANNEL],
+    bypassed: [bool; MAX_EFFECTS_PER_CHANNEL],
+}
+
+impl EffectChain {
+    fn new() -> Self {
+        Self {
+            nodes: std::array::from_fn(|_| None),
+            events: std::array::from_fn(|_| EventList::empty()),
+            bypassed: [false; MAX_EFFECTS_PER_CHANNEL],
+        }
+    }
+
+    /// Remove every node, queuing the boxes for off-thread disposal.
+    fn clear(&mut self, reclaim: &mut Reclaim) {
+        for slot in &mut self.nodes {
+            if let Some(node) = slot.take() {
+                reclaim.push(node);
+            }
+        }
+        for events in &mut self.events {
+            events.clear();
+        }
+        self.bypassed = [false; MAX_EFFECTS_PER_CHANNEL];
+    }
+
+    fn install(&mut self, slot: usize, node: Box<dyn AudioNode + Send>, reclaim: &mut Reclaim) {
+        if let Some(target) = self.nodes.get_mut(slot) {
+            if let Some(old) = target.replace(node) {
+                reclaim.push(old);
+            }
+        }
+    }
+
+    fn remove(&mut self, slot: usize, reclaim: &mut Reclaim) {
+        if let Some(target) = self.nodes.get_mut(slot) {
+            if let Some(old) = target.take() {
+                reclaim.push(old);
+            }
+        }
+        if let Some(events) = self.events.get_mut(slot) {
+            events.clear();
+        }
+        if let Some(bypassed) = self.bypassed.get_mut(slot) {
+            *bypassed = false;
+        }
+    }
+
+    fn swap(&mut self, slot_a: usize, slot_b: usize) {
+        if slot_a < MAX_EFFECTS_PER_CHANNEL && slot_b < MAX_EFFECTS_PER_CHANNEL {
+            self.nodes.swap(slot_a, slot_b);
+            self.events.swap(slot_a, slot_b);
+            self.bypassed.swap(slot_a, slot_b);
+        }
+    }
+
+    fn set_bypassed(&mut self, slot: usize, bypassed: bool) {
+        if let Some(flag) = self.bypassed.get_mut(slot) {
+            *flag = bypassed;
+        }
+    }
+
+    fn queue_param(&mut self, slot: usize, id: u32, value: f32) {
+        if let Some(events) = self.events.get_mut(slot) {
+            // Queued between blocks, so it lands at the next block's first
+            // frame. If the slot's list is full the update is dropped,
+            // matching the command ring's overflow policy.
+            let _ = events.push_ordered(TimedEvent {
+                offset: 0,
+                event: Event::ParamValue { id, value },
+            });
+        }
+    }
+
+    /// Load a project's saved chain. Construction allocates, so this is a
+    /// load-time operation only, never a per-block one.
+    fn load(&mut self, slots: &[mooloop_core::EffectSlotState], sample_rate: u32, reclaim: &mut Reclaim) {
+        self.clear(reclaim);
+        for (slot, effect) in slots.iter().take(MAX_EFFECTS_PER_CHANNEL).enumerate() {
+            self.install(slot, build_effect(effect.params, sample_rate), reclaim);
+            self.bypassed[slot] = effect.bypassed;
+        }
+    }
+
+    fn process(&mut self, context: &ProcessContext, bus: &mut StereoBus) {
+        for slot in 0..MAX_EFFECTS_PER_CHANNEL {
+            if self.bypassed[slot] {
+                // A bypassed slot keeps its queued events until re-enabled, so
+                // knob turns made while bypassed are not lost.
+                continue;
+            }
+            if let Some(node) = &mut self.nodes[slot] {
+                node.process(context, bus, &self.events[slot], None);
+            }
+            self.events[slot].clear();
+        }
+    }
+}
+
+/// Shared output stage: linear gain, constant-power pan, and a mute that stops
+/// the strip contributing without stopping it processing (so effect tails on a
+/// muted strip still decay instead of freezing).
+struct OutputStage {
     gain: f32,
     pan: f32,
     muted: bool,
 }
 
-impl ChannelStrip {
-    fn new(sample_slot: Arc<ArcSwapOption<SampleData>>, sample_rate: u32) -> Self {
+impl OutputStage {
+    fn new(gain: f32) -> Self {
         Self {
-            sampler: Sampler::new(sample_slot, SamplerParams::default(), sample_rate),
-            drum_synth: DrumSynth::new(DrumSynthParams::default(), sample_rate),
-            mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
-            active_source: DeviceKind::Sampler,
-            effect_chain: std::array::from_fn(|_| None),
-            effect_events: std::array::from_fn(|_| EventList::empty()),
-            effect_bypassed: [false; MAX_EFFECTS_PER_CHANNEL],
-            bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
-            gain: 0.8,
+            gain,
             pan: 0.0,
             muted: false,
         }
@@ -63,6 +155,67 @@ impl ChannelStrip {
 
     fn set_pan(&mut self, pan: f32) {
         self.pan = pan.clamp(-1.0, 1.0);
+    }
+
+    fn apply(&self, bus: &mut StereoBus, frames: usize) {
+        let (pan_l, pan_r) = pan_gains(self.pan);
+        bus.apply_stereo_gain(self.gain * pan_l, self.gain * pan_r, frames);
+    }
+}
+
+/// One mixer bus: an effect chain, an output stage, and the index of the bus
+/// it feeds. `output` is always lower than the bus's own index (see
+/// `mooloop_core::mixer`), which is what lets `process_block` render the whole
+/// bank in one descending pass with no sorting or scratch buffers.
+struct BusStrip {
+    effects: EffectChain,
+    bus: StereoBus,
+    output: OutputStage,
+    destination: u8,
+}
+
+impl BusStrip {
+    fn new() -> Self {
+        Self {
+            effects: EffectChain::new(),
+            bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
+            // Unity, not a channel's 0.8: see `mooloop_core::MixerBus::new`.
+            output: OutputStage::new(1.0),
+            destination: MASTER_BUS,
+        }
+    }
+
+    fn reset(&mut self, reclaim: &mut Reclaim) {
+        self.effects.clear(reclaim);
+        self.output = OutputStage::new(1.0);
+        self.destination = MASTER_BUS;
+    }
+}
+
+struct ChannelStrip {
+    sampler: Sampler,
+    drum_synth: DrumSynth,
+    mono_synth: MonoSynth,
+    active_source: DeviceKind,
+    effects: EffectChain,
+    bus: StereoBus,
+    output: OutputStage,
+    /// Mixer bus this channel feeds.
+    destination: u8,
+}
+
+impl ChannelStrip {
+    fn new(sample_slot: Arc<ArcSwapOption<SampleData>>, sample_rate: u32) -> Self {
+        Self {
+            sampler: Sampler::new(sample_slot, SamplerParams::default(), sample_rate),
+            drum_synth: DrumSynth::new(DrumSynthParams::default(), sample_rate),
+            mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
+            active_source: DeviceKind::Sampler,
+            effects: EffectChain::new(),
+            bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
+            output: OutputStage::new(0.8),
+            destination: MASTER_BUS,
+        }
     }
 
     fn reset_sources_to_defaults(&mut self, source: DeviceKind) {
@@ -77,58 +230,9 @@ impl ChannelStrip {
 
     fn reset_slot(&mut self, source: DeviceKind, reclaim: &mut Reclaim) {
         self.reset_sources_to_defaults(source);
-        self.clear_effects(reclaim);
-        self.gain = 0.8;
-        self.pan = 0.0;
-        self.muted = false;
-    }
-
-    /// Remove every effect node, queuing the boxes for off-thread disposal.
-    fn clear_effects(&mut self, reclaim: &mut Reclaim) {
-        for slot in &mut self.effect_chain {
-            if let Some(node) = slot.take() {
-                reclaim.push(node);
-            }
-        }
-        for events in &mut self.effect_events {
-            events.clear();
-        }
-        self.effect_bypassed = [false; MAX_EFFECTS_PER_CHANNEL];
-    }
-
-    fn install_effect(
-        &mut self,
-        slot: usize,
-        node: Box<dyn AudioNode + Send>,
-        reclaim: &mut Reclaim,
-    ) {
-        if let Some(target) = self.effect_chain.get_mut(slot) {
-            if let Some(old) = target.replace(node) {
-                reclaim.push(old);
-            }
-        }
-    }
-
-    fn remove_effect(&mut self, slot: usize, reclaim: &mut Reclaim) {
-        if let Some(target) = self.effect_chain.get_mut(slot) {
-            if let Some(old) = target.take() {
-                reclaim.push(old);
-            }
-        }
-        if let Some(events) = self.effect_events.get_mut(slot) {
-            events.clear();
-        }
-        if let Some(bypassed) = self.effect_bypassed.get_mut(slot) {
-            *bypassed = false;
-        }
-    }
-
-    fn swap_effects(&mut self, slot_a: usize, slot_b: usize) {
-        if slot_a < MAX_EFFECTS_PER_CHANNEL && slot_b < MAX_EFFECTS_PER_CHANNEL {
-            self.effect_chain.swap(slot_a, slot_b);
-            self.effect_events.swap(slot_a, slot_b);
-            self.effect_bypassed.swap(slot_a, slot_b);
-        }
+        self.effects.clear(reclaim);
+        self.output = OutputStage::new(0.8);
+        self.destination = MASTER_BUS;
     }
 
     fn load_source(&mut self, source: &ChannelSource) {
@@ -158,6 +262,16 @@ impl ChannelStrip {
                 .mono_synth
                 .process(context, &mut self.bus, events, None),
         }
+    }
+}
+
+/// Keep a channel's bus assignment inside the bank. A stale index from the GUI
+/// lands on the master rather than silently muting the channel.
+fn clamp_bus(bus: u8) -> u8 {
+    if (bus as usize) < MAX_BUSES {
+        bus
+    } else {
+        MASTER_BUS
     }
 }
 
@@ -204,8 +318,10 @@ pub(crate) struct RenderState {
     transport: Transport,
     sequencer: Sequencer,
     strips: Vec<ChannelStrip>,
+    /// The full bus bank, master first. Always `MAX_BUSES` long, so assigning
+    /// a channel to any bus is a bounded mutation rather than an allocation.
+    buses: Vec<BusStrip>,
     events: Vec<EventList>,
-    master: StereoBus,
     sample_rate: u32,
     /// Nodes displaced from effect slots this block, awaiting handoff to the
     /// reclaim ring (realtime playback) or plain drop (offline render).
@@ -222,8 +338,8 @@ impl RenderState {
             transport: Transport::new(sample_rate),
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
+            buses: (0..MAX_BUSES).map(|_| BusStrip::new()).collect(),
             events: (0..MAX_CHANNELS).map(|_| EventList::empty()).collect(),
-            master: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             sample_rate,
             reclaim: Vec::new(),
         }
@@ -269,29 +385,54 @@ impl RenderState {
         for (index, strip) in self.strips.iter_mut().enumerate() {
             if let Some(channel) = project.channels.get(index) {
                 strip.load_source(&channel.setup.source);
-                strip.muted = channel.setup.channel.muted;
-                strip.set_volume(channel.setup.channel.volume);
-                strip.set_pan(channel.setup.channel.pan);
+                strip.output.muted = channel.setup.channel.muted;
+                strip.output.set_volume(channel.setup.channel.volume);
+                strip.output.set_pan(channel.setup.channel.pan);
+                strip.destination = clamp_bus(channel.setup.channel.bus);
                 // Project loading is a transport-stop/load-time operation,
                 // not a hot per-block path, so constructing the boxed nodes
                 // here is acceptable (see docs/EFFECTS_PLAN.md). Displaced
                 // nodes still go through reclaim rather than being dropped.
-                strip.clear_effects(&mut self.reclaim);
-                for (slot, effect) in channel
-                    .setup
-                    .effects
-                    .iter()
-                    .take(MAX_EFFECTS_PER_CHANNEL)
-                    .enumerate()
-                {
-                    let node = build_effect(effect.params, self.sample_rate);
-                    strip.install_effect(slot, node, &mut self.reclaim);
-                    strip.effect_bypassed[slot] = effect.bypassed;
-                }
+                strip.effects
+                    .load(&channel.setup.effects, self.sample_rate, &mut self.reclaim);
             } else {
                 strip.reset_slot(DeviceKind::Sampler, &mut self.reclaim);
             }
         }
+        for (index, strip) in self.buses.iter_mut().enumerate() {
+            match project.buses.get(index) {
+                Some(setup) => {
+                    strip.output.muted = setup.bus.muted;
+                    strip.output.set_volume(setup.bus.volume);
+                    strip.output.set_pan(setup.bus.pan);
+                    strip.destination = sanitize_route(index as u8, setup.bus.output);
+                    strip
+                        .effects
+                        .load(&setup.effects, self.sample_rate, &mut self.reclaim);
+                }
+                None => strip.reset(&mut self.reclaim),
+            }
+        }
+    }
+
+    /// Resolve an effect address to the chain that owns it. Both arms are
+    /// bounds-checked, so a stale index from the GUI is a no-op rather than a
+    /// panic on the audio thread.
+    fn chain_for<'a>(
+        strips: &'a mut [ChannelStrip],
+        buses: &'a mut [BusStrip],
+        target: EffectTarget,
+    ) -> Option<&'a mut EffectChain> {
+        match target {
+            EffectTarget::Channel(index) => {
+                strips.get_mut(index as usize).map(|s| &mut s.effects)
+            }
+            EffectTarget::Bus(index) => buses.get_mut(index as usize).map(|b| &mut b.effects),
+        }
+    }
+
+    fn chain_mut(&mut self, target: EffectTarget) -> Option<&mut EffectChain> {
+        Self::chain_for(&mut self.strips, &mut self.buses, target)
     }
 
     /// Apply a structural change (install/remove of a boxed node). Called on
@@ -299,18 +440,16 @@ impl RenderState {
     /// allocated on the GUI thread.
     pub(crate) fn apply_structural(&mut self, cmd: StructuralCommand) {
         match cmd {
-            StructuralCommand::InstallEffect {
-                channel,
-                slot,
-                node,
-            } => {
-                if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.install_effect(slot as usize, node, &mut self.reclaim);
+            StructuralCommand::InstallEffect { target, slot, node } => {
+                // `chain_for` borrows the two strip vectors rather than all of
+                // `self`, so `reclaim` stays independently borrowable here.
+                if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
+                    chain.install(slot as usize, node, &mut self.reclaim);
                 }
             }
-            StructuralCommand::RemoveEffect { channel, slot } => {
-                if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.remove_effect(slot as usize, &mut self.reclaim);
+            StructuralCommand::RemoveEffect { target, slot } => {
+                if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
+                    chain.remove(slot as usize, &mut self.reclaim);
                 }
             }
         }
@@ -368,17 +507,42 @@ impl RenderState {
             }
             EngineCommand::SetChannelMuted { channel, muted } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.muted = muted;
+                    strip.output.muted = muted;
                 }
             }
             EngineCommand::SetChannelVolume { channel, volume } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.set_volume(volume);
+                    strip.output.set_volume(volume);
                 }
             }
             EngineCommand::SetChannelPan { channel, pan } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.set_pan(pan);
+                    strip.output.set_pan(pan);
+                }
+            }
+            EngineCommand::SetChannelBus { channel, bus } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.destination = clamp_bus(bus);
+                }
+            }
+            EngineCommand::SetBusMuted { bus, muted } => {
+                if let Some(strip) = self.buses.get_mut(bus as usize) {
+                    strip.output.muted = muted;
+                }
+            }
+            EngineCommand::SetBusVolume { bus, volume } => {
+                if let Some(strip) = self.buses.get_mut(bus as usize) {
+                    strip.output.set_volume(volume);
+                }
+            }
+            EngineCommand::SetBusPan { bus, pan } => {
+                if let Some(strip) = self.buses.get_mut(bus as usize) {
+                    strip.output.set_pan(pan);
+                }
+            }
+            EngineCommand::SetBusOutput { bus, output } => {
+                if let Some(strip) = self.buses.get_mut(bus as usize) {
+                    strip.destination = sanitize_route(bus, output);
                 }
             }
             EngineCommand::SetStep {
@@ -433,45 +597,31 @@ impl RenderState {
                 }
             }
             EngineCommand::SwapEffectSlots {
-                channel,
+                target,
                 slot_a,
                 slot_b,
             } => {
-                if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.swap_effects(slot_a as usize, slot_b as usize);
+                if let Some(chain) = self.chain_mut(target) {
+                    chain.swap(slot_a as usize, slot_b as usize);
                 }
             }
             EngineCommand::SetEffectBypassed {
-                channel,
+                target,
                 slot,
                 bypassed,
             } => {
-                if let Some(flag) = self
-                    .strips
-                    .get_mut(channel as usize)
-                    .and_then(|strip| strip.effect_bypassed.get_mut(slot as usize))
-                {
-                    *flag = bypassed;
+                if let Some(chain) = self.chain_mut(target) {
+                    chain.set_bypassed(slot as usize, bypassed);
                 }
             }
             EngineCommand::SetEffectParam {
-                channel,
+                target,
                 slot,
                 id,
                 value,
             } => {
-                if let Some(events) = self
-                    .strips
-                    .get_mut(channel as usize)
-                    .and_then(|strip| strip.effect_events.get_mut(slot as usize))
-                {
-                    // Queued between blocks, so it lands at the next block's
-                    // first frame. If the slot's list is full the update is
-                    // dropped, matching the command ring's overflow policy.
-                    let _ = events.push_ordered(TimedEvent {
-                        offset: 0,
-                        event: Event::ParamValue { id, value },
-                    });
+                if let Some(chain) = self.chain_mut(target) {
+                    chain.queue_param(slot as usize, id, value);
                 }
             }
             EngineCommand::InstallProject { .. } => {}
@@ -520,7 +670,7 @@ impl RenderState {
                 .enumerate()
                 .take(self.sequencer.active_channels())
             {
-                if !strip.muted {
+                if !strip.output.muted {
                     choke_groups[index] = strip.choke_group();
                 }
             }
@@ -538,37 +688,53 @@ impl RenderState {
             position_ticks: start_tick,
             position_frames,
         };
-        self.master.clear(frames);
+        for strip in &mut self.buses {
+            strip.bus.clear(frames);
+        }
         for (index, strip) in self
             .strips
             .iter_mut()
             .enumerate()
             .take(self.sequencer.active_channels())
         {
-            if strip.muted {
+            if strip.output.muted {
                 continue;
             }
             strip.bus.clear(frames);
             strip.process(&context, &self.events[index]);
-            for slot in 0..MAX_EFFECTS_PER_CHANNEL {
-                if !strip.effect_bypassed[slot] {
-                    if let Some(node) = &mut strip.effect_chain[slot] {
-                        node.process(&context, &mut strip.bus, &strip.effect_events[slot], None);
-                    }
-                }
-                // Bypassed slots keep their queued events until re-enabled,
-                // so knob turns made while bypassed are not lost.
-                if !strip.effect_bypassed[slot] {
-                    strip.effect_events[slot].clear();
+            strip.effects.process(&context, &mut strip.bus);
+            strip.output.apply(&mut strip.bus, frames);
+            if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
+                destination.bus.add_from(&strip.bus, frames);
+            }
+        }
+
+        // Inserts render high index to low. Every bus's destination is
+        // strictly lower than itself, so one descending pass is enough: a
+        // bus's input is complete by the time it is reached, and its output
+        // has not been rendered yet. The master (bus 0) is last and keeps its
+        // audio, since it is what the caller reads.
+        for index in (1..self.buses.len()).rev() {
+            let (lower, upper) = self.buses.split_at_mut(index);
+            let strip = &mut upper[0];
+            strip.effects.process(&context, &mut strip.bus);
+            strip.output.apply(&mut strip.bus, frames);
+            // A muted bus still processes, so a delay or reverb tail on it
+            // decays instead of freezing, but contributes nothing.
+            if !strip.output.muted {
+                if let Some(destination) = lower.get_mut(strip.destination as usize) {
+                    destination.bus.add_from(&strip.bus, frames);
                 }
             }
-            let (pan_l, pan_r) = pan_gains(strip.pan);
-            strip
-                .bus
-                .apply_stereo_gain(strip.gain * pan_l, strip.gain * pan_r, frames);
-            self.master.add_from(&strip.bus, frames);
         }
-        let (peak_l, peak_r) = self.master.peak(frames);
+        let master = &mut self.buses[MASTER_BUS as usize];
+        master.effects.process(&context, &mut master.bus);
+        master.output.apply(&mut master.bus, frames);
+        let (peak_l, peak_r) = if master.output.muted {
+            (0.0, 0.0)
+        } else {
+            master.bus.peak(frames)
+        };
         RenderReport {
             position_tick: self.transport.position_ticks as u64,
             beat_in_bar: self.transport.beat_in_bar(),
@@ -579,7 +745,7 @@ impl RenderState {
     }
 
     pub fn master(&self) -> &StereoBus {
-        &self.master
+        &self.buses[MASTER_BUS as usize].bus
     }
 
     pub fn play(&mut self) {
@@ -616,14 +782,14 @@ mod tests {
     #[test]
     fn channel_output_controls_are_bounded() {
         let mut strip = test_strip();
-        strip.set_volume(2.0);
-        strip.set_pan(-2.0);
-        assert_eq!(strip.gain, 1.0);
-        assert_eq!(strip.pan, -1.0);
-        strip.set_volume(-1.0);
-        strip.set_pan(2.0);
-        assert_eq!(strip.gain, 0.0);
-        assert_eq!(strip.pan, 1.0);
+        strip.output.set_volume(2.0);
+        strip.output.set_pan(-2.0);
+        assert_eq!(strip.output.gain, 1.0);
+        assert_eq!(strip.output.pan, -1.0);
+        strip.output.set_volume(-1.0);
+        strip.output.set_pan(2.0);
+        assert_eq!(strip.output.gain, 0.0);
+        assert_eq!(strip.output.pan, 1.0);
     }
 
     #[test]
@@ -796,7 +962,7 @@ mod tests {
         let dry = rendered_energy(&project, |_| {});
         let filtered = rendered_energy(&project, |render| {
             render.apply_structural(StructuralCommand::InstallEffect {
-                channel: 0,
+                target: EffectTarget::Channel(0),
                 slot: 0,
                 node: muffling_filter(),
             });
@@ -857,7 +1023,7 @@ mod tests {
 
             let wet = rendered_energy(&project, |render| {
                 render.apply_structural(StructuralCommand::InstallEffect {
-                    channel: 0,
+                    target: EffectTarget::Channel(0),
                     slot: 0,
                     node: build_effect(params, 48_000),
                 });
@@ -870,6 +1036,169 @@ mod tests {
         }
     }
 
+    /// A channel routed to a bus must reach the master *through* that bus, so
+    /// an effect inserted on the bus shapes everything feeding it.
+    #[test]
+    fn a_bus_effect_processes_every_channel_feeding_it() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let dry = rendered_energy(&project, |render| {
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 3,
+            });
+        });
+        assert!(dry > 0.0, "routing through a bus must not lose the signal");
+
+        let filtered = rendered_energy(&project, |render| {
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 3,
+            });
+            render.apply_structural(StructuralCommand::InstallEffect {
+                target: EffectTarget::Bus(3),
+                slot: 0,
+                node: muffling_filter(),
+            });
+        });
+        assert!(
+            filtered < dry * 0.5,
+            "bus filter should muffle the channel: dry {dry}, filtered {filtered}"
+        );
+    }
+
+    #[test]
+    fn muting_a_bus_silences_what_feeds_it() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let muted = rendered_energy(&project, |render| {
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 2,
+            });
+            render.apply_command(EngineCommand::SetBusMuted {
+                bus: 2,
+                muted: true,
+            });
+        });
+        assert_eq!(muted, 0.0);
+    }
+
+    #[test]
+    fn bus_volume_scales_its_contribution() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let unity = rendered_energy(&project, |render| {
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 1,
+            });
+            render.apply_command(EngineCommand::SetBusVolume {
+                bus: 1,
+                volume: 1.0,
+            });
+        });
+        let halved = rendered_energy(&project, |render| {
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 1,
+            });
+            render.apply_command(EngineCommand::SetBusVolume {
+                bus: 1,
+                volume: 0.5,
+            });
+        });
+        // Energy is the square of amplitude, so halving the gain quarters it.
+        let ratio = halved / unity;
+        assert!((0.2..0.3).contains(&ratio), "expected ~0.25, got {ratio}");
+    }
+
+    /// The descending render pass is only correct if a bus's input is complete
+    /// before it runs. Chain two of them and put the filter on the *second*
+    /// hop: it can only be heard if bus 5 was rendered before bus 2.
+    #[test]
+    fn a_bus_can_feed_another_bus() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let chained = rendered_energy(&project, |render| {
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 5,
+            });
+            render.apply_command(EngineCommand::SetBusOutput { bus: 5, output: 2 });
+        });
+        assert!(chained > 0.0, "chained buses must still reach the master");
+
+        let filtered = rendered_energy(&project, |render| {
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 5,
+            });
+            render.apply_command(EngineCommand::SetBusOutput { bus: 5, output: 2 });
+            render.apply_structural(StructuralCommand::InstallEffect {
+                target: EffectTarget::Bus(2),
+                slot: 0,
+                node: muffling_filter(),
+            });
+        });
+        assert!(
+            filtered < chained * 0.5,
+            "bus 5 must be rendered before bus 2: {chained} -> {filtered}"
+        );
+    }
+
+    /// Uphill routing would let two buses feed each other, which the single
+    /// descending pass cannot express. It is rejected to the master instead of
+    /// silently producing a one-block feedback path.
+    #[test]
+    fn uphill_routing_falls_back_to_the_master() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let dry = rendered_energy(&project, |_| {});
+        let attempted = rendered_energy(&project, |render| {
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 2,
+            });
+            // Illegal: bus 2 may only feed a lower-numbered bus.
+            render.apply_command(EngineCommand::SetBusOutput { bus: 2, output: 5 });
+            render.apply_structural(StructuralCommand::InstallEffect {
+                target: EffectTarget::Bus(5),
+                slot: 0,
+                node: muffling_filter(),
+            });
+        });
+        let ratio = attempted / dry;
+        assert!(
+            (0.9..1.1).contains(&ratio),
+            "bus 5's filter must not be in the path: {attempted} vs {dry}"
+        );
+    }
+
+    /// An out-of-range bus index must not mute the channel; it lands on the
+    /// master, which is the same thing a freshly-defaulted project does.
+    #[test]
+    fn an_out_of_range_bus_lands_on_the_master() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let dry = rendered_energy(&project, |_| {});
+        let clamped = rendered_energy(&project, |render| {
+            render.apply_command(EngineCommand::SetChannelBus {
+                channel: 0,
+                bus: 200,
+            });
+        });
+        assert_eq!(clamped, dry);
+    }
+
+    #[test]
+    fn a_master_effect_chain_processes_the_whole_mix() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let dry = rendered_energy(&project, |_| {});
+        let filtered = rendered_energy(&project, |render| {
+            render.apply_structural(StructuralCommand::InstallEffect {
+                target: EffectTarget::Bus(mooloop_core::MASTER_BUS),
+                slot: 0,
+                node: muffling_filter(),
+            });
+        });
+        assert!(filtered < dry * 0.5, "dry {dry}, filtered {filtered}");
+    }
+
     #[test]
     fn effect_param_bypass_and_reorder_plumbing() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
@@ -878,19 +1207,19 @@ mod tests {
         // queued ParamValue event must change the output.
         let open = rendered_energy(&project, |render| {
             render.apply_structural(StructuralCommand::InstallEffect {
-                channel: 0,
+                target: EffectTarget::Channel(0),
                 slot: 0,
                 node: default_effect(mooloop_core::EffectKind::Filter),
             });
         });
         let closed = rendered_energy(&project, |render| {
             render.apply_structural(StructuralCommand::InstallEffect {
-                channel: 0,
+                target: EffectTarget::Channel(0),
                 slot: 0,
                 node: default_effect(mooloop_core::EffectKind::Filter),
             });
             render.apply_command(EngineCommand::SetEffectParam {
-                channel: 0,
+                target: EffectTarget::Channel(0),
                 slot: 0,
                 id: mooloop_core::FILTER_PARAM_CUTOFF_HZ,
                 value: 100.0,
@@ -901,12 +1230,12 @@ mod tests {
         // Bypass restores the dry sound.
         let bypassed = rendered_energy(&project, |render| {
             render.apply_structural(StructuralCommand::InstallEffect {
-                channel: 0,
+                target: EffectTarget::Channel(0),
                 slot: 0,
                 node: muffling_filter(),
             });
             render.apply_command(EngineCommand::SetEffectBypassed {
-                channel: 0,
+                target: EffectTarget::Channel(0),
                 slot: 0,
                 bypassed: true,
             });
@@ -921,12 +1250,12 @@ mod tests {
         // Swapping an occupied slot with an empty one moves the filter.
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.apply_structural(StructuralCommand::InstallEffect {
-            channel: 0,
+            target: EffectTarget::Channel(0),
             slot: 0,
             node: muffling_filter(),
         });
         render.apply_command(EngineCommand::SwapEffectSlots {
-            channel: 0,
+            target: EffectTarget::Channel(0),
             slot_a: 0,
             slot_b: 3,
         });
@@ -937,7 +1266,7 @@ mod tests {
 
         // Removing the slot reclaims the node instead of dropping it here.
         render.apply_structural(StructuralCommand::RemoveEffect {
-            channel: 0,
+            target: EffectTarget::Channel(0),
             slot: 3,
         });
         assert_eq!(render.take_reclaim().len(), 1);

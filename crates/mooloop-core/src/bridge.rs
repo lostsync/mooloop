@@ -10,7 +10,8 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::{
-    DeviceKind, DrumSynthParams, MonoSynthParams, NoteEvent, NoteId, PlaybackMode, SamplerParams,
+    DeviceKind, DrumSynthParams, EffectTarget, MonoSynthParams, NoteEvent, NoteId, PlaybackMode,
+    SamplerParams,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
@@ -52,6 +53,18 @@ pub enum EngineCommand {
     SetChannelVolume { channel: u8, volume: f32 },
     /// Set a channel's stereo pan in [-1, 1].
     SetChannelPan { channel: u8, pan: f32 },
+    /// Assign a channel to a mixer bus. Out-of-range buses land on the master.
+    SetChannelBus { channel: u8, bus: u8 },
+    /// Mute/unmute a mixer bus, silencing everything feeding it.
+    SetBusMuted { bus: u8, muted: bool },
+    /// Set a bus's linear output volume in [0, 1].
+    SetBusVolume { bus: u8, volume: f32 },
+    /// Set a bus's stereo pan in [-1, 1].
+    SetBusPan { bus: u8, pan: f32 },
+    /// Route a bus into another bus. Only downhill routes (`output < bus`) are
+    /// accepted; anything else falls back to the master, which is what keeps
+    /// the render order a single descending pass. See `mooloop_core::mixer`.
+    SetBusOutput { bus: u8, output: u8 },
     /// Toggle or set a step. Addresses the pattern bank so edits to
     /// non-playing patterns take effect when selected.
     SetStep {
@@ -92,11 +105,15 @@ pub enum EngineCommand {
     /// array entries moves pointers only, so this is safe on the realtime
     /// thread — installing/removing nodes is not, and goes through the
     /// engine's structural command ring instead.
-    SwapEffectSlots { channel: u8, slot_a: u8, slot_b: u8 },
+    SwapEffectSlots {
+        target: EffectTarget,
+        slot_a: u8,
+        slot_b: u8,
+    },
     /// Bypass or re-enable one effect slot. While bypassed the slot's
     /// parameter events keep accumulating and flush on re-enable.
     SetEffectBypassed {
-        channel: u8,
+        target: EffectTarget,
         slot: u8,
         bypassed: bool,
     },
@@ -104,7 +121,7 @@ pub enum EngineCommand {
     /// to the node as `Event::ParamValue` at the next block, so effect kinds
     /// need no bespoke command per parameter.
     SetEffectParam {
-        channel: u8,
+        target: EffectTarget,
         slot: u8,
         id: u32,
         value: f32,

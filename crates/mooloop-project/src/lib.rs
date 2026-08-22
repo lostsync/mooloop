@@ -1396,10 +1396,43 @@ id = "default_kick"
 "#,
         )
         .unwrap();
-        assert_eq!(
-            load_bundle(&bundle).unwrap().document,
-            LoadedDocument::Song(Project::default())
-        );
+        // The manifest predates the mixer: it names no buses and no channel
+        // bus assignment. Both must default rather than fail the load.
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected a song");
+        };
+        assert_eq!(loaded, Project::default());
+        assert_eq!(loaded.buses.len(), mooloop_core::MAX_BUSES);
+        assert_eq!(loaded.channels[0].setup.channel.bus, mooloop_core::MASTER_BUS);
+    }
+
+    /// Buses carry their own effect chains, so the round trip has to survive
+    /// the same tagged-params path a channel's chain does.
+    #[test]
+    fn bus_routing_and_bus_effects_round_trip() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("routed.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.channel.bus = 4;
+        project.buses[4].bus.name = "Drums".into();
+        project.buses[4].bus.output = 2;
+        project.buses[4].bus.volume = 0.5;
+        project.buses[4]
+            .effects
+            .push(mooloop_core::EffectSlotState::of_kind(
+                mooloop_core::EffectKind::Compressor,
+            ));
+        project.buses[mooloop_core::MASTER_BUS as usize]
+            .effects
+            .push(mooloop_core::EffectSlotState::of_kind(
+                mooloop_core::EffectKind::Limiter,
+            ));
+
+        save_song(&bundle, &project, AssetMode::Referenced).unwrap();
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected a song");
+        };
+        assert_eq!(loaded, project);
     }
 
     #[test]

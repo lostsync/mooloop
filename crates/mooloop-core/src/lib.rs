@@ -6,6 +6,7 @@
 pub mod bridge;
 pub mod channel;
 pub mod effect;
+pub mod mixer;
 pub mod pattern;
 pub mod playlist;
 pub mod project;
@@ -27,6 +28,10 @@ pub use effect::{
     COMP_PARAM_RELEASE_MS, COMP_PARAM_THRESHOLD_DB, GATE_PARAM_ATTACK_MS, GATE_PARAM_HOLD_MS,
     GATE_PARAM_RANGE_DB, GATE_PARAM_RELEASE_MS, GATE_PARAM_THRESHOLD_DB,
     LIMITER_PARAM_CEILING_DB, LIMITER_PARAM_GAIN_DB, LIMITER_PARAM_RELEASE_MS,
+};
+pub use mixer::{
+    default_buses, is_legal_route, EffectTarget, sanitize_route, BusSetup, MixerBus, INSERT_BUSES, MASTER_BUS,
+    MAX_BUSES,
 };
 pub use pattern::{
     ChannelPattern, NoteEvent, NoteId, Pattern, Step, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
