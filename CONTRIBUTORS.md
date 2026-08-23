@@ -57,6 +57,12 @@ work session you can recall being part of, and don't stress over precision.
 - Notes: Audio-core architecture, realtime project swaps, compiled bus graphs,
   and latency/gain hardening.
 
+### GPT-5.6 Terra — Zed
+- First seen: 2026-08-23
+- Last seen: 2026-08-23
+- Sessions: 1
+- Notes: Fixed duplicate loop-wrap event scheduling.
+
 ### Kimi k3-256k — Kimi Code CLI
 - First seen: 2026-08-23
 - Last seen: 2026-08-23

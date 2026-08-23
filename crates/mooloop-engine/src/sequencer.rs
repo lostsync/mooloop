@@ -12,8 +12,6 @@ use mooloop_core::{
 };
 use mooloop_dsp::{Event, EventList, TimedEvent};
 
-const BOUNDARY_EPS: f64 = 1.0e-6;
-
 pub struct Sequencer {
     patterns: Vec<Pattern>,
     active_patterns: usize,
@@ -390,7 +388,7 @@ impl Sequencer {
         event_list: &mut EventList,
     ) {
         let tick = f64::from(edge_tick);
-        if tick + BOUNDARY_EPS < start_tick || tick >= end_tick {
+        if tick < start_tick || tick >= end_tick {
             return;
         }
         let offset = ((tick - start_tick) / ticks_per_sample).round() as i64;
@@ -555,12 +553,12 @@ impl Sequencer {
     ) {
         let period = f64::from(period_ticks);
         let edge = f64::from(edge_tick);
-        let mut cycle = ((start_tick - edge - BOUNDARY_EPS) / period).ceil() as i64;
+        let mut cycle = ((start_tick - edge) / period).ceil() as i64;
         cycle = cycle.max(0);
         let mut absolute_tick = edge + cycle as f64 * period;
 
         while absolute_tick < end_tick {
-            if absolute_tick + BOUNDARY_EPS >= start_tick {
+            if absolute_tick >= start_tick {
                 let offset = ((absolute_tick - start_tick) / ticks_per_sample).round() as i64;
                 let offset = offset.clamp(0, frames as i64 - 1) as u32;
                 let instance = (cycle as u64)
@@ -748,11 +746,55 @@ mod tests {
         let mut sequencer = Sequencer::new(1, 1, 16, Ppq::DEFAULT);
         sequencer.set_step(0, 0, 0, true, 60, 100);
         let pattern_ticks = 16.0 * f64::from(TICKS_PER_STEP);
-        for drift in [-BOUNDARY_EPS * 0.5, 0.0, BOUNDARY_EPS * 0.5] {
+        for drift in [-0.5e-6, 0.0] {
             let events = schedule_range(&sequencer, pattern_ticks + drift, pattern_ticks + 2.0);
             assert_eq!(events[0].offset, 0, "drift {drift}");
             assert!(matches!(events[0].event, Event::NoteOn { .. }));
         }
+    }
+
+    #[test]
+    fn loop_wrap_event_belongs_to_only_one_adjacent_block() {
+        let mut sequencer = Sequencer::new(1, 1, 16, Ppq::DEFAULT);
+        sequencer.set_step(0, 0, 0, true, 60, 100);
+        let wrap = 16.0 * f64::from(TICKS_PER_STEP);
+        let drift = 0.5e-6;
+
+        let before = schedule_range(&sequencer, wrap - 2.0, wrap + drift);
+        let after = schedule_range(&sequencer, wrap + drift, wrap + 2.0);
+        let note_ons = before
+            .iter()
+            .chain(&after)
+            .filter(|event| matches!(event.event, Event::NoteOn { .. }))
+            .count();
+
+        assert_eq!(
+            note_ons, 1,
+            "a loop-wrap NoteOn must not cross block ownership"
+        );
+    }
+
+    #[test]
+    fn song_loop_wrap_event_belongs_to_only_one_adjacent_block() {
+        let mut sequencer = Sequencer::new(1, 1, 16, Ppq::DEFAULT);
+        sequencer.set_step(0, 0, 0, true, 60, 100);
+        assert!(sequencer.set_playlist_placement(0, 0, true));
+        sequencer.set_playback_mode(PlaybackMode::Song);
+        let wrap = f64::from(sequencer.song_length_ticks());
+        let drift = 0.5e-6;
+
+        let before = schedule_range(&sequencer, wrap - 2.0, wrap + drift);
+        let after = schedule_range(&sequencer, wrap + drift, wrap + 2.0);
+        let note_ons = before
+            .iter()
+            .chain(&after)
+            .filter(|event| matches!(event.event, Event::NoteOn { .. }))
+            .count();
+
+        assert_eq!(
+            note_ons, 1,
+            "a song-loop NoteOn must not cross block ownership"
+        );
     }
 
     #[test]
