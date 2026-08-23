@@ -8,10 +8,12 @@
 
 mod meter;
 mod settings;
+mod history;
 
 slint::include_modules!();
 
 use meter::{linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
+use history::{Entry as HistoryEntry, History};
 use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BusSetup, Channel,
     ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind,
@@ -241,13 +243,39 @@ struct ChannelClipboard {
     sample: Option<Arc<SampleData>>,
 }
 
+/// A complete, UI-owned project snapshot. Samples stay beside the serializable
+/// project because restoring an edit must never decode a WAV on the UI thread.
+#[derive(Clone)]
+struct ProjectSnapshot {
+    project: Project,
+    samples: Vec<Option<Arc<SampleData>>>,
+}
+
+/// The command layer's state. Clipboard data and history live here rather
+/// than in a particular widget, so menu, keyboard, and context-menu surfaces
+/// all dispatch the same command.
+#[derive(Default)]
+struct CommandState {
+    channel_clipboard: Option<ChannelClipboard>,
+    history: History<ProjectSnapshot>,
+    project_edit_pending: bool,
+}
+
+#[derive(Clone, Copy)]
+enum HistoryMove {
+    Record,
+    Undo,
+    Redo,
+}
+
 /// Structural channel edits are prepared by UI callbacks and installed by the
 /// pump, which exclusively owns the engine handle. A complete project swap
 /// keeps insertion/removal/reordering atomically visible to the audio thread.
-struct ChannelEdit {
+struct ProjectEdit {
     project: Project,
     samples: Vec<Option<Arc<SampleData>>>,
-    status: &'static str,
+    status: String,
+    history: Option<(HistoryMove, HistoryEntry<ProjectSnapshot>)>,
 }
 
 enum DocumentResult {
@@ -329,23 +357,79 @@ fn snapshot_channel_clipboard(
     })
 }
 
+fn project_snapshot(state: &UiState, window: &MainWindow) -> ProjectSnapshot {
+    ProjectSnapshot {
+        project: state.project_snapshot(window.get_bpm(), window.get_swing_percent()),
+        samples: state.sample_snapshots(),
+    }
+}
+
+fn queue_project_edit(
+    tx: &std::sync::mpsc::Sender<ProjectEdit>,
+    before: ProjectSnapshot,
+    after: ProjectSnapshot,
+    status: &'static str,
+) -> bool {
+    let entry = HistoryEntry {
+        before,
+        after: after.clone(),
+        label: status,
+    };
+    tx.send(ProjectEdit {
+        project: after.project,
+        samples: after.samples,
+        status: status.into(),
+        history: Some((HistoryMove::Record, entry)),
+    })
+    .is_ok()
+}
+
+fn queue_history_target(
+    tx: &std::sync::mpsc::Sender<ProjectEdit>,
+    entry: HistoryEntry<ProjectSnapshot>,
+    movement: HistoryMove,
+) -> bool {
+    let snapshot = match movement {
+        HistoryMove::Undo => entry.before.clone(),
+        HistoryMove::Redo => entry.after.clone(),
+        HistoryMove::Record => unreachable!("recording needs an edited snapshot"),
+    };
+    let status = match movement {
+        HistoryMove::Undo => format!("Undid {}", entry.label),
+        HistoryMove::Redo => format!("Redid {}", entry.label),
+        HistoryMove::Record => unreachable!(),
+    };
+    tx.send(ProjectEdit {
+        project: snapshot.project,
+        samples: snapshot.samples,
+        status,
+        history: Some((movement, entry)),
+    })
+    .is_ok()
+}
+
+fn sync_command_availability(window: &MainWindow, commands: &CommandState) {
+    window.set_can_undo(!commands.project_edit_pending && commands.history.can_undo());
+    window.set_can_redo(!commands.project_edit_pending && commands.history.can_redo());
+    window.set_channel_clipboard_available(commands.channel_clipboard.is_some());
+}
+
 fn queue_channel_insert(
-    tx: &std::sync::mpsc::Sender<ChannelEdit>,
+    tx: &std::sync::mpsc::Sender<ProjectEdit>,
     state: &Rc<RefCell<UiState>>,
     window: &MainWindow,
     after: usize,
     clipboard: ChannelClipboard,
     status: &'static str,
-) {
-    let (mut project, mut samples) = {
+) -> bool {
+    let before = {
         let state = state.borrow();
-        (
-            state.project_snapshot(window.get_bpm(), window.get_swing_percent()),
-            state.sample_snapshots(),
-        )
+        project_snapshot(&state, window)
     };
+    let mut project = before.project.clone();
+    let mut samples = before.samples.clone();
     if project.channels.len() >= MAX_CHANNELS || after >= project.channels.len() {
-        return;
+        return false;
     }
     let mut channel = clipboard.channel;
     channel.setup.channel.name = copied_channel_name(&project, &channel.setup.channel.name);
@@ -353,38 +437,29 @@ fn queue_channel_insert(
     project.channels.insert(index, channel);
     samples.insert(index, clipboard.sample);
     project.selected_channel = index as u8;
-    let _ = tx.send(ChannelEdit {
-        project,
-        samples,
-        status,
-    });
+    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
 fn queue_channel_delete(
-    tx: &std::sync::mpsc::Sender<ChannelEdit>,
+    tx: &std::sync::mpsc::Sender<ProjectEdit>,
     state: &Rc<RefCell<UiState>>,
     window: &MainWindow,
     index: usize,
     status: &'static str,
-) {
-    let (mut project, mut samples) = {
+) -> bool {
+    let before = {
         let state = state.borrow();
-        (
-            state.project_snapshot(window.get_bpm(), window.get_swing_percent()),
-            state.sample_snapshots(),
-        )
+        project_snapshot(&state, window)
     };
+    let mut project = before.project.clone();
+    let mut samples = before.samples.clone();
     if project.channels.len() <= 1 || index >= project.channels.len() {
-        return;
+        return false;
     }
     project.channels.remove(index);
     samples.remove(index);
     project.selected_channel = index.min(project.channels.len() - 1) as u8;
-    let _ = tx.send(ChannelEdit {
-        project,
-        samples,
-        status,
-    });
+    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
 #[derive(Clone, Copy)]
@@ -1740,9 +1815,9 @@ impl AppUi {
         window.set_app_version(env!("CARGO_PKG_VERSION").into());
 
         let (document_tx, document_rx) = std::sync::mpsc::channel::<DocumentResult>();
-        let (channel_edit_tx, channel_edit_rx) = std::sync::mpsc::channel::<ChannelEdit>();
-        let channel_clipboard = Rc::new(RefCell::new(None::<ChannelClipboard>));
-        window.set_channel_clipboard_available(false);
+        let (channel_edit_tx, channel_edit_rx) = std::sync::mpsc::channel::<ProjectEdit>();
+        let command_state = Rc::new(RefCell::new(CommandState::default()));
+        sync_command_availability(&window, &command_state.borrow());
         let export_sample_rate = handle.sample_rate();
 
         {
@@ -3250,85 +3325,79 @@ impl AppUi {
                 queue_channel_delete(&tx, &st, &window, selected, "Channel deleted");
             });
         }
+        // All channel-edit surfaces arrive here.  The menu bar, Ctrl keys,
+        // and per-row context menu deliberately know only command ids; they
+        // cannot grow separate mutation paths.
         {
             let st = state.clone();
-            let clipboard = channel_clipboard.clone();
-            let weak = window.as_weak();
-            window.on_channel_copy_requested(move |index| {
-                let Some(window) = weak.upgrade() else { return };
-                let Ok(index) = usize::try_from(index) else {
-                    return;
-                };
-                let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else {
-                    return;
-                };
-                *clipboard.borrow_mut() = Some(copy);
-                window.set_channel_clipboard_available(true);
-                window.set_status_message("Channel copied".into());
-            });
-        }
-        {
-            let st = state.clone();
-            let clipboard = channel_clipboard.clone();
+            let commands = command_state.clone();
             let tx = channel_edit_tx.clone();
             let weak = window.as_weak();
-            window.on_channel_cut_requested(move |index| {
+            window.on_edit_command_requested(move |kind, index| {
                 let Some(window) = weak.upgrade() else { return };
-                let Ok(index) = usize::try_from(index) else {
-                    return;
-                };
-                let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else {
-                    return;
-                };
-                if st.borrow().channels.len() <= 1 {
+                let Ok(index) = usize::try_from(index) else { return };
+                if kind != 3 && commands.borrow().project_edit_pending {
                     return;
                 }
-                *clipboard.borrow_mut() = Some(copy);
-                window.set_channel_clipboard_available(true);
-                queue_channel_delete(&tx, &st, &window, index, "Channel cut");
-            });
-        }
-        {
-            let st = state.clone();
-            let clipboard = channel_clipboard.clone();
-            let tx = channel_edit_tx.clone();
-            let weak = window.as_weak();
-            window.on_channel_paste_requested(move |index| {
-                let Some(window) = weak.upgrade() else { return };
-                let Ok(index) = usize::try_from(index) else {
-                    return;
-                };
-                let Some(copy) = clipboard.borrow().clone() else {
-                    return;
-                };
-                queue_channel_insert(&tx, &st, &window, index, copy, "Channel pasted");
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = channel_edit_tx.clone();
-            let weak = window.as_weak();
-            window.on_channel_clone_requested(move |index| {
-                let Some(window) = weak.upgrade() else { return };
-                let Ok(index) = usize::try_from(index) else {
-                    return;
-                };
-                let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else {
-                    return;
-                };
-                queue_channel_insert(&tx, &st, &window, index, copy, "Channel cloned");
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = channel_edit_tx.clone();
-            let weak = window.as_weak();
-            window.on_channel_delete_requested(move |index| {
-                let Some(window) = weak.upgrade() else { return };
-                let Ok(index) = usize::try_from(index) else {
-                    return;
-                };
-                queue_channel_delete(&tx, &st, &window, index, "Channel deleted");
+                match kind {
+                    // Undo and redo use a target snapshot but only advance
+                    // their cursor in the pump after installation succeeds.
+                    0 => {
+                        let entry = commands.borrow().history.undo_target().cloned();
+                        if let Some(entry) = entry {
+                            if queue_history_target(&tx, entry, HistoryMove::Undo) {
+                                commands.borrow_mut().project_edit_pending = true;
+                                sync_command_availability(&window, &commands.borrow());
+                            }
+                        }
+                    }
+                    1 => {
+                        let entry = commands.borrow().history.redo_target().cloned();
+                        if let Some(entry) = entry {
+                            if queue_history_target(&tx, entry, HistoryMove::Redo) {
+                                commands.borrow_mut().project_edit_pending = true;
+                                sync_command_availability(&window, &commands.borrow());
+                            }
+                        }
+                    }
+                    2 => {
+                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else { return };
+                        if st.borrow().channels.len() <= 1 { return; }
+                        commands.borrow_mut().channel_clipboard = Some(copy);
+                        sync_command_availability(&window, &commands.borrow());
+                        if queue_channel_delete(&tx, &st, &window, index, "Channel cut") {
+                            commands.borrow_mut().project_edit_pending = true;
+                            sync_command_availability(&window, &commands.borrow());
+                        }
+                    }
+                    3 => {
+                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else { return };
+                        commands.borrow_mut().channel_clipboard = Some(copy);
+                        sync_command_availability(&window, &commands.borrow());
+                        window.set_status_message("Channel copied".into());
+                    }
+                    4 => {
+                        let Some(copy) = commands.borrow().channel_clipboard.clone() else { return };
+                        if queue_channel_insert(&tx, &st, &window, index, copy, "Channel pasted") {
+                            commands.borrow_mut().project_edit_pending = true;
+                            sync_command_availability(&window, &commands.borrow());
+                        }
+                    }
+                    5 => {
+                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else { return };
+                        if queue_channel_insert(&tx, &st, &window, index, copy, "Channel cloned") {
+                            commands.borrow_mut().project_edit_pending = true;
+                            sync_command_availability(&window, &commands.borrow());
+                        }
+                    }
+                    6 => {
+                        if queue_channel_delete(&tx, &st, &window, index, "Channel deleted") {
+                            commands.borrow_mut().project_edit_pending = true;
+                            sync_command_availability(&window, &commands.borrow());
+                        }
+                    }
+                    _ => {}
+                }
             });
         }
 
@@ -4348,6 +4417,7 @@ impl AppUi {
         //     drain audio events onto window ---
         let weak = window.as_weak();
         let st = state.clone();
+        let commands = command_state.clone();
         let default_sample_for_pump = default_sample.clone();
         let pump = Timer::default();
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
@@ -4367,6 +4437,9 @@ impl AppUi {
                     let Some(window) = weak.upgrade() else {
                         return;
                     };
+                    if edit.history.is_some() {
+                        commands.borrow_mut().project_edit_pending = false;
+                    }
                     if install_project_in_ui(
                         &mut handle,
                         default_sample_for_pump.as_ref(),
@@ -4380,8 +4453,19 @@ impl AppUi {
                         state.revision = state.revision.wrapping_add(1);
                         state.update_document_title(&window);
                         window.set_status_message(edit.status.into());
+                        drop(state);
+                        if let Some((movement, entry)) = edit.history {
+                            let mut commands = commands.borrow_mut();
+                            match movement {
+                                HistoryMove::Record => commands.history.record(entry),
+                                HistoryMove::Undo => commands.history.commit_undo(),
+                                HistoryMove::Redo => commands.history.commit_redo(),
+                            }
+                            sync_command_availability(&window, &commands);
+                        }
                     } else {
                         window.set_status_message("Channel edit is waiting for audio".into());
+                        sync_command_availability(&window, &commands.borrow());
                     }
                 }
                 while let Ok(result) = document_rx.try_recv() {

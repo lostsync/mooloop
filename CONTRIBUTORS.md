@@ -55,7 +55,7 @@ work session you can recall being part of, and don't stress over precision.
 - Last seen: 2026-08-23
 - Sessions: 12
 - Notes: Audio-core architecture, realtime project swaps, compiled bus graphs,
-  latency/gain hardening, and device-host controls.
+  latency/gain hardening, device-host controls, and the command-history foundation.
 
 ### GPT-5.6 Terra — Zed
 - First seen: 2026-08-23
