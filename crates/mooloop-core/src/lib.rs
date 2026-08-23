@@ -42,15 +42,15 @@ pub use playlist::{
     STEPS_PER_BAR, TICKS_PER_BAR,
 };
 pub use project::{
-    ChannelPreset, ChannelSetup, ChannelSource, DrumSynthState, Kit, MonoSynthState, Project,
-    ProjectChannel, SampleReference, SamplerState, DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT,
-    MIN_SWING_PERCENT,
+    ChannelPreset, ChannelSetup, ChannelSource, DrumSynthState, Kit, MonoSynthState,
+    PolySynthState, Project, ProjectChannel, SampleReference, SamplerState, DEFAULT_SWING_PERCENT,
+    MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };
 pub use sampler::{
     clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,
 };
 pub use synth::{
     DrumMode, DrumSynthParams, HatCharacter, KickCharacter, LfoParams, LfoWave, MonoSynthParams,
-    OscParams, OscWave, SnareCharacter, MAX_DRUM_VOICES,
+    OscParams, OscWave, PolySynthParams, SnareCharacter, MAX_DRUM_VOICES, MAX_POLY_VOICES,
 };
 pub use time::{ticks_per_sample, Ppq, Samples, Ticks};

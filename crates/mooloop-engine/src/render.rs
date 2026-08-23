@@ -5,12 +5,12 @@ use std::sync::Arc;
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
     compile_bus_graph, ChannelSource, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
-    EngineCommand, MonoSynthParams, Project, SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_BUSES,
-    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    EngineCommand, MonoSynthParams, PolySynthParams, Project, SamplerParams, DEFAULT_STEPS,
+    MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
 };
 use mooloop_dsp::{
     balance_gains, build_effect, pan_gains, AudioNode, DrumSynth, Event, EventList, MonoSynth,
-    ProcessContext, SampleData, Sampler, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
+    PolySynth, ProcessContext, SampleData, Sampler, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
 };
 
 use crate::meters::BusMeters;
@@ -210,6 +210,7 @@ struct ChannelStrip {
     sampler: Sampler,
     drum_synth: DrumSynth,
     mono_synth: MonoSynth,
+    poly_synth: PolySynth,
     active_source: DeviceKind,
     effects: EffectChain,
     bus: StereoBus,
@@ -224,6 +225,7 @@ impl ChannelStrip {
             sampler: Sampler::new(sample_slot, SamplerParams::default(), sample_rate),
             drum_synth: DrumSynth::new(DrumSynthParams::default(), sample_rate),
             mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
+            poly_synth: PolySynth::new(PolySynthParams::default(), sample_rate),
             active_source: DeviceKind::Sampler,
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
@@ -236,9 +238,11 @@ impl ChannelStrip {
         self.sampler.reset();
         self.drum_synth.reset();
         self.mono_synth.reset();
+        self.poly_synth.reset();
         self.sampler.set_params(SamplerParams::default());
         self.drum_synth.set_params(DrumSynthParams::default());
         self.mono_synth.set_params(MonoSynthParams::default());
+        self.poly_synth.set_params(PolySynthParams::default());
         self.active_source = source;
     }
 
@@ -255,6 +259,7 @@ impl ChannelStrip {
             ChannelSource::Sampler(state) => self.sampler.set_params(state.params),
             ChannelSource::DrumSynth(state) => self.drum_synth.set_params(state.params),
             ChannelSource::MonoSynth(state) => self.mono_synth.set_params(state.params),
+            ChannelSource::PolySynth(state) => self.poly_synth.set_params(state.params),
         }
     }
 
@@ -262,7 +267,7 @@ impl ChannelStrip {
         match self.active_source {
             DeviceKind::Sampler => self.sampler.choke_group(),
             DeviceKind::DrumSynth => self.drum_synth.choke_group(),
-            DeviceKind::MonoSynth => 0,
+            DeviceKind::MonoSynth | DeviceKind::PolySynth => 0,
         }
     }
 
@@ -274,6 +279,9 @@ impl ChannelStrip {
                 .process(context, &mut self.bus, events, None),
             DeviceKind::MonoSynth => self
                 .mono_synth
+                .process(context, &mut self.bus, events, None),
+            DeviceKind::PolySynth => self
+                .poly_synth
                 .process(context, &mut self.bus, events, None),
         }
     }
@@ -641,6 +649,11 @@ impl RenderState {
                     strip.mono_synth.set_params(params);
                 }
             }
+            EngineCommand::SetChannelPolySynthParams { channel, params } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.poly_synth.set_params(params);
+                }
+            }
             EngineCommand::SwapEffectSlots {
                 target,
                 slot_a,
@@ -909,6 +922,7 @@ mod tests {
         for channel in [
             ProjectChannel::drum_synth(0, 1),
             ProjectChannel::mono_synth(0, 1),
+            ProjectChannel::poly_synth(0, 1),
         ] {
             let project = synth_project(channel);
             let mut render = RenderState::from_project(48_000, &project, &[]);
@@ -970,6 +984,7 @@ mod tests {
                 ProjectChannel::sampler(0, 1),
                 ProjectChannel::drum_synth(1, 1),
                 ProjectChannel::mono_synth(2, 1),
+                ProjectChannel::poly_synth(3, 1),
             ],
             ..Project::default()
         };

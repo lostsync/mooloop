@@ -11,7 +11,7 @@
 
 use crate::{
     CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget, MonoSynthParams, NoteEvent,
-    NoteId, PlaybackMode, SamplerParams,
+    NoteId, PlaybackMode, PolySynthParams, SamplerParams,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
@@ -100,6 +100,11 @@ pub enum EngineCommand {
     SetChannelMonoSynthParams {
         channel: u8,
         params: MonoSynthParams,
+    },
+    /// Replace a channel's poly synth parameter set.
+    SetChannelPolySynthParams {
+        channel: u8,
+        params: PolySynthParams,
     },
     /// Swap two slots in a channel's effect chain (drag reorder). Swapping
     /// array entries moves pointers only, so this is safe on the realtime

@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use crate::{
     default_buses, BusSetup, Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter,
-    MonoSynthParams, NoteEvent, NoteId, PatternPlacement, PlaybackMode, SamplerParams,
-    SnareCharacter, DEFAULT_STEPS,
+    MonoSynthParams, NoteEvent, NoteId, PatternPlacement, PlaybackMode, PolySynthParams,
+    SamplerParams, SnareCharacter, DEFAULT_STEPS,
 };
 
 pub const MIN_SWING_PERCENT: u8 = 50;
@@ -47,6 +47,11 @@ pub struct MonoSynthState {
     pub params: MonoSynthParams,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PolySynthState {
+    pub params: PolySynthParams,
+}
+
 /// Tagged now so later synth variants can join the v1 envelope additively.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "state", rename_all = "snake_case")]
@@ -54,6 +59,7 @@ pub enum ChannelSource {
     Sampler(SamplerState),
     DrumSynth(DrumSynthState),
     MonoSynth(MonoSynthState),
+    PolySynth(PolySynthState),
 }
 
 impl Default for ChannelSource {
@@ -68,6 +74,7 @@ impl ChannelSource {
             Self::Sampler(_) => DeviceKind::Sampler,
             Self::DrumSynth(_) => DeviceKind::DrumSynth,
             Self::MonoSynth(_) => DeviceKind::MonoSynth,
+            Self::PolySynth(_) => DeviceKind::PolySynth,
         }
     }
 
@@ -109,6 +116,20 @@ impl ChannelSource {
     pub fn mono_synth_state_mut(&mut self) -> Option<&mut MonoSynthState> {
         match self {
             Self::MonoSynth(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn poly_synth_state(&self) -> Option<&PolySynthState> {
+        match self {
+            Self::PolySynth(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn poly_synth_state_mut(&mut self) -> Option<&mut PolySynthState> {
+        match self {
+            Self::PolySynth(state) => Some(state),
             _ => None,
         }
     }
@@ -158,6 +179,18 @@ impl ChannelSetup {
         }
     }
 
+    pub fn poly_synth(name: impl Into<String>) -> Self {
+        Self::poly_synth_with_params(name, PolySynthParams::default())
+    }
+
+    pub fn poly_synth_with_params(name: impl Into<String>, params: PolySynthParams) -> Self {
+        Self {
+            channel: Channel::new(name, DeviceKind::PolySynth),
+            source: ChannelSource::PolySynth(PolySynthState { params }),
+            effects: Vec::new(),
+        }
+    }
+
     pub fn kind(&self) -> DeviceKind {
         self.source.kind()
     }
@@ -184,6 +217,14 @@ impl ChannelSetup {
 
     pub fn mono_synth_state_mut(&mut self) -> Option<&mut MonoSynthState> {
         self.source.mono_synth_state_mut()
+    }
+
+    pub fn poly_synth_state(&self) -> Option<&PolySynthState> {
+        self.source.poly_synth_state()
+    }
+
+    pub fn poly_synth_state_mut(&mut self) -> Option<&mut PolySynthState> {
+        self.source.poly_synth_state_mut()
     }
 }
 
@@ -235,6 +276,25 @@ impl ProjectChannel {
         Self {
             setup: ChannelSetup::mono_synth_with_params(
                 format!("Mono Synth {}", index + 1),
+                params,
+            ),
+            notes: vec![Vec::new(); pattern_count.max(1)],
+            next_note_id: 1,
+        }
+    }
+
+    pub fn poly_synth(index: usize, pattern_count: usize) -> Self {
+        Self::poly_synth_with_params(index, pattern_count, PolySynthParams::default())
+    }
+
+    pub fn poly_synth_with_params(
+        index: usize,
+        pattern_count: usize,
+        params: PolySynthParams,
+    ) -> Self {
+        Self {
+            setup: ChannelSetup::poly_synth_with_params(
+                format!("Poly Synth {}", index + 1),
                 params,
             ),
             notes: vec![Vec::new(); pattern_count.max(1)],
@@ -436,5 +496,10 @@ mod tests {
         assert_eq!(mono.kind(), DeviceKind::MonoSynth);
         assert!(mono.mono_synth_state().is_some());
         assert!(mono.sampler_state().is_none());
+
+        let poly = ChannelSetup::poly_synth("Poly");
+        assert_eq!(poly.kind(), DeviceKind::PolySynth);
+        assert!(poly.poly_synth_state().is_some());
+        assert!(poly.sampler_state().is_none());
     }
 }

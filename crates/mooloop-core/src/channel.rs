@@ -20,6 +20,7 @@ pub enum DeviceKind {
     Sampler,
     DrumSynth,
     MonoSynth,
+    PolySynth,
 }
 
 /// One mixer channel.

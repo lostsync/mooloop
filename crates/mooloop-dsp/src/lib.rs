@@ -6,6 +6,7 @@
 //! - [`sampler`]: the sample-playback instrument.
 //! - [`drumsynth`]: the percussive synth (kick / snare / hat).
 //! - [`monosynth`]: the three-oscillator mono synth.
+//! - [`polysynth`]: the three-oscillator poly synth.
 //! - [`effects`]: chainable effects that run after a channel's generator
 //!   (see `docs/EFFECTS_PLAN.md` and `docs/MODULATION_PLAN.md`).
 //! - [`env`], [`osc`], [`lfo`], [`filter`], [`shaper`], [`smooth`]: building
@@ -27,6 +28,7 @@ pub mod lfo;
 pub mod monosynth;
 pub mod node;
 pub mod osc;
+pub mod polysynth;
 pub mod sampler;
 pub mod shaper;
 pub mod smooth;
@@ -41,4 +43,5 @@ pub use effects::{
 pub use event::{Event, EventList, TimedEvent};
 pub use monosynth::MonoSynth;
 pub use node::{AudioNode, ProcessContext};
+pub use polysynth::PolySynth;
 pub use sampler::{SampleData, Sampler};

@@ -359,3 +359,78 @@ impl Default for MonoSynthParams {
         }
     }
 }
+
+/// Upper bound on simultaneous poly synth voices.
+pub const MAX_POLY_VOICES: u8 = 16;
+
+/// All poly synth parameters, in the units the DSP and UI share. A pool of
+/// independent voices, each with three oscillators, a shared ADSR, a
+/// filter, and a stereo spread. The LFO is global and runs into the same
+/// destinations as on the mono synth.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PolySynthParams {
+    pub osc: [OscParams; 3],
+    /// Portamento time (seconds). `0` is instant pitch changes.
+    pub glide: f32,
+    /// Attack time (seconds).
+    pub attack: f32,
+    /// Decay time (seconds).
+    pub decay: f32,
+    /// Sustain level in `[0, 1]`.
+    pub sustain: f32,
+    /// Release time (seconds).
+    pub release: f32,
+    /// Low-pass cutoff on a perceptual `[0, 1]` scale. `1` bypasses it.
+    pub filter_cutoff: f32,
+    /// Low-pass resonance in `[0, 1]`.
+    pub filter_resonance: f32,
+    /// Bipolar filter envelope depth in `[-1, 1]` (up to six octaves).
+    pub filter_env_amount: f32,
+    /// Soft saturation drive in `[0, 1]`. `0` bypasses it.
+    pub drive: f32,
+    /// One LFO into pitch, filter, pulse width, and amplitude.
+    pub lfo: LfoParams,
+    /// Active voice count in `[1, MAX_POLY_VOICES]`.
+    pub polyphony: u8,
+    /// Stereo spread in `[0, 1]`. `0` is mono; `1` pans voices hard across the
+    /// field with the centre voice(s) staying centred.
+    pub spread: f32,
+}
+
+impl Default for PolySynthParams {
+    fn default() -> Self {
+        Self {
+            osc: [
+                OscParams {
+                    level: 0.8,
+                    ..OscParams::default()
+                },
+                OscParams {
+                    semitones: 12.0,
+                    cents: 4.0,
+                    level: 0.0,
+                    ..OscParams::default()
+                },
+                OscParams {
+                    semitones: -12.0,
+                    cents: -4.0,
+                    level: 0.0,
+                    ..OscParams::default()
+                },
+            ],
+            glide: 0.0,
+            attack: 0.005,
+            decay: 0.2,
+            sustain: 0.7,
+            release: 0.15,
+            filter_cutoff: 1.0,
+            filter_resonance: 0.0,
+            filter_env_amount: 0.0,
+            drive: 0.0,
+            lfo: LfoParams::default(),
+            polyphony: 8,
+            spread: 0.0,
+        }
+    }
+}

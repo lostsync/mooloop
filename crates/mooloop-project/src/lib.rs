@@ -7,10 +7,10 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooloop_core::{
-    ChannelSetup, ChannelSource, DeviceKind, DrumSynthParams, Kit, MonoSynthParams, Project,
-    SampleReference, SamplerParams, MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_NOTES_PER_CHANNEL_PATTERN,
-    MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
-    MAX_SAMPLER_VOICES, TICKS_PER_STEP,
+    ChannelSetup, ChannelSource, DeviceKind, DrumSynthParams, Kit, MonoSynthParams,
+    PolySynthParams, Project, SampleReference, SamplerParams, MAX_CHANNELS, MAX_CHOKE_GROUP,
+    MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS,
+    MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SAMPLER_VOICES, TICKS_PER_STEP,
 };
 use serde::{Deserialize, Serialize};
 
@@ -674,9 +674,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         LoadedDocument::Channel(setup) => {
             resolve_setup_asset(path, 0, &mut setup.source, &mut warnings)?
         }
-        LoadedDocument::Generator(source) => {
-            resolve_setup_asset(path, 0, source, &mut warnings)?
-        }
+        LoadedDocument::Generator(source) => resolve_setup_asset(path, 0, source, &mut warnings)?,
     }
     Ok(LoadReport {
         document,
@@ -924,6 +922,7 @@ fn validate_source(index: usize, source: &ChannelSource) -> Result<(), Error> {
         ChannelSource::Sampler(sampler) => validate_sampler(index, sampler.params),
         ChannelSource::DrumSynth(synth) => validate_drum_synth(index, synth.params),
         ChannelSource::MonoSynth(synth) => validate_mono_synth(index, synth.params),
+        ChannelSource::PolySynth(synth) => validate_poly_synth(index, synth.params),
     }
 }
 
@@ -978,6 +977,38 @@ fn validate_mono_synth(channel: usize, params: MonoSynthParams) -> Result<(), Er
     if !valid {
         return Err(Error::Invalid(format!(
             "channel {channel} has invalid mono synth parameters"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_poly_synth(channel: usize, params: PolySynthParams) -> Result<(), Error> {
+    let oscillators_valid = params.osc.iter().all(|osc| {
+        in_range(osc.semitones, -48.0, 48.0)
+            && in_range(osc.cents, -100.0, 100.0)
+            && in_range(osc.level, 0.0, 1.0)
+            && in_range(osc.pulse_width, 0.05, 0.95)
+    });
+    let valid = oscillators_valid
+        && in_range(params.glide, 0.0, 10.0)
+        && in_range(params.attack, 0.0, 10.0)
+        && in_range(params.decay, 0.0, 10.0)
+        && in_range(params.sustain, 0.0, 1.0)
+        && in_range(params.release, 0.0, 10.0)
+        && in_range(params.filter_cutoff, 0.0, 1.0)
+        && in_range(params.filter_resonance, 0.0, 1.0)
+        && in_range(params.filter_env_amount, -1.0, 1.0)
+        && in_range(params.drive, 0.0, 1.0)
+        && in_range(params.lfo.rate_hz, 0.0, 20.0)
+        && in_range(params.lfo.to_pitch, -24.0, 24.0)
+        && in_range(params.lfo.to_filter, -4.0, 4.0)
+        && in_range(params.lfo.to_pulse_width, -0.45, 0.45)
+        && in_range(params.lfo.to_amp, 0.0, 1.0)
+        && (1..=MAX_POLY_VOICES).contains(&params.polyphony)
+        && in_range(params.spread, 0.0, 1.0);
+    if !valid {
+        return Err(Error::Invalid(format!(
+            "channel {channel} has invalid poly synth parameters"
         )));
     }
     Ok(())
@@ -1403,7 +1434,10 @@ id = "default_kick"
         };
         assert_eq!(loaded, Project::default());
         assert_eq!(loaded.buses.len(), mooloop_core::MAX_BUSES);
-        assert_eq!(loaded.channels[0].setup.channel.bus, mooloop_core::MASTER_BUS);
+        assert_eq!(
+            loaded.channels[0].setup.channel.bus,
+            mooloop_core::MASTER_BUS
+        );
     }
 
     /// Buses carry their own effect chains, so the round trip has to survive
@@ -1478,6 +1512,16 @@ id = "default_kick"
             .lfo
             .rate_hz = 400.0;
         assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::poly_synth(0, 1);
+        project.channels[0]
+            .setup
+            .poly_synth_state_mut()
+            .unwrap()
+            .params
+            .polyphony = 0;
+        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
     }
 
     #[test]
@@ -1495,6 +1539,7 @@ id = "default_kick"
             ChannelSource::Sampler(mooloop_core::SamplerState::default()),
             ChannelSource::DrumSynth(mooloop_core::DrumSynthState::default()),
             ChannelSource::MonoSynth(mooloop_core::MonoSynthState::default()),
+            ChannelSource::PolySynth(mooloop_core::PolySynthState::default()),
         ];
         for (index, source) in sources.into_iter().enumerate() {
             let info = PresetInfo {
@@ -1502,7 +1547,9 @@ id = "default_kick"
                 category: "Bass".into(),
                 tags: vec!["warm".into(), "analog".into()],
             };
-            let path = temp.path().join(format!("preset-{index}.mooloop-generator"));
+            let path = temp
+                .path()
+                .join(format!("preset-{index}.mooloop-generator"));
             save_generator_preset(&path, &source, info.clone(), AssetMode::Embedded).unwrap();
             let loaded = load_bundle(&path).unwrap();
             assert!(loaded.warnings.is_empty());
@@ -1611,13 +1658,16 @@ id = "default_kick"
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("song.mooloop");
         let mut project = Project::default();
-        project.channels[0].setup.effects.push(
-            mooloop_core::EffectSlotState::filter(mooloop_core::FilterParams {
-                cutoff_hz: 1_250.0,
-                resonance: 0.6,
-                mode: mooloop_core::FilterMode::HighPass,
-            }),
-        );
+        project.channels[0]
+            .setup
+            .effects
+            .push(mooloop_core::EffectSlotState::filter(
+                mooloop_core::FilterParams {
+                    cutoff_hz: 1_250.0,
+                    resonance: 0.6,
+                    mode: mooloop_core::FilterMode::HighPass,
+                },
+            ));
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();
         let loaded = load_bundle(&bundle).unwrap();
@@ -1636,9 +1686,8 @@ id = "default_kick"
             let mut slot = mooloop_core::EffectSlotState::of_kind(kind);
             for descriptor in kind.descriptors() {
                 // Move every parameter off its default.
-                let shifted = descriptor.from_normalized(
-                    (descriptor.to_normalized(descriptor.default) + 0.37) % 1.0,
-                );
+                let shifted = descriptor
+                    .from_normalized((descriptor.to_normalized(descriptor.default) + 0.37) % 1.0);
                 slot.params.set(descriptor.id, shifted);
             }
             slot.bypassed = kind == mooloop_core::EffectKind::Drive;
