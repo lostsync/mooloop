@@ -298,7 +298,10 @@ export component MainWindow inherits Window {
 
     // ---- effect chain of the selected channel ----
     in property <[EffectSlotRow]> effect-slots;
-    callback add-effect-clicked(int);               // EffectKind index
+    // EffectKind index, then the slot it must precede. `effect-slots.length`
+    // means append; every device shell can therefore insert into the chain.
+    callback add-effect-clicked(int, int);
+    in-out property <int> insert-effect-before: 0;
     callback remove-effect-clicked(int);            // slot
     callback effect-bypass-toggled(int);            // slot
     // slot, descriptor index within the kind, normalized 0..1. One callback
@@ -1675,14 +1678,15 @@ export component MainWindow inherits Window {
                                     // when the rack is following the mixer.
                                     source-device := DeviceFrame {
                                         width: root.editing-bus
-                                            ? DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap
-                                            : DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap;
+                                            ? DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap + DeviceRackMetrics.rail-width * 2
+                                            : DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap + DeviceRackMetrics.rail-width * 2;
                                         height: DeviceRackMetrics.face-height;
+                                        insert-requested => { root.insert-effect-before = 0; insert-effect-menu.show(); }
 
                                         if root.editing-bus : BusDeviceFace {
-                                            x: 0px;
+                                            x: DeviceRackMetrics.rail-width;
                                             y: 0px;
-                                            width: parent.width;
+                                            width: parent.content-width;
                                             height: parent.height;
                                             name: root.editing-bus-name;
                                             is-master: root.editing-bus-is-master;
@@ -1703,9 +1707,9 @@ export component MainWindow inherits Window {
                                         }
 
                                         if !root.editing-bus && root.source-kind == 0 : SamplerDeviceFace {
-                                            x: 0px;
+                                            x: DeviceRackMetrics.rail-width;
                                             y: DeviceRackMetrics.header-height;
-                                            width: parent.width;
+                                            width: parent.content-width;
                                             height: parent.height - DeviceRackMetrics.header-height;
                                             page <=> root.sampler-device-page;
                                             attack <=> root.attack;
@@ -1765,9 +1769,9 @@ export component MainWindow inherits Window {
                                         }
 
                                         if !root.editing-bus && root.source-kind == 1 : DrumDeviceFace {
-                                            x: 0px;
+                                            x: DeviceRackMetrics.rail-width;
                                             y: DeviceRackMetrics.header-height;
-                                            width: parent.width;
+                                            width: parent.content-width;
                                             height: parent.height - DeviceRackMetrics.header-height;
                                             mode <=> root.drum-mode;
                                             kick-character <=> root.drum-kick-character;
@@ -1816,9 +1820,9 @@ export component MainWindow inherits Window {
                                         }
 
                                         if !root.editing-bus && root.source-kind == 2 : MonoDeviceFace {
-                                            x: 0px;
+                                            x: DeviceRackMetrics.rail-width;
                                             y: DeviceRackMetrics.header-height;
-                                            width: parent.width;
+                                            width: parent.content-width;
                                             height: parent.height - DeviceRackMetrics.header-height;
                                             page <=> root.mono-device-page;
                                             osc1-wave <=> root.mono-osc1-wave; osc1-semitones <=> root.mono-osc1-semitones; osc1-cents <=> root.mono-osc1-cents; osc1-level <=> root.mono-osc1-level; osc1-pulse-width <=> root.mono-osc1-pulse-width;
@@ -1862,7 +1866,7 @@ export component MainWindow inherits Window {
                                         }
 
                                         if !root.editing-bus : DeviceHeader {
-                                            x: 0px; y: 0px; width: parent.width;
+                                            x: DeviceRackMetrics.rail-width; y: 0px; width: parent.content-width;
                                             name: root.source-kind == 0 ? "Sampler"
                                                 : root.source-kind == 1 ? "Drum Synth"
                                                 : root.source-kind == 2 ? "Mono Synth" : "Poly Synth";
@@ -1877,17 +1881,20 @@ export component MainWindow inherits Window {
                                         property <length> face-width:
                                             DeviceRackMetrics.unit-width * slot.units
                                             + DeviceRackMetrics.half-gap * (slot.units - 1);
-                                        width: self.face-width + 20px;
+                                        width: self.face-width + DeviceRackMetrics.rail-width * 2 + 20px;
                                         height: DeviceRackMetrics.face-height;
                                         DeviceFrame {
                                             x: 0px;
                                             y: 0px;
-                                            width: parent.face-width;
+                                            width: parent.face-width + DeviceRackMetrics.rail-width * 2;
                                             height: DeviceRackMetrics.face-height;
+                                            removal-enabled: true;
+                                            insert-requested => { root.insert-effect-before = index; insert-effect-menu.show(); }
+                                            remove-requested => { root.remove-effect-clicked(index); }
                                             if slot.kind == 0 : FilterDeviceFace {
-                                                x: 0px;
+                                                x: DeviceRackMetrics.rail-width;
                                                 y: 0px;
-                                                width: parent.width;
+                                                width: parent.content-width;
                                                 height: parent.height;
                                                 slot-index: index;
                                                 slot-count: root.effect-slots.length;
@@ -1903,9 +1910,9 @@ export component MainWindow inherits Window {
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 1 : DriveDeviceFace {
-                                                x: 0px;
+                                                x: DeviceRackMetrics.rail-width;
                                                 y: 0px;
-                                                width: parent.width;
+                                                width: parent.content-width;
                                                 height: parent.height;
                                                 slot-index: index;
                                                 slot-count: root.effect-slots.length;
@@ -1925,9 +1932,9 @@ export component MainWindow inherits Window {
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 2 : BitcrushDeviceFace {
-                                                x: 0px;
+                                                x: DeviceRackMetrics.rail-width;
                                                 y: 0px;
-                                                width: parent.width;
+                                                width: parent.content-width;
                                                 height: parent.height;
                                                 slot-index: index;
                                                 slot-count: root.effect-slots.length;
@@ -1943,9 +1950,9 @@ export component MainWindow inherits Window {
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 3 : DelayDeviceFace {
-                                                x: 0px;
+                                                x: DeviceRackMetrics.rail-width;
                                                 y: 0px;
-                                                width: parent.width;
+                                                width: parent.content-width;
                                                 height: parent.height;
                                                 slot-index: index;
                                                 slot-count: root.effect-slots.length;
@@ -1967,9 +1974,9 @@ export component MainWindow inherits Window {
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 4 : GateDeviceFace {
-                                                x: 0px;
+                                                x: DeviceRackMetrics.rail-width;
                                                 y: 0px;
-                                                width: parent.width;
+                                                width: parent.content-width;
                                                 height: parent.height;
                                                 slot-index: index;
                                                 slot-count: root.effect-slots.length;
@@ -1989,9 +1996,9 @@ export component MainWindow inherits Window {
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 5 : CompressorDeviceFace {
-                                                x: 0px;
+                                                x: DeviceRackMetrics.rail-width;
                                                 y: 0px;
-                                                width: parent.width;
+                                                width: parent.content-width;
                                                 height: parent.height;
                                                 slot-index: index;
                                                 slot-count: root.effect-slots.length;
@@ -2013,9 +2020,9 @@ export component MainWindow inherits Window {
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 6 : LimiterDeviceFace {
-                                                x: 0px;
+                                                x: DeviceRackMetrics.rail-width;
                                                 y: 0px;
-                                                width: parent.width;
+                                                width: parent.content-width;
                                                 height: parent.height;
                                                 slot-index: index;
                                                 slot-count: root.effect-slots.length;
@@ -2031,7 +2038,7 @@ export component MainWindow inherits Window {
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                         }
-                                        DeviceJoin { x: parent.face-width; y: 0px; }
+                                        DeviceJoin { x: parent.face-width + DeviceRackMetrics.rail-width * 2; y: 0px; }
                                     }
 
                                     Rectangle {
@@ -2039,12 +2046,12 @@ export component MainWindow inherits Window {
                                         height: DeviceRackMetrics.face-height;
                                         DeviceAddSlot {
                                             enabled: root.effect-slots.length < 8;
-                                            clicked => { add-effect-menu.show(); }
+                                            clicked => { root.insert-effect-before = root.effect-slots.length; insert-effect-menu.show(); }
                                         }
                                         // Effect kinds are a growing set, so the
                                         // add action opens a menu rather than
                                         // spending rack width on a selector bank.
-                                        add-effect-menu := PopupWindow {
+                                        insert-effect-menu := PopupWindow {
                                             x: 0px;
                                             y: 44px;
                                             width: 148px;
@@ -2058,13 +2065,13 @@ export component MainWindow inherits Window {
                                                 VerticalLayout {
                                                     padding: 4px;
                                                     spacing: 1px;
-                                                    ToolButton { text: "Filter"; tooltip: "Add a low/high-pass filter"; clicked => { add-effect-menu.close(); root.add-effect-clicked(0); } }
-                                                    ToolButton { text: "Drive"; tooltip: "Add saturation or distortion"; clicked => { add-effect-menu.close(); root.add-effect-clicked(1); } }
-                                                    ToolButton { text: "Bitcrush"; tooltip: "Add bit and rate reduction"; clicked => { add-effect-menu.close(); root.add-effect-clicked(2); } }
-                                                    ToolButton { text: "Delay"; tooltip: "Add a delay"; clicked => { add-effect-menu.close(); root.add-effect-clicked(3); } }
-                                                    ToolButton { text: "Gate"; tooltip: "Add a noise gate"; clicked => { add-effect-menu.close(); root.add-effect-clicked(4); } }
-                                                    ToolButton { text: "Comp"; tooltip: "Add a compressor"; clicked => { add-effect-menu.close(); root.add-effect-clicked(5); } }
-                                                    ToolButton { text: "Limiter"; tooltip: "Add a limiter"; clicked => { add-effect-menu.close(); root.add-effect-clicked(6); } }
+                                                    ToolButton { text: "Filter"; tooltip: "Insert a low/high-pass filter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(0, root.insert-effect-before); } }
+                                                    ToolButton { text: "Drive"; tooltip: "Insert saturation or distortion"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(1, root.insert-effect-before); } }
+                                                    ToolButton { text: "Bitcrush"; tooltip: "Insert bit and rate reduction"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(2, root.insert-effect-before); } }
+                                                    ToolButton { text: "Delay"; tooltip: "Insert a delay"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(3, root.insert-effect-before); } }
+                                                    ToolButton { text: "Gate"; tooltip: "Insert a noise gate"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(4, root.insert-effect-before); } }
+                                                    ToolButton { text: "Comp"; tooltip: "Insert a compressor"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(5, root.insert-effect-before); } }
+                                                    ToolButton { text: "Limiter"; tooltip: "Insert a limiter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(6, root.insert-effect-before); } }
                                                 }
                                             }
                                         }

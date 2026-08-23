@@ -1,20 +1,77 @@
 import { HorizontalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { ToolButton } from "controls.slint";
+import { IconButton, ToolButton } from "controls.slint";
 
 export global DeviceRackMetrics {
     out property <length> unit-width: 220px;
     out property <length> half-gap: 4px;
     out property <length> face-height: 268px;
     out property <length> header-height: 28px;
+    // The shared device shell owns these two narrow action rails. Faces keep
+    // their working controls in the central rectangle, so future devices get
+    // the same chain affordances without duplicating chrome.
+    out property <length> rail-width: 30px;
 }
 
 export component DeviceFrame inherits Rectangle {
+    in property <bool> insertion-enabled: true;
+    in property <bool> removal-enabled: false;
+    callback insert-requested();
+    callback remove-requested();
+    out property <length> content-width: root.width - DeviceRackMetrics.rail-width * 2;
+
     background: Theme.surface;
     border-width: 1px;
     border-color: Theme.border;
     border-radius: 3px;
     clip: true;
+
+    // These are deliberately a shell rather than a per-effect header: source,
+    // inserts, and future buffer devices all get stable insertion/preset/mix
+    // territory. Preset navigation is reserved until per-device presets land.
+    Rectangle {
+        x: 0px;
+        width: DeviceRackMetrics.rail-width;
+        height: parent.height;
+        background: Theme.surface-raised;
+        Rectangle { x: parent.width - 1px; width: 1px; height: 100%; background: Theme.border; }
+        VerticalLayout {
+            padding: 2px;
+            spacing: 2px;
+            IconButton {
+                text: "+"; size: 24px; enabled: root.insertion-enabled;
+                tooltip: "Insert an effect before this device";
+                clicked => { root.insert-requested(); }
+            }
+            IconButton { text: "→"; size: 24px; enabled: false; tooltip: "Next device preset (coming soon)"; }
+            IconButton { text: "←"; size: 24px; enabled: false; tooltip: "Previous device preset (coming soon)"; }
+            IconButton { text: "⌑"; size: 24px; enabled: false; tooltip: "Save device preset (coming soon)"; }
+            IconButton { text: "▱"; size: 24px; enabled: false; tooltip: "Load device preset (coming soon)"; }
+            Rectangle { vertical-stretch: 1; }
+            Text { text: "OUT"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+            Rectangle { width: 16px; height: 52px; border-radius: 2px; background: Theme.panel; }
+        }
+    }
+
+    Rectangle {
+        x: parent.width - DeviceRackMetrics.rail-width;
+        width: DeviceRackMetrics.rail-width;
+        height: parent.height;
+        background: Theme.surface-raised;
+        Rectangle { width: 1px; height: 100%; background: Theme.border; }
+        VerticalLayout {
+            padding: 2px;
+            spacing: 3px;
+            IconButton {
+                text: "✕"; size: 24px; enabled: root.removal-enabled;
+                tooltip: "Remove this device";
+                clicked => { root.remove-requested(); }
+            }
+            Text { text: "MIX"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+            Rectangle { width: 16px; height: 52px; border-radius: 2px; background: Theme.panel; }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
 }
 
 export component DeviceHeader inherits Rectangle {

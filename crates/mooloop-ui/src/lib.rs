@@ -3492,15 +3492,16 @@ impl AppUi {
 
         // --- Effect chain callbacks (edit whatever the rack is pointed at) ---
         {
+            let tx = cmd_tx.clone();
             let stx = structural_tx.clone();
             let st = state.clone();
-            window.on_add_effect_clicked(move |kind_index| {
+            window.on_add_effect_clicked(move |kind_index, insert_before| {
                 let Some(kind) = effect_kind_from_index(kind_index) else {
                     return;
                 };
                 let mut st = st.borrow_mut();
                 let target = st.effect_target;
-                let (slot, params) = {
+                let (slot, tail_slot, params) = {
                     let Some(effects) = st.effect_chain_mut() else {
                         return;
                     };
@@ -3508,19 +3509,27 @@ impl AppUi {
                         return;
                     }
                     let effect = EffectSlotState::of_kind(kind);
-                    let slot = effects.len();
-                    effects.push(effect);
-                    (slot, effect.params)
+                    let slot = (insert_before as usize).min(effects.len());
+                    let tail_slot = effects.len();
+                    effects.insert(slot, effect);
+                    (slot, tail_slot, effect.params)
                 };
                 st.sync_effects();
-                // The node is boxed here, on the GUI thread, and ownership
-                // crosses to the audio thread through the ordered control
-                // stream.
+                // Install into the vacant tail then move it left. Keeping this
+                // on the ordered stream means the realtime chain sees the same
+                // order as the UI/model without allocating in its callback.
                 let _ = stx.send(StructuralCommand::InstallEffect {
                     target,
-                    slot: slot as u8,
+                    slot: tail_slot as u8,
                     node: build_effect(params, sample_rate),
                 });
+                for position in (slot + 1..=tail_slot).rev() {
+                    let _ = tx.send(EngineCommand::SwapEffectSlots {
+                        target,
+                        slot_a: position as u8,
+                        slot_b: position as u8 - 1,
+                    });
+                }
             });
         }
 
@@ -4757,9 +4766,9 @@ impl AppUi {
                 // descriptor tables, then reordered, bypassed, and removed.
                 // Covers the full structural/param/swap command surface and
                 // proves each kind is constructible from the UI path.
-                w.invoke_add_effect_clicked(0);
-                w.invoke_add_effect_clicked(1);
-                w.invoke_add_effect_clicked(2);
+                w.invoke_add_effect_clicked(0, 0);
+                w.invoke_add_effect_clicked(1, 1);
+                w.invoke_add_effect_clicked(2, 2);
                 w.invoke_effect_param_changed(0, 0, 0.4); // filter cutoff
                 w.invoke_effect_param_changed(0, 1, 0.5); // filter resonance
                 w.invoke_effect_param_changed(0, 2, 1.0); // filter -> high-pass
@@ -4768,18 +4777,18 @@ impl AppUi {
                 w.invoke_effect_param_changed(1, 3, 0.8); // drive mix
                 w.invoke_effect_param_changed(2, 0, 0.2); // bitcrush bits
                 w.invoke_effect_param_changed(2, 1, 0.6); // bitcrush rate
-                w.invoke_add_effect_clicked(3);
+                w.invoke_add_effect_clicked(3, 3);
                 w.invoke_effect_param_changed(3, 0, 0.6); // delay time
                 w.invoke_effect_param_changed(3, 1, 0.5); // delay feedback
                 w.invoke_effect_param_changed(3, 2, 1.0); // delay -> reverse
                 w.invoke_effect_param_changed(3, 3, 1.0); // delay ping-pong
-                w.invoke_add_effect_clicked(4);
+                w.invoke_add_effect_clicked(4, 4);
                 w.invoke_effect_param_changed(4, 0, 0.4); // gate threshold
                 w.invoke_effect_param_changed(4, 4, 0.2); // gate range
-                w.invoke_add_effect_clicked(5);
+                w.invoke_add_effect_clicked(5, 5);
                 w.invoke_effect_param_changed(5, 0, 0.5); // comp threshold
                 w.invoke_effect_param_changed(5, 1, 0.8); // comp ratio
-                w.invoke_add_effect_clicked(6);
+                w.invoke_add_effect_clicked(6, 6);
                 w.invoke_effect_param_changed(6, 0, 0.9); // limiter ceiling
                 w.invoke_effect_param_changed(6, 2, 0.4); // limiter gain
                 w.invoke_reorder_effect(0, 2);
@@ -4800,11 +4809,11 @@ impl AppUi {
                 w.invoke_bus_muted(3);
                 w.invoke_bus_muted(3);
                 w.invoke_bus_selected(3);
-                w.invoke_add_effect_clicked(5); // compressor on the bus
+                w.invoke_add_effect_clicked(5, 0); // compressor on the bus
                 w.invoke_effect_param_changed(0, 0, 0.45);
                 w.invoke_effect_param_changed(0, 1, 0.6);
                 w.invoke_bus_selected(0); // master
-                w.invoke_add_effect_clicked(6); // limiter on the master
+                w.invoke_add_effect_clicked(6, 0); // limiter on the master
                 w.invoke_effect_param_changed(0, 0, 0.95);
                 w.invoke_channel_selected(0); // back to a channel's chain
                 w.set_mixer_visible(false);
