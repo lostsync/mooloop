@@ -350,14 +350,22 @@ export component ParameterKnob inherits Rectangle {
         spacing: 3px;
         alignment: center;
 
-        knob-face := KnobFace {
-            diameter: root.diameter;
-            normalized: root.normalized;
-            bipolar: root.bipolar;
-            enabled: root.enabled;
-            fill: root.fill;
-            focused: keyboard.has-focus;
-            hovered: knob-touch.has-hover;
+        // VerticalLayout aligns its children along the vertical axis only.
+        // Without this full-width cell, a narrow knob face starts at the left
+        // of a wider ParameterKnob, visibly skewing every device control row.
+        Rectangle {
+            width: root.width;
+            height: root.diameter;
+            knob-face := KnobFace {
+                x: (parent.width - root.diameter) / 2;
+                diameter: root.diameter;
+                normalized: root.normalized;
+                bipolar: root.bipolar;
+                enabled: root.enabled;
+                fill: root.fill;
+                focused: keyboard.has-focus;
+                hovered: knob-touch.has-hover;
+            }
         }
 
         Text {
