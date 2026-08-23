@@ -21,7 +21,7 @@ or dependable production tool.
 
 ## What Works
 
-- Up to 16 channels using a sampler, drum synth, or mono synth.
+- Up to 16 channels using a sampler, drum synth, mono synth, or poly synth.
 - Up to 256 patterns, each from 1 to 256 sixteenth-note steps long.
 - A step rack with pitch and velocity data.
 - A zoomable piano roll and pinned velocity lane.
@@ -43,6 +43,8 @@ or dependable production tool.
   across a group of channels works exactly like building one on a channel.
 - Versioned song, kit, and channel-preset bundles with optional embedded
   samples.
+- Initial undo/redo for channel structure and piano-roll note edits; menu,
+  keyboard, and channel context-menu actions share one command path.
 - Offline WAV and MP3 export.
 - Sample-accurate event delivery inside JACK blocks.
 - A reusable Slint audio-control layer, appearance settings, and peak meters.
@@ -73,11 +75,12 @@ or dependable production tool.
   not record or retain their output, and none of the buffer playback,
   mutation, or resampling workflow described in the design documents exists
   in the application yet.
-- Editing is still incomplete: there is no undo, clipboard command layer,
-  autosave, crash recovery, dedicated missing-sample relinking, or playlist
-  clip dragging.
-- Metering is master-only, despite unfinished per-channel meter visuals. There
-  is no metronome.
+- Editing is still incomplete: undo/redo currently covers channel structure
+  and piano-roll notes, but not yet rack steps, patterns, or playlist clips.
+  Clipboard is currently channel-only; autosave, crash recovery, dedicated
+  missing-sample relinking, and playlist clip dragging are still absent.
+- The master, mixer buses, and device hosts have live meters. There is no
+  metronome.
 - The interface still has interaction and responsive-layout edge cases. Many
   workflows are mouse-first and keyboard navigation is incomplete.
 - Linux with JACK or PipeWire's JACK compatibility layer is the only supported

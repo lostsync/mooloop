@@ -55,6 +55,7 @@ const MAX_TIME_S: f32 = 2.0;
 enum PendingEngineMessage {
     Command(EngineCommand),
     Structural(StructuralCommand),
+    ProjectEdit(ProjectEdit),
 }
 
 #[derive(Clone)]
@@ -74,6 +75,15 @@ impl StructuralCommandSender {
         self.0
             .send(PendingEngineMessage::Structural(command))
             .is_ok()
+    }
+}
+
+#[derive(Clone)]
+struct ProjectEditSender(std::sync::mpsc::Sender<PendingEngineMessage>);
+
+impl ProjectEditSender {
+    fn send(&self, edit: ProjectEdit) -> bool {
+        self.0.send(PendingEngineMessage::ProjectEdit(edit)).is_ok()
     }
 }
 const WAVEFORM_BINS: usize = 256;
@@ -365,7 +375,7 @@ fn project_snapshot(state: &UiState, window: &MainWindow) -> ProjectSnapshot {
 }
 
 fn queue_project_edit(
-    tx: &std::sync::mpsc::Sender<ProjectEdit>,
+    tx: &ProjectEditSender,
     before: ProjectSnapshot,
     after: ProjectSnapshot,
     status: &'static str,
@@ -381,11 +391,10 @@ fn queue_project_edit(
         status: status.into(),
         history: Some((HistoryMove::Record, entry)),
     })
-    .is_ok()
 }
 
 fn queue_history_target(
-    tx: &std::sync::mpsc::Sender<ProjectEdit>,
+    tx: &ProjectEditSender,
     entry: HistoryEntry<ProjectSnapshot>,
     movement: HistoryMove,
 ) -> bool {
@@ -405,7 +414,6 @@ fn queue_history_target(
         status,
         history: Some((movement, entry)),
     })
-    .is_ok()
 }
 
 fn sync_command_availability(window: &MainWindow, commands: &CommandState) {
@@ -414,8 +422,24 @@ fn sync_command_availability(window: &MainWindow, commands: &CommandState) {
     window.set_channel_clipboard_available(commands.channel_clipboard.is_some());
 }
 
+fn record_project_history(
+    commands: &Rc<RefCell<CommandState>>,
+    before: ProjectSnapshot,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    label: &'static str,
+) {
+    let after = project_snapshot(&state.borrow(), window);
+    commands.borrow_mut().history.record(HistoryEntry {
+        before,
+        after,
+        label,
+    });
+    sync_command_availability(window, &commands.borrow());
+}
+
 fn queue_channel_insert(
-    tx: &std::sync::mpsc::Sender<ProjectEdit>,
+    tx: &ProjectEditSender,
     state: &Rc<RefCell<UiState>>,
     window: &MainWindow,
     after: usize,
@@ -441,7 +465,7 @@ fn queue_channel_insert(
 }
 
 fn queue_channel_delete(
-    tx: &std::sync::mpsc::Sender<ProjectEdit>,
+    tx: &ProjectEditSender,
     state: &Rc<RefCell<UiState>>,
     window: &MainWindow,
     index: usize,
@@ -1815,7 +1839,6 @@ impl AppUi {
         window.set_app_version(env!("CARGO_PKG_VERSION").into());
 
         let (document_tx, document_rx) = std::sync::mpsc::channel::<DocumentResult>();
-        let (channel_edit_tx, channel_edit_rx) = std::sync::mpsc::channel::<ProjectEdit>();
         let command_state = Rc::new(RefCell::new(CommandState::default()));
         sync_command_availability(&window, &command_state.borrow());
         let export_sample_rate = handle.sample_rate();
@@ -2293,6 +2316,7 @@ impl AppUi {
         // --- Ordered command channel from UI closures to the pump ---
         let (pending_tx, pending_rx) = std::sync::mpsc::channel::<PendingEngineMessage>();
         let cmd_tx = EngineCommandSender(pending_tx.clone());
+        let project_edit_tx = ProjectEditSender(pending_tx.clone());
         let structural_tx = StructuralCommandSender(pending_tx);
         let sample_rate = handle.sample_rate();
         // Sample slots are published out-of-band, so source replacement asks
@@ -2899,8 +2923,12 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_created(move |start_tick, midi_note, duration_ticks| {
+                let Some(window) = weak.upgrade() else { return 0 };
+                let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
                 let channel = st.selected;
@@ -2923,14 +2951,14 @@ impl AppUi {
                 }
                 st.selected_note_id = Some(note.id);
                 st.refresh_rack_cell(channel, (start_tick / TICKS_PER_STEP) as usize);
-                if let Some(window) = weak.upgrade() {
-                    st.refresh_note_editor(&window);
-                }
+                st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
                     pattern: pattern as u8,
                     channel: channel as u8,
                     note,
                 });
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Note created");
                 note.id as i32
             });
         }
@@ -2972,8 +3000,12 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_moved(move |id, start_tick, midi_note| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
                 let channel = st.selected;
@@ -3000,21 +3032,25 @@ impl AppUi {
                 st.selected_note_id = Some(edited.id);
                 st.refresh_rack_cell(channel, old_step as usize);
                 st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
-                if let Some(window) = weak.upgrade() {
-                    st.refresh_note_editor(&window);
-                }
+                st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
                     pattern: pattern as u8,
                     channel: channel as u8,
                     note: edited,
                 });
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Note moved");
             });
         }
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_resized(move |id, duration| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
                 let channel = st.selected;
@@ -3029,21 +3065,25 @@ impl AppUi {
                     .min(length_ticks.saturating_sub(note.start_tick).max(1));
                 let edited = *note;
                 st.selected_note_id = Some(edited.id);
-                if let Some(window) = weak.upgrade() {
-                    st.refresh_note_editor(&window);
-                }
+                st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
                     pattern: pattern as u8,
                     channel: channel as u8,
                     note: edited,
                 });
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Note resized");
             });
         }
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_removed(move |id| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
                 let channel = st.selected;
@@ -3056,21 +3096,25 @@ impl AppUi {
                 let removed = st.channels[channel].notes[pattern].remove(index);
                 st.selected_note_id = None;
                 st.refresh_rack_cell(channel, (removed.start_tick / TICKS_PER_STEP) as usize);
-                if let Some(window) = weak.upgrade() {
-                    st.refresh_note_editor(&window);
-                }
+                st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::RemoveNote {
                     pattern: pattern as u8,
                     channel: channel as u8,
                     id: removed.id,
                 });
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Note removed");
             });
         }
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_velocity_edited(move |id, value| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
                 let velocity = (1.0 + value.clamp(0.0, 1.0) * 126.0).round() as u8;
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
@@ -3085,14 +3129,14 @@ impl AppUi {
                 let edited = *note;
                 st.selected_note_id = Some(edited.id);
                 st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
-                if let Some(window) = weak.upgrade() {
-                    st.refresh_note_editor(&window);
-                }
+                st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
                     pattern: pattern as u8,
                     channel: channel as u8,
                     note: edited,
                 });
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Note velocity changed");
             });
         }
 
@@ -3317,7 +3361,7 @@ impl AppUi {
         }
         {
             let st = state.clone();
-            let tx = channel_edit_tx.clone();
+            let tx = project_edit_tx.clone();
             let weak = window.as_weak();
             window.on_remove_channel_clicked(move || {
                 let Some(window) = weak.upgrade() else { return };
@@ -3331,7 +3375,7 @@ impl AppUi {
         {
             let st = state.clone();
             let commands = command_state.clone();
-            let tx = channel_edit_tx.clone();
+            let tx = project_edit_tx.clone();
             let weak = window.as_weak();
             window.on_edit_command_requested(move |kind, index| {
                 let Some(window) = weak.upgrade() else { return };
@@ -4433,41 +4477,6 @@ impl AppUi {
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
-                while let Ok(edit) = channel_edit_rx.try_recv() {
-                    let Some(window) = weak.upgrade() else {
-                        return;
-                    };
-                    if edit.history.is_some() {
-                        commands.borrow_mut().project_edit_pending = false;
-                    }
-                    if install_project_in_ui(
-                        &mut handle,
-                        default_sample_for_pump.as_ref(),
-                        &st,
-                        &window,
-                        &edit.project,
-                        &edit.samples,
-                    ) {
-                        let mut state = st.borrow_mut();
-                        state.dirty = true;
-                        state.revision = state.revision.wrapping_add(1);
-                        state.update_document_title(&window);
-                        window.set_status_message(edit.status.into());
-                        drop(state);
-                        if let Some((movement, entry)) = edit.history {
-                            let mut commands = commands.borrow_mut();
-                            match movement {
-                                HistoryMove::Record => commands.history.record(entry),
-                                HistoryMove::Undo => commands.history.commit_undo(),
-                                HistoryMove::Redo => commands.history.commit_redo(),
-                            }
-                            sync_command_availability(&window, &commands);
-                        }
-                    } else {
-                        window.set_status_message("Channel edit is waiting for audio".into());
-                        sync_command_availability(&window, &commands.borrow());
-                    }
-                }
                 while let Ok(result) = document_rx.try_recv() {
                     let Some(window) = weak.upgrade() else {
                         return;
@@ -4769,6 +4778,39 @@ impl AppUi {
                                 }
                             }
                             handle.send_structural(cmd);
+                        }
+                        PendingEngineMessage::ProjectEdit(edit) => {
+                            let Some(window) = weak.upgrade() else { return };
+                            if edit.history.is_some() {
+                                commands.borrow_mut().project_edit_pending = false;
+                            }
+                            if install_project_in_ui(
+                                &mut handle,
+                                default_sample_for_pump.as_ref(),
+                                &st,
+                                &window,
+                                &edit.project,
+                                &edit.samples,
+                            ) {
+                                let mut state = st.borrow_mut();
+                                state.dirty = true;
+                                state.revision = state.revision.wrapping_add(1);
+                                state.update_document_title(&window);
+                                window.set_status_message(edit.status.into());
+                                drop(state);
+                                if let Some((movement, entry)) = edit.history {
+                                    let mut commands = commands.borrow_mut();
+                                    match movement {
+                                        HistoryMove::Record => commands.history.record(entry),
+                                        HistoryMove::Undo => commands.history.commit_undo(),
+                                        HistoryMove::Redo => commands.history.commit_redo(),
+                                    }
+                                    sync_command_availability(&window, &commands);
+                                }
+                            } else {
+                                window.set_status_message("Channel edit is waiting for audio".into());
+                                sync_command_availability(&window, &commands.borrow());
+                            }
                         }
                     }
                 }
