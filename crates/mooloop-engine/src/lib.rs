@@ -17,7 +17,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwapOption;
 use jack::{AudioOut, Client, ClientOptions};
 use mooloop_core::{EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS};
-use mooloop_dsp::{AudioNode, SampleData};
+use mooloop_dsp::{AudioNode, DryAlign, SampleData};
 use rtrb::{Consumer, Producer};
 
 mod graph;
@@ -28,7 +28,7 @@ mod sequencer;
 mod transport;
 
 use graph::{AsyncClient, Graph};
-use render::RenderState;
+use render::{ReclaimedEffect, RenderState};
 
 pub use meters::{BusMeters, DeviceMeters};
 pub use offline::{
@@ -43,23 +43,26 @@ pub use offline::{
 /// POD commands in one ordered engine-private stream.
 pub enum StructuralCommand {
     /// Install `node` at `slot` on `target`, replacing whatever was there.
-    /// The replaced node (if any) comes back via the reclaim ring — the
+    /// `align` is the container's dry-path delay matching the node's reported
+    /// latency, allocated on this thread for the same reason as the node.
+    /// The replaced occupants (if any) come back via the reclaim ring — the
     /// realtime thread never drops a `Box` itself (that would be a
     /// deallocation on the audio thread).
     InstallEffect {
         target: EffectTarget,
         slot: u8,
         node: Box<dyn AudioNode + Send>,
+        align: Option<Box<DryAlign>>,
     },
     /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
     RemoveEffect { target: EffectTarget, slot: u8 },
 }
 
-/// audio -> GUI. Hands back a displaced node so the GUI thread can drop it
-/// (deallocate) safely, off the realtime thread. Drained as a side effect of
-/// `EngineHandle::poll` — there is nothing to inspect.
+/// audio -> GUI. Hands back displaced occupants so the GUI thread can drop
+/// (deallocate) them safely, off the realtime thread. Drained as a side
+/// effect of `EngineHandle::poll` — there is nothing to inspect.
 pub(crate) enum StructuralReclaim {
-    Node(Box<dyn AudioNode + Send>),
+    Effect(ReclaimedEffect),
     /// A complete executor displaced by a project install. Keeping it boxed
     /// lets the realtime thread swap ownership without allocating; the box is
     /// destroyed when `EngineHandle::poll` drains this variant.
@@ -226,12 +229,12 @@ impl EngineHandle {
 
     /// Pop one event if available.
     pub fn poll(&mut self) -> Option<EngineEvent> {
-        // Reclaim displaced effect nodes first: dropping the boxes here frees
-        // them off the realtime thread, which is the entire point of the
-        // reclaim ring.
+        // Reclaim displaced effect occupants first: dropping the boxes here
+        // frees them off the realtime thread, which is the entire point of
+        // the reclaim ring.
         while let Ok(reclaim) = self.reclaim_rx.pop() {
             match reclaim {
-                StructuralReclaim::Node(node) => drop(node),
+                StructuralReclaim::Effect(effect) => drop(effect),
                 StructuralReclaim::RenderState(render) => drop(render),
             }
         }
@@ -305,8 +308,11 @@ impl EngineHandle {
         self.bus_meters.take(bus)
     }
 
-    pub fn take_device_peak(&self, channel: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
-        self.device_meters.take(channel, stage)
+    /// Read and clear a device's held input/output peaks. `target` addresses
+    /// channels and buses in one space: a channel is its own index, a bus is
+    /// `MAX_CHANNELS + bus index`. Stage 0 is the source; effect slots follow.
+    pub fn take_device_peak(&self, target: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
+        self.device_meters.take(target, stage)
     }
 
     pub fn sample_rate(&self) -> u32 {

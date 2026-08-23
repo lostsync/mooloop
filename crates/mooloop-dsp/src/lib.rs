@@ -9,6 +9,8 @@
 //! - [`polysynth`]: the three-oscillator poly synth.
 //! - [`effects`]: chainable effects that run after a channel's generator
 //!   (see `docs/EFFECTS_PLAN.md` and `docs/MODULATION_PLAN.md`).
+//! - [`align`]: the dry-path latency delay the engine's effect container
+//!   blends against.
 //! - [`env`], [`osc`], [`lfo`], [`filter`], [`shaper`], [`smooth`]: building
 //!   blocks shared by the synths and effects.
 //!
@@ -16,6 +18,7 @@
 //! the UI; that integration is a later step. Effects implement the same
 //! `AudioNode` trait, processing the bus in place after the generator.
 
+pub mod align;
 pub mod bus;
 pub mod delayline;
 pub mod drumsynth;
@@ -33,6 +36,7 @@ pub mod sampler;
 pub mod shaper;
 pub mod smooth;
 
+pub use align::DryAlign;
 pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;

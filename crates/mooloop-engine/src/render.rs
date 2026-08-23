@@ -9,8 +9,9 @@ use mooloop_core::{
     MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
 };
 use mooloop_dsp::{
-    balance_gains, build_effect, pan_gains, AudioNode, DrumSynth, Event, EventList, MonoSynth,
-    PolySynth, ProcessContext, SampleData, Sampler, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
+    balance_gains, build_effect, pan_gains, AudioNode, DrumSynth, DryAlign, Event, EventList,
+    MonoSynth, PolySynth, ProcessContext, SampleData, Sampler, StereoBus, TimedEvent,
+    MAX_BLOCK_SIZE,
 };
 
 use crate::meters::{BusMeters, DeviceMeters};
@@ -18,15 +19,35 @@ use crate::sequencer::Sequencer;
 use crate::transport::Transport;
 use crate::StructuralCommand;
 
-/// Nodes displaced from effect slots, handed back so the non-realtime side
-/// can drop them. The realtime thread must never free a `Box` itself.
-type Reclaim = Vec<Box<dyn AudioNode + Send>>;
+/// A displaced effect-slot occupant: the node plus the dry-align delay the
+/// container allocated alongside it. Both halves are heap objects built on
+/// the non-realtime side, so they must also be dropped there — the realtime
+/// thread never frees a `Box` itself.
+pub(crate) struct ReclaimedEffect {
+    pub node: Option<Box<dyn AudioNode + Send>>,
+    pub align: Option<Box<DryAlign>>,
+}
+
+impl ReclaimedEffect {
+    fn is_empty(&self) -> bool {
+        self.node.is_none() && self.align.is_none()
+    }
+}
+
+/// Occupants displaced from effect slots, handed back so the non-realtime
+/// side can drop them.
+type Reclaim = Vec<ReclaimedEffect>;
 
 /// A compact, preallocated per-effect mailbox. Knob traffic is coalesced by
 /// parameter ID; retaining every intermediate mouse position is neither
 /// audible nor necessary, while allocating a full `EventList` for every one
 /// of 256 possible slots would make empty chains prohibitively expensive.
 const MAX_PENDING_EFFECT_PARAMS: usize = 8;
+
+/// Maximum linear gain of a container input/output trim: +12 dB. The UI
+/// works in dB and clamps there; this bounds what a hand-edited song file or
+/// a stale command can do.
+const MAX_TRIM_GAIN: f32 = 4.0;
 
 #[derive(Clone, Copy)]
 struct PendingEffectParams {
@@ -88,6 +109,10 @@ struct EffectChain {
     wet_dry: [f32; MAX_EFFECTS_PER_CHANNEL],
     input_trim: [f32; MAX_EFFECTS_PER_CHANNEL],
     output_trim: [f32; MAX_EFFECTS_PER_CHANNEL],
+    /// Per-slot dry-path delay matching the installed node's reported
+    /// latency, so the wet/dry blend never mixes time-misaligned signals.
+    /// Allocated off the realtime thread, next to the node it belongs to.
+    dry_align: [Option<Box<DryAlign>>; MAX_EFFECTS_PER_CHANNEL],
     /// One scratch buffer is enough: chain slots process sequentially, so no
     /// slot needs to retain its dry signal once its mix has been applied.
     /// Keeping this per-chain rather than per-slot makes the full 256-slot
@@ -105,15 +130,20 @@ impl EffectChain {
             wet_dry: [1.0; MAX_EFFECTS_PER_CHANNEL],
             input_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
             output_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
+            dry_align: std::array::from_fn(|_| None),
             dry: StereoBus::with_capacity(MAX_BLOCK_SIZE),
         }
     }
 
     /// Remove every node, queuing the boxes for off-thread disposal.
     fn clear(&mut self, reclaim: &mut Reclaim) {
-        for slot in &mut self.nodes {
-            if let Some(node) = slot.take() {
-                reclaim.push(node);
+        for slot in 0..MAX_EFFECTS_PER_CHANNEL {
+            let displaced = ReclaimedEffect {
+                node: self.nodes[slot].take(),
+                align: self.dry_align[slot].take(),
+            };
+            if !displaced.is_empty() {
+                reclaim.push(displaced);
             }
         }
         for events in &mut self.events {
@@ -125,23 +155,40 @@ impl EffectChain {
         self.output_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
     }
 
-    /// Install a node and return whichever box must be reclaimed. An invalid
-    /// slot returns the incoming node so it is never dropped by the realtime
-    /// caller.
+    /// Install a node together with its dry-path delay, returning whichever
+    /// occupants must be reclaimed. An invalid slot returns the incoming
+    /// pieces so they are never dropped by the realtime caller.
     fn install(
         &mut self,
         slot: usize,
         node: Box<dyn AudioNode + Send>,
-    ) -> Option<Box<dyn AudioNode + Send>> {
-        if let Some(target) = self.nodes.get_mut(slot) {
-            target.replace(node)
+        align: Option<Box<DryAlign>>,
+    ) -> ReclaimedEffect {
+        if slot < MAX_EFFECTS_PER_CHANNEL {
+            ReclaimedEffect {
+                node: self.nodes[slot].replace(node),
+                align: std::mem::replace(&mut self.dry_align[slot], align),
+            }
         } else {
-            Some(node)
+            ReclaimedEffect {
+                node: Some(node),
+                align,
+            }
         }
     }
 
-    fn remove(&mut self, slot: usize) -> Option<Box<dyn AudioNode + Send>> {
-        let removed = self.nodes.get_mut(slot).and_then(Option::take);
+    fn remove(&mut self, slot: usize) -> ReclaimedEffect {
+        let removed = if slot < MAX_EFFECTS_PER_CHANNEL {
+            ReclaimedEffect {
+                node: self.nodes[slot].take(),
+                align: self.dry_align[slot].take(),
+            }
+        } else {
+            ReclaimedEffect {
+                node: None,
+                align: None,
+            }
+        };
         if let Some(events) = self.events.get_mut(slot) {
             events.clear();
         }
@@ -159,6 +206,7 @@ impl EffectChain {
             self.wet_dry.swap(slot_a, slot_b);
             self.input_trim.swap(slot_a, slot_b);
             self.output_trim.swap(slot_a, slot_b);
+            self.dry_align.swap(slot_a, slot_b);
         }
     }
 
@@ -190,13 +238,16 @@ impl EffectChain {
     ) {
         self.clear(reclaim);
         for (slot, effect) in slots.iter().take(MAX_EFFECTS_PER_CHANNEL).enumerate() {
-            if let Some(displaced) = self.install(slot, build_effect(effect.params, sample_rate)) {
+            let node = build_effect(effect.params, sample_rate);
+            let align = DryAlign::new(node.latency_frames()).map(Box::new);
+            let displaced = self.install(slot, node, align);
+            if !displaced.is_empty() {
                 reclaim.push(displaced);
             }
             self.bypassed[slot] = effect.bypassed;
             self.wet_dry[slot] = effect.wet_dry.clamp(0.0, 1.0);
-            self.input_trim[slot] = effect.input_trim.clamp(0.0, 2.0);
-            self.output_trim[slot] = effect.output_trim.clamp(0.0, 2.0);
+            self.input_trim[slot] = effect.input_trim.clamp(0.0, MAX_TRIM_GAIN);
+            self.output_trim[slot] = effect.output_trim.clamp(0.0, MAX_TRIM_GAIN);
         }
     }
 
@@ -210,10 +261,21 @@ impl EffectChain {
             if self.bypassed[slot] {
                 // A bypassed slot keeps its queued events until re-enabled, so
                 // knob turns made while bypassed are not lost.
-                if let Some((meters, channel)) = device_meters {
+                if let Some(align) = &mut self.dry_align[slot] {
+                    // Keep the dry ring tracking the passing signal, so
+                    // re-enabling the slot never blends in audio captured
+                    // before the bypass.
+                    self.dry.l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
+                    self.dry.r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
+                    align.process(
+                        &mut self.dry.l[..context.frames],
+                        &mut self.dry.r[..context.frames],
+                    );
+                }
+                if let Some((meters, target)) = device_meters {
                     let (left, right) = bus.peak(context.frames);
-                    meters.publish_input(channel, slot + 1, left, right);
-                    meters.publish_output(channel, slot + 1, left, right);
+                    meters.publish_input(target, slot + 1, left, right);
+                    meters.publish_output(target, slot + 1, left, right);
                 }
                 continue;
             }
@@ -225,9 +287,15 @@ impl EffectChain {
                 }
                 self.dry.l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
                 self.dry.r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
-                if let Some((meters, channel)) = device_meters {
+                if let Some(align) = &mut self.dry_align[slot] {
+                    align.process(
+                        &mut self.dry.l[..context.frames],
+                        &mut self.dry.r[..context.frames],
+                    );
+                }
+                if let Some((meters, target)) = device_meters {
                     let (left, right) = bus.peak(context.frames);
-                    meters.publish_input(channel, slot + 1, left, right);
+                    meters.publish_input(target, slot + 1, left, right);
                 }
                 self.event_scratch.clear();
                 self.events[slot].copy_to(&mut self.event_scratch);
@@ -239,9 +307,9 @@ impl EffectChain {
                     bus.l[frame] = (self.dry.l[frame] * dry + bus.l[frame] * wet) * trim;
                     bus.r[frame] = (self.dry.r[frame] * dry + bus.r[frame] * wet) * trim;
                 }
-                if let Some((meters, channel)) = device_meters {
+                if let Some((meters, target)) = device_meters {
                     let (left, right) = bus.peak(context.frames);
-                    meters.publish_output(channel, slot + 1, left, right);
+                    meters.publish_output(target, slot + 1, left, right);
                 }
             }
             self.events[slot].clear();
@@ -605,29 +673,36 @@ impl RenderState {
     }
 
     /// Apply a structural change (install/remove of a boxed node). Called on
-    /// the realtime thread from the ordered control stream; the box itself was
-    /// allocated on the control thread.
-    pub(crate) fn apply_structural(
-        &mut self,
-        cmd: StructuralCommand,
-    ) -> Option<Box<dyn AudioNode + Send>> {
+    /// the realtime thread from the ordered control stream; the boxes
+    /// themselves were allocated on the control thread. Returns whatever the
+    /// edit displaced, so the caller can hand it to the reclaim ring.
+    pub(crate) fn apply_structural(&mut self, cmd: StructuralCommand) -> Option<ReclaimedEffect> {
         match cmd {
-            StructuralCommand::InstallEffect { target, slot, node } => {
+            StructuralCommand::InstallEffect {
+                target,
+                slot,
+                node,
+                align,
+            } => {
                 // `chain_for` borrows the two strip vectors rather than all of
                 // `self`, so `reclaim` stays independently borrowable here.
                 if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
-                    chain.install(slot as usize, node)
+                    Some(chain.install(slot as usize, node, align))
                 } else {
-                    Some(node)
+                    Some(ReclaimedEffect {
+                        node: Some(node),
+                        align,
+                    })
                 }
             }
             StructuralCommand::RemoveEffect { target, slot } => {
                 if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
-                    chain.remove(slot as usize)
+                    Some(chain.remove(slot as usize))
                 } else {
                     None
                 }
             }
+            .filter(|displaced| !displaced.is_empty())
         }
     }
 
@@ -794,14 +869,14 @@ impl RenderState {
             EngineCommand::SetEffectInputTrim { target, slot, input_trim } => {
                 if let Some(chain) = self.chain_mut(target) {
                     if let Some(value) = chain.input_trim.get_mut(slot as usize) {
-                        *value = input_trim.clamp(0.0, 2.0);
+                        *value = input_trim.clamp(0.0, MAX_TRIM_GAIN);
                     }
                 }
             }
             EngineCommand::SetEffectOutputTrim { target, slot, output_trim } => {
                 if let Some(chain) = self.chain_mut(target) {
                     if let Some(value) = chain.output_trim.get_mut(slot as usize) {
-                        *value = output_trim.clamp(0.0, 2.0);
+                        *value = output_trim.clamp(0.0, MAX_TRIM_GAIN);
                     }
                 }
             }
@@ -911,7 +986,7 @@ impl RenderState {
             let Some(strip) = self.buses.get_mut(index) else {
                 continue;
             };
-            strip.effects.process(&context, &mut strip.bus, None);
+            strip.effects.process(&context, &mut strip.bus, Some((&self.device_meters, MAX_CHANNELS + index)));
             strip.output.apply_balance(&mut strip.bus, frames);
             // A muted bus still processes, so a delay or reverb tail on it
             // decays instead of freezing, but contributes nothing — and meters
@@ -1174,16 +1249,26 @@ mod tests {
         build_effect(kind.default_params(), 48_000)
     }
 
+    fn install_effect(
+        target: EffectTarget,
+        slot: u8,
+        node: Box<dyn AudioNode + Send>,
+    ) -> StructuralCommand {
+        let align = DryAlign::new(node.latency_frames()).map(Box::new);
+        StructuralCommand::InstallEffect {
+            target,
+            slot,
+            node,
+            align,
+        }
+    }
+
     #[test]
     fn installed_filter_changes_channel_output() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let filtered = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Channel(0),
-                slot: 0,
-                node: muffling_filter(),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
         });
         assert!(dry > 0.0, "reference render was silent");
         assert!(
@@ -1240,11 +1325,7 @@ mod tests {
             }
 
             let wet = rendered_energy(&project, |render| {
-                let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                    target: EffectTarget::Channel(0),
-                    slot: 0,
-                    node: build_effect(params, 48_000),
-                });
+                let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, build_effect(params, 48_000)));
             });
             assert!(
                 (wet - dry).abs() > dry * 0.01,
@@ -1266,11 +1347,7 @@ mod tests {
 
         let filtered = rendered_energy(&project, |render| {
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 3 });
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Bus(3),
-                slot: 0,
-                node: muffling_filter(),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Bus(3), 0, muffling_filter()));
         });
         assert!(
             filtered < dry * 0.5,
@@ -1330,11 +1407,7 @@ mod tests {
             let mut buses = mooloop_core::default_buses();
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 5 });
             route(render, &mut buses, 5, 2);
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Bus(2),
-                slot: 0,
-                node: muffling_filter(),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Bus(2), 0, muffling_filter()));
         });
         assert!(
             filtered < chained * 0.5,
@@ -1359,11 +1432,7 @@ mod tests {
             let mut buses = mooloop_core::default_buses();
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 2 });
             route(render, &mut buses, 2, 9);
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Bus(9),
-                slot: 0,
-                node: muffling_filter(),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Bus(9), 0, muffling_filter()));
         });
         assert!(
             filtered < chained * 0.5,
@@ -1479,9 +1548,7 @@ mod tests {
         let meters = DeviceMeters::new();
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.attach_device_meters(meters.clone());
-        let _ = render.apply_structural(StructuralCommand::InstallEffect {
-            target: EffectTarget::Channel(0), slot: 0, node: muffling_filter(),
-        });
+        let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
         render.play();
         render.process_block(1024);
 
@@ -1491,6 +1558,100 @@ mod tests {
         let (effect_in, effect_out) = meters.take(0, 1);
         assert!(effect_in.0 > 0.001, "effect sees the source output");
         assert!(effect_out.0 < effect_in.0, "filter output should differ from its input");
+    }
+
+    #[test]
+    fn bus_effect_slots_meter_like_channel_slots() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let meters = DeviceMeters::new();
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.attach_device_meters(meters.clone());
+        render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 3 });
+        let _ = render.apply_structural(install_effect(EffectTarget::Bus(3), 0, muffling_filter()));
+        render.play();
+        render.process_block(1024);
+
+        let (effect_in, effect_out) = meters.take(MAX_CHANNELS + 3, 1);
+        assert!(effect_in.0 > 0.001, "a bus effect sees what its bus received");
+        assert!(effect_out.0 < effect_in.0, "filter output should differ from its input");
+        let (channel_in, _) = meters.take(0, 1);
+        assert_eq!(channel_in, (0.0, 0.0), "the channel has no effect in slot 1");
+    }
+
+    /// Test node: an honest pure delay. What the container's dry path must be
+    /// aligned against whenever a node reports latency.
+    struct LatentDelay {
+        left: std::collections::VecDeque<f32>,
+        right: std::collections::VecDeque<f32>,
+    }
+
+    impl LatentDelay {
+        fn new(frames: usize) -> Self {
+            Self {
+                left: std::iter::repeat(0.0).take(frames).collect(),
+                right: std::iter::repeat(0.0).take(frames).collect(),
+            }
+        }
+    }
+
+    impl AudioNode for LatentDelay {
+        fn latency_frames(&self) -> u32 {
+            self.left.len() as u32
+        }
+
+        fn process(
+            &mut self,
+            ctx: &ProcessContext,
+            bus: &mut StereoBus,
+            _events_in: &EventList,
+            _events_out: Option<&mut EventList>,
+        ) {
+            for frame in 0..ctx.frames {
+                self.left.push_back(bus.l[frame]);
+                self.right.push_back(bus.r[frame]);
+                bus.l[frame] = self.left.pop_front().unwrap_or(0.0);
+                bus.r[frame] = self.right.pop_front().unwrap_or(0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn the_container_aligns_its_dry_path_to_node_latency() {
+        const LATENCY: usize = 15;
+        let mut chain = EffectChain::new();
+        let node = Box::new(LatentDelay::new(LATENCY));
+        let align = DryAlign::new(node.latency_frames()).map(Box::new);
+        let displaced = chain.install(0, node, align);
+        assert!(displaced.is_empty());
+        chain.wet_dry[0] = 0.5;
+
+        let context = ProcessContext {
+            sample_rate: 48_000,
+            frames: 64,
+            playing: true,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        };
+        let mut bus = StereoBus::with_capacity(MAX_BLOCK_SIZE);
+        bus.l[0] = 1.0;
+        bus.r[0] = 1.0;
+        chain.process(&context, &mut bus, None);
+
+        assert!(
+            bus.l[..LATENCY].iter().all(|s| *s == 0.0),
+            "a latent node must not pass dry audio early: {:?}",
+            &bus.l[..LATENCY]
+        );
+        assert!(
+            (bus.l[LATENCY] - 1.0).abs() < 1e-6,
+            "aligned dry + wet recombine to unity, got {}",
+            bus.l[LATENCY]
+        );
+        assert!(
+            bus.l[LATENCY + 1..].iter().all(|s| *s == 0.0),
+            "no second, misaligned copy of the impulse may follow"
+        );
     }
 
     #[test]
@@ -1514,11 +1675,7 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let filtered = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Bus(mooloop_core::MASTER_BUS),
-                slot: 0,
-                node: muffling_filter(),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Bus(mooloop_core::MASTER_BUS), 0, muffling_filter()));
         });
         assert!(filtered < dry * 0.5, "dry {dry}, filtered {filtered}");
     }
@@ -1528,18 +1685,14 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let host_dry = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Channel(0), slot: 0, node: muffling_filter(),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
             render.apply_command(EngineCommand::SetEffectWetDry {
                 target: EffectTarget::Channel(0), slot: 0, wet_dry: 0.0,
             });
         });
         assert!((host_dry / dry - 1.0).abs() < 0.1, "wet=0 must pass dry signal");
         let trimmed = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Channel(0), slot: 0, node: muffling_filter(),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
             render.apply_command(EngineCommand::SetEffectWetDry {
                 target: EffectTarget::Channel(0), slot: 0, wet_dry: 0.0,
             });
@@ -1549,9 +1702,7 @@ mod tests {
         });
         assert!((trimmed / dry - 0.25).abs() < 0.08, "trim is amplitude, energy scales squared");
         let input_trimmed = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Channel(0), slot: 0, node: muffling_filter(),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
             render.apply_command(EngineCommand::SetEffectWetDry {
                 target: EffectTarget::Channel(0), slot: 0, wet_dry: 0.0,
             });
@@ -1572,18 +1723,10 @@ mod tests {
         // A wide-open filter passes (nearly) everything; closing it via a
         // queued ParamValue event must change the output.
         let open = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Channel(0),
-                slot: 0,
-                node: default_effect(mooloop_core::EffectKind::Filter),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, default_effect(mooloop_core::EffectKind::Filter)));
         });
         let closed = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Channel(0),
-                slot: 0,
-                node: default_effect(mooloop_core::EffectKind::Filter),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, default_effect(mooloop_core::EffectKind::Filter)));
             render.apply_command(EngineCommand::SetEffectParam {
                 target: EffectTarget::Channel(0),
                 slot: 0,
@@ -1595,11 +1738,7 @@ mod tests {
 
         // Bypass restores the dry sound.
         let bypassed = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(StructuralCommand::InstallEffect {
-                target: EffectTarget::Channel(0),
-                slot: 0,
-                node: muffling_filter(),
-            });
+            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
             render.apply_command(EngineCommand::SetEffectBypassed {
                 target: EffectTarget::Channel(0),
                 slot: 0,
@@ -1615,11 +1754,7 @@ mod tests {
 
         // Swapping an occupied slot with an empty one moves the filter.
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        let _ = render.apply_structural(StructuralCommand::InstallEffect {
-            target: EffectTarget::Channel(0),
-            slot: 0,
-            node: muffling_filter(),
-        });
+        let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
         render.apply_command(EngineCommand::SwapEffectSlots {
             target: EffectTarget::Channel(0),
             slot_a: 0,

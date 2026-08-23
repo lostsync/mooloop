@@ -26,7 +26,7 @@ use mooloop_core::{
     MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT,
     MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
-use mooloop_dsp::{build_effect, DrumSynth, SampleData};
+use mooloop_dsp::{build_effect, DrumSynth, DryAlign, SampleData};
 use mooloop_engine::{
     EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope,
     StructuralCommand, WavEncoding,
@@ -3639,10 +3639,16 @@ impl AppUi {
                 // Install into the vacant tail then move it left. Keeping this
                 // on the ordered stream means the realtime chain sees the same
                 // order as the UI/model without allocating in its callback.
+                // The dry-align ring is built here for the same reason as the
+                // node: construction allocates, so it happens off the audio
+                // thread and rides the same structural command.
+                let node = build_effect(params, sample_rate);
+                let align = DryAlign::new(node.latency_frames()).map(Box::new);
                 let _ = stx.send(StructuralCommand::InstallEffect {
                     target,
                     slot: tail_slot as u8,
-                    node: build_effect(params, sample_rate),
+                    node,
+                    align,
                 });
                 for position in (slot + 1..=tail_slot).rev() {
                     let _ = tx.send(EngineCommand::SwapEffectSlots {

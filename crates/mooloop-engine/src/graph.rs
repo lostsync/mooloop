@@ -76,8 +76,8 @@ impl ProcessHandler for Graph {
                         self.pending_command = Some(RealtimeCommand::Structural(command));
                         break;
                     }
-                    if let Some(node) = self.render.apply_structural(command) {
-                        match self.reclaim_tx.push(StructuralReclaim::Node(node)) {
+                    if let Some(displaced) = self.render.apply_structural(command) {
+                        match self.reclaim_tx.push(StructuralReclaim::Effect(displaced)) {
                             Ok(()) => {}
                             Err(_) => {
                                 unreachable!("reclaim capacity checked before structural edit")
