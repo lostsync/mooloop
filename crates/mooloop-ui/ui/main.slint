@@ -2,7 +2,7 @@ import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-w
 import { Theme } from "theme.slint";
 import {
     AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
-    SegmentedControl, SelectorBank, StereoPeakMeter,
+    SegmentedControl, SelectorBank, StereoPeakMeter, ZoomScrollBar,
     ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton
 } from "controls.slint";
 import {
@@ -315,8 +315,14 @@ export component MainWindow inherits Window {
     in-out property <bool> has-selected-note;
     property <int> piano-low-note: 36;
     property <int> piano-high-note: 84;
-    property <length> piano-row-height: 5px;
+    // Starts three pitch-zoom steps above the old 5px minimum: that is where
+    // Adam kept landing after clicking zoom-in, so start there.
+    property <length> piano-row-height: 8px;
     property <length> piano-step-width: 32px;
+    // Full scrollable extent of the piano-roll grid in pixels; the zoom
+    // scrollbars work against these.
+    property <length> piano-content-w: root.pattern-length * root.piano-step-width;
+    property <length> piano-content-h: 49 * root.piano-row-height;
 
     callback piano-note-created(int, int, int) -> int;  // start tick, MIDI note, duration ticks -> stable note ID
     callback piano-note-selected(int);      // stable note ID
@@ -2175,31 +2181,29 @@ export component MainWindow inherits Window {
                                     Tooltip { text: @markdown("Piano-roll note grid"); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
-                                Text { text: "↔"; color: Theme.text-faint; vertical-alignment: center; }
-                                FlatButton {
-                                    text: "−"; tooltip: "Zoom time out";
-                                    min-width: 26px; max-width: 26px;
-                                    enabled: root.piano-step-width > 20px;
-                                    clicked => { root.piano-step-width = max(20px, root.piano-step-width - 4px); }
-                                }
-                                FlatButton {
-                                    text: "+"; tooltip: "Zoom time in";
-                                    min-width: 26px; max-width: 26px;
-                                    enabled: root.piano-step-width < 72px;
-                                    clicked => { root.piano-step-width = min(72px, root.piano-step-width + 4px); }
-                                }
-                                Text { text: "↕"; color: Theme.text-faint; vertical-alignment: center; }
-                                FlatButton {
-                                    text: "−"; tooltip: "Zoom pitch out";
-                                    min-width: 26px; max-width: 26px;
-                                    enabled: root.piano-row-height > 5px;
-                                    clicked => { root.piano-row-height = max(5px, root.piano-row-height - 1px); }
-                                }
-                                FlatButton {
-                                    text: "+"; tooltip: "Zoom pitch in";
-                                    min-width: 26px; max-width: 26px;
-                                    enabled: root.piano-row-height < 16px;
-                                    clicked => { root.piano-row-height = min(16px, root.piano-row-height + 1px); }
+                                // Time axis: drag the thumb to scroll, drag a
+                                // grip to zoom around the fixed opposite end.
+                                // Replaces the old −/+ FlatButton pair.
+                                ZoomScrollBar {
+                                    height: 14px;
+                                    min-width: 140px;
+                                    horizontal-stretch: 2;
+                                    offset: clamp(-piano-scroll.viewport-x
+                                        / max(1px, root.piano-content-w - piano-scroll.visible-width), 0, 1);
+                                    visible-fraction: clamp(
+                                        piano-scroll.visible-width / max(1px, root.piano-content-w), 0, 1);
+                                    scrolled(v) => {
+                                        piano-scroll.viewport-x = -v * max(0px,
+                                            root.piano-content-w - piano-scroll.visible-width);
+                                    }
+                                    zoomed(o, f) => {
+                                        root.piano-step-width = clamp(
+                                            piano-scroll.visible-width / max(1, root.pattern-length * f),
+                                            20px, 72px);
+                                        piano-scroll.viewport-x = -o * max(0px,
+                                            root.piano-content-w - piano-scroll.visible-width);
+                                    }
+                                    Tooltip { text: @markdown("Drag to scroll time. Drag an end grip to zoom."); }
                                 }
                             }
                         }
@@ -2261,9 +2265,16 @@ export component MainWindow inherits Window {
 
                             VerticalLayout {
                                 spacing: 0px;
-                                piano-scroll := ScrollView {
-                                    vertical-stretch: 1;
-                                    horizontal-stretch: 1;
+                                HorizontalLayout {
+                                    spacing: 2px;
+                                    piano-scroll := ScrollView {
+                                        // The zoom scrollbars own panning and
+                                        // zooming for both axes; the built-in
+                                        // bars would only duplicate them.
+                                        horizontal-scrollbar-policy: always-off;
+                                        vertical-scrollbar-policy: always-off;
+                                        vertical-stretch: 1;
+                                        horizontal-stretch: 1;
                                     viewport-width: max(self.visible-width,
                                         root.pattern-length * root.piano-step-width);
                                     viewport-height: max(self.visible-height,
@@ -2465,6 +2476,31 @@ export component MainWindow inherits Window {
                                                 }
                                             }
                                         }
+                                    }
+                                    }
+
+                                    // Pitch axis: same idiom vertically. The
+                                    // keyboard column follows viewport-y, so
+                                    // keys stay in sync while dragging.
+                                    ZoomScrollBar {
+                                        vertical: true;
+                                        width: 12px;
+                                        offset: clamp(-piano-scroll.viewport-y
+                                            / max(1px, root.piano-content-h - piano-scroll.visible-height), 0, 1);
+                                        visible-fraction: clamp(
+                                            piano-scroll.visible-height / max(1px, root.piano-content-h), 0, 1);
+                                        scrolled(v) => {
+                                            piano-scroll.viewport-y = -v * max(0px,
+                                                root.piano-content-h - piano-scroll.visible-height);
+                                        }
+                                        zoomed(o, f) => {
+                                            root.piano-row-height = clamp(
+                                                piano-scroll.visible-height / max(1, 49 * f),
+                                                5px, 16px);
+                                            piano-scroll.viewport-y = -o * max(0px,
+                                                root.piano-content-h - piano-scroll.visible-height);
+                                        }
+                                        Tooltip { text: @markdown("Drag to scroll pitch. Drag an end grip to zoom."); }
                                     }
                                 }
 

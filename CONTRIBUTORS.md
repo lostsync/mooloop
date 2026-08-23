@@ -67,9 +67,9 @@ work session you can recall being part of, and don't stress over precision.
 ### ox-alpha — opencode
 - First seen: 2026-08-23
 - Last seen: 2026-08-23
-- Sessions: 1
+- Sessions: 2
 - Notes: Rescued the ZoomScrollBar widget from an abandoned WIP branch and
-  gave it gallery coverage.
+  wired it into the piano roll's time and pitch axes.
 
 ### Kimi k3-256k — opencode
 - First seen: 2026-08-21

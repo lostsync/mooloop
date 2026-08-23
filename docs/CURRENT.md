@@ -36,7 +36,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   precision internally.
 - A horizontally and vertically zoomable piano roll with note creation,
   movement, length resizing, right-click removal, exact pitch/velocity/length
-  fields, and a pinned velocity lane. It shares selectable straight/triplet
+  fields, and a pinned velocity lane. Both axes use the zoom scrollbar —
+  drag the thumb to pan, drag an end grip to zoom around the fixed end — in
+  place of zoom-in/zoom-out buttons. The default pitch zoom starts three
+  steps above minimum because that is where editing comfortably begins.
+  It shares selectable straight/triplet
   musical snap values from one bar through 1/64 with the playlist.
 - Sixteenth-note rack cells summarize their four 64th-note substeps without
   discarding rests between hits. Each substep is drawn solid where a note is
