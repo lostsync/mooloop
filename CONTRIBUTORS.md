@@ -45,9 +45,10 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-21
-- Sessions: 1
-- Notes: Set up this file at Adam's request.
+- Last seen: 2026-08-23
+- Sessions: 2
+- Notes: Set up this file at Adam's request. Refreshed the README
+  screenshot.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21
