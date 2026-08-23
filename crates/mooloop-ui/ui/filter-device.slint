@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { IconButton, ParameterKnob, SelectorBank } from "controls.slint";
+import { ParameterKnob, SelectorBank } from "controls.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
 import { FilterResponseDisplay } from "device-displays.slint";
 
@@ -17,8 +17,6 @@ export component FilterDeviceFace inherits Rectangle {
     callback cutoff-changed(float);
     callback resonance-changed(float);
     callback mode-changed(int);
-    callback bypass-toggled();
-    callback remove-clicked();
     callback reorder-requested(int);     // target slot index
 
     VerticalLayout {
@@ -114,30 +112,4 @@ export component FilterDeviceFace inherits Rectangle {
         }
     }
 
-    // Rack actions: bypass (power) and remove, compact buttons on the
-    // header's right edge.
-    Rectangle {
-        visible: false;
-        x: parent.width - 52px;
-        y: 0px;
-        width: 52px;
-        height: DeviceRackMetrics.header-height;
-        HorizontalLayout {
-            padding: 3px;
-            spacing: 2px;
-            IconButton {
-                text: root.bypassed ? "○" : "●";
-                tooltip: root.bypassed ? "Enable this filter" : "Bypass this filter";
-                size: 22px;
-                active: !root.bypassed;
-                clicked => { root.bypass-toggled(); }
-            }
-            IconButton {
-                text: "✕";
-                tooltip: "Remove this filter";
-                size: 22px;
-                clicked => { root.remove-clicked(); }
-            }
-        }
-    }
 }

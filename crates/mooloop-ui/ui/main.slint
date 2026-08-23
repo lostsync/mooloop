@@ -1945,8 +1945,6 @@ export component MainWindow inherits Window {
                                                 cutoff-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                 resonance-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                 mode-changed(v) => { root.effect-param-changed(index, 2, v * 1.0); }
-                                                bypass-toggled => { root.effect-bypass-toggled(index); }
-                                                remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 1 : DriveDeviceFace {
@@ -1967,8 +1965,6 @@ export component MainWindow inherits Window {
                                                 tone-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                 mix-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                 output-changed(v) => { root.effect-param-changed(index, 4, v); }
-                                                bypass-toggled => { root.effect-bypass-toggled(index); }
-                                                remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 2 : BitcrushDeviceFace {
@@ -1985,8 +1981,6 @@ export component MainWindow inherits Window {
                                                 bits-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                 downsample-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                 mix-changed(v) => { root.effect-param-changed(index, 2, v); }
-                                                bypass-toggled => { root.effect-bypass-toggled(index); }
-                                                remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 3 : DelayDeviceFace {
@@ -2009,8 +2003,6 @@ export component MainWindow inherits Window {
                                                 cross-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                 tone-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                 mix-changed(v) => { root.effect-param-changed(index, 5, v); }
-                                                bypass-toggled => { root.effect-bypass-toggled(index); }
-                                                remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 4 : GateDeviceFace {
@@ -2031,8 +2023,6 @@ export component MainWindow inherits Window {
                                                 hold-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                 release-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                 range-changed(v) => { root.effect-param-changed(index, 4, v); }
-                                                bypass-toggled => { root.effect-bypass-toggled(index); }
-                                                remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 5 : CompressorDeviceFace {
@@ -2055,8 +2045,6 @@ export component MainWindow inherits Window {
                                                 release-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                 knee-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                 makeup-changed(v) => { root.effect-param-changed(index, 5, v); }
-                                                bypass-toggled => { root.effect-bypass-toggled(index); }
-                                                remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 6 : LimiterDeviceFace {
@@ -2073,8 +2061,6 @@ export component MainWindow inherits Window {
                                                 ceiling-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                 release-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                 gain-changed(v) => { root.effect-param-changed(index, 2, v); }
-                                                bypass-toggled => { root.effect-bypass-toggled(index); }
-                                                remove-clicked => { root.remove-effect-clicked(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                         }
