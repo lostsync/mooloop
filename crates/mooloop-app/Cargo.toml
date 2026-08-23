@@ -19,7 +19,7 @@ mooloop-ui = { workspace = true }
 # dependencies (JACK, GL, X11/Wayland, fontconfig, ...) are auto-detected
 # with $auto rather than hand-listed.
 [package.metadata.deb]
-maintainer = "adam <CHANGE-ME@example.com>"
+maintainer = "adam <lostsync@gmail.com>"
 copyright = "2026, adam"
 license-file = ["../../LICENSE", "0"]
 extended-description = """\
