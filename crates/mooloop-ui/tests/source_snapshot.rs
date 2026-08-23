@@ -248,3 +248,49 @@ fn effect_rack_scrolls_horizontally_to_reach_a_long_chain() {
     );
     write_snapshot(&scrolled, "MOOLOOP_EFFECT_RACK_SCROLLED_SNAPSHOT");
 }
+
+#[test]
+fn render_poly_source_editor() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .expect("initialize headless renderer");
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_pattern_length(16);
+    ui.set_selected_channel_name(SharedString::from("Poly"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(3);
+
+    let poly = ui.window().take_snapshot().unwrap();
+    assert_eq!((poly.width(), poly.height()), (960, 760));
+    assert!(poly.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&poly, "MOOLOOP_POLY_SOURCE_SNAPSHOT");
+
+    ui.set_poly_osc2_level(0.6);
+    ui.set_poly_osc2_semitones(7.0);
+    let layered = ui.window().take_snapshot().unwrap();
+    assert_ne!(poly.as_bytes(), layered.as_bytes());
+    write_snapshot(&layered, "MOOLOOP_POLY_LAYERED_SOURCE_SNAPSHOT");
+
+    ui.set_poly_device_page(1);
+    let poly_amp = ui.window().take_snapshot().unwrap();
+    assert_ne!(poly.as_bytes(), poly_amp.as_bytes());
+    write_snapshot(&poly_amp, "MOOLOOP_POLY_AMP_SOURCE_SNAPSHOT");
+
+    ui.set_poly_device_page(2);
+    let poly_mod = ui.window().take_snapshot().unwrap();
+    assert_ne!(poly_amp.as_bytes(), poly_mod.as_bytes());
+    write_snapshot(&poly_mod, "MOOLOOP_POLY_MOD_SOURCE_SNAPSHOT");
+
+    ui.set_poly_device_page(3);
+    let poly_voice = ui.window().take_snapshot().unwrap();
+    assert_ne!(poly_mod.as_bytes(), poly_voice.as_bytes());
+    write_snapshot(&poly_voice, "MOOLOOP_POLY_VOICE_SOURCE_SNAPSHOT");
+}

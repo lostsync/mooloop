@@ -1,0 +1,265 @@
+import { Theme } from "theme.slint";
+import { ParameterKnob, SelectorBank, ToggleButton, ValueScale } from "controls.slint";
+import { StepperField } from "toolbar.slint";
+import { DevicePageButton } from "device-rack.slint";
+import { FilterResponseDisplay, OscillatorTrace } from "device-displays.slint";
+import { EnvelopeEditor } from "envelope.slint";
+
+component OscillatorDeviceStrip inherits Rectangle {
+    in property <string> title;
+    in-out property <int> wave;
+    in-out property <float> semitones;
+    in-out property <float> cents;
+    in-out property <float> level;
+    in-out property <float> pulse-width;
+    callback wave-changed(int);
+    callback semitones-changed(float);
+    callback cents-changed(float);
+    callback level-changed(float);
+    callback pulse-width-changed(float);
+
+    background: Theme.panel;
+    border-radius: 2px;
+    VerticalLayout {
+        padding: 5px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text { text: root.title; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            SelectorBank {
+                options: ["S", "T", "W", "P"];
+                selected-index <=> root.wave;
+                segment-width: 30px;
+                tooltip: "Oscillator waveform";
+                selected(i) => { root.wave-changed(i); }
+            }
+        }
+        Rectangle {
+            height: 42px;
+            OscillatorTrace {
+                x: 5px; y: 4px; width: parent.width - 10px; height: parent.height - 8px;
+                wave: root.wave;
+                semitones: root.semitones;
+                cents: root.cents;
+                level: root.level;
+                pulse-width: root.pulse-width;
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 48px; diameter: 36px; label: "Semi"; tooltip: "Coarse tuning";
+                value <=> root.semitones; minimum: -48; maximum: 48; default-value: 0; step: 1;
+                value-text: (root.semitones > 0 ? "+" : "") + round(root.semitones) + " st";
+                changed(v) => { root.semitones-changed(v); }
+            }
+            ParameterKnob {
+                width: 48px; diameter: 36px; label: "Fine"; tooltip: "Fine tuning";
+                value <=> root.cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
+                value-text: (root.cents > 0 ? "+" : "") + round(root.cents) + " ct";
+                changed(v) => { root.cents-changed(v); }
+            }
+            ParameterKnob {
+                width: 48px; diameter: 36px; label: "Level"; tooltip: "Oscillator level";
+                value <=> root.level; default-value: 0;
+                value-text: round(root.level * 100) + "%";
+                changed(v) => { root.level-changed(v); }
+            }
+            ParameterKnob {
+                width: 48px; diameter: 36px; label: "Width"; tooltip: "Pulse width";
+                value <=> root.pulse-width; minimum: 0.05; maximum: 0.95; default-value: 0.5;
+                enabled: root.wave == 3;
+                value-text: round(root.pulse-width * 100) + "%";
+                changed(v) => { root.pulse-width-changed(v); }
+            }
+        }
+    }
+}
+
+export component PolyDeviceFace inherits Rectangle {
+    in-out property <int> page;
+    in-out property <int> osc1-wave; in-out property <float> osc1-semitones; in-out property <float> osc1-cents; in-out property <float> osc1-level; in-out property <float> osc1-pulse-width;
+    in-out property <int> osc2-wave; in-out property <float> osc2-semitones; in-out property <float> osc2-cents; in-out property <float> osc2-level; in-out property <float> osc2-pulse-width;
+    in-out property <int> osc3-wave; in-out property <float> osc3-semitones; in-out property <float> osc3-cents; in-out property <float> osc3-level; in-out property <float> osc3-pulse-width;
+    in-out property <float> glide; in-out property <float> attack; in-out property <float> decay; in-out property <float> sustain; in-out property <float> release;
+    in-out property <float> filter-cutoff; in-out property <float> filter-resonance; in-out property <float> filter-env; in-out property <float> drive;
+    in-out property <int> lfo-wave; in-out property <float> lfo-rate; in-out property <bool> lfo-retrigger;
+    in-out property <float> lfo-pitch; in-out property <float> lfo-filter; in-out property <float> lfo-pulse-width; in-out property <float> lfo-amp;
+    in-out property <int> polyphony; in-out property <float> spread;
+    callback osc1-wave-changed(int); callback osc1-semitones-changed(float); callback osc1-cents-changed(float); callback osc1-level-changed(float); callback osc1-pulse-width-changed(float);
+    callback osc2-wave-changed(int); callback osc2-semitones-changed(float); callback osc2-cents-changed(float); callback osc2-level-changed(float); callback osc2-pulse-width-changed(float);
+    callback osc3-wave-changed(int); callback osc3-semitones-changed(float); callback osc3-cents-changed(float); callback osc3-level-changed(float); callback osc3-pulse-width-changed(float);
+    callback glide-changed(float); callback attack-changed(float); callback decay-changed(float); callback sustain-changed(float); callback release-changed(float);
+    callback filter-cutoff-changed(float); callback filter-resonance-changed(float); callback filter-env-changed(float); callback drive-changed(float);
+    callback lfo-wave-changed(int); callback lfo-rate-changed(float); callback lfo-retrigger-changed(bool);
+    callback lfo-pitch-changed(float); callback lfo-filter-changed(float); callback lfo-pulse-width-changed(float); callback lfo-amp-changed(float);
+    callback polyphony-changed(int); callback spread-changed(float);
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 5px;
+        HorizontalLayout {
+            spacing: 3px;
+            DevicePageButton { text: "OSC"; active: root.page == 0; clicked => { root.page = 0; } }
+            DevicePageButton { text: "AMP/FILTER"; active: root.page == 1; clicked => { root.page = 1; } }
+            DevicePageButton { text: "MOD"; active: root.page == 2; clicked => { root.page = 2; } }
+            DevicePageButton { text: "VOICE"; active: root.page == 3; clicked => { root.page = 3; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+
+        if root.page == 0 : HorizontalLayout {
+            spacing: 5px;
+            OscillatorDeviceStrip {
+                horizontal-stretch: 1; title: "OSC 1";
+                wave <=> root.osc1-wave; semitones <=> root.osc1-semitones; cents <=> root.osc1-cents; level <=> root.osc1-level; pulse-width <=> root.osc1-pulse-width;
+                wave-changed(v) => { root.osc1-wave-changed(v); } semitones-changed(v) => { root.osc1-semitones-changed(v); } cents-changed(v) => { root.osc1-cents-changed(v); } level-changed(v) => { root.osc1-level-changed(v); } pulse-width-changed(v) => { root.osc1-pulse-width-changed(v); }
+            }
+            OscillatorDeviceStrip {
+                horizontal-stretch: 1; title: "OSC 2";
+                wave <=> root.osc2-wave; semitones <=> root.osc2-semitones; cents <=> root.osc2-cents; level <=> root.osc2-level; pulse-width <=> root.osc2-pulse-width;
+                wave-changed(v) => { root.osc2-wave-changed(v); } semitones-changed(v) => { root.osc2-semitones-changed(v); } cents-changed(v) => { root.osc2-cents-changed(v); } level-changed(v) => { root.osc2-level-changed(v); } pulse-width-changed(v) => { root.osc2-pulse-width-changed(v); }
+            }
+            OscillatorDeviceStrip {
+                horizontal-stretch: 1; title: "OSC 3";
+                wave <=> root.osc3-wave; semitones <=> root.osc3-semitones; cents <=> root.osc3-cents; level <=> root.osc3-level; pulse-width <=> root.osc3-pulse-width;
+                wave-changed(v) => { root.osc3-wave-changed(v); } semitones-changed(v) => { root.osc3-semitones-changed(v); } cents-changed(v) => { root.osc3-cents-changed(v); } level-changed(v) => { root.osc3-level-changed(v); } pulse-width-changed(v) => { root.osc3-pulse-width-changed(v); }
+            }
+        }
+
+        if root.page == 1 : HorizontalLayout {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            spacing: 6px;
+            Rectangle {
+                width: 360px;
+                background: Theme.panel;
+                border-radius: 2px;
+                VerticalLayout {
+                    padding: 5px; spacing: 4px;
+                    Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: 8px; }
+                    EnvelopeEditor {
+                        height: 66px;
+                        attack: root.attack / 2; decay: root.decay / 2; sustain <=> root.sustain; release: root.release / 2;
+                        attack-text: round(root.attack * 1000) + " ms"; decay-text: round(root.decay * 1000) + " ms"; sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 1000) + " ms";
+                        attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
+                        decay-changed(v) => { root.decay = v * 2; root.decay-changed(root.decay); }
+                        sustain-changed(v) => { root.sustain-changed(v); }
+                        release-changed(v) => { root.release = v * 2; root.release-changed(root.release); }
+                    }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Glide"; tooltip: "Portamento time"; value <=> root.glide; minimum: 0; maximum: 2; default-value: 0; value-text: round(root.glide * 1000) + " ms"; changed(v) => { root.glide-changed(v); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; minimum: 0; maximum: 2; default-value: 0.005; value-text: round(root.attack * 1000) + " ms"; changed(v) => { root.attack-changed(v); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; minimum: 0; maximum: 2; default-value: 0.2; value-text: round(root.decay * 1000) + " ms"; changed(v) => { root.decay-changed(v); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 0.7; value-text: round(root.sustain * 100) + "%"; changed(v) => { root.sustain-changed(v); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; minimum: 0; maximum: 2; default-value: 0.15; value-text: round(root.release * 1000) + " ms"; changed(v) => { root.release-changed(v); } }
+                    }
+                }
+            }
+            Rectangle {
+                width: 280px;
+                background: Theme.panel;
+                border-radius: 2px;
+                VerticalLayout {
+                    padding: 5px; spacing: 4px;
+                    Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: 8px; }
+                    FilterResponseDisplay {
+                        height: 90px;
+                        mode: 0;
+                        cutoff: root.filter-cutoff;
+                        resonance: root.filter-resonance;
+                        env-amount: root.filter-env;
+                    }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff"; value <=> root.filter-cutoff; default-value: 1; value-text: root.filter-cutoff >= 0.999 ? "Open" : round(20 * pow(1000, root.filter-cutoff)) + " Hz"; changed(v) => { root.filter-cutoff-changed(v); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; changed(v) => { root.filter-resonance-changed(v); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Env"; tooltip: "Envelope depth"; value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true; fill: Theme.warning; value-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%"; changed(v) => { root.filter-env-changed(v); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Drive"; tooltip: "Soft saturation"; value <=> root.drive; default-value: 0; fill: Theme.warning; value-text: round(root.drive * 100) + "%"; changed(v) => { root.drive-changed(v); } }
+                    }
+                }
+            }
+        }
+
+        if root.page == 2 : Rectangle {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            background: Theme.panel;
+            border-radius: 2px;
+            HorizontalLayout {
+                padding: 8px; spacing: 8px;
+                VerticalLayout {
+                    width: 214px; spacing: 6px;
+                    Text { text: "LFO SHAPE"; color: Theme.text-faint; font-size: 8px; }
+                    SelectorBank {
+                        options: ["Sin", "Tri", "Saw", "Sq", "S&H"];
+                        selected-index <=> root.lfo-wave;
+                        segment-width: 40px;
+                        tooltip: "LFO waveform";
+                        selected(i) => { root.lfo-wave-changed(i); }
+                    }
+                    Rectangle {
+                        height: 90px;
+                        Path {
+                            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+                            viewbox-width: 200; viewbox-height: 70;
+                            commands: "M 0 35 C 25 0 50 0 75 35 C 100 70 125 70 150 35 C 168 10 186 12 200 35";
+                            stroke: Theme.accent; stroke-width: 1.5px; fill: transparent;
+                        }
+                    }
+                    ToggleButton { text: "RETRIGGER"; checked <=> root.lfo-retrigger; toggled(on) => { root.lfo-retrigger-changed(on); } }
+                }
+                Rectangle { width: 1px; background: Theme.border; }
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 6px;
+                    alignment: space-around;
+                    ParameterKnob { label: "Rate"; tooltip: "LFO speed"; value <=> root.lfo-rate; minimum: 0.01; maximum: 20; default-value: 5; scale: ValueScale.logarithmic; value-text: root.lfo-rate < 1 ? round(root.lfo-rate * 100) / 100 + " Hz" : round(root.lfo-rate * 10) / 10 + " Hz"; changed(v) => { root.lfo-rate-changed(v); } }
+                    ParameterKnob { label: "Pitch"; tooltip: "Pitch modulation"; value <=> root.lfo-pitch; minimum: -24; maximum: 24; default-value: 0; bipolar: true; value-text: (root.lfo-pitch > 0 ? "+" : "") + round(root.lfo-pitch * 10) / 10 + " st"; changed(v) => { root.lfo-pitch-changed(v); } }
+                    ParameterKnob { label: "Cutoff"; tooltip: "Filter modulation"; value <=> root.lfo-filter; minimum: -4; maximum: 4; default-value: 0; bipolar: true; value-text: (root.lfo-filter > 0 ? "+" : "") + round(root.lfo-filter * 10) / 10 + " oct"; changed(v) => { root.lfo-filter-changed(v); } }
+                    ParameterKnob { label: "Width"; tooltip: "Pulse-width modulation"; value <=> root.lfo-pulse-width; minimum: -0.45; maximum: 0.45; default-value: 0; bipolar: true; value-text: (root.lfo-pulse-width > 0 ? "+" : "") + round(root.lfo-pulse-width * 100) + "%"; changed(v) => { root.lfo-pulse-width-changed(v); } }
+                    ParameterKnob { label: "Trem"; tooltip: "Amplitude modulation"; value <=> root.lfo-amp; default-value: 0; fill: Theme.warning; value-text: round(root.lfo-amp * 100) + "%"; changed(v) => { root.lfo-amp-changed(v); } }
+                }
+            }
+        }
+
+        if root.page == 3 : Rectangle {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            background: Theme.panel;
+            border-radius: 2px;
+            HorizontalLayout {
+                padding: 8px; spacing: 8px;
+                alignment: space-around;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    StepperField {
+                        label: "POLYPHONY";
+                        tooltip: "Active voice count";
+                        value <=> root.polyphony;
+                        minimum: 1;
+                        maximum: 16;
+                        step: 1;
+                        value-width: 18px;
+                        changed(v) => { root.polyphony-changed(v); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    ParameterKnob {
+                        label: "Spread";
+                        tooltip: "Stereo spread across voices";
+                        value <=> root.spread;
+                        default-value: 0;
+                        value-text: round(root.spread * 100) + "%";
+                        changed(v) => { root.spread-changed(v); }
+                    }
+                }
+            }
+        }
+    }
+}

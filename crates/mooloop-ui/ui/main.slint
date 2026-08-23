@@ -30,6 +30,7 @@ import { LimiterDeviceFace } from "limiter-device.slint";
 import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
+import { PolyDeviceFace } from "poly-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 export { Theme }
 export { ControlGallery } from "gallery.slint";
@@ -242,7 +243,7 @@ export component MainWindow inherits Window {
     callback channel-volume-changed(int, float);
     callback channel-pan-changed(int, float);
     callback channel-bus-changed(int, int); // channel, bus
-    callback add-channel-clicked(int); // 0=Sampler, 1=Drum, 2=Mono
+    callback add-channel-clicked(int); // 0=Sampler, 1=Drum, 2=Mono, 3=Poly
     callback remove-channel-clicked();
     // Channel structure is a project edit, so these callbacks carry the
     // clicked row rather than relying on whichever row was selected before a
@@ -289,9 +290,10 @@ export component MainWindow inherits Window {
 
     // ---- lower editor ----
     in-out property <int> editor-page;      // 0=Source, 1=Notes, 2=Playlist
-    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono
+    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
+    in-out property <int> poly-device-page;
     callback channel-source-changed(int);
 
     // ---- effect chain of the selected channel ----
@@ -471,6 +473,49 @@ export component MainWindow inherits Window {
     callback mono-filter-cutoff-changed(float); callback mono-filter-resonance-changed(float); callback mono-filter-env-changed(float); callback mono-drive-changed(float);
     callback mono-lfo-wave-changed(int); callback mono-lfo-rate-changed(float); callback mono-lfo-retrigger-changed(bool);
     callback mono-lfo-pitch-changed(float); callback mono-lfo-filter-changed(float); callback mono-lfo-pulse-width-changed(float); callback mono-lfo-amp-changed(float);
+
+    // ---- poly synth params of the selected channel ----
+    in-out property <int> poly-osc1-wave: 2;
+    in-out property <float> poly-osc1-semitones;
+    in-out property <float> poly-osc1-cents;
+    in-out property <float> poly-osc1-level: 0.8;
+    in-out property <float> poly-osc1-pulse-width: 0.5;
+    in-out property <int> poly-osc2-wave: 2;
+    in-out property <float> poly-osc2-semitones: 12;
+    in-out property <float> poly-osc2-cents: 4;
+    in-out property <float> poly-osc2-level;
+    in-out property <float> poly-osc2-pulse-width: 0.5;
+    in-out property <int> poly-osc3-wave: 2;
+    in-out property <float> poly-osc3-semitones: -12;
+    in-out property <float> poly-osc3-cents: -4;
+    in-out property <float> poly-osc3-level;
+    in-out property <float> poly-osc3-pulse-width: 0.5;
+    in-out property <float> poly-glide;
+    in-out property <float> poly-attack: 0.005;
+    in-out property <float> poly-decay: 0.2;
+    in-out property <float> poly-sustain: 0.7;
+    in-out property <float> poly-release: 0.15;
+    in-out property <float> poly-filter-cutoff: 1;
+    in-out property <float> poly-filter-resonance;
+    in-out property <float> poly-filter-env;
+    in-out property <float> poly-drive;
+    in-out property <int> poly-lfo-wave;
+    in-out property <float> poly-lfo-rate: 5;
+    in-out property <bool> poly-lfo-retrigger;
+    in-out property <float> poly-lfo-pitch;
+    in-out property <float> poly-lfo-filter;
+    in-out property <float> poly-lfo-pulse-width;
+    in-out property <float> poly-lfo-amp;
+    in-out property <int> poly-polyphony: 8;
+    in-out property <float> poly-spread;
+    callback poly-osc1-wave-changed(int); callback poly-osc1-semitones-changed(float); callback poly-osc1-cents-changed(float); callback poly-osc1-level-changed(float); callback poly-osc1-pulse-width-changed(float);
+    callback poly-osc2-wave-changed(int); callback poly-osc2-semitones-changed(float); callback poly-osc2-cents-changed(float); callback poly-osc2-level-changed(float); callback poly-osc2-pulse-width-changed(float);
+    callback poly-osc3-wave-changed(int); callback poly-osc3-semitones-changed(float); callback poly-osc3-cents-changed(float); callback poly-osc3-level-changed(float); callback poly-osc3-pulse-width-changed(float);
+    callback poly-glide-changed(float); callback poly-attack-changed(float); callback poly-decay-changed(float); callback poly-sustain-changed(float); callback poly-release-changed(float);
+    callback poly-filter-cutoff-changed(float); callback poly-filter-resonance-changed(float); callback poly-filter-env-changed(float); callback poly-drive-changed(float);
+    callback poly-lfo-wave-changed(int); callback poly-lfo-rate-changed(float); callback poly-lfo-retrigger-changed(bool);
+    callback poly-lfo-pitch-changed(float); callback poly-lfo-filter-changed(float); callback poly-lfo-pulse-width-changed(float); callback poly-lfo-amp-changed(float);
+    callback poly-polyphony-changed(int); callback poly-spread-changed(float);
 
     // ---- transport callbacks ----
     callback new-song();
@@ -1260,6 +1305,7 @@ export component MainWindow inherits Window {
                             ToolButton { text: "Add Sampler"; tooltip: "Add a sampler channel"; clicked => { add-source-menu.close(); root.add-channel-clicked(0); } }
                             ToolButton { text: "Add Drum Synth"; tooltip: "Add a drum synth channel"; clicked => { add-source-menu.close(); root.add-channel-clicked(1); } }
                             ToolButton { text: "Add Mono Synth"; tooltip: "Add a mono synth channel"; clicked => { add-source-menu.close(); root.add-channel-clicked(2); } }
+                            ToolButton { text: "Add Poly Synth"; tooltip: "Add a poly synth channel"; clicked => { add-source-menu.close(); root.add-channel-clicked(3); } }
                         }
                     }
                 }
@@ -1559,9 +1605,9 @@ export component MainWindow inherits Window {
                                     vertical-alignment: center;
                                 }
                                 if !root.editing-bus : SelectorBank {
-                                    options: ["Sampler", "Drum", "Mono"];
+                                    options: ["Sampler", "Drum", "Mono", "Poly"];
                                     selected-index <=> root.source-kind;
-                                    segment-width: 62px;
+                                    segment-width: 48px;
                                     tooltip: "Source device";
                                     selected(i) => {
                                         root.source-kind = i;
@@ -1791,10 +1837,35 @@ export component MainWindow inherits Window {
                                             lfo-pitch-changed(v) => { root.mono-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.mono-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.mono-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.mono-lfo-amp-changed(v); }
                                         }
 
+                                        if !root.editing-bus && root.source-kind == 3 : PolyDeviceFace {
+                                            x: 0px;
+                                            y: DeviceRackMetrics.header-height;
+                                            width: parent.width;
+                                            height: parent.height - DeviceRackMetrics.header-height;
+                                            page <=> root.poly-device-page;
+                                            osc1-wave <=> root.poly-osc1-wave; osc1-semitones <=> root.poly-osc1-semitones; osc1-cents <=> root.poly-osc1-cents; osc1-level <=> root.poly-osc1-level; osc1-pulse-width <=> root.poly-osc1-pulse-width;
+                                            osc2-wave <=> root.poly-osc2-wave; osc2-semitones <=> root.poly-osc2-semitones; osc2-cents <=> root.poly-osc2-cents; osc2-level <=> root.poly-osc2-level; osc2-pulse-width <=> root.poly-osc2-pulse-width;
+                                            osc3-wave <=> root.poly-osc3-wave; osc3-semitones <=> root.poly-osc3-semitones; osc3-cents <=> root.poly-osc3-cents; osc3-level <=> root.poly-osc3-level; osc3-pulse-width <=> root.poly-osc3-pulse-width;
+                                            glide <=> root.poly-glide; attack <=> root.poly-attack; decay <=> root.poly-decay; sustain <=> root.poly-sustain; release <=> root.poly-release;
+                                            filter-cutoff <=> root.poly-filter-cutoff; filter-resonance <=> root.poly-filter-resonance; filter-env <=> root.poly-filter-env; drive <=> root.poly-drive;
+                                            lfo-wave <=> root.poly-lfo-wave; lfo-rate <=> root.poly-lfo-rate; lfo-retrigger <=> root.poly-lfo-retrigger;
+                                            lfo-pitch <=> root.poly-lfo-pitch; lfo-filter <=> root.poly-lfo-filter; lfo-pulse-width <=> root.poly-lfo-pulse-width; lfo-amp <=> root.poly-lfo-amp;
+                                            polyphony <=> root.poly-polyphony; spread <=> root.poly-spread;
+                                            osc1-wave-changed(v) => { root.poly-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.poly-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.poly-osc1-cents-changed(v); } osc1-level-changed(v) => { root.poly-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.poly-osc1-pulse-width-changed(v); }
+                                            osc2-wave-changed(v) => { root.poly-osc2-wave-changed(v); } osc2-semitones-changed(v) => { root.poly-osc2-semitones-changed(v); } osc2-cents-changed(v) => { root.poly-osc2-cents-changed(v); } osc2-level-changed(v) => { root.poly-osc2-level-changed(v); } osc2-pulse-width-changed(v) => { root.poly-osc2-pulse-width-changed(v); }
+                                            osc3-wave-changed(v) => { root.poly-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.poly-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.poly-osc3-cents-changed(v); } osc3-level-changed(v) => { root.poly-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.poly-osc3-pulse-width-changed(v); }
+                                            glide-changed(v) => { root.poly-glide-changed(v); } attack-changed(v) => { root.poly-attack-changed(v); } decay-changed(v) => { root.poly-decay-changed(v); } sustain-changed(v) => { root.poly-sustain-changed(v); } release-changed(v) => { root.poly-release-changed(v); }
+                                            filter-cutoff-changed(v) => { root.poly-filter-cutoff-changed(v); } filter-resonance-changed(v) => { root.poly-filter-resonance-changed(v); } filter-env-changed(v) => { root.poly-filter-env-changed(v); } drive-changed(v) => { root.poly-drive-changed(v); }
+                                            lfo-wave-changed(v) => { root.poly-lfo-wave-changed(v); } lfo-rate-changed(v) => { root.poly-lfo-rate-changed(v); } lfo-retrigger-changed(v) => { root.poly-lfo-retrigger-changed(v); }
+                                            lfo-pitch-changed(v) => { root.poly-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.poly-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.poly-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.poly-lfo-amp-changed(v); }
+                                            polyphony-changed(v) => { root.poly-polyphony-changed(v); } spread-changed(v) => { root.poly-spread-changed(v); }
+                                        }
+
                                         if !root.editing-bus : DeviceHeader {
                                             x: 0px; y: 0px; width: parent.width;
                                             name: root.source-kind == 0 ? "Sampler"
-                                                : root.source-kind == 1 ? "Drum Synth" : "Mono Synth";
+                                                : root.source-kind == 1 ? "Drum Synth"
+                                                : root.source-kind == 2 ? "Mono Synth" : "Poly Synth";
                                             kind: "SOURCE / 3U";
                                             device-color: Theme.accent;
                                         }

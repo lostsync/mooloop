@@ -239,7 +239,9 @@ fn config_dir() -> PathBuf {
 /// Directory holding one subdirectory of generator presets per
 /// [`DeviceKind`], e.g. `presets/generators/mono_synth/`.
 pub(crate) fn generator_presets_dir(kind: DeviceKind) -> PathBuf {
-    config_dir().join("presets/generators").join(kind_slug(kind))
+    config_dir()
+        .join("presets/generators")
+        .join(kind_slug(kind))
 }
 
 /// Directory holding whole-channel presets (`presets/channels/`).
@@ -252,6 +254,7 @@ fn kind_slug(kind: DeviceKind) -> &'static str {
         DeviceKind::Sampler => "sampler",
         DeviceKind::DrumSynth => "drum_synth",
         DeviceKind::MonoSynth => "mono_synth",
+        DeviceKind::PolySynth => "poly_synth",
     }
 }
 
