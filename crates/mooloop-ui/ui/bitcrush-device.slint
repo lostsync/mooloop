@@ -54,7 +54,7 @@ export component BitcrushDeviceFace inherits Rectangle {
         HorizontalLayout {
             spacing: 0px;
             ParameterKnob {
-                width: 104px;
+                width: 69px;
                 diameter: 36px;
                 label: "Bits";
                 tooltip: "Quantization depth";
@@ -64,7 +64,7 @@ export component BitcrushDeviceFace inherits Rectangle {
                 changed(v) => { root.bits-changed(v); }
             }
             ParameterKnob {
-                width: 104px;
+                width: 69px;
                 diameter: 36px;
                 label: "Rate";
                 tooltip: "Sample-and-hold length";
@@ -72,6 +72,18 @@ export component BitcrushDeviceFace inherits Rectangle {
                 default-value: 0.0;
                 value-text: round(root.rate-natural * 10) / 10 + "x";
                 changed(v) => { root.downsample-changed(v); }
+            }
+            // Bitcrush's own DSP blend, distinct from the surrounding host's
+            // generic Wet/dry control.
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Mix";
+                tooltip: "Bitcrush's internal dry/wet blend";
+                value <=> root.mix;
+                default-value: 1.0;
+                value-text: round(root.mix * 100) + "%";
+                changed(v) => { root.mix-changed(v); }
             }
         }
     }

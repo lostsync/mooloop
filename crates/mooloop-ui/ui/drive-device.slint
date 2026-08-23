@@ -65,7 +65,7 @@ export component DriveDeviceFace inherits Rectangle {
         HorizontalLayout {
             spacing: 0px;
             ParameterKnob {
-                width: 104px;
+                width: 69px;
                 diameter: 36px;
                 label: "Drive";
                 tooltip: "Input gain into the shaping curve";
@@ -75,7 +75,7 @@ export component DriveDeviceFace inherits Rectangle {
                 changed(v) => { root.drive-changed(v); }
             }
             ParameterKnob {
-                width: 104px;
+                width: 69px;
                 diameter: 36px;
                 label: "Tone";
                 tooltip: "Post-shaper tilt: dark to bright";
@@ -83,6 +83,18 @@ export component DriveDeviceFace inherits Rectangle {
                 default-value: 0.5;
                 value-text: round((root.tone * 2 - 1) * 100) + "%";
                 changed(v) => { root.tone-changed(v); }
+            }
+            // This is Drive's own blend, inside its DSP.  The frame Wet/dry
+            // control remains an outer, host-level parallel blend.
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Mix";
+                tooltip: "Drive's internal dry/wet blend";
+                value <=> root.mix;
+                default-value: 1.0;
+                value-text: round(root.mix * 100) + "%";
+                changed(v) => { root.mix-changed(v); }
             }
         }
     }

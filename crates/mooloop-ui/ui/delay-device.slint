@@ -68,7 +68,7 @@ export component DelayDeviceFace inherits Rectangle {
         HorizontalLayout {
             spacing: 0px;
             ParameterKnob {
-                width: 106px;
+                width: 85px;
                 diameter: 40px;
                 label: "Time";
                 tooltip: "Delay time";
@@ -80,7 +80,7 @@ export component DelayDeviceFace inherits Rectangle {
                 changed(v) => { root.time-changed(v); }
             }
             ParameterKnob {
-                width: 106px;
+                width: 85px;
                 diameter: 40px;
                 label: "Fdbk";
                 tooltip: "How much of each repeat feeds the next";
@@ -90,7 +90,7 @@ export component DelayDeviceFace inherits Rectangle {
                 changed(v) => { root.feedback-changed(v); }
             }
             ParameterKnob {
-                width: 106px;
+                width: 85px;
                 diameter: 40px;
                 label: "Cross";
                 tooltip: "Feedback crossing to the other channel; full is ping-pong";
@@ -100,7 +100,7 @@ export component DelayDeviceFace inherits Rectangle {
                 changed(v) => { root.cross-changed(v); }
             }
             ParameterKnob {
-                width: 106px;
+                width: 85px;
                 diameter: 40px;
                 label: "Tone";
                 tooltip: "Damping of the repeats: dark to open";
@@ -108,6 +108,18 @@ export component DelayDeviceFace inherits Rectangle {
                 default-value: 0.6;
                 value-text: round(root.tone * 100) + "%";
                 changed(v) => { root.tone-changed(v); }
+            }
+            // Delay's own repeat blend is intentionally kept alongside the
+            // generic host Wet/dry control for the rare but useful nested mix.
+            ParameterKnob {
+                width: 85px;
+                diameter: 40px;
+                label: "Mix";
+                tooltip: "Delay's internal dry/wet blend";
+                value <=> root.mix;
+                default-value: 0.35;
+                value-text: round(root.mix * 100) + "%";
+                changed(v) => { root.mix-changed(v); }
             }
         }
     }
