@@ -230,6 +230,24 @@ struct ResolvedDocument {
     samples: Vec<Option<Arc<SampleData>>>,
 }
 
+/// In-memory channel clipboard. It intentionally keeps decoded sample data
+/// alongside the serializable channel so pasting never needs to re-read a WAV
+/// on the UI thread.
+#[derive(Clone)]
+struct ChannelClipboard {
+    channel: ProjectChannel,
+    sample: Option<Arc<SampleData>>,
+}
+
+/// Structural channel edits are prepared by UI callbacks and installed by the
+/// pump, which exclusively owns the engine handle. A complete project swap
+/// keeps insertion/removal/reordering atomically visible to the audio thread.
+struct ChannelEdit {
+    project: Project,
+    samples: Vec<Option<Arc<SampleData>>>,
+    status: &'static str,
+}
+
 enum DocumentResult {
     Cancelled,
     NewSong(Project),
@@ -269,6 +287,102 @@ fn fresh_starter_seed() -> u64 {
         ^ SEQUENCE
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
+fn copied_channel_name(project: &Project, source_name: &str) -> String {
+    let base = if source_name.trim().is_empty() {
+        "Channel".to_string()
+    } else {
+        format!("{source_name} copy")
+    };
+    if !project
+        .channels
+        .iter()
+        .any(|channel| channel.setup.channel.name == base)
+    {
+        return base;
+    }
+    for suffix in 2..=MAX_CHANNELS {
+        let candidate = format!("{base} {suffix}");
+        if !project
+            .channels
+            .iter()
+            .any(|channel| channel.setup.channel.name == candidate)
+        {
+            return candidate;
+        }
+    }
+    base
+}
+
+fn snapshot_channel_clipboard(
+    state: &UiState,
+    window: &MainWindow,
+    index: usize,
+) -> Option<ChannelClipboard> {
+    let project = state.project_snapshot(window.get_bpm(), window.get_swing_percent());
+    Some(ChannelClipboard {
+        channel: project.channels.get(index)?.clone(),
+        sample: state.sample_snapshots().get(index)?.clone(),
+    })
+}
+
+fn queue_channel_insert(
+    tx: &std::sync::mpsc::Sender<ChannelEdit>,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    after: usize,
+    clipboard: ChannelClipboard,
+    status: &'static str,
+) {
+    let (mut project, mut samples) = {
+        let state = state.borrow();
+        (
+            state.project_snapshot(window.get_bpm(), window.get_swing_percent()),
+            state.sample_snapshots(),
+        )
+    };
+    if project.channels.len() >= MAX_CHANNELS || after >= project.channels.len() {
+        return;
+    }
+    let mut channel = clipboard.channel;
+    channel.setup.channel.name = copied_channel_name(&project, &channel.setup.channel.name);
+    let index = after + 1;
+    project.channels.insert(index, channel);
+    samples.insert(index, clipboard.sample);
+    project.selected_channel = index as u8;
+    let _ = tx.send(ChannelEdit {
+        project,
+        samples,
+        status,
+    });
+}
+
+fn queue_channel_delete(
+    tx: &std::sync::mpsc::Sender<ChannelEdit>,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    index: usize,
+    status: &'static str,
+) {
+    let (mut project, mut samples) = {
+        let state = state.borrow();
+        (
+            state.project_snapshot(window.get_bpm(), window.get_swing_percent()),
+            state.sample_snapshots(),
+        )
+    };
+    if project.channels.len() <= 1 || index >= project.channels.len() {
+        return;
+    }
+    project.channels.remove(index);
+    samples.remove(index);
+    project.selected_channel = index.min(project.channels.len() - 1) as u8;
+    let _ = tx.send(ChannelEdit {
+        project,
+        samples,
+        status,
+    });
 }
 
 #[derive(Clone, Copy)]
@@ -1550,6 +1664,9 @@ impl AppUi {
         window.set_app_version(env!("CARGO_PKG_VERSION").into());
 
         let (document_tx, document_rx) = std::sync::mpsc::channel::<DocumentResult>();
+        let (channel_edit_tx, channel_edit_rx) = std::sync::mpsc::channel::<ChannelEdit>();
+        let channel_clipboard = Rc::new(RefCell::new(None::<ChannelClipboard>));
+        window.set_channel_clipboard_available(false);
         let export_sample_rate = handle.sample_rate();
 
         {
@@ -3047,39 +3164,82 @@ impl AppUi {
             });
         }
         {
-            let tx = cmd_tx.clone();
             let st = state.clone();
+            let tx = channel_edit_tx.clone();
             let weak = window.as_weak();
             window.on_remove_channel_clicked(move || {
-                let mut st = st.borrow_mut();
-                if st.channels.len() <= 1 {
+                let Some(window) = weak.upgrade() else { return };
+                let selected = st.borrow().selected;
+                queue_channel_delete(&tx, &st, &window, selected, "Channel deleted");
+            });
+        }
+        {
+            let st = state.clone();
+            let clipboard = channel_clipboard.clone();
+            let weak = window.as_weak();
+            window.on_channel_copy_requested(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(index) = usize::try_from(index) else { return };
+                let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else {
+                    return;
+                };
+                *clipboard.borrow_mut() = Some(copy);
+                window.set_channel_clipboard_available(true);
+                window.set_status_message("Channel copied".into());
+            });
+        }
+        {
+            let st = state.clone();
+            let clipboard = channel_clipboard.clone();
+            let tx = channel_edit_tx.clone();
+            let weak = window.as_weak();
+            window.on_channel_cut_requested(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(index) = usize::try_from(index) else { return };
+                let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else {
+                    return;
+                };
+                if st.borrow().channels.len() <= 1 {
                     return;
                 }
-                dbg_log("UI: remove channel");
-                st.channels.pop();
-                st.step_models.pop();
-                st.rows.remove(st.rows.row_count() - 1);
-                st.source_revision = st.source_revision.wrapping_add(1);
-                if st.selected >= st.channels.len() {
-                    st.selected = st.channels.len() - 1;
-                    st.selected_note_id = None;
-                    if let Some(w) = weak.upgrade() {
-                        w.set_selected_channel(st.selected as i32);
-                    }
-                }
-                // The rack cannot keep pointing at a channel that is gone.
-                if let EffectTarget::Channel(index) = st.effect_target {
-                    if index as usize >= st.channels.len() {
-                        st.effect_target = EffectTarget::Channel(st.selected as u8);
-                    }
-                }
-                st.sync_row_flags();
-                if let Some(w) = weak.upgrade() {
-                    // A removed channel changes its bus's feed count.
-                    st.sync_mixer(&w);
-                    st.refresh_editor(&w);
-                }
-                let _ = tx.send(EngineCommand::RemoveChannel);
+                *clipboard.borrow_mut() = Some(copy);
+                window.set_channel_clipboard_available(true);
+                queue_channel_delete(&tx, &st, &window, index, "Channel cut");
+            });
+        }
+        {
+            let st = state.clone();
+            let clipboard = channel_clipboard.clone();
+            let tx = channel_edit_tx.clone();
+            let weak = window.as_weak();
+            window.on_channel_paste_requested(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(index) = usize::try_from(index) else { return };
+                let Some(copy) = clipboard.borrow().clone() else { return };
+                queue_channel_insert(&tx, &st, &window, index, copy, "Channel pasted");
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = channel_edit_tx.clone();
+            let weak = window.as_weak();
+            window.on_channel_clone_requested(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(index) = usize::try_from(index) else { return };
+                let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else {
+                    return;
+                };
+                queue_channel_insert(&tx, &st, &window, index, copy, "Channel cloned");
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = channel_edit_tx.clone();
+            let weak = window.as_weak();
+            window.on_channel_delete_requested(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(index) = usize::try_from(index) else { return };
+                queue_channel_delete(&tx, &st, &window, index, "Channel deleted");
             });
         }
 
@@ -3937,6 +4097,27 @@ impl AppUi {
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
+                while let Ok(edit) = channel_edit_rx.try_recv() {
+                    let Some(window) = weak.upgrade() else {
+                        return;
+                    };
+                    if install_project_in_ui(
+                        &mut handle,
+                        default_sample_for_pump.as_ref(),
+                        &st,
+                        &window,
+                        &edit.project,
+                        &edit.samples,
+                    ) {
+                        let mut state = st.borrow_mut();
+                        state.dirty = true;
+                        state.revision = state.revision.wrapping_add(1);
+                        state.update_document_title(&window);
+                        window.set_status_message(edit.status.into());
+                    } else {
+                        window.set_status_message("Channel edit is waiting for audio".into());
+                    }
+                }
                 while let Ok(result) = document_rx.try_recv() {
                     let Some(window) = weak.upgrade() else {
                         return;
@@ -4892,6 +5073,18 @@ fn decode_wav(path: &Path) -> Result<Arc<SampleData>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copied_channel_names_are_readable_and_unique() {
+        let mut project = Project::default();
+        project.channels[0].setup.channel.name = "Kick".into();
+        assert_eq!(copied_channel_name(&project, "Kick"), "Kick copy");
+
+        let mut first_copy = project.channels[0].clone();
+        first_copy.setup.channel.name = "Kick copy".into();
+        project.channels.push(first_copy);
+        assert_eq!(copied_channel_name(&project, "Kick"), "Kick copy 2");
+    }
 
     #[test]
     fn rack_cell_preserves_sixty_fourth_note_gaps() {

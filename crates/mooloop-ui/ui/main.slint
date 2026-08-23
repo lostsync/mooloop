@@ -244,6 +244,15 @@ export component MainWindow inherits Window {
     callback channel-bus-changed(int, int); // channel, bus
     callback add-channel-clicked(int); // 0=Sampler, 1=Drum, 2=Mono
     callback remove-channel-clicked();
+    // Channel structure is a project edit, so these callbacks carry the
+    // clicked row rather than relying on whichever row was selected before a
+    // context menu opened.
+    in-out property <bool> channel-clipboard-available: false;
+    callback channel-copy-requested(int);
+    callback channel-cut-requested(int);
+    callback channel-paste-requested(int);
+    callback channel-clone-requested(int);
+    callback channel-delete-requested(int);
     callback add-pattern-clicked();
     callback pattern-selected(int);
     callback pattern-length-changed(int);
@@ -514,6 +523,15 @@ export component MainWindow inherits Window {
                 } else if (k == "q") {
                     root.quit-requested();
                     accept
+                } else if (k == "c") {
+                    root.channel-copy-requested(root.selected-channel);
+                    accept
+                } else if (k == "x") {
+                    root.channel-cut-requested(root.selected-channel);
+                    accept
+                } else if (k == "v") {
+                    root.channel-paste-requested(root.selected-channel);
+                    accept
                 } else {
                     reject
                 }
@@ -599,14 +617,14 @@ export component MainWindow inherits Window {
                 title: "Edit";
                 menu-id: 1;
                 open-menu <=> menu-bar.open-menu;
-                // Targets: the command/shortcut layer and undo stack do not
-                // exist yet; the entries define where they land.
+                // Undo is still pending, but channel clipboard actions are
+                // concrete project edits and therefore live here too.
                 MenuRow { text: "Undo"; shortcut: "Ctrl+Z"; enabled: false; selected => { } }
                 MenuRow { text: "Redo"; shortcut: "Ctrl+Shift+Z"; enabled: false; selected => { } }
                 MenuSeparator {}
-                MenuRow { text: "Cut"; shortcut: "Ctrl+X"; enabled: false; selected => { } }
-                MenuRow { text: "Copy"; shortcut: "Ctrl+C"; enabled: false; selected => { } }
-                MenuRow { text: "Paste"; shortcut: "Ctrl+V"; enabled: false; selected => { } }
+                MenuRow { text: "Cut Channel"; shortcut: "Ctrl+X"; enabled: root.channels.length > 1; selected => { root.channel-cut-requested(root.selected-channel); } }
+                MenuRow { text: "Copy Channel"; shortcut: "Ctrl+C"; selected => { root.channel-copy-requested(root.selected-channel); } }
+                MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: root.channel-clipboard-available && root.channels.length < 16; selected => { root.channel-paste-requested(root.selected-channel); } }
                 MenuSeparator {}
                 MenuRow { text: "Select All"; shortcut: "Ctrl+A"; enabled: false; selected => { } }
             }
@@ -638,17 +656,14 @@ export component MainWindow inherits Window {
                     selected => { root.add-channel-clicked(0); }
                 }
                 MenuRow {
-                    text: "Remove Last Channel";
+                    text: "Delete Selected Channel";
                     enabled: root.channels.length > 1;
-                    selected => { root.remove-channel-clicked(); }
+                    selected => { root.channel-delete-requested(root.selected-channel); }
                 }
                 MenuSeparator {}
-                // Target: duplicate the selected channel's setup and notes.
-                MenuRow { text: "Clone Channel"; enabled: false; selected => { } }
-                // Target: rename the selected channel in place.
-                MenuRow { text: "Rename Channel"; enabled: false; selected => { } }
-                // Target: remove the selected channel (not just the last).
-                MenuRow { text: "Delete Selected Channel"; enabled: false; selected => { } }
+                MenuRow { text: "Clone Channel"; enabled: root.channels.length < 16; selected => { root.channel-clone-requested(root.selected-channel); } }
+                MenuRow { text: "Copy Channel"; selected => { root.channel-copy-requested(root.selected-channel); } }
+                MenuRow { text: "Paste Channel"; enabled: root.channel-clipboard-available && root.channels.length < 16; selected => { root.channel-paste-requested(root.selected-channel); } }
             }
 
             MenuBarItem {
@@ -997,7 +1012,40 @@ export component MainWindow inherits Window {
                         }
                         TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.channel-selected(ch); }
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) {
+                                    root.channel-selected(ch);
+                                    if (e.button == PointerEventButton.right) {
+                                        channel-context-menu.show();
+                                    }
+                                }
+                            }
+                        }
+
+                        // The menu is anchored to the channel name, so it
+                        // opens beside the row that owns its commands instead
+                        // of at a disconnected fixed screen coordinate.
+                        channel-context-menu := PopupWindow {
+                            x: 0px;
+                            y: parent.height + 2px;
+                            width: 172px;
+                            height: context-frame.preferred-height;
+                            close-policy: close-on-click;
+                            context-frame := Rectangle {
+                                background: Theme.surface;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                border-radius: 3px;
+                                VerticalLayout {
+                                    padding: 4px;
+                                    MenuRow { text: "Cut Channel"; shortcut: "Ctrl+X"; enabled: root.channels.length > 1; selected => { root.channel-cut-requested(ch); } }
+                                    MenuRow { text: "Copy Channel"; shortcut: "Ctrl+C"; selected => { root.channel-copy-requested(ch); } }
+                                    MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: root.channel-clipboard-available && root.channels.length < 16; selected => { root.channel-paste-requested(ch); } }
+                                    MenuSeparator {}
+                                    MenuRow { text: "Clone Channel"; enabled: root.channels.length < 16; selected => { root.channel-clone-requested(ch); } }
+                                    MenuRow { text: "Delete Channel"; enabled: root.channels.length > 1; selected => { root.channel-delete-requested(ch); } }
+                                }
+                            }
                         }
                     }
 
