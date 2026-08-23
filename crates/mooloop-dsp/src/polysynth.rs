@@ -454,10 +454,12 @@ mod tests {
     #[test]
     fn polyphony_allows_simultaneous_voices() {
         let sr = 48_000;
-        let mut params = PolySynthParams::default();
-        params.attack = 0.0001;
-        params.sustain = 1.0;
-        params.polyphony = 4;
+        let params = PolySynthParams {
+            attack: 0.0001,
+            sustain: 1.0,
+            polyphony: 4,
+            ..Default::default()
+        };
         let mut synth = make_synth(sr, params);
         let mut bus = StereoBus::with_capacity(4096);
         let mut events = EventList::empty();
@@ -471,10 +473,12 @@ mod tests {
     #[test]
     fn exceeding_polyphony_steals_oldest_voice() {
         let sr = 48_000;
-        let mut params = PolySynthParams::default();
-        params.attack = 0.0001;
-        params.sustain = 1.0;
-        params.polyphony = 2;
+        let params = PolySynthParams {
+            attack: 0.0001,
+            sustain: 1.0,
+            polyphony: 2,
+            ..Default::default()
+        };
         let mut synth = make_synth(sr, params);
         let mut bus = StereoBus::with_capacity(4096);
         let mut events = EventList::empty();
@@ -490,11 +494,13 @@ mod tests {
     #[test]
     fn spread_pans_voices_outward() {
         let sr = 48_000;
-        let mut params = PolySynthParams::default();
-        params.attack = 0.0001;
-        params.sustain = 1.0;
-        params.polyphony = 3;
-        params.spread = 1.0;
+        let params = PolySynthParams {
+            attack: 0.0001,
+            sustain: 1.0,
+            polyphony: 3,
+            spread: 1.0,
+            ..Default::default()
+        };
         let mut synth = make_synth(sr, params);
         let mut bus = StereoBus::with_capacity(4096);
         let mut events = EventList::empty();

@@ -698,13 +698,10 @@ impl RenderState {
                 }
             }
             StructuralCommand::RemoveEffect { target, slot } => {
-                if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
-                    Some(chain.remove(slot as usize))
-                } else {
-                    None
-                }
+                Self::chain_for(&mut self.strips, &mut self.buses, target)
+                    .map(|chain| chain.remove(slot as usize))
             }
-            .filter(|displaced| !displaced.is_empty())
+            .filter(|displaced| !displaced.is_empty()),
         }
     }
 
@@ -1060,9 +1057,9 @@ mod tests {
     #[test]
     fn channel_output_controls_are_bounded() {
         let mut strip = test_strip();
-        strip.output.set_volume(2.0);
+        strip.output.set_volume(MAX_TRIM_GAIN + 1.0);
         strip.output.set_pan(-2.0);
-        assert_eq!(strip.output.gain, 1.0);
+        assert_eq!(strip.output.gain, MAX_TRIM_GAIN);
         assert_eq!(strip.output.pan, -1.0);
         strip.output.set_volume(-1.0);
         strip.output.set_pan(2.0);
@@ -1595,8 +1592,8 @@ mod tests {
     impl LatentDelay {
         fn new(frames: usize) -> Self {
             Self {
-                left: std::iter::repeat(0.0).take(frames).collect(),
-                right: std::iter::repeat(0.0).take(frames).collect(),
+                left: std::iter::repeat_n(0.0, frames).collect(),
+                right: std::iter::repeat_n(0.0, frames).collect(),
             }
         }
     }
