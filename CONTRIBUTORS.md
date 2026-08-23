@@ -50,6 +50,13 @@ work session you can recall being part of, and don't stress over precision.
 - Notes: Set up this file at Adam's request. Refreshed the README
   screenshot.
 
+### GLM (glm-5.3) — opencode
+- First seen: 2026-08-23
+- Last seen: 2026-08-23
+- Sessions: 1
+- Notes: Effect-container refactor: latency-aligned dry path, one dB trim
+  knob everywhere, bus-effect metering, and the shared effect-device shell.
+
 ### GPT-5 — Codex
 - First seen: 2026-08-21
 - Last seen: 2026-08-23

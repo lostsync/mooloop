@@ -148,7 +148,9 @@ alignment, and height contract as effects.
   application narrows.
 - Every device has a 28 px identity header with enabled state, name, kind, and
   size. The host's bypass and wet/dry controls occupy the header's right edge;
-  a device face must not add a second copy. Controls unique to that device
+  a device face must not add a second copy. Effect faces inherit the shared
+  `EffectDeviceShell`, which owns that header and the drag-to-reorder handle;
+  a face file contains only its working controls. Controls unique to that device
   begin below the header.
 - Signal direction and insertion points remain visible between devices.
 - A device with more controls than one face can hold uses stable internal
@@ -161,6 +163,9 @@ alignment, and height contract as effects.
   signal-flow evidence: left is the signal entering the hosted device and
   right is the signal leaving after host wet/dry and trim. A generator is the
   only exception: it has no input meter, only a generated output.
+- Every gain trim is the same `TrimKnob` class: dB from unity, −60 dB (−∞) to
+  +12 dB, double-click to 0 dB. No gain control reads in percent; dB is the
+  unit the values actually mean.
 
 The lower editor retains one channel row:
 

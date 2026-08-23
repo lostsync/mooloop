@@ -91,6 +91,16 @@ Noticed I was clicking pitch zoom-in three times before every edit, so the defau
 
 Latest: duplicate loop-boundary events prevented (`f332b7c`), device frame metering fixed and controls compacted (`8b3a9d2`).
 
+## Aug 23 — The effect container earns its name
+
+The device host was a UI contract with a matching engine shape, but three things said the container wasn't finished. The dry path blended against a latency-introducing device's wet copy with no alignment — drive reports 15 frames, so its own dry signal combed against itself. Bus effect slots were dead glass: `DeviceMeters` had no address space for them, and the rack polled the selected channel's chain even while editing a bus. And the trims read in percent of a 0..2 range, which put unity at "200%" and geared the drag wrong, while the source device's output trim sat at a frozen "80%" because the window property behind it was only ever restated on channel selection (`a82bed0`, `c58f3fb`).
+
+The alignment fix is a stereo integer ring per slot (`DryAlign` in mooloop-dsp), built from the node's `latency_frames()` at install time and reclaimed with the node on removal. Bypassed slots keep feeding their ring so the delay history survives a bypass round-trip. Meters gained a target-index space: channels 0..256, buses above them, one polling loop for both.
+
+Trims moved to dB from unity — −60 dB (−∞) to +12 dB, one `TrimKnob` class for the effect in/out, the rack-row volume and the source output trim, all storing linear gain in the wire and project file. Linear-in-dB needed no custom curve; dB is already the logarithm of gain. Channel volume widened to the same +12 dB ceiling so identical-looking knobs behave identically.
+
+Then the faces (`a65bd0f`). Seven files each carried a copy of the header strip, the drag handle, and — on six of seven — a hidden rectangle of bypass/remove buttons that rendered nothing and wired nothing. All of it collapsed into `EffectDeviceShell`; a face now declares its name and unit count and its controls arrive as `@children` under the shell's header. Net −307 lines. A new effect kind is a face of controls plus DSP wired to the container; no chrome of its own to write or drift.
+
 ---
 
 ## Patterns worth noticing
