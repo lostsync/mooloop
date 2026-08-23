@@ -19,6 +19,9 @@ export component DeviceFrame inherits Rectangle {
     in property <bool> removal-enabled: false;
     callback insert-requested();
     callback remove-requested();
+    in property <bool> bypassed: false;
+    in property <bool> bypass-enabled: false;
+    callback bypass-toggled();
     // The shell deliberately owns the narrow, always-in-the-same-place
     // controls from the device sketch. A face opts in only when its DSP has a
     // real parameter to receive the value; an absent control is preferable to
@@ -112,8 +115,16 @@ export component DeviceFrame inherits Rectangle {
         }
     }
 
-    // The mix control lives in the header, exactly where it can be compared
+    // Host controls live in the header, exactly where they can be compared
     // across a horizontal chain without stealing working area from a face.
+    if root.bypass-enabled : IconButton {
+        x: root.width - DeviceRackMetrics.rail-width - 52px;
+        y: 3px; z: 100; size: 22px;
+        text: root.bypassed ? "○" : "●";
+        active: !root.bypassed;
+        tooltip: root.bypassed ? "Enable this device" : "Bypass this device";
+        clicked => { root.bypass-toggled(); }
+    }
     if root.wet-dry-enabled : MiniKnob {
         x: root.width - DeviceRackMetrics.rail-width - 26px;
         y: 3px;

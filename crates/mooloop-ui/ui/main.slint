@@ -1917,6 +1917,9 @@ export component MainWindow inherits Window {
                                             input-right-db: slot.input-right-db;
                                             output-left-db: slot.output-left-db;
                                             output-right-db: slot.output-right-db;
+                                            bypass-enabled: true;
+                                            bypassed: slot.bypassed;
+                                            bypass-toggled => { root.effect-bypass-toggled(index); }
                                             output-trim-enabled: true;
                                             output-trim: slot.output-trim;
                                             output-trim-text: round(slot.output-trim * 200) + "%";

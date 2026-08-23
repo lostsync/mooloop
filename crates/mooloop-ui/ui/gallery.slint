@@ -478,12 +478,23 @@ export component ControlGallery inherits Window {
                     spacing: 4px;
                     alignment: start;
                     DeviceFrame {
-                        width: DeviceRackMetrics.unit-width;
+                        width: DeviceRackMetrics.unit-width + DeviceRackMetrics.rail-width * 2;
                         height: DeviceRackMetrics.face-height;
+                        output-trim-enabled: true;
+                        output-trim: 0.75;
+                        output-trim-text: "150%";
+                        bypass-enabled: true;
+                        wet-dry-enabled: true;
+                        wet-dry: 0.65;
+                        wet-dry-text: "65% wet";
+                        input-left-db: -9;
+                        input-right-db: -12;
+                        output-left-db: -15;
+                        output-right-db: -18;
                         FilterDeviceFace {
-                            x: 0px;
+                            x: DeviceRackMetrics.rail-width;
                             y: 0px;
-                            width: parent.width;
+                            width: parent.content-width;
                             height: parent.height;
                             slot-index: 0;
                             slot-count: 8;
