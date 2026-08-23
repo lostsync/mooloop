@@ -1415,6 +1415,33 @@ mod tests {
     }
 
     #[test]
+    fn generic_host_mix_and_trim_wrap_every_effect() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let dry = rendered_energy(&project, |_| {});
+        let host_dry = rendered_energy(&project, |render| {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
+                target: EffectTarget::Channel(0), slot: 0, node: muffling_filter(),
+            });
+            render.apply_command(EngineCommand::SetEffectWetDry {
+                target: EffectTarget::Channel(0), slot: 0, wet_dry: 0.0,
+            });
+        });
+        assert!((host_dry / dry - 1.0).abs() < 0.1, "wet=0 must pass dry signal");
+        let trimmed = rendered_energy(&project, |render| {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
+                target: EffectTarget::Channel(0), slot: 0, node: muffling_filter(),
+            });
+            render.apply_command(EngineCommand::SetEffectWetDry {
+                target: EffectTarget::Channel(0), slot: 0, wet_dry: 0.0,
+            });
+            render.apply_command(EngineCommand::SetEffectOutputTrim {
+                target: EffectTarget::Channel(0), slot: 0, output_trim: 0.5,
+            });
+        });
+        assert!((trimmed / dry - 0.25).abs() < 0.08, "trim is amplitude, energy scales squared");
+    }
+
+    #[test]
     fn effect_param_bypass_and_reorder_plumbing() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
 

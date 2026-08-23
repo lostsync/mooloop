@@ -68,17 +68,6 @@ export component DeviceFrame inherits Rectangle {
             IconButton { text: "⌑"; size: 24px; enabled: false; tooltip: "Save device preset (coming soon)"; }
             IconButton { text: "▱"; size: 24px; enabled: false; tooltip: "Load device preset (coming soon)"; }
             Rectangle { vertical-stretch: 1; }
-            if root.output-trim-enabled : Text { text: "TRIM"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-            if root.output-trim-enabled : MiniKnob {
-                width: 22px;
-                diameter: 22px;
-                label: "Output trim";
-                value <=> root.output-trim;
-                maximum: 2.0;
-                default-value: 1.0;
-                value-text: root.output-trim-text;
-                changed(v) => { root.output-trim-changed(v); }
-            }
             Text { text: "IN"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
             ChannelMeter {
                 width: 22px;
@@ -88,6 +77,13 @@ export component DeviceFrame inherits Rectangle {
                 right-db: root.input-right-db;
                 held-left-db: root.input-left-db;
                 held-right-db: root.input-right-db;
+            }
+            if root.output-trim-enabled : Text { text: "TRIM"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+            if root.output-trim-enabled : MiniKnob {
+                width: 22px; diameter: 22px; label: "Output trim";
+                value <=> root.output-trim; maximum: 2.0; default-value: 1.0;
+                value-text: root.output-trim-text;
+                changed(v) => { root.output-trim-changed(v); }
             }
         }
     }
