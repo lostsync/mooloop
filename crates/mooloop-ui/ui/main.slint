@@ -331,8 +331,12 @@ export component MainWindow inherits Window {
     in-out property <int> selected-velocity;
     in-out property <int> selected-duration-ticks: 24;
     in-out property <bool> has-selected-note;
-    property <int> piano-low-note: 36;
-    property <int> piano-high-note: 84;
+    // The piano roll is a MIDI editor, rather than a C2–C6 drum-only view.
+    // Keep the bounds and every pixel extent derived from this range so the
+    // pitch scrollbar can reach notes below C2 too.
+    property <int> piano-low-note: 0;
+    property <int> piano-high-note: 127;
+    property <int> piano-note-count: root.piano-high-note - root.piano-low-note + 1;
     // Starts three pitch-zoom steps above the old 5px minimum: that is where
     // Adam kept landing after clicking zoom-in, so start there.
     property <length> piano-row-height: 8px;
@@ -340,7 +344,7 @@ export component MainWindow inherits Window {
     // Full scrollable extent of the piano-roll grid in pixels; the zoom
     // scrollbars work against these.
     property <length> piano-content-w: root.pattern-length * root.piano-step-width;
-    property <length> piano-content-h: 49 * root.piano-row-height;
+    property <length> piano-content-h: root.piano-note-count * root.piano-row-height;
 
     callback piano-note-created(int, int, int) -> int;  // start tick, MIDI note, duration ticks -> stable note ID
     callback piano-note-selected(int);      // stable note ID
@@ -2259,8 +2263,8 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             y: piano-scroll.viewport-y;
                                             width: parent.width;
-                                            height: 49 * root.piano-row-height;
-                                            for key in 49 : Rectangle {
+                                            height: root.piano-note-count * root.piano-row-height;
+                                            for key in root.piano-note-count : Rectangle {
                                                 y: key * root.piano-row-height;
                                                 height: root.piano-row-height;
                                                 width: parent.width;
@@ -2315,11 +2319,11 @@ export component MainWindow inherits Window {
                                     viewport-width: max(self.visible-width,
                                         root.pattern-length * root.piano-step-width);
                                     viewport-height: max(self.visible-height,
-                                        49 * root.piano-row-height);
+                                        root.piano-note-count * root.piano-row-height);
                                     Rectangle {
                                         x: 0px;
                                         width: root.pattern-length * root.piano-step-width;
-                                        height: 49 * root.piano-row-height;
+                                        height: root.piano-note-count * root.piano-row-height;
                                         background: Theme.surface;
 
                                         // Tick/note <-> pixel conversions and note
@@ -2358,7 +2362,7 @@ export component MainWindow inherits Window {
                                                 ? 2 : 1;
                                         }
 
-                                        for key in 49 : Rectangle {
+                                        for key in root.piano-note-count : Rectangle {
                                             y: key * root.piano-row-height;
                                             height: root.piano-row-height;
                                             width: parent.width;
@@ -2532,7 +2536,7 @@ export component MainWindow inherits Window {
                                         }
                                         zoomed(o, f) => {
                                             root.piano-row-height = clamp(
-                                                piano-scroll.visible-height / max(1, 49 * f),
+                                                piano-scroll.visible-height / max(1, root.piano-note-count * f),
                                                 5px, 16px);
                                             piano-scroll.viewport-y = -o * max(0px,
                                                 root.piano-content-h - piano-scroll.visible-height);
