@@ -151,6 +151,11 @@ impl EffectChain {
             if self.bypassed[slot] {
                 // A bypassed slot keeps its queued events until re-enabled, so
                 // knob turns made while bypassed are not lost.
+                if let Some((meters, channel)) = device_meters {
+                    let (left, right) = bus.peak(context.frames);
+                    meters.publish_input(channel, slot + 1, left, right);
+                    meters.publish_output(channel, slot + 1, left, right);
+                }
                 continue;
             }
             if let Some(node) = &mut self.nodes[slot] {
@@ -1382,6 +1387,26 @@ mod tests {
         assert!(meters.take(6).0 > 0.001, "the routed bus should meter");
         assert!(meters.take(MASTER_BUS as usize).0 > 0.001);
         assert_eq!(meters.take(5), (0.0, 0.0), "an unused bus must read silent");
+    }
+
+    #[test]
+    fn device_meters_follow_the_host_signal_flow() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let meters = DeviceMeters::new();
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.attach_device_meters(meters.clone());
+        let _ = render.apply_structural(StructuralCommand::InstallEffect {
+            target: EffectTarget::Channel(0), slot: 0, node: muffling_filter(),
+        });
+        render.play();
+        render.process_block(1024);
+
+        let (source_in, source_out) = meters.take(0, 0);
+        assert_eq!(source_in, (0.0, 0.0), "sources have no device input");
+        assert!(source_out.0 > 0.001, "source output should meter");
+        let (effect_in, effect_out) = meters.take(0, 1);
+        assert!(effect_in.0 > 0.001, "effect sees the source output");
+        assert!(effect_out.0 < effect_in.0, "filter output should differ from its input");
     }
 
     #[test]
