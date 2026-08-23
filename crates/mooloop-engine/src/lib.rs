@@ -274,6 +274,11 @@ impl EngineHandle {
             .expect("project install generation exhausted");
         let mut render = RenderState::new(self.sample_rate, self.sample_slots.clone());
         render.attach_meters(self.bus_meters.clone());
+        // A project swap replaces the complete renderer. Reconnect both meter
+        // transports before it reaches the audio thread: otherwise the new
+        // renderer publishes device peaks into its private, unread array while
+        // the UI continues to read the startup array forever.
+        render.attach_device_meters(self.device_meters.clone());
         render.load_project(&project);
         let prepared = PreparedProject {
             generation,

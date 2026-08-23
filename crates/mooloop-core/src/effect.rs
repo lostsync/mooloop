@@ -1036,11 +1036,14 @@ pub struct EffectSlotState {
     pub bypassed: bool,
     #[serde(default = "default_wet_dry")]
     pub wet_dry: f32,
+    #[serde(default = "default_input_trim")]
+    pub input_trim: f32,
     #[serde(default = "default_output_trim")]
     pub output_trim: f32,
 }
 
 fn default_wet_dry() -> f32 { 1.0 }
+fn default_input_trim() -> f32 { 1.0 }
 fn default_output_trim() -> f32 { 1.0 }
 
 impl EffectSlotState {
@@ -1049,6 +1052,7 @@ impl EffectSlotState {
             params,
             bypassed: false,
             wet_dry: 1.0,
+            input_trim: 1.0,
             output_trim: 1.0,
         }
     }

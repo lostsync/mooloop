@@ -113,6 +113,7 @@ struct EffectSlotRow {
     p4: float,
     p5: float,
     wet-dry: float,
+    input-trim: float,
     output-trim: float,
     input-left-db: float,
     input-right-db: float,
@@ -314,6 +315,7 @@ export component MainWindow inherits Window {
     callback remove-effect-clicked(int);            // slot
     callback effect-bypass-toggled(int);            // slot
     callback effect-wet-dry-changed(int, float);
+    callback effect-input-trim-changed(int, float);
     callback effect-output-trim-changed(int, float);
     // slot, descriptor index within the kind, normalized 0..1. One callback
     // covers every parameter of every effect kind.
@@ -1920,6 +1922,10 @@ export component MainWindow inherits Window {
                                             bypass-enabled: true;
                                             bypassed: slot.bypassed;
                                             bypass-toggled => { root.effect-bypass-toggled(index); }
+                                            input-trim-enabled: true;
+                                            input-trim: slot.input-trim;
+                                            input-trim-text: round(slot.input-trim * 200) + "%";
+                                            input-trim-changed(v) => { root.effect-input-trim-changed(index, v); }
                                             output-trim-enabled: true;
                                             output-trim: slot.output-trim;
                                             output-trim-text: round(slot.output-trim * 200) + "%";

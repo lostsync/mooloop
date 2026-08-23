@@ -472,6 +472,7 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         p4: p[4],
         p5: p[5],
         wet_dry: slot.wet_dry,
+        input_trim: slot.input_trim,
         output_trim: slot.output_trim,
         input_left_db: METER_FLOOR_DB,
         input_right_db: METER_FLOOR_DB,
@@ -3612,6 +3613,20 @@ impl AppUi {
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot as usize, row);
                 let _ = tx.send(EngineCommand::SetEffectWetDry { target, slot: slot as u8, wet_dry: value });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_effect_input_trim_changed(move |slot, input_trim| {
+                let mut st = st.borrow_mut();
+                let target = st.effect_target;
+                let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot as usize)) else { return; };
+                effect.input_trim = input_trim.clamp(0.0, 2.0);
+                let value = effect.input_trim;
+                let row = effect_slot_row(effect);
+                st.effect_slot_model.set_row_data(slot as usize, row);
+                let _ = tx.send(EngineCommand::SetEffectInputTrim { target, slot: slot as u8, input_trim: value });
             });
         }
         {

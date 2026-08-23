@@ -156,7 +156,7 @@ alignment, and height contract as effects.
   devices.
 - A face is a working surface, not a dump of every parameter. Each page must
   still expose a coherent musical operation rather than an arbitrary subset.
-- The shared host owns input and output metering, output trim, wet/dry,
+- The shared host owns input and output metering, input and output trim, wet/dry,
   bypass, presets, insertion, removal, and reorder actions. Its meter pair is
   signal-flow evidence: left is the signal entering the hosted device and
   right is the signal leaving after host wet/dry and trim. A generator is the

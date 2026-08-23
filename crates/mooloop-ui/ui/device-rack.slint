@@ -22,6 +22,10 @@ export component DeviceFrame inherits Rectangle {
     in property <bool> bypassed: false;
     in property <bool> bypass-enabled: false;
     callback bypass-toggled();
+    in property <bool> input-trim-enabled: false;
+    in-out property <float> input-trim: 1.0;
+    in property <string> input-trim-text: "100%";
+    callback input-trim-changed(float);
     // The shell deliberately owns the narrow, always-in-the-same-place
     // controls from the device sketch. A face opts in only when its DSP has a
     // real parameter to receive the value; an absent control is preferable to
@@ -81,12 +85,17 @@ export component DeviceFrame inherits Rectangle {
                 held-left-db: root.input-left-db;
                 held-right-db: root.input-right-db;
             }
-            if root.output-trim-enabled : Text { text: "TRIM"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-            if root.output-trim-enabled : MiniKnob {
-                width: 22px; diameter: 22px; label: "Output trim";
-                value <=> root.output-trim; maximum: 2.0; default-value: 1.0;
-                value-text: root.output-trim-text;
-                changed(v) => { root.output-trim-changed(v); }
+            if root.input-trim-enabled : Text { text: "TRIM"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+            if root.input-trim-enabled : MiniKnob {
+                width: 22px;
+                height: 22px;
+                diameter: 22px;
+                label: "Input trim";
+                value <=> root.input-trim;
+                maximum: 2.0;
+                default-value: 1.0;
+                value-text: root.input-trim-text;
+                changed(v) => { root.input-trim-changed(v); }
             }
         }
     }
@@ -96,7 +105,6 @@ export component DeviceFrame inherits Rectangle {
         width: DeviceRackMetrics.rail-width;
         height: parent.height;
         background: Theme.surface-raised;
-        Rectangle { width: 1px; height: 100%; background: Theme.border; }
         VerticalLayout {
             padding: 2px;
             spacing: 3px;
@@ -111,6 +119,18 @@ export component DeviceFrame inherits Rectangle {
                 width: 22px; height: 58px; segments: 12;
                 left-db: root.output-left-db; right-db: root.output-right-db;
                 held-left-db: root.output-left-db; held-right-db: root.output-right-db;
+            }
+            if root.output-trim-enabled : Text { text: "TRIM"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+            if root.output-trim-enabled : MiniKnob {
+                width: 22px;
+                height: 22px;
+                diameter: 22px;
+                label: "Output trim";
+                value <=> root.output-trim;
+                maximum: 2.0;
+                default-value: 1.0;
+                value-text: root.output-trim-text;
+                changed(v) => { root.output-trim-changed(v); }
             }
         }
     }

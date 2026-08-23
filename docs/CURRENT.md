@@ -73,7 +73,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   notes or mixer state. Closed and open hats share a choke group in the
   generated starter kit.
 - Every insert runs inside a shared device host. The host owns bypass, a
-  generic dry/wet blend, output trim, insertion/removal actions, and separate
+  generic dry/wet blend, independent input and output trims, insertion/removal actions, and separate
   held input/output peaks; its dry path is preallocated and runs after the
   device DSP, so parallel processing works even when an effect itself has no
   mix parameter. Sources have a blank input meter because they generate rather

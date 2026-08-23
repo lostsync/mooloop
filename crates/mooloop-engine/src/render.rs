@@ -36,6 +36,7 @@ struct EffectChain {
     events: [EventList; MAX_EFFECTS_PER_CHANNEL],
     bypassed: [bool; MAX_EFFECTS_PER_CHANNEL],
     wet_dry: [f32; MAX_EFFECTS_PER_CHANNEL],
+    input_trim: [f32; MAX_EFFECTS_PER_CHANNEL],
     output_trim: [f32; MAX_EFFECTS_PER_CHANNEL],
     dry: [StereoBus; MAX_EFFECTS_PER_CHANNEL],
 }
@@ -47,6 +48,7 @@ impl EffectChain {
             events: std::array::from_fn(|_| EventList::empty()),
             bypassed: [false; MAX_EFFECTS_PER_CHANNEL],
             wet_dry: [1.0; MAX_EFFECTS_PER_CHANNEL],
+            input_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
             output_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
             dry: std::array::from_fn(|_| StereoBus::with_capacity(MAX_BLOCK_SIZE)),
         }
@@ -64,6 +66,7 @@ impl EffectChain {
         }
         self.bypassed = [false; MAX_EFFECTS_PER_CHANNEL];
         self.wet_dry = [1.0; MAX_EFFECTS_PER_CHANNEL];
+        self.input_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
         self.output_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
     }
 
@@ -99,6 +102,7 @@ impl EffectChain {
             self.events.swap(slot_a, slot_b);
             self.bypassed.swap(slot_a, slot_b);
             self.wet_dry.swap(slot_a, slot_b);
+            self.input_trim.swap(slot_a, slot_b);
             self.output_trim.swap(slot_a, slot_b);
             self.dry.swap(slot_a, slot_b);
         }
@@ -137,6 +141,7 @@ impl EffectChain {
             }
             self.bypassed[slot] = effect.bypassed;
             self.wet_dry[slot] = effect.wet_dry.clamp(0.0, 1.0);
+            self.input_trim[slot] = effect.input_trim.clamp(0.0, 2.0);
             self.output_trim[slot] = effect.output_trim.clamp(0.0, 2.0);
         }
     }
@@ -159,6 +164,11 @@ impl EffectChain {
                 continue;
             }
             if let Some(node) = &mut self.nodes[slot] {
+                let input_trim = self.input_trim[slot];
+                for frame in 0..context.frames {
+                    bus.l[frame] *= input_trim;
+                    bus.r[frame] *= input_trim;
+                }
                 self.dry[slot].l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
                 self.dry[slot].r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
                 if let Some((meters, channel)) = device_meters {
@@ -722,6 +732,13 @@ impl RenderState {
                 if let Some(chain) = self.chain_mut(target) {
                     if let Some(value) = chain.wet_dry.get_mut(slot as usize) {
                         *value = wet_dry.clamp(0.0, 1.0);
+                    }
+                }
+            }
+            EngineCommand::SetEffectInputTrim { target, slot, input_trim } => {
+                if let Some(chain) = self.chain_mut(target) {
+                    if let Some(value) = chain.input_trim.get_mut(slot as usize) {
+                        *value = input_trim.clamp(0.0, 2.0);
                     }
                 }
             }
@@ -1440,7 +1457,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_host_mix_and_trim_wrap_every_effect() {
+    fn generic_host_mix_and_input_output_trims_wrap_every_effect() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let host_dry = rendered_energy(&project, |render| {
@@ -1464,6 +1481,21 @@ mod tests {
             });
         });
         assert!((trimmed / dry - 0.25).abs() < 0.08, "trim is amplitude, energy scales squared");
+        let input_trimmed = rendered_energy(&project, |render| {
+            let _ = render.apply_structural(StructuralCommand::InstallEffect {
+                target: EffectTarget::Channel(0), slot: 0, node: muffling_filter(),
+            });
+            render.apply_command(EngineCommand::SetEffectWetDry {
+                target: EffectTarget::Channel(0), slot: 0, wet_dry: 0.0,
+            });
+            render.apply_command(EngineCommand::SetEffectInputTrim {
+                target: EffectTarget::Channel(0), slot: 0, input_trim: 0.5,
+            });
+        });
+        assert!(
+            (input_trimmed / dry - 0.25).abs() < 0.08,
+            "input trim must feed the hosted effect at reduced amplitude"
+        );
     }
 
     #[test]
