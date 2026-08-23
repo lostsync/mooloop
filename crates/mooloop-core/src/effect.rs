@@ -1034,13 +1034,22 @@ pub struct EffectSlotState {
     #[serde(deserialize_with = "deserialize_effect_params")]
     pub params: EffectParams,
     pub bypassed: bool,
+    #[serde(default = "default_wet_dry")]
+    pub wet_dry: f32,
+    #[serde(default = "default_output_trim")]
+    pub output_trim: f32,
 }
+
+fn default_wet_dry() -> f32 { 1.0 }
+fn default_output_trim() -> f32 { 1.0 }
 
 impl EffectSlotState {
     pub fn new(params: EffectParams) -> Self {
         Self {
             params,
             bypassed: false,
+            wet_dry: 1.0,
+            output_trim: 1.0,
         }
     }
 

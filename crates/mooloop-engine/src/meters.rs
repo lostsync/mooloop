@@ -16,10 +16,58 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use mooloop_core::MAX_BUSES;
+use mooloop_core::{MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL};
 
 /// Peak-hold cells for every bus, left and right interleaved.
 pub struct BusMeters {
     cells: Vec<AtomicU32>,
+}
+
+/// Held input/output peaks for every visible channel device. Stage zero is a
+/// source (its input is deliberately never published); later stages are the
+/// effect slots. This gives a device face a truthful pair of meters instead
+/// of borrowing the master meter for every rectangle in the rack.
+pub struct DeviceMeters {
+    cells: Vec<AtomicU32>,
+}
+
+impl DeviceMeters {
+    const STAGES: usize = MAX_EFFECTS_PER_CHANNEL + 1;
+    const VALUES_PER_STAGE: usize = 4; // input L/R, output L/R
+
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            cells: (0..MAX_CHANNELS * Self::STAGES * Self::VALUES_PER_STAGE)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+        })
+    }
+
+    fn base(channel: usize, stage: usize) -> Option<usize> {
+        (channel < MAX_CHANNELS && stage < Self::STAGES)
+            .then_some((channel * Self::STAGES + stage) * Self::VALUES_PER_STAGE)
+    }
+
+    pub fn publish_input(&self, channel: usize, stage: usize, left: f32, right: f32) {
+        if let Some(base) = Self::base(channel, stage) {
+            self.cells[base].fetch_max(left.max(0.0).to_bits(), Ordering::Relaxed);
+            self.cells[base + 1].fetch_max(right.max(0.0).to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    pub fn publish_output(&self, channel: usize, stage: usize, left: f32, right: f32) {
+        if let Some(base) = Self::base(channel, stage) {
+            self.cells[base + 2].fetch_max(left.max(0.0).to_bits(), Ordering::Relaxed);
+            self.cells[base + 3].fetch_max(right.max(0.0).to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    pub fn take(&self, channel: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
+        let read = |index: usize| f32::from_bits(self.cells[index].swap(0, Ordering::Relaxed));
+        Self::base(channel, stage)
+            .map(|base| ((read(base), read(base + 1)), (read(base + 2), read(base + 3))))
+            .unwrap_or(((0.0, 0.0), (0.0, 0.0)))
+    }
 }
 
 impl BusMeters {

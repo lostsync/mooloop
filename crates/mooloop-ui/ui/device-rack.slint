@@ -34,10 +34,10 @@ export component DeviceFrame inherits Rectangle {
     // These are the currently edited chain endpoint's live bus readings. The
     // engine publishes a held peak per bus, so the frame never invents a
     // per-effect reading it cannot measure yet.
-    in property <float> meter-left-db: -60;
-    in property <float> meter-right-db: -60;
-    in property <float> meter-held-left-db: -60;
-    in property <float> meter-held-right-db: -60;
+    in property <float> input-left-db: -60;
+    in property <float> input-right-db: -60;
+    in property <float> output-left-db: -60;
+    in property <float> output-right-db: -60;
     out property <length> content-width: root.width - DeviceRackMetrics.rail-width * 2;
 
     background: Theme.surface;
@@ -74,19 +74,20 @@ export component DeviceFrame inherits Rectangle {
                 diameter: 22px;
                 label: "Output trim";
                 value <=> root.output-trim;
+                maximum: 2.0;
                 default-value: 1.0;
                 value-text: root.output-trim-text;
                 changed(v) => { root.output-trim-changed(v); }
             }
-            Text { text: "OUT"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+            Text { text: "IN"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
             ChannelMeter {
                 width: 22px;
                 height: 58px;
                 segments: 12;
-                left-db: root.meter-left-db;
-                right-db: root.meter-right-db;
-                held-left-db: root.meter-held-left-db;
-                held-right-db: root.meter-held-right-db;
+                left-db: root.input-left-db;
+                right-db: root.input-right-db;
+                held-left-db: root.input-left-db;
+                held-right-db: root.input-right-db;
             }
         }
     }
@@ -106,17 +107,28 @@ export component DeviceFrame inherits Rectangle {
                 clicked => { root.remove-requested(); }
             }
             Rectangle { vertical-stretch: 1; }
-            if root.wet-dry-enabled : Text { text: "WET/DRY"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-            if root.wet-dry-enabled : MiniKnob {
-                width: 22px;
-                diameter: 22px;
-                label: "Wet/dry";
-                value <=> root.wet-dry;
-                default-value: 1.0;
-                value-text: root.wet-dry-text;
-                changed(v) => { root.wet-dry-changed(v); }
+            Text { text: "OUT"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+            ChannelMeter {
+                width: 22px; height: 58px; segments: 12;
+                left-db: root.output-left-db; right-db: root.output-right-db;
+                held-left-db: root.output-left-db; held-right-db: root.output-right-db;
             }
         }
+    }
+
+    // The mix control lives in the header, exactly where it can be compared
+    // across a horizontal chain without stealing working area from a face.
+    if root.wet-dry-enabled : MiniKnob {
+        x: root.width - DeviceRackMetrics.rail-width - 26px;
+        y: 3px;
+        z: 100;
+        width: 22px;
+        diameter: 22px;
+        label: "Wet/dry";
+        value <=> root.wet-dry;
+        default-value: 1.0;
+        value-text: root.wet-dry-text;
+        changed(v) => { root.wet-dry-changed(v); }
     }
 }
 

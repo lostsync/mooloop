@@ -13,7 +13,7 @@ use mooloop_dsp::{
     PolySynth, ProcessContext, SampleData, Sampler, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
 };
 
-use crate::meters::BusMeters;
+use crate::meters::{BusMeters, DeviceMeters};
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
 use crate::StructuralCommand;
@@ -35,6 +35,9 @@ struct EffectChain {
     /// generators never see effect events.
     events: [EventList; MAX_EFFECTS_PER_CHANNEL],
     bypassed: [bool; MAX_EFFECTS_PER_CHANNEL],
+    wet_dry: [f32; MAX_EFFECTS_PER_CHANNEL],
+    output_trim: [f32; MAX_EFFECTS_PER_CHANNEL],
+    dry: [StereoBus; MAX_EFFECTS_PER_CHANNEL],
 }
 
 impl EffectChain {
@@ -43,6 +46,9 @@ impl EffectChain {
             nodes: std::array::from_fn(|_| None),
             events: std::array::from_fn(|_| EventList::empty()),
             bypassed: [false; MAX_EFFECTS_PER_CHANNEL],
+            wet_dry: [1.0; MAX_EFFECTS_PER_CHANNEL],
+            output_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
+            dry: std::array::from_fn(|_| StereoBus::with_capacity(MAX_BLOCK_SIZE)),
         }
     }
 
@@ -57,6 +63,8 @@ impl EffectChain {
             events.clear();
         }
         self.bypassed = [false; MAX_EFFECTS_PER_CHANNEL];
+        self.wet_dry = [1.0; MAX_EFFECTS_PER_CHANNEL];
+        self.output_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
     }
 
     /// Install a node and return whichever box must be reclaimed. An invalid
@@ -90,6 +98,9 @@ impl EffectChain {
             self.nodes.swap(slot_a, slot_b);
             self.events.swap(slot_a, slot_b);
             self.bypassed.swap(slot_a, slot_b);
+            self.wet_dry.swap(slot_a, slot_b);
+            self.output_trim.swap(slot_a, slot_b);
+            self.dry.swap(slot_a, slot_b);
         }
     }
 
@@ -125,10 +136,17 @@ impl EffectChain {
                 reclaim.push(displaced);
             }
             self.bypassed[slot] = effect.bypassed;
+            self.wet_dry[slot] = effect.wet_dry.clamp(0.0, 1.0);
+            self.output_trim[slot] = effect.output_trim.clamp(0.0, 2.0);
         }
     }
 
-    fn process(&mut self, context: &ProcessContext, bus: &mut StereoBus) {
+    fn process(
+        &mut self,
+        context: &ProcessContext,
+        bus: &mut StereoBus,
+        device_meters: Option<(&DeviceMeters, usize)>,
+    ) {
         for slot in 0..MAX_EFFECTS_PER_CHANNEL {
             if self.bypassed[slot] {
                 // A bypassed slot keeps its queued events until re-enabled, so
@@ -136,7 +154,24 @@ impl EffectChain {
                 continue;
             }
             if let Some(node) = &mut self.nodes[slot] {
+                self.dry[slot].l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
+                self.dry[slot].r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
+                if let Some((meters, channel)) = device_meters {
+                    let (left, right) = bus.peak(context.frames);
+                    meters.publish_input(channel, slot + 1, left, right);
+                }
                 node.process(context, bus, &self.events[slot], None);
+                let wet = self.wet_dry[slot];
+                let dry = 1.0 - wet;
+                let trim = self.output_trim[slot];
+                for frame in 0..context.frames {
+                    bus.l[frame] = (self.dry[slot].l[frame] * dry + bus.l[frame] * wet) * trim;
+                    bus.r[frame] = (self.dry[slot].r[frame] * dry + bus.r[frame] * wet) * trim;
+                }
+                if let Some((meters, channel)) = device_meters {
+                    let (left, right) = bus.peak(context.frames);
+                    meters.publish_output(channel, slot + 1, left, right);
+                }
             }
             self.events[slot].clear();
         }
@@ -372,6 +407,7 @@ pub(crate) struct RenderState {
     /// their own unread instance rather than paying for an `Option` check per
     /// bus per block.
     meters: Arc<BusMeters>,
+    device_meters: Arc<DeviceMeters>,
 }
 
 impl RenderState {
@@ -390,6 +426,7 @@ impl RenderState {
             sample_rate,
             reclaim: Vec::new(),
             meters: BusMeters::new(),
+            device_meters: DeviceMeters::new(),
         }
     }
 
@@ -397,6 +434,10 @@ impl RenderState {
     /// before the realtime thread exists.
     pub(crate) fn attach_meters(&mut self, meters: Arc<BusMeters>) {
         self.meters = meters;
+    }
+
+    pub(crate) fn attach_device_meters(&mut self, meters: Arc<DeviceMeters>) {
+        self.device_meters = meters;
     }
 
     pub fn from_project(
@@ -672,6 +713,20 @@ impl RenderState {
                     chain.set_bypassed(slot as usize, bypassed);
                 }
             }
+            EngineCommand::SetEffectWetDry { target, slot, wet_dry } => {
+                if let Some(chain) = self.chain_mut(target) {
+                    if let Some(value) = chain.wet_dry.get_mut(slot as usize) {
+                        *value = wet_dry.clamp(0.0, 1.0);
+                    }
+                }
+            }
+            EngineCommand::SetEffectOutputTrim { target, slot, output_trim } => {
+                if let Some(chain) = self.chain_mut(target) {
+                    if let Some(value) = chain.output_trim.get_mut(slot as usize) {
+                        *value = output_trim.clamp(0.0, 2.0);
+                    }
+                }
+            }
             EngineCommand::SetEffectParam {
                 target,
                 slot,
@@ -759,7 +814,9 @@ impl RenderState {
             }
             strip.bus.clear(frames);
             strip.process(&context, &self.events[index]);
-            strip.effects.process(&context, &mut strip.bus);
+            let source_peak = strip.bus.peak(frames);
+            self.device_meters.publish_output(index, 0, source_peak.0, source_peak.1);
+            strip.effects.process(&context, &mut strip.bus, Some((&self.device_meters, index)));
             strip.output.apply_pan(&mut strip.bus, frames);
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
                 destination.bus.add_from(&strip.bus, frames);
@@ -776,7 +833,7 @@ impl RenderState {
             let Some(strip) = self.buses.get_mut(index) else {
                 continue;
             };
-            strip.effects.process(&context, &mut strip.bus);
+            strip.effects.process(&context, &mut strip.bus, None);
             strip.output.apply_balance(&mut strip.bus, frames);
             // A muted bus still processes, so a delay or reverb tail on it
             // decays instead of freezing, but contributes nothing — and meters

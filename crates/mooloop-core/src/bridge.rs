@@ -122,6 +122,10 @@ pub enum EngineCommand {
         slot: u8,
         bypassed: bool,
     },
+    /// Generic device-host wet/dry blend, applied around every insert.
+    SetEffectWetDry { target: EffectTarget, slot: u8, wet_dry: f32 },
+    /// Generic device-host output trim, applied after the wet/dry blend.
+    SetEffectOutputTrim { target: EffectTarget, slot: u8, output_trim: f32 },
     /// Queue one sample-timed parameter change for one effect slot. Delivered
     /// to the node as `Event::ParamValue` at the next block, so effect kinds
     /// need no bespoke command per parameter.

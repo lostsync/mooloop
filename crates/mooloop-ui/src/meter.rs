@@ -68,7 +68,7 @@ impl MeterBallistics {
     }
 }
 
-fn linear_to_db(linear: f32) -> f32 {
+pub(crate) fn linear_to_db(linear: f32) -> f32 {
     if !linear.is_finite() || linear <= 0.0 {
         return MIN_DB;
     }

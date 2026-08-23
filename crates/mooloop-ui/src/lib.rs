@@ -11,7 +11,7 @@ mod settings;
 
 slint::include_modules!();
 
-use meter::{MeterBallistics, MIN_DB as METER_FLOOR_DB};
+use meter::{linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BusSetup, Channel,
     ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind,
@@ -471,6 +471,12 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         p3: p[3],
         p4: p[4],
         p5: p[5],
+        wet_dry: slot.wet_dry,
+        output_trim: slot.output_trim,
+        input_left_db: METER_FLOOR_DB,
+        input_right_db: METER_FLOOR_DB,
+        output_left_db: METER_FLOOR_DB,
+        output_right_db: METER_FLOOR_DB,
     }
 }
 
@@ -3597,6 +3603,35 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            window.on_effect_wet_dry_changed(move |slot, wet_dry| {
+                let mut st = st.borrow_mut();
+                let target = st.effect_target;
+                let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot as usize)) else { return; };
+                effect.wet_dry = wet_dry.clamp(0.0, 1.0);
+                let value = effect.wet_dry;
+                let row = effect_slot_row(effect);
+                st.effect_slot_model.set_row_data(slot as usize, row);
+                let _ = tx.send(EngineCommand::SetEffectWetDry { target, slot: slot as u8, wet_dry: value });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_effect_output_trim_changed(move |slot, output_trim| {
+                let mut st = st.borrow_mut();
+                let target = st.effect_target;
+                let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot as usize)) else { return; };
+                effect.output_trim = output_trim.clamp(0.0, 2.0);
+                let value = effect.output_trim;
+                let row = effect_slot_row(effect);
+                st.effect_slot_model.set_row_data(slot as usize, row);
+                let _ = tx.send(EngineCommand::SetEffectOutputTrim { target, slot: slot as u8, output_trim: value });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
             // One callback for every parameter of every effect kind: the
             // rack sends a descriptor index and a normalized position, and
             // the descriptor table converts to the natural units the wire
@@ -4704,19 +4739,7 @@ impl AppUi {
                 let showing_mixer = w.get_mixer_visible();
                 let editing_bus = w.get_editing_bus();
                 let edited_bus = w.get_editing_bus_index().max(0) as usize;
-                // The bottom device rack follows either one bus or one
-                // channel. A channel ultimately feeds its assigned bus, so
-                // that bus is the measurable endpoint of its chain.
-                let device_meter_bus = if editing_bus {
-                    edited_bus
-                } else {
-                    let state = st.borrow();
-                    state
-                        .channels
-                        .get(state.selected)
-                        .map(|channel| channel.bus as usize)
-                        .unwrap_or(0)
-                };
+                let selected_channel = st.borrow().selected;
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
                     let (peak_l, peak_r) = handle.take_bus_peak(bus);
                     let left = meters.0.update(peak_l, elapsed);
@@ -4733,11 +4756,23 @@ impl AppUi {
                         w.set_editing_bus_left_db(left.level_db);
                         w.set_editing_bus_right_db(right.level_db);
                     }
-                    if bus == device_meter_bus {
-                        w.set_device_meter_left_db(left.level_db);
-                        w.set_device_meter_right_db(right.level_db);
-                        w.set_device_meter_held_left_db(left.held_db);
-                        w.set_device_meter_held_right_db(right.held_db);
+                }
+                if !editing_bus {
+                    let ((_source_in_l, _source_in_r), (source_out_l, source_out_r)) =
+                        handle.take_device_peak(selected_channel, 0);
+                    w.set_source_output_left_db(linear_to_db(source_out_l));
+                    w.set_source_output_right_db(linear_to_db(source_out_r));
+                    let state = st.borrow();
+                    for slot in 0..state.effect_slot_model.row_count() {
+                        let ((in_l, in_r), (out_l, out_r)) =
+                            handle.take_device_peak(selected_channel, slot + 1);
+                        if let Some(mut row) = state.effect_slot_model.row_data(slot) {
+                            row.input_left_db = linear_to_db(in_l);
+                            row.input_right_db = linear_to_db(in_r);
+                            row.output_left_db = linear_to_db(out_l);
+                            row.output_right_db = linear_to_db(out_r);
+                            state.effect_slot_model.set_row_data(slot, row);
+                        }
                     }
                 }
 

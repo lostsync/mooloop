@@ -30,7 +30,7 @@ mod transport;
 use graph::{AsyncClient, Graph};
 use render::RenderState;
 
-pub use meters::BusMeters;
+pub use meters::{BusMeters, DeviceMeters};
 pub use offline::{
     ExportError, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, RenderSummary,
     WavEncoding,
@@ -146,8 +146,10 @@ impl Engine {
 
         let xrun_count = Arc::new(AtomicU64::new(0));
         let bus_meters = BusMeters::new();
+        let device_meters = DeviceMeters::new();
         let mut render = RenderState::new(sample_rate, sample_slots.clone());
         render.attach_meters(bus_meters.clone());
+        render.attach_device_meters(device_meters.clone());
         let io = graph::GraphIo {
             out_l,
             out_r,
@@ -185,6 +187,7 @@ impl Engine {
                 evt_rx,
                 reclaim_rx,
                 bus_meters,
+                device_meters,
                 sample_slots,
                 sample_rate,
                 install_generation: 0,
@@ -201,6 +204,7 @@ pub struct EngineHandle {
     evt_rx: Consumer<EngineEvent>,
     reclaim_rx: Consumer<StructuralReclaim>,
     bus_meters: Arc<BusMeters>,
+    device_meters: Arc<DeviceMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     sample_rate: u32,
     install_generation: u64,
@@ -294,6 +298,10 @@ impl EngineHandle {
     /// this is an atomic array rather than another event.
     pub fn take_bus_peak(&self, bus: usize) -> (f32, f32) {
         self.bus_meters.take(bus)
+    }
+
+    pub fn take_device_peak(&self, channel: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
+        self.device_meters.take(channel, stage)
     }
 
     pub fn sample_rate(&self) -> u32 {
