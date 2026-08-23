@@ -75,6 +75,15 @@ pub(crate) fn linear_to_db(linear: f32) -> f32 {
     (20.0 * linear.log10()).max(MIN_DB)
 }
 
+/// Inverse of `linear_to_db` for the trim knobs, which work in dB. The
+/// knob's floor means silence, not `-60 dB of residual gain`.
+pub(crate) fn db_to_linear(db: f32) -> f32 {
+    if !db.is_finite() || db <= MIN_DB {
+        return 0.0;
+    }
+    10.0f32.powf(db / 20.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,6 +93,14 @@ mod tests {
         assert_eq!(linear_to_db(0.0), MIN_DB);
         assert!((linear_to_db(0.5) - -6.0206).abs() < 0.001);
         assert_eq!(linear_to_db(1.0), 0.0);
+    }
+
+    #[test]
+    fn trim_db_round_trips_through_linear() {
+        assert_eq!(db_to_linear(0.0), 1.0);
+        assert!((db_to_linear(-6.0206) - 0.5).abs() < 0.001);
+        assert_eq!(db_to_linear(MIN_DB), 0.0, "the knob floor is silence");
+        assert_eq!(linear_to_db(db_to_linear(-12.0)), -12.0);
     }
 
     #[test]

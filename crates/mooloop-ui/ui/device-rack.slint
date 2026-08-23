@@ -1,6 +1,6 @@
 import { HorizontalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { IconButton, MiniKnob, ToolButton } from "controls.slint";
+import { IconButton, MiniKnob, ToolButton, TrimKnob } from "controls.slint";
 import { ChannelMeter } from "meters.slint";
 
 export global DeviceRackMetrics {
@@ -22,17 +22,17 @@ export component DeviceFrame inherits Rectangle {
     in property <bool> bypassed: false;
     in property <bool> bypass-enabled: false;
     callback bypass-toggled();
+    // Trims are dB from unity at both ends of every device, delivered by the
+    // same TrimKnob class; the Rust boundary converts to linear gain.
     in property <bool> input-trim-enabled: false;
-    in-out property <float> input-trim: 1.0;
-    in property <string> input-trim-text: "100%";
+    in-out property <float> input-trim: 0;
     callback input-trim-changed(float);
     // The shell deliberately owns the narrow, always-in-the-same-place
     // controls from the device sketch. A face opts in only when its DSP has a
     // real parameter to receive the value; an absent control is preferable to
     // a convincing but inert one.
     in property <bool> output-trim-enabled: false;
-    in-out property <float> output-trim: 1.0;
-    in property <string> output-trim-text: "100%";
+    in-out property <float> output-trim: 0;
     callback output-trim-changed(float);
     in property <bool> wet-dry-enabled: false;
     in-out property <float> wet-dry: 1.0;
@@ -86,15 +86,12 @@ export component DeviceFrame inherits Rectangle {
                 held-right-db: root.input-right-db;
             }
             if root.input-trim-enabled : Text { text: "TRIM"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-            if root.input-trim-enabled : MiniKnob {
+            if root.input-trim-enabled : TrimKnob {
                 width: 22px;
                 height: 22px;
                 diameter: 22px;
                 label: "Input trim";
                 value <=> root.input-trim;
-                maximum: 2.0;
-                default-value: 1.0;
-                value-text: root.input-trim-text;
                 changed(v) => { root.input-trim-changed(v); }
             }
         }
@@ -121,15 +118,12 @@ export component DeviceFrame inherits Rectangle {
                 held-left-db: root.output-left-db; held-right-db: root.output-right-db;
             }
             if root.output-trim-enabled : Text { text: "TRIM"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-            if root.output-trim-enabled : MiniKnob {
+            if root.output-trim-enabled : TrimKnob {
                 width: 22px;
                 height: 22px;
                 diameter: 22px;
                 label: "Output trim";
                 value <=> root.output-trim;
-                maximum: 2.0;
-                default-value: 1.0;
-                value-text: root.output-trim-text;
                 changed(v) => { root.output-trim-changed(v); }
             }
         }

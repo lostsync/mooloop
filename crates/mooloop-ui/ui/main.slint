@@ -3,7 +3,7 @@ import { Theme } from "theme.slint";
 import {
     AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
     SegmentedControl, SelectorBank, StereoPeakMeter, ZoomScrollBar,
-    ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton
+    ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton, TrimKnob
 } from "controls.slint";
 import {
     BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
@@ -76,7 +76,8 @@ struct NoteHit {
 struct ChannelRow {
     name: string,
     muted: bool,
-    volume: float,
+    // Channel gain in dB from unity; the Rust side stores linear.
+    volume-db: float,
     pan: float,
     selected: bool,
     // Mixer bus this channel feeds; 0 is the master.
@@ -113,8 +114,9 @@ struct EffectSlotRow {
     p4: float,
     p5: float,
     wet-dry: float,
-    input-trim: float,
-    output-trim: float,
+    // Trims are carried in dB from unity; the Rust side stores linear gain.
+    input-trim-db: float,
+    output-trim-db: float,
     input-left-db: float,
     input-right-db: float,
     output-left-db: float,
@@ -143,7 +145,7 @@ export component MainWindow inherits Window {
     in-out property <bool> meter-r-clipping;
     in-out property <float> source-output-left-db: -60;
     in-out property <float> source-output-right-db: -60;
-    in-out property <float> selected-channel-volume: 1.0;
+    in-out property <float> selected-channel-volume-db: 0;
 
     // ---- appearance settings ----
     in-out property <bool> appearance-open;
@@ -298,6 +300,8 @@ export component MainWindow inherits Window {
     in property <[bool]> editing-bus-allowed;
     in property <float> editing-bus-left-db: -60;
     in property <float> editing-bus-right-db: -60;
+    in property <float> editing-bus-input-left-db: -60;
+    in property <float> editing-bus-input-right-db: -60;
 
     // ---- lower editor ----
     in-out property <int> editor-page;      // 0=Source, 1=Notes, 2=Playlist
@@ -1135,12 +1139,10 @@ export component MainWindow inherits Window {
                     // is for steps, and a pair of 22px knobs costs a fifth of
                     // the width a labelled fader did. Names and values live in
                     // the tooltips.
-                    MiniKnob {
+                    TrimKnob {
                         label: "Volume";
-                        value: row.volume;
-                        default-value: 0.8;
-                        value-text: round(row.volume * 100) + "%";
-                        changed(v) => { root.channel-volume-changed(ch, v); }
+                        value: row.volume-db;
+                        changed(v) => { root.channel-volume-changed(ch, v <= -59.9 ? 0.0 : pow(10, v / 20)); }
                     }
 
                     MiniKnob {
@@ -1710,14 +1712,15 @@ export component MainWindow inherits Window {
                                             ? DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap + DeviceRackMetrics.rail-width * 2
                                             : DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap + DeviceRackMetrics.rail-width * 2;
                                         height: DeviceRackMetrics.face-height;
-                                        input-left-db: -60;
-                                        input-right-db: -60;
-                                        output-left-db: root.source-output-left-db;
-                                        output-right-db: root.source-output-right-db;
+                                        input-left-db: root.editing-bus ? root.editing-bus-input-left-db : -60;
+                                        input-right-db: root.editing-bus ? root.editing-bus-input-right-db : -60;
+                                        output-left-db: root.editing-bus ? root.editing-bus-left-db : root.source-output-left-db;
+                                        output-right-db: root.editing-bus ? root.editing-bus-right-db : root.source-output-right-db;
                                         output-trim-enabled: !root.editing-bus;
-                                        output-trim: root.selected-channel-volume;
-                                        output-trim-text: round(root.selected-channel-volume * 100) + "%";
-                                        output-trim-changed(v) => { root.channel-volume-changed(root.selected-channel, v); }
+                                        output-trim: root.selected-channel-volume-db;
+                                        output-trim-changed(v) => {
+                                            root.channel-volume-changed(root.selected-channel, v <= -59.9 ? 0.0 : pow(10, v / 20));
+                                        }
                                         insert-requested => { root.insert-effect-before = 0; insert-effect-menu.show(); }
 
                                         if root.editing-bus : BusDeviceFace {
@@ -1933,12 +1936,10 @@ export component MainWindow inherits Window {
                                             bypassed: slot.bypassed;
                                             bypass-toggled => { root.effect-bypass-toggled(index); }
                                             input-trim-enabled: true;
-                                            input-trim: slot.input-trim;
-                                            input-trim-text: round(slot.input-trim * 200) + "%";
+                                            input-trim: slot.input-trim-db;
                                             input-trim-changed(v) => { root.effect-input-trim-changed(index, v); }
                                             output-trim-enabled: true;
-                                            output-trim: slot.output-trim;
-                                            output-trim-text: round(slot.output-trim * 200) + "%";
+                                            output-trim: slot.output-trim-db;
                                             output-trim-changed(v) => { root.effect-output-trim-changed(index, v); }
                                             wet-dry-enabled: true;
                                             wet-dry: slot.wet-dry;

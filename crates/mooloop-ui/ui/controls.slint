@@ -808,6 +808,21 @@ export component MiniKnob inherits Rectangle {
     Tooltip { text: @markdown("**\{root.label}** \{root.value-text}"); }
 }
 
+// Trim/gain knob in dB from unity. Every gain-stage trim in a device frame —
+// effect input, effect output, source output, channel volume — is one of
+// these, so gain always reads and drags the same way: linear in dB (the dB
+// domain is already perceptually logarithmic), unity at double-click, and a
+// value readout that says "+3.0 dB" rather than a percentage of a ratio.
+// `value` is dB; the caller converts to linear gain at its boundary.
+export component TrimKnob inherits MiniKnob {
+    minimum: -60;
+    maximum: 12;
+    default-value: 0;
+    value-text: root.value <= root.minimum + 0.05 ? "-∞"
+        : abs(root.value) < 0.05 ? "±0.0 dB"
+        : (root.value > 0 ? "+" : "") + (round(root.value * 10) / 10) + " dB";
+}
+
 // Small round status light. Not interactive - use it for activity, sync, and
 // record-armed state.
 export component LedIndicator inherits Rectangle {

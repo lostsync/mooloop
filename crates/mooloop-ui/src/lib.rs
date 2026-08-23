@@ -12,7 +12,7 @@ mod history;
 
 slint::include_modules!();
 
-use meter::{linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
+use meter::{db_to_linear, linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use history::{Entry as HistoryEntry, History};
 use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BusSetup, Channel,
@@ -571,8 +571,8 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         p4: p[4],
         p5: p[5],
         wet_dry: slot.wet_dry,
-        input_trim: slot.input_trim,
-        output_trim: slot.output_trim,
+        input_trim_db: linear_to_db(slot.input_trim),
+        output_trim_db: linear_to_db(slot.output_trim),
         input_left_db: METER_FLOOR_DB,
         input_right_db: METER_FLOOR_DB,
         output_left_db: METER_FLOOR_DB,
@@ -1172,7 +1172,7 @@ impl UiState {
             .map(|(index, channel)| ChannelRow {
                 name: channel.name.as_str().into(),
                 muted: channel.muted,
-                volume: channel.volume,
+                volume_db: linear_to_db(channel.volume),
                 pan: channel.pan,
                 selected: index == self.selected,
                 bus: channel.bus as i32,
@@ -1215,7 +1215,7 @@ impl UiState {
             if let Some(mut row) = self.rows.row_data(i) {
                 row.selected = i == self.selected;
                 row.muted = ch.muted;
-                row.volume = ch.volume;
+                row.volume_db = linear_to_db(ch.volume);
                 row.pan = ch.pan;
                 row.bus = ch.bus as i32;
                 row.name = ch.name.as_str().into();
@@ -1509,7 +1509,7 @@ impl UiState {
         let drum = ch.drum_params;
         let mono = ch.mono_params;
         window.set_selected_channel_name(ch.name.as_str().into());
-        window.set_selected_channel_volume(ch.volume);
+        window.set_selected_channel_volume_db(linear_to_db(ch.volume));
         window.set_source_kind(device_kind_to_int(ch.kind));
         self.sync_effects();
         window.set_drum_mode(drum_mode_to_int(drum.mode));
@@ -1776,7 +1776,7 @@ impl AppUi {
         let row = ChannelRow {
             name: first.name.as_str().into(),
             muted: false,
-            volume: first.volume,
+            volume_db: linear_to_db(first.volume),
             pan: first.pan,
             selected: true,
             bus: first.bus as i32,
@@ -3244,15 +3244,25 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let weak = window.as_weak();
             window.on_channel_volume_changed(move |ch, volume| {
                 let ch = ch as usize;
                 let mut st = st.borrow_mut();
                 let Some(channel) = st.channels.get_mut(ch) else {
                     return;
                 };
-                channel.volume = volume.clamp(0.0, 1.0);
+                // Gain stages share the container's +12 dB headroom.
+                channel.volume = volume.clamp(0.0, 4.0);
                 let volume = channel.volume;
                 st.sync_row_flags();
+                // The source device's output-trim knob is the same parameter;
+                // restate it or its readout freezes at whatever the channel
+                // had when it was selected.
+                if ch == st.selected {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_selected_channel_volume_db(linear_to_db(volume));
+                    }
+                }
                 let _ = tx.send(EngineCommand::SetChannelVolume {
                     channel: ch as u8,
                     volume,
@@ -3341,7 +3351,7 @@ impl AppUi {
                 let row = ChannelRow {
                     name: ch.name.as_str().into(),
                     muted: false,
-                    volume: ch.volume,
+                    volume_db: linear_to_db(ch.volume),
                     pan: ch.pan,
                     selected: true,
                     bus: ch.bus as i32,
@@ -3737,11 +3747,13 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
-            window.on_effect_input_trim_changed(move |slot, input_trim| {
+            window.on_effect_input_trim_changed(move |slot, input_trim_db| {
                 let mut st = st.borrow_mut();
                 let target = st.effect_target;
                 let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot as usize)) else { return; };
-                effect.input_trim = input_trim.clamp(0.0, 2.0);
+                // The knob works in dB from unity; the project and the wire
+                // carry linear gain.
+                effect.input_trim = db_to_linear(input_trim_db.clamp(METER_FLOOR_DB, 12.0));
                 let value = effect.input_trim;
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot as usize, row);
@@ -3751,11 +3763,11 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
-            window.on_effect_output_trim_changed(move |slot, output_trim| {
+            window.on_effect_output_trim_changed(move |slot, output_trim_db| {
                 let mut st = st.borrow_mut();
                 let target = st.effect_target;
                 let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot as usize)) else { return; };
-                effect.output_trim = output_trim.clamp(0.0, 2.0);
+                effect.output_trim = db_to_linear(output_trim_db.clamp(METER_FLOOR_DB, 12.0));
                 let value = effect.output_trim;
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot as usize, row);
@@ -4904,15 +4916,31 @@ impl AppUi {
                         w.set_editing_bus_right_db(right.level_db);
                     }
                 }
+                // Device meters address channels and buses in one space: a
+                // bus's chain publishes at MAX_CHANNELS + bus index (see
+                // DeviceMeters). Poll whichever chain the rack is showing.
+                let device_target = if editing_bus {
+                    mooloop_core::MAX_CHANNELS + edited_bus
+                } else {
+                    selected_channel
+                };
                 if !editing_bus {
                     let ((_source_in_l, _source_in_r), (source_out_l, source_out_r)) =
-                        handle.take_device_peak(selected_channel, 0);
+                        handle.take_device_peak(device_target, 0);
                     w.set_source_output_left_db(linear_to_db(source_out_l));
                     w.set_source_output_right_db(linear_to_db(source_out_r));
+                } else {
+                    // A bus has no generator; its head's input meter reads
+                    // what the bus summed this block, before its chain.
+                    let ((bus_in_l, bus_in_r), _) = handle.take_device_peak(device_target, 0);
+                    w.set_editing_bus_input_left_db(linear_to_db(bus_in_l));
+                    w.set_editing_bus_input_right_db(linear_to_db(bus_in_r));
+                }
+                {
                     let state = st.borrow();
                     for slot in 0..state.effect_slot_model.row_count() {
                         let ((in_l, in_r), (out_l, out_r)) =
-                            handle.take_device_peak(selected_channel, slot + 1);
+                            handle.take_device_peak(device_target, slot + 1);
                         if let Some(mut row) = state.effect_slot_model.row_data(slot) {
                             row.input_left_db = linear_to_db(in_l);
                             row.input_right_db = linear_to_db(in_r);

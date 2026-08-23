@@ -336,7 +336,9 @@ impl OutputStage {
     }
 
     fn set_volume(&mut self, volume: f32) {
-        self.gain = volume.clamp(0.0, 1.0);
+        // Channels and buses gain up to +12 dB, same headroom as the effect
+        // container's trims.
+        self.gain = volume.clamp(0.0, MAX_TRIM_GAIN);
     }
 
     fn set_pan(&mut self, pan: f32) {
@@ -986,6 +988,11 @@ impl RenderState {
             let Some(strip) = self.buses.get_mut(index) else {
                 continue;
             };
+            // The bus head's input meter reads what the bus received this
+            // block, before its own chain touches it.
+            let (input_l, input_r) = strip.bus.peak(frames);
+            self.device_meters
+                .publish_input(MAX_CHANNELS + index, 0, input_l, input_r);
             strip.effects.process(&context, &mut strip.bus, Some((&self.device_meters, MAX_CHANNELS + index)));
             strip.output.apply_balance(&mut strip.bus, frames);
             // A muted bus still processes, so a delay or reverb tail on it
