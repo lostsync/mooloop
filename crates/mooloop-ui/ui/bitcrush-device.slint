@@ -54,7 +54,7 @@ export component BitcrushDeviceFace inherits Rectangle {
         HorizontalLayout {
             spacing: 0px;
             ParameterKnob {
-                width: 69px;
+                width: 104px;
                 diameter: 36px;
                 label: "Bits";
                 tooltip: "Quantization depth";
@@ -64,7 +64,7 @@ export component BitcrushDeviceFace inherits Rectangle {
                 changed(v) => { root.bits-changed(v); }
             }
             ParameterKnob {
-                width: 69px;
+                width: 104px;
                 diameter: 36px;
                 label: "Rate";
                 tooltip: "Sample-and-hold length";
@@ -72,16 +72,6 @@ export component BitcrushDeviceFace inherits Rectangle {
                 default-value: 0.0;
                 value-text: round(root.rate-natural * 10) / 10 + "x";
                 changed(v) => { root.downsample-changed(v); }
-            }
-            ParameterKnob {
-                width: 69px;
-                diameter: 36px;
-                label: "Mix";
-                tooltip: "Dry/wet blend";
-                value <=> root.mix;
-                default-value: 1.0;
-                value-text: round(root.mix * 100) + "%";
-                changed(v) => { root.mix-changed(v); }
             }
         }
     }

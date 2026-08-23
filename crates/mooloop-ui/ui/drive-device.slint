@@ -65,7 +65,7 @@ export component DriveDeviceFace inherits Rectangle {
         HorizontalLayout {
             spacing: 0px;
             ParameterKnob {
-                width: 52px;
+                width: 104px;
                 diameter: 36px;
                 label: "Drive";
                 tooltip: "Input gain into the shaping curve";
@@ -75,7 +75,7 @@ export component DriveDeviceFace inherits Rectangle {
                 changed(v) => { root.drive-changed(v); }
             }
             ParameterKnob {
-                width: 52px;
+                width: 104px;
                 diameter: 36px;
                 label: "Tone";
                 tooltip: "Post-shaper tilt: dark to bright";
@@ -83,26 +83,6 @@ export component DriveDeviceFace inherits Rectangle {
                 default-value: 0.5;
                 value-text: round((root.tone * 2 - 1) * 100) + "%";
                 changed(v) => { root.tone-changed(v); }
-            }
-            ParameterKnob {
-                width: 52px;
-                diameter: 36px;
-                label: "Mix";
-                tooltip: "Dry/wet blend";
-                value <=> root.mix;
-                default-value: 1.0;
-                value-text: round(root.mix * 100) + "%";
-                changed(v) => { root.mix-changed(v); }
-            }
-            ParameterKnob {
-                width: 52px;
-                diameter: 36px;
-                label: "Out";
-                tooltip: "Output trim";
-                value <=> root.output;
-                default-value: 0.5;
-                value-text: round(root.output * 2 * 100) / 100 + "x";
-                changed(v) => { root.output-changed(v); }
             }
         }
     }

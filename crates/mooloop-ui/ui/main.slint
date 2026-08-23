@@ -134,6 +134,13 @@ export component MainWindow inherits Window {
     in-out property <float> meter-r-held-db: -60;
     in-out property <bool> meter-l-clipping;
     in-out property <bool> meter-r-clipping;
+    // The device frame reads the live level at the endpoint bus of the chain
+    // currently shown below. It is a real bus reading, not a static preview.
+    in-out property <float> device-meter-left-db: -60;
+    in-out property <float> device-meter-right-db: -60;
+    in-out property <float> device-meter-held-left-db: -60;
+    in-out property <float> device-meter-held-right-db: -60;
+    in-out property <float> selected-channel-volume: 1.0;
 
     // ---- appearance settings ----
     in-out property <bool> appearance-open;
@@ -1687,6 +1694,14 @@ export component MainWindow inherits Window {
                                             ? DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap + DeviceRackMetrics.rail-width * 2
                                             : DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap + DeviceRackMetrics.rail-width * 2;
                                         height: DeviceRackMetrics.face-height;
+                                        meter-left-db: root.device-meter-left-db;
+                                        meter-right-db: root.device-meter-right-db;
+                                        meter-held-left-db: root.device-meter-held-left-db;
+                                        meter-held-right-db: root.device-meter-held-right-db;
+                                        output-trim-enabled: !root.editing-bus;
+                                        output-trim: root.selected-channel-volume;
+                                        output-trim-text: round(root.selected-channel-volume * 100) + "%";
+                                        output-trim-changed(v) => { root.channel-volume-changed(root.selected-channel, v); }
                                         insert-requested => { root.insert-effect-before = 0; insert-effect-menu.show(); }
 
                                         if root.editing-bus : BusDeviceFace {
@@ -1894,6 +1909,26 @@ export component MainWindow inherits Window {
                                             y: 0px;
                                             width: parent.face-width + DeviceRackMetrics.rail-width * 2;
                                             height: DeviceRackMetrics.face-height;
+                                            meter-left-db: root.device-meter-left-db;
+                                            meter-right-db: root.device-meter-right-db;
+                                            meter-held-left-db: root.device-meter-held-left-db;
+                                            meter-held-right-db: root.device-meter-held-right-db;
+                                            // Only these effects currently have an actual wet/dry
+                                            // parameter. Drive alone also exposes output trim.
+                                            output-trim-enabled: slot.kind == 1;
+                                            output-trim: slot.p4;
+                                            output-trim-text: round(slot.p4 * 2 * 100) / 100 + "x";
+                                            output-trim-changed(v) => {
+                                                if (slot.kind == 1) { root.effect-param-changed(index, 4, v); }
+                                            }
+                                            wet-dry-enabled: slot.kind == 1 || slot.kind == 2 || slot.kind == 3;
+                                            wet-dry: slot.kind == 1 ? slot.p3 : slot.kind == 2 ? slot.p2 : slot.p5;
+                                            wet-dry-text: round((slot.kind == 1 ? slot.p3 : slot.kind == 2 ? slot.p2 : slot.p5) * 100) + "% wet";
+                                            wet-dry-changed(v) => {
+                                                if (slot.kind == 1) { root.effect-param-changed(index, 3, v); }
+                                                if (slot.kind == 2) { root.effect-param-changed(index, 2, v); }
+                                                if (slot.kind == 3) { root.effect-param-changed(index, 5, v); }
+                                            }
                                             removal-enabled: true;
                                             insert-requested => { root.insert-effect-before = index; insert-effect-menu.show(); }
                                             remove-requested => { root.remove-effect-clicked(index); }

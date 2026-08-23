@@ -1403,6 +1403,7 @@ impl UiState {
         let drum = ch.drum_params;
         let mono = ch.mono_params;
         window.set_selected_channel_name(ch.name.as_str().into());
+        window.set_selected_channel_volume(ch.volume);
         window.set_source_kind(device_kind_to_int(ch.kind));
         self.sync_effects();
         window.set_drum_mode(drum_mode_to_int(drum.mode));
@@ -4703,6 +4704,19 @@ impl AppUi {
                 let showing_mixer = w.get_mixer_visible();
                 let editing_bus = w.get_editing_bus();
                 let edited_bus = w.get_editing_bus_index().max(0) as usize;
+                // The bottom device rack follows either one bus or one
+                // channel. A channel ultimately feeds its assigned bus, so
+                // that bus is the measurable endpoint of its chain.
+                let device_meter_bus = if editing_bus {
+                    edited_bus
+                } else {
+                    let state = st.borrow();
+                    state
+                        .channels
+                        .get(state.selected)
+                        .map(|channel| channel.bus as usize)
+                        .unwrap_or(0)
+                };
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
                     let (peak_l, peak_r) = handle.take_bus_peak(bus);
                     let left = meters.0.update(peak_l, elapsed);
@@ -4718,6 +4732,12 @@ impl AppUi {
                     if editing_bus && bus == edited_bus {
                         w.set_editing_bus_left_db(left.level_db);
                         w.set_editing_bus_right_db(right.level_db);
+                    }
+                    if bus == device_meter_bus {
+                        w.set_device_meter_left_db(left.level_db);
+                        w.set_device_meter_right_db(right.level_db);
+                        w.set_device_meter_held_left_db(left.held_db);
+                        w.set_device_meter_held_right_db(right.held_db);
                     }
                 }
 

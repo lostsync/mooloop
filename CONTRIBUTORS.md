@@ -53,9 +53,9 @@ work session you can recall being part of, and don't stress over precision.
 ### GPT-5 — Codex
 - First seen: 2026-08-21
 - Last seen: 2026-08-23
-- Sessions: 6
+- Sessions: 7
 - Notes: Audio-core architecture, realtime project swaps, compiled bus graphs,
-  and latency/gain hardening.
+  latency/gain hardening, and device-frame controls.
 
 ### GPT-5.6 Terra — Zed
 - First seen: 2026-08-23
