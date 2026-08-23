@@ -1,23 +1,20 @@
 import { Theme } from "theme.slint";
 import { ParameterKnob, SelectorBank } from "controls.slint";
-import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { FilterResponseDisplay } from "device-displays.slint";
 
-// One filter effect in a channel's device rack. Includes its own header so
-// the header can double as the drag handle for reordering, with bypass and
-// remove as small action buttons at the header's right edge (per
-// docs/UI_DESIGN.md's Rack Actions rule).
-export component FilterDeviceFace inherits Rectangle {
-    in property <int> slot-index;
-    in property <int> slot-count;
-    in property <bool> bypassed;
+// One filter effect in a channel's device rack: only the working controls
+// live here; the header and drag-to-reorder come from the shared
+// EffectDeviceShell, and bypass/remove live on the host DeviceFrame.
+export component FilterDeviceFace inherits EffectDeviceShell {
+    name: "Filter";
+    kind: "FX / 1U";
     in-out property <int> mode;         // 0 = low-pass, 1 = high-pass
     in-out property <float> cutoff;     // perceptual 0..1 (20 Hz .. 20 kHz)
     in-out property <float> resonance;  // 0..1
     callback cutoff-changed(float);
     callback resonance-changed(float);
     callback mode-changed(int);
-    callback reorder-requested(int);     // target slot index
 
     VerticalLayout {
         padding: 6px;
@@ -79,37 +76,4 @@ export component FilterDeviceFace inherits Rectangle {
             }
         }
     }
-
-    DeviceHeader {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        name: "Filter";
-        kind: "FX / 1U";
-        role: "FX";
-        device-color: Theme.warning;
-        enabled: !root.bypassed;
-    }
-
-    // Drag-to-reorder handle: covers the header left of the action buttons.
-    // On release, a horizontal delta past half a slot pitch (device + join)
-    // moves the device; smaller movements are ignored.
-    drag := TouchArea {
-        x: 0px;
-        y: 0px;
-        width: parent.width - 52px;
-        height: DeviceRackMetrics.header-height;
-        mouse-cursor: move;
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.up {
-                let pitch = DeviceRackMetrics.unit-width + 20px;
-                let delta = round((self.mouse-x - self.pressed-x) / pitch);
-                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
-                if target != root.slot-index {
-                    root.reorder-requested(target);
-                }
-            }
-        }
-    }
-
 }

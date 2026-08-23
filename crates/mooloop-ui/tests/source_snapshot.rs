@@ -22,7 +22,7 @@ fn rack_rows() -> ModelRc<ChannelRow> {
         .map(|(index, name)| ChannelRow {
             name: SharedString::from(name),
             muted: false,
-            volume: 0.8,
+            volume_db: -1.9382, // linear 0.8 in dB
             pan: 0.0,
             selected: index == 0,
             bus: 0,
@@ -190,6 +190,13 @@ fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
         p3: 0.5,
         p4: 0.5,
         p5: 0.5,
+        wet_dry: 1.0,
+        input_trim_db: 0.0,
+        output_trim_db: 0.0,
+        input_left_db: -60.0,
+        input_right_db: -60.0,
+        output_left_db: -60.0,
+        output_right_db: -60.0,
     }
 }
 

@@ -1,15 +1,15 @@
 import { Theme } from "theme.slint";
-import { IconButton, ParameterKnob, SelectorBank } from "controls.slint";
-import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { ParameterKnob, SelectorBank } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { DelayEchoDisplay } from "device-displays.slint";
 
 // One delay in a channel's device rack. Two units wide: six working controls
 // do not fit the 1U face the other effects use, and UI_DESIGN.md quantizes
-// device width rather than compressing controls.
-export component DelayDeviceFace inherits Rectangle {
-    in property <int> slot-index;
-    in property <int> slot-count;
-    in property <bool> bypassed;
+// device width rather than compressing controls. Header and drag come from
+// the shared EffectDeviceShell.
+export component DelayDeviceFace inherits EffectDeviceShell {
+    name: "Delay";
+    kind: "FX / 2U";
     in-out property <int> mode;      // 0 = digital, 1 = tape, 2 = reverse
     in-out property <float> time;     // normalized 0..1 (1 ms .. 2000 ms)
     in-out property <float> feedback; // normalized 0..1
@@ -22,9 +22,6 @@ export component DelayDeviceFace inherits Rectangle {
     callback cross-changed(float);
     callback tone-changed(float);
     callback mix-changed(float);
-    callback bypass-toggled();
-    callback remove-clicked();
-    callback reorder-requested(int);
 
     // Normalized -> natural, matching ParamCurve::Exponential over [1, 2000].
     private property <float> time-natural: pow(2000, root.time);
@@ -120,60 +117,6 @@ export component DelayDeviceFace inherits Rectangle {
                 default-value: 0.35;
                 value-text: round(root.mix * 100) + "%";
                 changed(v) => { root.mix-changed(v); }
-            }
-        }
-    }
-
-    DeviceHeader {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        name: "Delay";
-        kind: "FX / 2U";
-        role: "FX";
-        device-color: Theme.warning;
-        enabled: !root.bypassed;
-    }
-
-    drag := TouchArea {
-        x: 0px;
-        y: 0px;
-        width: parent.width - 52px;
-        height: DeviceRackMetrics.header-height;
-        mouse-cursor: move;
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.up {
-                let pitch = DeviceRackMetrics.unit-width + 20px;
-                let delta = round((self.mouse-x - self.pressed-x) / pitch);
-                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
-                if target != root.slot-index {
-                    root.reorder-requested(target);
-                }
-            }
-        }
-    }
-
-    Rectangle {
-        visible: false;
-        x: parent.width - 52px;
-        y: 0px;
-        width: 52px;
-        height: DeviceRackMetrics.header-height;
-        HorizontalLayout {
-            padding: 3px;
-            spacing: 2px;
-            IconButton {
-                text: root.bypassed ? "○" : "●";
-                tooltip: root.bypassed ? "Enable this delay" : "Bypass this delay";
-                size: 22px;
-                active: !root.bypassed;
-                clicked => { root.bypass-toggled(); }
-            }
-            IconButton {
-                text: "✕";
-                tooltip: "Remove this delay";
-                size: 22px;
-                clicked => { root.remove-clicked(); }
             }
         }
     }

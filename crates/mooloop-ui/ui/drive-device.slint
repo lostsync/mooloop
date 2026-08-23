@@ -1,15 +1,14 @@
 import { Theme } from "theme.slint";
-import { IconButton, ParameterKnob, SelectorBank } from "controls.slint";
-import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { ParameterKnob, SelectorBank } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { DriveTransferDisplay } from "device-displays.slint";
 
-// One drive/saturation effect in a channel's device rack. Same outer geometry
-// and header/drag/action contract as `FilterDeviceFace`; only the working
-// controls differ.
-export component DriveDeviceFace inherits Rectangle {
-    in property <int> slot-index;
-    in property <int> slot-count;
-    in property <bool> bypassed;
+// One drive/saturation effect in a channel's device rack: only the working
+// controls live here; header, drag-to-reorder, and host actions come from
+// the shared shell and frame.
+export component DriveDeviceFace inherits EffectDeviceShell {
+    name: "Drive";
+    kind: "FX / 1U";
     in-out property <int> curve;       // 0 = soft, 1 = hard, 2 = fold, 3 = tape
     in-out property <float> drive;      // normalized 0..1 (1x .. 64x)
     in-out property <float> tone;       // normalized 0..1 (-1 .. 1)
@@ -20,9 +19,6 @@ export component DriveDeviceFace inherits Rectangle {
     callback tone-changed(float);
     callback mix-changed(float);
     callback output-changed(float);
-    callback bypass-toggled();
-    callback remove-clicked();
-    callback reorder-requested(int);
 
     // Normalized knob position -> the natural value the plot and readout use,
     // matching `ParamCurve::Exponential` over [1, 64] in mooloop-core.
@@ -95,60 +91,6 @@ export component DriveDeviceFace inherits Rectangle {
                 default-value: 1.0;
                 value-text: round(root.mix * 100) + "%";
                 changed(v) => { root.mix-changed(v); }
-            }
-        }
-    }
-
-    DeviceHeader {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        name: "Drive";
-        kind: "FX / 1U";
-        role: "FX";
-        device-color: Theme.warning;
-        enabled: !root.bypassed;
-    }
-
-    drag := TouchArea {
-        x: 0px;
-        y: 0px;
-        width: parent.width - 52px;
-        height: DeviceRackMetrics.header-height;
-        mouse-cursor: move;
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.up {
-                let pitch = DeviceRackMetrics.unit-width + 20px;
-                let delta = round((self.mouse-x - self.pressed-x) / pitch);
-                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
-                if target != root.slot-index {
-                    root.reorder-requested(target);
-                }
-            }
-        }
-    }
-
-    Rectangle {
-        visible: false;
-        x: parent.width - 52px;
-        y: 0px;
-        width: 52px;
-        height: DeviceRackMetrics.header-height;
-        HorizontalLayout {
-            padding: 3px;
-            spacing: 2px;
-            IconButton {
-                text: root.bypassed ? "○" : "●";
-                tooltip: root.bypassed ? "Enable this drive" : "Bypass this drive";
-                size: 22px;
-                active: !root.bypassed;
-                clicked => { root.bypass-toggled(); }
-            }
-            IconButton {
-                text: "✕";
-                tooltip: "Remove this drive";
-                size: 22px;
-                clicked => { root.remove-clicked(); }
             }
         }
     }

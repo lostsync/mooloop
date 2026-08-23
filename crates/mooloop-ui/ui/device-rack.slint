@@ -210,6 +210,57 @@ export component DeviceHeader inherits Rectangle {
     }
 }
 
+// Shared shell for every effect face: the header strip (name, kind tag,
+// bypass state) plus drag-to-reorder on the header. The face's working
+// controls are its @children, painted below the header. Adding an effect
+// kind means writing only its controls inside this shell; the chrome is
+// inherited, not repeated. Bypass/remove live on the host DeviceFrame
+// around the face, not in here.
+export component EffectDeviceShell inherits Rectangle {
+    in property <string> name;
+    in property <string> kind;
+    in property <int> slot-index;
+    in property <int> slot-count;
+    in property <bool> bypassed;
+    callback reorder-requested(int);  // target slot index
+
+    @children
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: root.name;
+        kind: root.kind;
+        role: "FX";
+        device-color: Theme.warning;
+        enabled: !root.bypassed;
+    }
+
+    // Drag-to-reorder handle: covers the header left of the host frame's
+    // bypass/wet-dry controls. On release, a horizontal delta past half a
+    // slot pitch (device + join) moves the device; smaller movements are
+    // ignored.
+    drag := TouchArea {
+        x: 0px;
+        y: 0px;
+        z: 10;
+        width: parent.width - 52px;
+        height: DeviceRackMetrics.header-height;
+        mouse-cursor: move;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up {
+                let pitch = DeviceRackMetrics.unit-width + 20px;
+                let delta = round((self.mouse-x - self.pressed-x) / pitch);
+                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
+                if target != root.slot-index {
+                    root.reorder-requested(target);
+                }
+            }
+        }
+    }
+}
+
 export component DeviceJoin inherits Rectangle {
     width: 20px;
     height: DeviceRackMetrics.face-height;

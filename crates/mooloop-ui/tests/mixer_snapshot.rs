@@ -22,7 +22,7 @@ fn rack_rows() -> ModelRc<ChannelRow> {
         .map(|(index, (name, bus))| ChannelRow {
             name: SharedString::from(name),
             muted: false,
-            volume: 0.8,
+            volume_db: -1.9382, // linear 0.8 in dB
             pan: 0.0,
             selected: index == 0,
             bus,
@@ -144,6 +144,13 @@ fn render_mixer_pane_with_a_bus_chain() {
             p3: 0.3,
             p4: 0.1,
             p5: 0.0,
+            wet_dry: 1.0,
+            input_trim_db: 0.0,
+            output_trim_db: 0.0,
+            input_left_db: -9.0,
+            input_right_db: -11.0,
+            output_left_db: -12.0,
+            output_right_db: -14.0,
         },
         EffectSlotRow {
             kind: 6,
@@ -155,6 +162,13 @@ fn render_mixer_pane_with_a_bus_chain() {
             p3: 0.0,
             p4: 0.0,
             p5: 0.0,
+            wet_dry: 1.0,
+            input_trim_db: 0.0,
+            output_trim_db: 0.0,
+            input_left_db: -12.0,
+            input_right_db: -14.0,
+            output_left_db: -10.0,
+            output_right_db: -10.5,
         },
     ]))));
 

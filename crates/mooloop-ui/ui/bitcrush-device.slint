@@ -1,23 +1,20 @@
 import { Theme } from "theme.slint";
-import { IconButton, ParameterKnob } from "controls.slint";
-import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { ParameterKnob } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { BitcrushTrace } from "device-displays.slint";
 
-// One bitcrush effect in a channel's device rack. Same outer geometry and
-// header/drag/action contract as the other effect faces.
-export component BitcrushDeviceFace inherits Rectangle {
-    in property <int> slot-index;
-    in property <int> slot-count;
-    in property <bool> bypassed;
+// One bitcrush effect in a channel's device rack: only the working controls
+// live here; header, drag-to-reorder, and host actions come from the shared
+// shell and frame.
+export component BitcrushDeviceFace inherits EffectDeviceShell {
+    name: "Bitcrush";
+    kind: "FX / 1U";
     in-out property <float> bits;        // normalized 0..1 (1 .. 16 bits)
     in-out property <float> downsample;  // normalized 0..1 (1x .. 64x)
     in-out property <float> mix;         // normalized 0..1
     callback bits-changed(float);
     callback downsample-changed(float);
     callback mix-changed(float);
-    callback bypass-toggled();
-    callback remove-clicked();
-    callback reorder-requested(int);
 
     // Normalized -> natural, matching the descriptors in mooloop-core: bits is
     // linear over [1, 16], downsample is exponential over [1, 64].
@@ -84,60 +81,6 @@ export component BitcrushDeviceFace inherits Rectangle {
                 default-value: 1.0;
                 value-text: round(root.mix * 100) + "%";
                 changed(v) => { root.mix-changed(v); }
-            }
-        }
-    }
-
-    DeviceHeader {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        name: "Bitcrush";
-        kind: "FX / 1U";
-        role: "FX";
-        device-color: Theme.warning;
-        enabled: !root.bypassed;
-    }
-
-    drag := TouchArea {
-        x: 0px;
-        y: 0px;
-        width: parent.width - 52px;
-        height: DeviceRackMetrics.header-height;
-        mouse-cursor: move;
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.up {
-                let pitch = DeviceRackMetrics.unit-width + 20px;
-                let delta = round((self.mouse-x - self.pressed-x) / pitch);
-                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
-                if target != root.slot-index {
-                    root.reorder-requested(target);
-                }
-            }
-        }
-    }
-
-    Rectangle {
-        visible: false;
-        x: parent.width - 52px;
-        y: 0px;
-        width: 52px;
-        height: DeviceRackMetrics.header-height;
-        HorizontalLayout {
-            padding: 3px;
-            spacing: 2px;
-            IconButton {
-                text: root.bypassed ? "○" : "●";
-                tooltip: root.bypassed ? "Enable this bitcrush" : "Bypass this bitcrush";
-                size: 22px;
-                active: !root.bypassed;
-                clicked => { root.bypass-toggled(); }
-            }
-            IconButton {
-                text: "✕";
-                tooltip: "Remove this bitcrush";
-                size: 22px;
-                clicked => { root.remove-clicked(); }
             }
         }
     }
