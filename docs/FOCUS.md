@@ -63,6 +63,8 @@ records that the toolbar deliberately has no click-track toggle because
 nothing in the DSP graph produces one. For an instrument aimed at rhythm,
 that is a bigger gap than the prefs dialog.
 
+/* NOTE (from the human, with ears): this app has no ability to record. it will, probably, but it doesn't. you dont need a click yet. if you really really did you could just do one on a pattern. yall have been hilarious about this metronome. */
+
 ### 3. Modulation and automation, to audible
 
 `MODULATION_PLAN.md` is approved and says to implement it rather than
