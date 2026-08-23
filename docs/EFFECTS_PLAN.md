@@ -54,7 +54,7 @@ you'll pass compilation, then cause real audio dropouts.
 
 ### Slot storage: dynamic, not preallocated-per-kind
 
-Each channel's effect chain is a fixed-size array of *optional, dynamically
+Each channel's effect chain is an addressable array of *optional, dynamically
 allocated* nodes:
 
 ```rust
@@ -62,9 +62,9 @@ allocated* nodes:
 effect_chain: [Option<Box<dyn AudioNode + Send>>; MAX_EFFECTS_PER_CHANNEL],
 ```
 
-Add `pub const MAX_EFFECTS_PER_CHANNEL: usize = 8;` to
+Use the complete `u8` slot address space (`MAX_EFFECTS_PER_CHANNEL == 256`) in
 `crates/mooloop-core/src/channel.rs`, right next to `MAX_CHANNELS` /
-`MAX_PATTERNS`.
+`MAX_PATTERNS`. This is a realtime bridge boundary, not a product cap.
 
 We do **not** preallocate one instance of every effect kind in every slot.
 That was considered and rejected: it wastes memory per slot per kind and

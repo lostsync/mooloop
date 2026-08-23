@@ -21,7 +21,7 @@ or dependable production tool.
 
 ## What Works
 
-- Up to 16 channels using a sampler, drum synth, mono synth, or poly synth.
+- Up to 256 channels using a sampler, drum synth, mono synth, or poly synth.
 - Up to 256 patterns, each from 1 to 256 sixteenth-note steps long.
 - A step rack with pitch and velocity data.
 - A zoomable piano roll and pinned velocity lane.

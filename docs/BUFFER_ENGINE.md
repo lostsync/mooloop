@@ -128,7 +128,8 @@ automation engine.
 - Publish snapshots or replacement buffers through lock-free pointer swaps.
 - Defer destruction until the realtime graph and all voices release old data.
 - Make the memory budget visible. At 48 kHz, one minute of stereo `f32` audio
-  is about 22 MiB; multiplying that silently by 16 channels is unacceptable.
+  is about 22 MiB; multiplying that silently by every addressable channel is
+  unacceptable. Buffer devices are opt-in inserts, sized only when present.
 - Offline and realtime render paths must use the same buffer behavior.
 - Project save must snapshot coherently without blocking the callback.
 

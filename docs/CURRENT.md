@@ -19,7 +19,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   2-4 even hits), and Stretch (drag a step sideways to set note length). The
   whole run of steps shares one hit area, because a per-cell one cannot follow
   a drag past the cell the press landed in.
-- Up to 16 channels. A new song starts with a lightly randomized four-channel
+- The complete 256-channel addressable bank. A new song starts with a lightly randomized four-channel
   drum kit (kick, snare, closed hat, and open hat); creating another new song
   generates a new variation. Channels can use the sampler, drum synth, mono
   synth, or poly synth and every rack row exposes mute, output volume, and
@@ -171,7 +171,9 @@ boundary.
   groups, sidechains, and buffer taps.
 - Musical time is PPQ 96, which exactly represents common subdivisions through
   64th notes and triplet grids.
-- Pattern and channel capacity are bounded for realtime safety.
+- Realtime state is preallocated outside the audio callback. The channel and
+  effect banks each cover their complete 256-value `u8` address space; these
+  are bridge-format boundaries rather than small product caps.
 - DSP tests cover sampler pitch, trim, loops, envelopes, filter behavior,
   reverse playback, and lo-fi stages, plus drum synth and mono synth voice,
   envelope, glide, filter, and LFO behavior. Mono synth tests also bound the

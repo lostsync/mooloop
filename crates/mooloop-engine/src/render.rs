@@ -22,6 +22,53 @@ use crate::StructuralCommand;
 /// can drop them. The realtime thread must never free a `Box` itself.
 type Reclaim = Vec<Box<dyn AudioNode + Send>>;
 
+/// A compact, preallocated per-effect mailbox. Knob traffic is coalesced by
+/// parameter ID; retaining every intermediate mouse position is neither
+/// audible nor necessary, while allocating a full `EventList` for every one
+/// of 256 possible slots would make empty chains prohibitively expensive.
+const MAX_PENDING_EFFECT_PARAMS: usize = 8;
+
+#[derive(Clone, Copy)]
+struct PendingEffectParams {
+    events: [Option<TimedEvent>; MAX_PENDING_EFFECT_PARAMS],
+}
+
+impl PendingEffectParams {
+    const fn empty() -> Self {
+        Self { events: [None; MAX_PENDING_EFFECT_PARAMS] }
+    }
+
+    fn clear(&mut self) {
+        self.events.fill(None);
+    }
+
+    fn queue(&mut self, event: TimedEvent) {
+        let Event::ParamValue { id, .. } = event.event else {
+            return;
+        };
+        if let Some(existing) = self.events.iter_mut().find(|existing| {
+            matches!(existing, Some(TimedEvent { event: Event::ParamValue { id: existing_id, .. }, .. }) if *existing_id == id)
+        }) {
+            *existing = Some(event);
+            return;
+        }
+        if let Some(empty) = self.events.iter_mut().find(|entry| entry.is_none()) {
+            *empty = Some(event);
+        } else {
+            // The command queue is already bounded. Under pathological
+            // automation traffic, keep the newest value rather than retaining
+            // a stale one indefinitely.
+            self.events[0] = Some(event);
+        }
+    }
+
+    fn copy_to(&self, destination: &mut EventList) {
+        for event in self.events.iter().flatten() {
+            let _ = destination.push_ordered(*event);
+        }
+    }
+}
+
 /// A fixed-size chain of optional effect nodes plus the per-slot machinery
 /// that feeds them. Channels and mixer buses both own one, which is the whole
 /// reason effect commands address an `EffectTarget` rather than a channel.
@@ -33,24 +80,32 @@ struct EffectChain {
     /// `EngineCommand::SetEffectParam` and consumed by the next block. Kept
     /// separate from the note-event lists so slot addressing is trivial and
     /// generators never see effect events.
-    events: [EventList; MAX_EFFECTS_PER_CHANNEL],
+    events: [PendingEffectParams; MAX_EFFECTS_PER_CHANNEL],
+    /// Reused while each sequential slot processes. See
+    /// `PendingEffectParams` for why this is not stored per slot.
+    event_scratch: EventList,
     bypassed: [bool; MAX_EFFECTS_PER_CHANNEL],
     wet_dry: [f32; MAX_EFFECTS_PER_CHANNEL],
     input_trim: [f32; MAX_EFFECTS_PER_CHANNEL],
     output_trim: [f32; MAX_EFFECTS_PER_CHANNEL],
-    dry: [StereoBus; MAX_EFFECTS_PER_CHANNEL],
+    /// One scratch buffer is enough: chain slots process sequentially, so no
+    /// slot needs to retain its dry signal once its mix has been applied.
+    /// Keeping this per-chain rather than per-slot makes the full 256-slot
+    /// addressable chain practical.
+    dry: StereoBus,
 }
 
 impl EffectChain {
     fn new() -> Self {
         Self {
             nodes: std::array::from_fn(|_| None),
-            events: std::array::from_fn(|_| EventList::empty()),
+            events: [PendingEffectParams::empty(); MAX_EFFECTS_PER_CHANNEL],
+            event_scratch: EventList::empty(),
             bypassed: [false; MAX_EFFECTS_PER_CHANNEL],
             wet_dry: [1.0; MAX_EFFECTS_PER_CHANNEL],
             input_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
             output_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
-            dry: std::array::from_fn(|_| StereoBus::with_capacity(MAX_BLOCK_SIZE)),
+            dry: StereoBus::with_capacity(MAX_BLOCK_SIZE),
         }
     }
 
@@ -104,7 +159,6 @@ impl EffectChain {
             self.wet_dry.swap(slot_a, slot_b);
             self.input_trim.swap(slot_a, slot_b);
             self.output_trim.swap(slot_a, slot_b);
-            self.dry.swap(slot_a, slot_b);
         }
     }
 
@@ -117,9 +171,9 @@ impl EffectChain {
     fn queue_param(&mut self, slot: usize, id: u32, value: f32) {
         if let Some(events) = self.events.get_mut(slot) {
             // Queued between blocks, so it lands at the next block's first
-            // frame. If the slot's list is full the update is dropped,
-            // matching the command ring's overflow policy.
-            let _ = events.push_ordered(TimedEvent {
+            // frame. Repeated writes to a parameter coalesce to its newest
+            // value, matching the command ring's latest-state semantics.
+            events.queue(TimedEvent {
                 offset: 0,
                 event: Event::ParamValue { id, value },
             });
@@ -169,19 +223,21 @@ impl EffectChain {
                     bus.l[frame] *= input_trim;
                     bus.r[frame] *= input_trim;
                 }
-                self.dry[slot].l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
-                self.dry[slot].r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
+                self.dry.l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
+                self.dry.r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
                 if let Some((meters, channel)) = device_meters {
                     let (left, right) = bus.peak(context.frames);
                     meters.publish_input(channel, slot + 1, left, right);
                 }
-                node.process(context, bus, &self.events[slot], None);
+                self.event_scratch.clear();
+                self.events[slot].copy_to(&mut self.event_scratch);
+                node.process(context, bus, &self.event_scratch, None);
                 let wet = self.wet_dry[slot];
                 let dry = 1.0 - wet;
                 let trim = self.output_trim[slot];
                 for frame in 0..context.frames {
-                    bus.l[frame] = (self.dry[slot].l[frame] * dry + bus.l[frame] * wet) * trim;
-                    bus.r[frame] = (self.dry[slot].r[frame] * dry + bus.r[frame] * wet) * trim;
+                    bus.l[frame] = (self.dry.l[frame] * dry + bus.l[frame] * wet) * trim;
+                    bus.r[frame] = (self.dry.r[frame] * dry + bus.r[frame] * wet) * trim;
                 }
                 if let Some((meters, channel)) = device_meters {
                     let (left, right) = bus.peak(context.frames);
@@ -985,6 +1041,17 @@ mod tests {
         let render = RenderState::from_project(48_000, &project, &[]);
         assert_eq!(render.pattern_length_ticks(0), Some(32 * 24));
         assert!((render.ticks_per_sample() - (173.0 * 96.0 / 60.0 / 48_000.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn project_load_installs_the_last_addressable_effect_slot() {
+        let mut project = Project::default();
+        project.channels[0].setup.effects = (0..MAX_EFFECTS_PER_CHANNEL)
+            .map(|_| mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Filter))
+            .collect();
+
+        let render = RenderState::from_project(48_000, &project, &[]);
+        assert!(render.strips[0].effects.nodes[MAX_EFFECTS_PER_CHANNEL - 1].is_some());
     }
 
     fn synth_project(channel: ProjectChannel) -> Project {

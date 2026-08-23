@@ -4,7 +4,7 @@
 //! bus per block — seventeen values every few milliseconds — which would
 //! swamp a queue the UI drains on a timer, and a queue is the wrong shape
 //! anyway: the GUI only ever wants the most recent reading, never the
-//! backlog. A small array of atomics is wait-free on both sides, costs no
+//! backlog. A preallocated array of atomics is wait-free on both sides, costs no
 //! allocation, and cannot overflow.
 //!
 //! The value published is a *held* peak: the audio thread raises it and only

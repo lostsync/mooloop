@@ -155,7 +155,10 @@ These are firm enough to build against:
   a text document.
 - WAV is the canonical render target. MP3 is a delivery format, not an engine
   primitive.
-- Effects use an ordered fixed-capacity device chain and stable parameter IDs.
+- Effects use an ordered device chain and stable parameter IDs. Dynamic musical
+  items must not receive small product caps: any realtime storage is prepared
+  off the audio thread and bounded only by an explicit protocol or safety
+  boundary, documented at that boundary.
 - Buffer capture position is determined by where its device is inserted; it
   does not require a separate fixed channel tap point.
 

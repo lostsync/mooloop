@@ -1,17 +1,21 @@
 //! Channel model. A channel is a source, its own insert chain, and an output
 //! stage that feeds one mixer bus. The buses themselves live in `mixer`.
 
-/// Upper bound on simultaneous channels. The engine pre-allocates its pools
-/// to this size so channel add/remove never allocates on the RT thread.
-pub const MAX_CHANNELS: usize = 16;
+/// Complete addressable channel bank.
+///
+/// Channel indices travel over the realtime bridge as `u8`, so this is a wire
+/// format boundary, not a product-design limit. The engine preallocates this
+/// bank so channel add/remove never allocates on the RT thread.
+pub const MAX_CHANNELS: usize = u8::MAX as usize + 1;
 
 /// Upper bound on stored patterns. Pattern IDs cross the realtime bridge as
 /// `u8`, so 256 is the complete addressable bank rather than a UI limit.
 pub const MAX_PATTERNS: usize = u8::MAX as usize + 1;
 
-/// Upper bound on effects in one channel's chain. Chain slots cross the
-/// realtime bridge as `u8`, so this stays well under 256.
-pub const MAX_EFFECTS_PER_CHANNEL: usize = 8;
+/// Complete addressable effect-chain bank. Chain slots cross the realtime
+/// bridge as `u8`; this is therefore a protocol boundary, not an eight-device
+/// product cap.
+pub const MAX_EFFECTS_PER_CHANNEL: usize = u8::MAX as usize + 1;
 
 /// Instrument kind for a channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

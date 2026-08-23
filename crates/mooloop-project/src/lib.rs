@@ -846,6 +846,13 @@ pub fn validate_project(project: &Project) -> Result<(), Error> {
             return Err(Error::Invalid("playlist placement is out of range".into()));
         }
     }
+    for (index, bus) in project.buses.iter().enumerate() {
+        if bus.effects.len() > mooloop_core::MAX_EFFECTS_PER_CHANNEL {
+            return Err(Error::Invalid(format!(
+                "bus {index} has more effects than the realtime address space supports"
+            )));
+        }
+    }
     validate_setups(
         &project
             .channels
@@ -910,6 +917,11 @@ fn validate_setups(setups: &[ChannelSetup]) -> Result<(), Error> {
         if channel.kind != setup.source.kind() {
             return Err(Error::Invalid(format!(
                 "channel {index} kind does not match its source"
+            )));
+        }
+        if setup.effects.len() > mooloop_core::MAX_EFFECTS_PER_CHANNEL {
+            return Err(Error::Invalid(format!(
+                "channel {index} has more effects than the realtime address space supports"
             )));
         }
         validate_source(index, &setup.source)?;
@@ -1467,6 +1479,18 @@ id = "default_kick"
             panic!("expected a song");
         };
         assert_eq!(loaded, project);
+    }
+
+    #[test]
+    fn complete_channel_and_effect_address_spaces_are_valid() {
+        let mut project = Project::default();
+        let channel = project.channels[0].clone();
+        project.channels = vec![channel; mooloop_core::MAX_CHANNELS];
+        let effect = mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Filter);
+        project.channels[0].setup.effects = vec![effect; mooloop_core::MAX_EFFECTS_PER_CHANNEL];
+        project.buses[0].effects = vec![effect; mooloop_core::MAX_EFFECTS_PER_CHANNEL];
+
+        validate_project(&project).expect("the complete realtime address space is supported");
     }
 
     #[test]

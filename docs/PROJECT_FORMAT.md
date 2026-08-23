@@ -190,7 +190,8 @@ shows the missing path so it can be relinked by loading another WAV.
 
 ## Version 1 Limits
 
-- 1 to 16 channels and 1 to 256 patterns.
+- 1 to 256 channels and 1 to 256 patterns. Channel count follows the complete
+  `u8` realtime-address space, not a small product cap.
 - Pattern lengths from 1 to 256 sixteenth-note steps.
 - Playlist starts within the 64-bar playlist canvas.
 - Tempo from 1 to 999 BPM.
