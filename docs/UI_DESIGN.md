@@ -147,13 +147,20 @@ alignment, and height contract as effects.
 - The rack scrolls horizontally. Device internals never compress when the
   application narrows.
 - Every device has a 28 px identity header with enabled state, name, kind, and
-  size. Controls begin below that header.
+  size. The host's bypass and wet/dry controls occupy the header's right edge;
+  a device face must not add a second copy. Controls unique to that device
+  begin below the header.
 - Signal direction and insertion points remain visible between devices.
 - A device with more controls than one face can hold uses stable internal
   pages. Switching pages never changes device dimensions or moves neighboring
   devices.
 - A face is a working surface, not a dump of every parameter. Each page must
   still expose a coherent musical operation rather than an arbitrary subset.
+- The shared host owns input and output metering, output trim, wet/dry,
+  bypass, presets, insertion, removal, and reorder actions. Its meter pair is
+  signal-flow evidence: left is the signal entering the hosted device and
+  right is the signal leaving after host wet/dry and trim. A generator is the
+  only exception: it has no input meter, only a generated output.
 
 The lower editor retains one channel row:
 
