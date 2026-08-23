@@ -264,7 +264,7 @@ boundary.
   levels do not jump. Mixer buses use a distinct stereo balance law that is
   unity at centre and never boosts an endpoint; adding centred routing stages
   is therefore level-neutral.
-- Each channel runs a fixed-size effect chain (up to 8 slots) after its
+- Each channel runs a full 256-slot addressable effect chain after its
   generator. Value edits, boxed structural edits, and prepared projects share
   one ordered control stream, so no edit can cross a project-generation
   boundary. Displaced nodes and whole render states return through a bounded

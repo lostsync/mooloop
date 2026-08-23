@@ -11,9 +11,11 @@ storage is then preallocated for the complete supported address space.
 
 ## Current boundaries
 
-- Channels and effect slots use complete `u8` address spaces: 256 of each.
-  These are bridge-format boundaries and must be expanded deliberately with a
-  format/protocol migration, never reduced to a UI policy cap.
+- The current channel and effect bridges use complete `u8` address spaces:
+  256 of each. These are transitional bridge-format boundaries, not UI policy
+  caps. `MIXER_PLAN.md` replaces positional channel/bus addressing with stable
+  signal-slot identities and a per-project prepared render plan, removing the
+  fixed mixer-bank model rather than normalizing it as permanent.
 - Pattern IDs likewise use a complete `u8` address space (256 patterns).
 - Event lists, block size, voice pools, sample memory, playlist span, and
   routing have explicit realtime, DSP, or file-format reasons. Any change to

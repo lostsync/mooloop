@@ -159,6 +159,9 @@ These are firm enough to build against:
   items must not receive small product caps: any realtime storage is prepared
   off the audio thread and bounded only by an explicit protocol or safety
   boundary, documented at that boundary.
+- `MIXER_PLAN.md` defines the v0.1 mixer as one dynamic signal-slot system:
+  source tracks, groups, buses, and send returns are different roles of one
+  routable, insertable strip rather than fixed banks of unrelated objects.
 - Buffer capture position is determined by where its device is inserted; it
   does not require a separate fixed channel tap point.
 
