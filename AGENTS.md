@@ -2,7 +2,9 @@
 
 Read `docs/PRODUCT.md` before making product or architecture decisions.
 `docs/CURRENT.md` records implemented behavior, `docs/ROADMAP.md` orders future
-work, and `docs/BUFFER_ENGINE.md` defines the buffer-centric hypothesis. Read
+work, `docs/FOCUS.md` names what we are working on next and what is
+deliberately deferred, and `docs/BUFFER_ENGINE.md` defines the buffer-centric
+hypothesis. Read
 `docs/UI_DESIGN.md` before changing UI layout or controls; its agent checklist
 is the acceptance contract for interface work. Current explicit user feedback
 and current purpose-built UI designs outrank all of these documents.
