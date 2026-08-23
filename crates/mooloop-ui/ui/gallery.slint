@@ -3,7 +3,8 @@ import { Theme } from "theme.slint";
 import {
     AudioOrientation, IconButton, LedIndicator, MiniKnob, MixerFader, MuteButton,
     ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl, SoloButton,
-    StereoPeakMeter, ToggleButton, ToolButton, TransportButton, ValueScale, ValueReadout
+    StereoPeakMeter, ToggleButton, ToolButton, TransportButton, ValueScale, ValueReadout,
+    ZoomScrollBar
 } from "controls.slint";
 import {
     ChannelMeter, ClipIndicator, CorrelationMeter, GainReductionMeter, MasterMeter,
@@ -42,6 +43,10 @@ export component ControlGallery inherits Window {
     in-out property <float> bipolar-value: 0.5;
     in-out property <float> mini-volume: 0.8;
     in-out property <float> mini-pan: 0;
+    in-out property <float> zoom-offset: 0.2;
+    in-out property <float> zoom-visible: 0.3;
+    in-out property <float> zoom-offset-v: 0.1;
+    in-out property <float> zoom-visible-v: 0.5;
     in-out property <float> env-attack: 0.12;
     in-out property <float> env-decay: 0.3;
     in-out property <float> env-sustain: 0.6;
@@ -582,6 +587,55 @@ export component ControlGallery inherits Window {
                         }
                     }
                     DeviceAddSlot { }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "ZOOM SCROLLBAR"; }
+                HorizontalBox {
+                    spacing: 24px;
+                    alignment: start;
+                    VerticalBox {
+                        width: 320px;
+                        spacing: 10px;
+                        ZoomScrollBar {
+                            width: 320px;
+                            offset <=> root.zoom-offset;
+                            visible-fraction <=> root.zoom-visible;
+                            scrolled(v) => { root.zoom-offset = v; }
+                            zoomed(o, f) => { root.zoom-offset = o; root.zoom-visible = f; }
+                        }
+                        Text {
+                            text: "offset " + round(root.zoom-offset * 100) + "%  visible "
+                                + round(root.zoom-visible * 100) + "%";
+                            color: Theme.text-muted;
+                            font-size: 10px;
+                        }
+                        ZoomScrollBar {
+                            width: 320px;
+                            enabled: false;
+                            offset: 0.4;
+                            visible-fraction: 0.15;
+                        }
+                    }
+                    HorizontalBox {
+                        spacing: 10px;
+                        alignment: start;
+                        ZoomScrollBar {
+                            vertical: true;
+                            height: 140px;
+                            offset <=> root.zoom-offset-v;
+                            visible-fraction <=> root.zoom-visible-v;
+                            scrolled(v) => { root.zoom-offset-v = v; }
+                            zoomed(o, f) => { root.zoom-offset-v = o; root.zoom-visible-v = f; }
+                        }
+                        Text {
+                            text: "V\n" + round(root.zoom-offset-v * 100) + "%\n"
+                                + round(root.zoom-visible-v * 100) + "%";
+                            color: Theme.text-muted;
+                            font-size: 10px;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
                 }
 
                 SectionLabel { text: "CURSOR TOOLS AND STEPPERS"; }

@@ -64,6 +64,13 @@ work session you can recall being part of, and don't stress over precision.
 - Notes: Implemented the poly synth source device end to end (DSP voice pool,
   engine integration, Slint face, and persistence).
 
+### ox-alpha — opencode
+- First seen: 2026-08-23
+- Last seen: 2026-08-23
+- Sessions: 1
+- Notes: Rescued the ZoomScrollBar widget from an abandoned WIP branch and
+  gave it gallery coverage.
+
 ### Kimi k3-256k — opencode
 - First seen: 2026-08-21
 - Last seen: 2026-08-21

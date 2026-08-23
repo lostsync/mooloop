@@ -1023,3 +1023,141 @@ export component MixerFader inherits Rectangle {
 
     Tooltip { text: @markdown("**\{root.tooltip}** \{root.value-text}"); }
 }
+
+// Scrollbar with integrated zoom grips, the Ableton/Bitwig idiom that
+// replaces separate zoom-in/zoom-out buttons. Callers work entirely in
+// normalized [0, 1] terms; the widget does its own pixel math against
+// whatever length the caller gives it.
+//
+// Only ONE `TouchArea` covers the whole track (see the drag feedback-loop
+// pitfall documented on `MixerFader`): the thumb never moves as a *direct*
+// result of being under the pointer during a drag, so `mouse-x`/`mouse-y`
+// stay a stable coordinate system for its duration. Which zone was grabbed
+// (left grip / body / right grip) is decided once at press time and latched
+// in `drag-zone`.
+export component ZoomScrollBar inherits Rectangle {
+    in property <bool> vertical: false;
+    in property <float> offset: 0;
+    in property <float> visible-fraction: 1;
+    in property <bool> enabled: true;
+    callback scrolled(float);
+    callback zoomed(float, float);
+
+    private property <length> grip-size: 6px;
+    private property <length> min-thumb-length: 18px;
+    private property <string> drag-zone: "";
+    private property <float> press-offset;
+    private property <float> press-visible-fraction;
+    private property <length> press-pos;
+
+    private property <length> track-length: root.vertical ? self.height : self.width;
+    private property <float> min-fraction: root.track-length > 0px
+        ? min(1, root.min-thumb-length / root.track-length) : 0;
+    private property <float> clamped-visible: clamp(root.visible-fraction, root.min-fraction, 1);
+    private property <length> thumb-length: max(root.track-length * root.clamped-visible, root.min-thumb-length);
+    private property <length> thumb-start: clamp(
+        root.track-length * clamp(root.offset, 0, 1), 0px, max(0px, root.track-length - root.thumb-length));
+    private property <string> hover-zone: track.has-hover
+        ? root.zone-at(root.vertical ? track.mouse-y : track.mouse-x) : "";
+    private property <string> active-zone: track.pressed ? root.drag-zone : root.hover-zone;
+
+    min-width: root.vertical ? 14px : 64px;
+    min-height: root.vertical ? 64px : 14px;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.surface;
+
+    pure function zone-at(pos: length) -> string {
+        if (pos < root.thumb-start || pos > root.thumb-start + root.thumb-length) {
+            return "jump";
+        }
+        if (pos < root.thumb-start + root.grip-size) {
+            return "left";
+        }
+        if (pos > root.thumb-start + root.thumb-length - root.grip-size) {
+            return "right";
+        }
+        return "body";
+    }
+
+    thumb := Rectangle {
+        x: root.vertical ? 0px : root.thumb-start;
+        y: root.vertical ? root.thumb-start : 0px;
+        width: root.vertical ? parent.width : root.thumb-length;
+        height: root.vertical ? root.thumb-length : parent.height;
+        border-radius: 2px;
+        border-width: 1px;
+        border-color: (root.active-zone == "left" || root.active-zone == "right" || root.active-zone == "body")
+            ? Theme.text-faint : Theme.border;
+        background: !root.enabled
+            ? Theme.surface-raised
+            : root.active-zone == "body" && track.pressed
+                ? Theme.surface-active
+                : Theme.surface-raised;
+
+        // Grip marks on the two resizable ends, so they read as grabbable
+        // rather than as decoration on a plain thumb.
+        Rectangle {
+            x: root.vertical ? 2px : 3px;
+            y: root.vertical ? 3px : 2px;
+            width: root.vertical ? parent.width - 4px : 2px;
+            height: root.vertical ? 2px : parent.height - 4px;
+            border-radius: 1px;
+            background: root.enabled
+                ? (root.active-zone == "left" ? Theme.focus : Theme.text-faint) : Theme.text-faint;
+        }
+        Rectangle {
+            x: root.vertical ? 2px : parent.width - 5px;
+            y: root.vertical ? parent.height - 5px : 2px;
+            width: root.vertical ? parent.width - 4px : 2px;
+            height: root.vertical ? 2px : parent.height - 4px;
+            border-radius: 1px;
+            background: root.enabled
+                ? (root.active-zone == "right" ? Theme.focus : Theme.text-faint) : Theme.text-faint;
+        }
+    }
+
+    track := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: !root.enabled
+            ? default
+            : (root.active-zone == "left" || root.active-zone == "right")
+                ? (root.vertical ? ns-resize : ew-resize)
+                : pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                let pos = root.vertical ? self.mouse-y : self.mouse-x;
+                root.drag-zone = root.zone-at(pos);
+                root.press-offset = root.offset;
+                root.press-visible-fraction = root.visible-fraction;
+                root.press-pos = pos;
+                if (root.drag-zone == "jump") {
+                    // Clicking outside the thumb pages it so the click point
+                    // becomes its centre, then continues as a body drag.
+                    let target-start = pos - root.thumb-length / 2;
+                    let next = clamp(target-start / root.track-length, 0, max(0, 1 - root.visible-fraction));
+                    root.scrolled(next);
+                    root.press-offset = next;
+                    root.drag-zone = "body";
+                }
+            } else if (e.kind == PointerEventKind.move && self.pressed) {
+                let pos = root.vertical ? self.mouse-y : self.mouse-x;
+                let delta = (pos - root.press-pos) / root.track-length;
+                if (root.drag-zone == "body") {
+                    root.scrolled(clamp(root.press-offset + delta, 0, max(0, 1 - root.clamped-visible)));
+                } else if (root.drag-zone == "left") {
+                    let fixed-end = root.press-offset + root.press-visible-fraction;
+                    let next-start = clamp(root.press-offset + delta, 0, fixed-end - root.min-fraction);
+                    root.zoomed(next-start, fixed-end - next-start);
+                } else if (root.drag-zone == "right") {
+                    let next-end = clamp(root.press-offset + root.press-visible-fraction + delta,
+                        root.press-offset + root.min-fraction, 1);
+                    root.zoomed(root.press-offset, next-end - root.press-offset);
+                }
+            } else if (e.kind == PointerEventKind.up) {
+                root.drag-zone = "";
+            }
+        }
+    }
+}
