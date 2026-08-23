@@ -177,12 +177,9 @@ struct ChannelState {
 }
 
 impl ChannelState {
-    fn new(
-        index: usize,
-        default_waveform: Vec<f32>,
-        default_description: String,
-        default_duration: f32,
-    ) -> Self {
+    /// A brand new sampler channel is silent and empty until a sample is
+    /// loaded or a project assigns one.
+    fn new(index: usize) -> Self {
         Self {
             name: format!("Sampler {}", index + 1),
             kind: DeviceKind::Sampler,
@@ -193,13 +190,13 @@ impl ChannelState {
             drum_params: DrumSynthParams::default(),
             mono_params: MonoSynthParams::default(),
             poly_params: PolySynthParams::default(),
-            sample_name: "default kick".into(),
-            sample_description: default_description,
-            sample_duration: default_duration,
+            sample_name: String::new(),
+            sample_description: String::new(),
+            sample_duration: 0.0,
             sample_path: None,
             sample_embedded: false,
             sample_data: None,
-            waveform: default_waveform,
+            waveform: Vec::new(),
             can_previous_sample: false,
             can_next_sample: false,
             notes: vec![Vec::new()],
@@ -857,9 +854,6 @@ enum PresetSaveTarget {
 
 impl UiState {
     fn reset_channel_source(&mut self, index: usize, kind: DeviceKind) {
-        let default_waveform = self.default_waveform.clone();
-        let default_description = self.default_sample_description.clone();
-        let default_duration = self.default_sample_duration;
         let Some(channel) = self.channels.get_mut(index) else {
             return;
         };
@@ -874,13 +868,13 @@ impl UiState {
         match kind {
             DeviceKind::Sampler => {
                 channel.params = SamplerParams::default();
-                channel.sample_name = "default kick".into();
-                channel.sample_description = default_description;
-                channel.sample_duration = default_duration;
+                channel.sample_name.clear();
+                channel.sample_description.clear();
+                channel.sample_duration = 0.0;
                 channel.sample_path = None;
                 channel.sample_embedded = false;
                 channel.sample_data = None;
-                channel.waveform = default_waveform;
+                channel.waveform.clear();
                 channel.can_previous_sample = false;
                 channel.can_next_sample = false;
             }
@@ -1053,16 +1047,31 @@ impl UiState {
                     Some(SampleReference::File { path, embedded }) => {
                         (Some(path.clone()), *embedded)
                     }
-                    Some(SampleReference::Builtin { .. }) | None => (None, false),
+                    Some(SampleReference::Builtin { .. } | SampleReference::Empty) | None => {
+                        (None, false)
+                    }
                 };
+                // Only a legacy `Builtin` reference (a project saved before
+                // the sampler stopped auto-loading a kick) substitutes the
+                // cached default sample; `Empty` means genuinely no sample.
+                let is_builtin = matches!(
+                    sampler.map(|state| &state.sample),
+                    Some(SampleReference::Builtin { .. })
+                );
                 let missing = sample_path.is_some() && sample.is_none();
                 let sample_name = if sampler.is_some() {
                     sample_path
                         .as_ref()
                         .and_then(|path| path.file_name())
                         .and_then(|name| name.to_str())
-                        .unwrap_or("default kick")
-                        .to_string()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            if is_builtin {
+                                "default kick".to_string()
+                            } else {
+                                String::new()
+                            }
+                        })
                 } else {
                     String::new()
                 };
@@ -1070,7 +1079,7 @@ impl UiState {
                     .as_ref()
                     .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))
                     .unwrap_or_else(|| {
-                        if sampler.is_some() && sample_path.is_none() {
+                        if is_builtin {
                             self.default_waveform.clone()
                         } else {
                             Vec::new()
@@ -1082,7 +1091,7 @@ impl UiState {
                     .unwrap_or_else(|| {
                         if missing {
                             "Missing sample - load a WAV to relink".into()
-                        } else if sampler.is_some() {
+                        } else if is_builtin {
                             self.default_sample_description.clone()
                         } else {
                             String::new()
@@ -1094,7 +1103,7 @@ impl UiState {
                     .unwrap_or_else(|| {
                         if missing {
                             0.0
-                        } else if sampler.is_some() {
+                        } else if is_builtin {
                             self.default_sample_duration
                         } else {
                             0.0
@@ -1741,13 +1750,17 @@ impl AppUi {
             });
         }
 
-        // --- Channel rack state: start with one channel ---
-        let default_sample = handle.sample_snapshot(0);
-        let audio_sample_rate = default_sample
-            .as_ref()
-            .map(|sample| sample.sample_rate)
-            .unwrap_or(48_000);
+        // --- Channel rack state: start with one empty channel ---
+        //
+        // `default_sample`/`default_waveform`/etc. are kept only to resolve
+        // legacy `SampleReference::Builtin` references when an old project
+        // (saved before the sampler stopped auto-loading a kick) is opened —
+        // see `apply_sample_references` and `install_project_in_ui`. They no
+        // longer seed a freshly created channel, which starts genuinely
+        // empty.
+        let audio_sample_rate = handle.sample_rate();
         window.set_audio_sample_rate(audio_sample_rate as i32);
+        let default_sample = Some(SampleData::default_kick(audio_sample_rate));
         let default_waveform = default_sample
             .as_ref()
             .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))
@@ -1760,13 +1773,7 @@ impl AppUi {
             .as_ref()
             .map(|sample| sample_duration(sample))
             .unwrap_or_default();
-        let mut first = ChannelState::new(
-            0,
-            default_waveform.clone(),
-            default_sample_description.clone(),
-            default_sample_duration,
-        );
-        first.sample_data = default_sample.clone();
+        let first = ChannelState::new(0);
         let first_steps: Vec<StepCell> = (0..DEFAULT_STEPS as usize)
             .map(|step| rack_cell(&first.notes[0], step))
             .collect();
@@ -3331,12 +3338,7 @@ impl AppUi {
                 }
                 dbg_log("UI: add channel");
                 let index = st.channels.len();
-                let mut ch = ChannelState::new(
-                    index,
-                    st.default_waveform.clone(),
-                    st.default_sample_description.clone(),
-                    st.default_sample_duration,
-                );
+                let mut ch = ChannelState::new(index);
                 ch.notes.resize_with(st.pattern_lengths.len(), Vec::new);
                 let cells: Vec<StepCell> = (0..st.pattern_lengths[st.current_pattern])
                     .map(|step| rack_cell(&ch.notes[st.current_pattern], step))
@@ -5101,7 +5103,7 @@ fn apply_sample_references(
 ) {
     for (channel, sample) in channels.iter_mut().zip(references) {
         match sample {
-            Some(SampleReference::Builtin { .. }) => {
+            Some(SampleReference::Builtin { .. } | SampleReference::Empty) => {
                 channel.sample_path = None;
                 channel.sample_embedded = false;
             }
@@ -5247,7 +5249,9 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
     let mut samples = Vec::with_capacity(sample_references.len());
     for (channel, reference) in sample_references.into_iter().enumerate() {
         match reference {
-            None | Some(SampleReference::Builtin { .. }) => samples.push(None),
+            None | Some(SampleReference::Builtin { .. } | SampleReference::Empty) => {
+                samples.push(None)
+            }
             Some(SampleReference::File { path, .. }) if path.is_file() => match decode_wav(&path) {
                 Ok(sample) => samples.push(Some(sample)),
                 Err(error) => {
@@ -5595,7 +5599,7 @@ mod tests {
 
     #[test]
     fn channel_assigns_stable_note_ids() {
-        let mut channel = ChannelState::new(0, Vec::new(), String::new(), 0.0);
+        let mut channel = ChannelState::new(0);
         let first = channel.create_note(0, 0, DEFAULT_NOTE_DURATION_TICKS, 60);
         let second = channel.create_note(0, TICKS_PER_64TH, DEFAULT_NOTE_DURATION_TICKS, 62);
         assert_ne!(first.id, second.id);
@@ -5676,7 +5680,7 @@ mod tests {
 
     #[test]
     fn saved_bundle_sample_paths_replace_external_paths() {
-        let mut channel = ChannelState::new(0, Vec::new(), String::new(), 0.0);
+        let mut channel = ChannelState::new(0);
         channel.sample_path = Some(PathBuf::from("/samples/source.wav"));
 
         apply_sample_references(

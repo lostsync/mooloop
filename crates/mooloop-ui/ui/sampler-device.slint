@@ -138,7 +138,11 @@ export component SamplerDeviceFace inherits Rectangle {
                 }
                 VerticalLayout {
                     min-width: 130px; horizontal-stretch: 1; spacing: 0px;
-                    Text { text: root.sample-name; color: Theme.text; font-size: 10px; overflow: elide; }
+                    Text {
+                        text: root.sample-name == "" ? "No sample loaded" : root.sample-name;
+                        color: root.sample-name == "" ? Theme.text-faint : Theme.text;
+                        font-size: 10px; overflow: elide;
+                    }
                     Text { text: root.sample-description; color: Theme.text-faint; font-size: 8px; overflow: elide; }
                 }
                 StepperField {

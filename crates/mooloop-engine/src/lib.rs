@@ -118,8 +118,8 @@ pub struct Engine {
 impl Engine {
     /// Open the JACK client (works against pipewire-jack transparently) and
     /// start the realtime thread. All channel devices and the pattern bank are
-    /// pre-allocated to pool size; every channel starts with a synthesised
-    /// default kick so the app is audible before the user loads a WAV.
+    /// pre-allocated to pool size; every channel starts with an empty sample
+    /// slot until the user loads a WAV or a project assigns one.
     pub fn new() -> Result<(Engine, EngineHandle), Error> {
         let (client, _status) = Client::new(CLIENT_NAME, ClientOptions::NO_START_SERVER)
             .map_err(|e| Error::ClientOpen(e.to_string()))?;
@@ -139,11 +139,11 @@ impl Engine {
             .register_port("out_r", AudioOut::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
 
-        // Every channel's slot starts with the same shared default kick.
-        let kick = SampleData::default_kick(sample_rate);
+        // Every channel's slot starts empty; a channel is silent until the
+        // user loads a sample or a project assigns one.
         let sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
             (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::from(Some(kick.clone()))))
+                .map(|_| Arc::new(ArcSwapOption::from(None)))
                 .collect(),
         );
 

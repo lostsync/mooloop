@@ -1133,7 +1133,18 @@ mod tests {
         assert!(render.strips[0].effects.nodes[MAX_EFFECTS_PER_CHANNEL - 1].is_some());
     }
 
-    fn synth_project(channel: ProjectChannel) -> Project {
+    /// Builds a project around `channel` with one triggering note. A fresh
+    /// sampler channel has no sample loaded (and would render silent), so
+    /// these generic routing/mixing/metering tests — which need *some*
+    /// audible source, not specifically sampler behavior — point a sampler
+    /// channel at the legacy builtin kick the same way an old saved project
+    /// would.
+    fn synth_project(mut channel: ProjectChannel) -> Project {
+        if let Some(sampler) = channel.setup.sampler_state_mut() {
+            sampler.sample = mooloop_core::SampleReference::Builtin {
+                id: "default_kick".into(),
+            };
+        }
         let mut project = Project {
             channels: vec![channel],
             ..Project::default()

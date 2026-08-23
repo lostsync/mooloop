@@ -19,15 +19,17 @@ const fn default_swing_percent() -> u8 {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SampleReference {
+    /// No sample assigned. The default for a freshly created channel.
+    Empty,
+    /// Kept for backward compatibility: projects saved before the sampler
+    /// stopped auto-loading a kick may still reference it by id.
     Builtin { id: String },
     File { path: PathBuf, embedded: bool },
 }
 
 impl Default for SampleReference {
     fn default() -> Self {
-        Self::Builtin {
-            id: "default_kick".into(),
-        }
+        Self::Empty
     }
 }
 

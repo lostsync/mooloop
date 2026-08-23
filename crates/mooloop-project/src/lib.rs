@@ -1444,7 +1444,18 @@ id = "default_kick"
         let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
             panic!("expected a song");
         };
-        assert_eq!(loaded, Project::default());
+        // The manifest explicitly names the legacy builtin-kick sample
+        // reference, which the loader must still honor even though a fresh
+        // project now defaults to no sample at all.
+        let mut expected = Project::default();
+        expected.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::Builtin {
+            id: "default_kick".into(),
+        };
+        assert_eq!(loaded, expected);
         assert_eq!(loaded.buses.len(), mooloop_core::MAX_BUSES);
         assert_eq!(
             loaded.channels[0].setup.channel.bus,
