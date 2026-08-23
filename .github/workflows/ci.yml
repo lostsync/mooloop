@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # .cargo/config.toml in this repo pins `-fuse-ld=mold` for the maintainer's
+  # own machine. mold isn't installed on CI runners, so clear RUSTFLAGS here
+  # rather than editing that file — an explicit RUSTFLAGS env var takes
+  # precedence over the config file's target.*.rustflags.
+  RUSTFLAGS: ""
+  # Bypass the maintainer-local absolute target directory in .cargo/config.toml.
+  CARGO_TARGET_DIR: target
+
+jobs:
+  build:
+    name: Check, clippy, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libjack-jackd2-dev \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libxkbcommon-dev \
+            libxcb1-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libwayland-dev \
+            libfontconfig1-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace

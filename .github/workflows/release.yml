@@ -1,0 +1,182 @@
+name: Release
+
+# Builds Linux packages (.deb, .rpm, AppImage) and attaches them to a GitHub
+# Release. Fires on a `v*.*.*` tag push, or manually via workflow_dispatch
+# for a dry run (no tag needed; the publish job still requires a real tag).
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # See ci.yml: this repo's committed .cargo/config.toml pins a linker and
+  # target-dir from the maintainer's own machine. Clear RUSTFLAGS so CI uses
+  # the default linker instead.
+  RUSTFLAGS: ""
+  # Keep package artifacts in the runner workspace, not the maintainer's path.
+  CARGO_TARGET_DIR: target
+
+jobs:
+  package-deb:
+    name: Build .deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libjack-jackd2-dev \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libxkbcommon-dev \
+            libxcb1-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libwayland-dev \
+            libfontconfig1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: deb
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build release binary
+        run: cargo build --release -p mooloop-app
+
+      - name: Package .deb
+        run: cargo deb -p mooloop-app --no-build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mooloop-deb
+          path: target/debian/*.deb
+
+  package-rpm:
+    name: Build .rpm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libjack-jackd2-dev \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libxkbcommon-dev \
+            libxcb1-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libwayland-dev \
+            libfontconfig1-dev \
+            rpm
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rpm
+
+      - name: Install cargo-generate-rpm
+        run: cargo install cargo-generate-rpm --locked
+
+      - name: Build release binary
+        run: cargo build --release -p mooloop-app
+
+      - name: Package .rpm
+        run: cargo generate-rpm -p crates/mooloop-app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mooloop-rpm
+          path: target/generate-rpm/*.rpm
+
+  package-appimage:
+    name: Build AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libjack-jackd2-dev \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libxkbcommon-dev \
+            libxcb1-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libwayland-dev \
+            libfontconfig1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: appimage
+
+      - name: Build release binary
+        run: cargo build --release -p mooloop-app
+
+      - name: Fetch linuxdeploy
+        run: |
+          curl -fsSL -o linuxdeploy.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy.AppImage
+
+      - name: Build AppImage
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp target/release/mooloop AppDir/usr/bin/
+          ./linuxdeploy.AppImage \
+            --appimage-extract-and-run \
+            --appdir AppDir \
+            --executable target/release/mooloop \
+            --desktop-file packaging/mooloop.desktop \
+            --icon-file packaging/mooloop.png \
+            --output appimage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mooloop-appimage
+          path: Mooloop-*.AppImage
+
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [package-deb, package-rpm, package-appimage]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

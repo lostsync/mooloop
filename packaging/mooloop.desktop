@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mooloop
+GenericName=Pattern Instrument
+Comment=Tracker-inspired pattern instrument for JACK/PipeWire
+Exec=mooloop
+Icon=mooloop
+Terminal=false
+Categories=Audio;AudioVideo;Music;

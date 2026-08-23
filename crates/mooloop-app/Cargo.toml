@@ -1,5 +1,6 @@
 [package]
 name = "mooloop-app"
+description = "Experimental, Linux-native, tracker-inspired pattern instrument"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,3 +14,32 @@ path = "src/main.rs"
 mooloop-core = { workspace = true }
 mooloop-engine = { workspace = true }
 mooloop-ui = { workspace = true }
+
+# Packaged by .github/workflows/release.yml via `cargo deb`. Shared-library
+# dependencies (JACK, GL, X11/Wayland, fontconfig, ...) are auto-detected
+# with $auto rather than hand-listed.
+[package.metadata.deb]
+maintainer = "adam <CHANGE-ME@example.com>"
+copyright = "2026, adam"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Mooloop is an experimental, Linux-native, tracker-inspired pattern \
+instrument. It combines a channel rack, piano roll, playlist, sampler, and \
+small synthesis engines, and talks directly to JACK or PipeWire's JACK \
+compatibility layer."""
+section = "sound"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/mooloop", "usr/bin/", "755"],
+    ["../../packaging/mooloop.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/mooloop.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+]
+
+# Packaged by .github/workflows/release.yml via `cargo generate-rpm`.
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/mooloop", dest = "/usr/bin/mooloop", mode = "755" },
+    { source = "../../packaging/mooloop.desktop", dest = "/usr/share/applications/mooloop.desktop", mode = "644" },
+    { source = "../../packaging/mooloop.png", dest = "/usr/share/icons/hicolor/256x256/apps/mooloop.png", mode = "644" },
+]
