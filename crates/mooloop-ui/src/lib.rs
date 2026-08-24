@@ -532,6 +532,17 @@ fn sync_command_availability(window: &MainWindow, commands: &CommandState) {
     window.set_channel_clipboard_available(commands.channel_clipboard.is_some());
 }
 
+/// `SegmentedMeter` only changes pixels when its lit-segment count changes.
+/// Keeping the raw dB value in the model is useful at that boundary, but
+/// rewriting it for an in-between ballistics update just invalidates Slint.
+fn meter_segments(db: f32, segments: u32) -> u32 {
+    (((db - METER_FLOOR_DB) / -METER_FLOOR_DB).clamp(0.0, 1.0) * segments as f32).ceil() as u32
+}
+
+fn meter_display_changed(previous: f32, next: f32, segments: u32) -> bool {
+    meter_segments(previous, segments) != meter_segments(next, segments)
+}
+
 fn record_project_history(
     commands: &Rc<RefCell<CommandState>>,
     before: ProjectSnapshot,
@@ -4916,6 +4927,8 @@ impl AppUi {
         let mut bus_meters: Vec<(MeterBallistics, MeterBallistics)> =
             (0..MAX_BUSES).map(|_| Default::default()).collect();
         let mut last_meter_update = std::time::Instant::now();
+        let autodrive_verbose = std::env::var_os("MOOLOOP_AUTODRIVE_VERBOSE").is_some();
+        let mut playhead_was_nonempty = false;
         pump.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
@@ -5196,6 +5209,7 @@ impl AppUi {
                     }
                 }
                 let mut forwarded = 0usize;
+                let mut document_title_needs_refresh = false;
                 while let Ok(message) = pending_rx.try_recv() {
                     match message {
                         PendingEngineMessage::Command(cmd) => {
@@ -5204,13 +5218,11 @@ impl AppUi {
                                 EngineCommand::Play | EngineCommand::Pause | EngineCommand::Stop
                             ) {
                                 let mut state = st.borrow_mut();
+                                document_title_needs_refresh |= !state.dirty;
                                 state.dirty = true;
                                 state.revision = state.revision.wrapping_add(1);
-                                if let Some(window) = weak.upgrade() {
-                                    state.update_document_title(&window);
-                                }
                             }
-                            if std::env::var("MOOLOOP_AUTODRIVE_VERBOSE").is_ok() {
+                            if autodrive_verbose {
                                 eprintln!("autodrive cmd: {cmd:?}");
                             }
                             handle.send(cmd);
@@ -5220,11 +5232,9 @@ impl AppUi {
                             // Any structural change is an unsaved edit.
                             {
                                 let mut state = st.borrow_mut();
+                                document_title_needs_refresh |= !state.dirty;
                                 state.dirty = true;
                                 state.revision = state.revision.wrapping_add(1);
-                                if let Some(window) = weak.upgrade() {
-                                    state.update_document_title(&window);
-                                }
                             }
                             handle.send_structural(cmd);
                         }
@@ -5355,6 +5365,10 @@ impl AppUi {
                         }
                     }
                 }
+                if document_title_needs_refresh {
+                    let Some(window) = weak.upgrade() else { return };
+                    st.borrow().update_document_title(&window);
+                }
                 let Some(w) = weak.upgrade() else { return };
                 let mut saw_nonzero = false;
                 let mut block_peak_l = 0.0f32;
@@ -5419,6 +5433,7 @@ impl AppUi {
                 // a strip does not open showing a peak from minutes ago; only
                 // write the models when something is actually displaying them.
                 let showing_mixer = w.get_mixer_visible();
+                let showing_device_rack = w.get_editor_page() == 0;
                 let editing_bus = w.get_editing_bus();
                 let edited_bus = w.get_editing_bus_index().max(0) as usize;
                 let selected_channel = st.borrow().selected;
@@ -5429,9 +5444,13 @@ impl AppUi {
                     if showing_mixer {
                         let strips = st.borrow();
                         if let Some(mut row) = strips.mixer_strip_model.row_data(bus) {
-                            row.left_db = left.level_db;
-                            row.right_db = right.level_db;
-                            strips.mixer_strip_model.set_row_data(bus, row);
+                            if meter_display_changed(row.left_db, left.level_db, 14)
+                                || meter_display_changed(row.right_db, right.level_db, 14)
+                            {
+                                row.left_db = left.level_db;
+                                row.right_db = right.level_db;
+                                strips.mixer_strip_model.set_row_data(bus, row);
+                            }
                         }
                     }
                     if editing_bus && bus == edited_bus {
@@ -5447,33 +5466,44 @@ impl AppUi {
                 } else {
                     selected_channel
                 };
-                if !editing_bus {
-                    let ((_source_in_l, _source_in_r), (source_out_l, source_out_r)) =
-                        handle.take_device_peak(device_target, 0);
+                let ((bus_or_source_in_l, bus_or_source_in_r), (source_out_l, source_out_r)) =
+                    handle.take_device_peak(device_target, 0);
+                if showing_device_rack && !editing_bus {
                     w.set_source_output_left_db(linear_to_db(source_out_l));
                     w.set_source_output_right_db(linear_to_db(source_out_r));
-                } else {
+                } else if showing_device_rack {
                     // A bus has no generator; its head's input meter reads
                     // what the bus summed this block, before its chain.
-                    let ((bus_in_l, bus_in_r), _) = handle.take_device_peak(device_target, 0);
-                    w.set_editing_bus_input_left_db(linear_to_db(bus_in_l));
-                    w.set_editing_bus_input_right_db(linear_to_db(bus_in_r));
+                    w.set_editing_bus_input_left_db(linear_to_db(bus_or_source_in_l));
+                    w.set_editing_bus_input_right_db(linear_to_db(bus_or_source_in_r));
                 }
                 {
                     let state = st.borrow();
                     for slot in 0..state.effect_slot_model.row_count() {
                         let ((in_l, in_r), (out_l, out_r)) =
                             handle.take_device_peak(device_target, slot + 1);
-                        if let Some(mut row) = state.effect_slot_model.row_data(slot) {
-                            row.input_left_db = linear_to_db(in_l);
-                            row.input_right_db = linear_to_db(in_r);
-                            row.output_left_db = linear_to_db(out_l);
-                            row.output_right_db = linear_to_db(out_r);
-                            if row.eq_analyzer_enabled {
-                                let spectrum = handle.effect_spectrum(state.effect_target, slot as u8);
-                                row.eq_spectrum_data = spectrum.as_slice().into();
+                        if showing_device_rack {
+                            if let Some(mut row) = state.effect_slot_model.row_data(slot) {
+                                let input_left_db = linear_to_db(in_l);
+                                let input_right_db = linear_to_db(in_r);
+                                let output_left_db = linear_to_db(out_l);
+                                let output_right_db = linear_to_db(out_r);
+                                let meter_changed = meter_display_changed(row.input_left_db, input_left_db, 12)
+                                    || meter_display_changed(row.input_right_db, input_right_db, 12)
+                                    || meter_display_changed(row.output_left_db, output_left_db, 12)
+                                    || meter_display_changed(row.output_right_db, output_right_db, 12);
+                                if row.eq_analyzer_enabled {
+                                    let spectrum = handle.effect_spectrum(state.effect_target, slot as u8);
+                                    row.eq_spectrum_data = spectrum.as_slice().into();
+                                }
+                                if meter_changed || row.eq_analyzer_enabled {
+                                    row.input_left_db = input_left_db;
+                                    row.input_right_db = input_right_db;
+                                    row.output_left_db = output_left_db;
+                                    row.output_right_db = output_right_db;
+                                    state.effect_slot_model.set_row_data(slot, row);
+                                }
                             }
-                            state.effect_slot_model.set_row_data(slot, row);
                         }
                     }
                 }
@@ -5486,12 +5516,17 @@ impl AppUi {
                         .channels
                         .get(selected_channel)
                         .is_some_and(|channel| channel.kind == DeviceKind::Sampler);
-                    let positions = if !editing_bus && is_sampler {
-                        handle.playhead_positions(selected_channel)
-                    } else {
-                        Vec::new()
-                    };
-                    state.playhead_model.set_vec(positions);
+                    if showing_device_rack && !editing_bus && is_sampler {
+                        let positions = handle.playhead_positions(selected_channel);
+                        let has_positions = !positions.is_empty();
+                        if has_positions || playhead_was_nonempty {
+                            state.playhead_model.set_vec(positions);
+                        }
+                        playhead_was_nonempty = has_positions;
+                    } else if playhead_was_nonempty {
+                        playhead_was_nonempty = false;
+                        state.playhead_model.set_vec(Vec::new());
+                    }
                 }
 
                 let (mp, sp, cf) = stats_in.get();
