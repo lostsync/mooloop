@@ -30,6 +30,7 @@ import { CompressorDeviceFace } from "compressor-device.slint";
 import { LimiterDeviceFace } from "limiter-device.slint";
 import { EqDeviceFace } from "eq-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
+import { ModulationDeviceFace } from "modulation-device.slint";
 import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
@@ -105,7 +106,7 @@ struct PlaylistClip {
 // kind costs a device face and nothing here.
 struct EffectSlotRow {
     // Matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay,
-    // 4=Gate, 5=Compressor, 6=Limiter, 7=EQ, 8=Reverb.
+    // 4=Gate, 5=Compressor, 6=Limiter, 7=EQ, 8=Reverb, 9=Mod.
     kind: int,
     // Rack units this device's face occupies. Devices with more working
     // controls get more width rather than compressing their controls.
@@ -2173,6 +2174,32 @@ export component MainWindow inherits Window {
                                                 capture-y-changed(v) => { root.effect-param-changed(index, 7, v); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
+                                            if slot.kind == 9 : ModulationDeviceFace {
+                                                x: DeviceRackMetrics.rail-width;
+                                                y: 0px;
+                                                width: parent.content-width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                mode: round(slot.p0 * 4);
+                                                rate: slot.p1;
+                                                depth: slot.p2;
+                                                character: slot.p3;
+                                                feedback: slot.p4;
+                                                spread: slot.p5;
+                                                tone: slot.p6;
+                                                stages: slot.p7;
+                                                mode-changed(i) => { root.effect-param-changed(index, 0, i * 1.0 / 4.0); }
+                                                rate-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                depth-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                character-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                feedback-changed(v) => { root.effect-param-changed(index, 4, v); }
+                                                spread-changed(v) => { root.effect-param-changed(index, 5, v); }
+                                                tone-changed(v) => { root.effect-param-changed(index, 6, v); }
+                                                stages-changed(v) => { root.effect-param-changed(index, 7, v); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
                                         }
                                         DeviceJoin { x: parent.face-width + DeviceRackMetrics.rail-width * 2; y: 0px; }
                                     }
@@ -2191,7 +2218,7 @@ export component MainWindow inherits Window {
                                             x: 0px;
                                             y: 44px;
                                             width: 148px;
-                                            height: 224px;
+                                            height: 248px;
                                             close-policy: close-on-click;
                                             Rectangle {
                                                 background: Theme.surface;
@@ -2210,6 +2237,7 @@ export component MainWindow inherits Window {
                                                     ToolButton { text: "Limiter"; tooltip: "Insert a limiter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(6, root.insert-effect-before); } }
                                                     ToolButton { text: "EQ"; tooltip: "Insert a parametric equalizer"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(7, root.insert-effect-before); } }
                                                     ToolButton { text: "Reverb"; tooltip: "Insert a generated-room convolution reverb"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(8, root.insert-effect-before); } }
+                                                    ToolButton { text: "Mod"; tooltip: "Insert chorus, flange, phaser, ensemble, or ADT"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(9, root.insert-effect-before); } }
                                                 }
                                             }
                                         }

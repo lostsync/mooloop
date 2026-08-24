@@ -180,7 +180,12 @@ Inlets and outlets exist in the data model without being drawn as wires.
 4. ~~**Dynamics: gate, compressor, limiter** — one shared envelope
    detector.~~ Done, sharing `mooloop_dsp::dynamics`.
 5. ~~**EQ** — cheap; `Svf` already exists.~~ Done.
-6. **Chorus and phaser** — need the modulation rack to exist first.
+6. ~~**One modulation processor**~~ Done as a mode-selectable 3U insert:
+   chorus, flange, phaser, ensemble, and ADT share stable parameter IDs and
+   the ordinary effect event path. This is deliberately separate from the
+   forthcoming modulator rack: its internal LFO is a sound algorithm, not a
+   general control source. The future rack can modulate its descriptors like
+   any other effect.
 7. ~~**Reverb** — last; hardest to make good rather than merely present.~~ Done
    as a generated-room convolution IR player. `CONVOLUTION_REVERB.md` records
    its realtime/resource contract and measured-IR import boundary.

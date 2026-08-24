@@ -44,7 +44,7 @@ pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;
 pub use effects::{
     build_effect, generate_room_ir, BitcrushEffect, CompressorEffect, DelayEffect, DriveEffect,
-    FilterEffect, GateEffect, LimiterEffect, PreparedIr, ReverbEffect, StereoIr,
+    FilterEffect, GateEffect, LimiterEffect, ModulationEffect, PreparedIr, ReverbEffect, StereoIr,
     CONVOLUTION_BLOCK_FRAMES,
 };
 pub use event::{Event, EventList, TimedEvent};

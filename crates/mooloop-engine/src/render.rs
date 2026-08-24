@@ -1472,6 +1472,10 @@ mod tests {
                 mooloop_core::EffectKind::Eq => {
                     params.set(mooloop_core::EQ_PARAM_GAIN_DB, 18.0);
                 }
+                mooloop_core::EffectKind::Modulation => {
+                    params.set(mooloop_core::MODULATION_PARAM_MODE, 2.0);
+                    params.set(mooloop_core::MODULATION_PARAM_DEPTH, 0.85);
+                }
                 mooloop_core::EffectKind::Filter => {
                     params.set(mooloop_core::FILTER_PARAM_CUTOFF_HZ, 100.0);
                 }

@@ -12,6 +12,7 @@
 #[serde(rename_all = "snake_case")]
 pub enum EffectKind {
     Eq,
+    Modulation,
     Filter,
     Drive,
     Bitcrush,
@@ -24,8 +25,9 @@ pub enum EffectKind {
 
 impl EffectKind {
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 9] = [
+    pub const ALL: [EffectKind; 10] = [
         EffectKind::Eq,
+        EffectKind::Modulation,
         EffectKind::Filter,
         EffectKind::Drive,
         EffectKind::Bitcrush,
@@ -40,6 +42,7 @@ impl EffectKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Eq => "EQ",
+            Self::Modulation => "Mod",
             Self::Filter => "Filter",
             Self::Drive => "Drive",
             Self::Bitcrush => "Bitcrush",
@@ -56,6 +59,7 @@ impl EffectKind {
     pub fn descriptors(self) -> &'static [ParamDescriptor] {
         match self {
             Self::Eq => &EQ_DESCRIPTORS,
+            Self::Modulation => &MODULATION_DESCRIPTORS,
             Self::Filter => &FILTER_DESCRIPTORS,
             Self::Drive => &DRIVE_DESCRIPTORS,
             Self::Bitcrush => &BITCRUSH_DESCRIPTORS,
@@ -76,6 +80,7 @@ impl EffectKind {
     pub fn default_params(self) -> EffectParams {
         match self {
             Self::Eq => EffectParams::Eq(EqParams::default()),
+            Self::Modulation => EffectParams::Modulation(ModulationParams::default()),
             Self::Filter => EffectParams::Filter(FilterParams::default()),
             Self::Drive => EffectParams::Drive(DriveParams::default()),
             Self::Bitcrush => EffectParams::Bitcrush(BitcrushParams::default()),
@@ -869,6 +874,94 @@ impl Default for DelayParams {
     }
 }
 
+// --- Modulation ------------------------------------------------------------
+
+/// `Event::ParamValue` ids for [`ModulationParams`].
+pub const MODULATION_PARAM_MODE: u32 = 0;
+pub const MODULATION_PARAM_RATE_HZ: u32 = 1;
+pub const MODULATION_PARAM_DEPTH: u32 = 2;
+pub const MODULATION_PARAM_COLOR: u32 = 3;
+pub const MODULATION_PARAM_FEEDBACK: u32 = 4;
+pub const MODULATION_PARAM_SPREAD: u32 = 5;
+pub const MODULATION_PARAM_TONE: u32 = 6;
+pub const MODULATION_PARAM_STAGES: u32 = 7;
+
+static MODULATION_DESCRIPTORS: [ParamDescriptor; 8] = [
+    ParamDescriptor { id: MODULATION_PARAM_MODE, name: "Mode", unit: "", min: 0.0, max: 4.0, curve: ParamCurve::Stepped(5), default: 0.0 },
+    ParamDescriptor { id: MODULATION_PARAM_RATE_HZ, name: "Rate", unit: "Hz", min: 0.02, max: 12.0, curve: ParamCurve::Exponential, default: 0.35 },
+    ParamDescriptor { id: MODULATION_PARAM_DEPTH, name: "Depth", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Linear, default: 0.45 },
+    ParamDescriptor { id: MODULATION_PARAM_COLOR, name: "Color", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Linear, default: 0.45 },
+    ParamDescriptor { id: MODULATION_PARAM_FEEDBACK, name: "Feedback", unit: "", min: -0.92, max: 0.92, curve: ParamCurve::Linear, default: 0.0 },
+    ParamDescriptor { id: MODULATION_PARAM_SPREAD, name: "Spread", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Linear, default: 0.65 },
+    ParamDescriptor { id: MODULATION_PARAM_TONE, name: "Tone", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Linear, default: 0.75 },
+    ParamDescriptor { id: MODULATION_PARAM_STAGES, name: "Stages", unit: "", min: 4.0, max: 12.0, curve: ParamCurve::Stepped(5), default: 8.0 },
+];
+
+/// Algorithms exposed by the unified modulation processor. The first four
+/// share a modulated delay line; phaser uses a compact all-pass cascade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModulationMode {
+    #[default]
+    Chorus,
+    Flange,
+    Phaser,
+    Ensemble,
+    Adt,
+}
+
+impl ModulationMode {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Flange,
+            2 => Self::Phaser,
+            3 => Self::Ensemble,
+            4 => Self::Adt,
+            _ => Self::Chorus,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Chorus => 0,
+            Self::Flange => 1,
+            Self::Phaser => 2,
+            Self::Ensemble => 3,
+            Self::Adt => 4,
+        }
+    }
+}
+
+/// Parameters for the shared modulation processor. `color` deliberately has
+/// one stable wire identity while each algorithm names it musically on the
+/// face (delay, sweep centre, or tape age).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModulationParams {
+    pub mode: ModulationMode,
+    pub rate_hz: f32,
+    pub depth: f32,
+    pub color: f32,
+    pub feedback: f32,
+    pub spread: f32,
+    pub tone: f32,
+    pub stages: u8,
+}
+
+impl Default for ModulationParams {
+    fn default() -> Self {
+        Self {
+            mode: ModulationMode::default(),
+            rate_hz: 0.35,
+            depth: 0.45,
+            color: 0.45,
+            feedback: 0.0,
+            spread: 0.65,
+            tone: 0.75,
+            stages: 8,
+        }
+    }
+}
+
 // --- Reverb ----------------------------------------------------------------
 
 /// `Event::ParamValue` ids for [`ReverbParams`].
@@ -1317,6 +1410,7 @@ impl Default for LimiterParams {
 #[serde(tag = "type", content = "state", rename_all = "snake_case")]
 pub enum EffectParams {
     Eq(EqParams),
+    Modulation(ModulationParams),
     Filter(FilterParams),
     Drive(DriveParams),
     Bitcrush(BitcrushParams),
@@ -1331,6 +1425,7 @@ impl EffectParams {
     pub fn kind(&self) -> EffectKind {
         match self {
             Self::Eq(_) => EffectKind::Eq,
+            Self::Modulation(_) => EffectKind::Modulation,
             Self::Filter(_) => EffectKind::Filter,
             Self::Drive(_) => EffectKind::Drive,
             Self::Bitcrush(_) => EffectKind::Bitcrush,
@@ -1352,6 +1447,13 @@ impl EffectParams {
     pub fn eq(&self) -> Option<&EqParams> {
         match self {
             Self::Eq(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn modulation(&self) -> Option<&ModulationParams> {
+        match self {
+            Self::Modulation(p) => Some(p),
             _ => None,
         }
     }
@@ -1442,6 +1544,17 @@ impl EffectParams {
                     EqParams::HIGH_PASS_TARGET => p.high_pass.slope.to_index() as f32,
                     _ => p.low_pass.slope.to_index() as f32,
                 }),
+                _ => None,
+            },
+            Self::Modulation(p) => match id {
+                MODULATION_PARAM_MODE => Some(p.mode.to_index() as f32),
+                MODULATION_PARAM_RATE_HZ => Some(p.rate_hz),
+                MODULATION_PARAM_DEPTH => Some(p.depth),
+                MODULATION_PARAM_COLOR => Some(p.color),
+                MODULATION_PARAM_FEEDBACK => Some(p.feedback),
+                MODULATION_PARAM_SPREAD => Some(p.spread),
+                MODULATION_PARAM_TONE => Some(p.tone),
+                MODULATION_PARAM_STAGES => Some(f32::from(p.stages)),
                 _ => None,
             },
             Self::Filter(p) => match id {
@@ -1551,6 +1664,17 @@ impl EffectParams {
                     }
                     _ => p.low_pass.slope = EqSlope::from_index(value.round() as i32),
                 },
+                _ => return None,
+            },
+            Self::Modulation(p) => match id {
+                MODULATION_PARAM_MODE => p.mode = ModulationMode::from_index(value.round() as i32),
+                MODULATION_PARAM_RATE_HZ => p.rate_hz = value,
+                MODULATION_PARAM_DEPTH => p.depth = value,
+                MODULATION_PARAM_COLOR => p.color = value,
+                MODULATION_PARAM_FEEDBACK => p.feedback = value,
+                MODULATION_PARAM_SPREAD => p.spread = value,
+                MODULATION_PARAM_TONE => p.tone = value,
+                MODULATION_PARAM_STAGES => p.stages = value.round() as u8,
                 _ => return None,
             },
             Self::Filter(p) => match id {
@@ -1687,11 +1811,13 @@ impl EffectSlotState {
     /// A slot holding this kind's defaults.
     pub fn of_kind(kind: EffectKind) -> Self {
         let mut slot = Self::new(kind.default_params());
-        // Unlike filter/drive, an IR contains only the room return. Start at
-        // a useful send-like balance rather than replacing the source with
-        // ambience when this device is added to an insert chain.
+        // Return-only processors need an intentional blend when added: an IR
+        // should begin send-like, while a chorus needs enough dry signal to
+        // preserve its combing and stereo movement.
         if kind == EffectKind::Reverb {
             slot.wet_dry = 0.35;
+        } else if kind == EffectKind::Modulation {
+            slot.wet_dry = 0.5;
         }
         slot
     }
@@ -1702,6 +1828,10 @@ impl EffectSlotState {
 
     pub fn drive(params: DriveParams) -> Self {
         Self::new(EffectParams::Drive(params))
+    }
+
+    pub fn modulation(params: ModulationParams) -> Self {
+        Self::new(EffectParams::Modulation(params))
     }
 
     pub fn bitcrush(params: BitcrushParams) -> Self {

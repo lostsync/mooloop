@@ -631,6 +631,7 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Limiter => 6,
         EffectKind::Eq => 7,
         EffectKind::Reverb => 8,
+        EffectKind::Modulation => 9,
     }
 }
 
@@ -641,7 +642,7 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
     match kind {
         EffectKind::Filter | EffectKind::Drive | EffectKind::Bitcrush | EffectKind::Limiter => 1,
         EffectKind::Delay | EffectKind::Gate | EffectKind::Compressor => 2,
-        EffectKind::Eq | EffectKind::Reverb => 3,
+        EffectKind::Eq | EffectKind::Reverb | EffectKind::Modulation => 3,
     }
 }
 

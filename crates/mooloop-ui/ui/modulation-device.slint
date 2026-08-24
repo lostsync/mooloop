@@ -1,0 +1,101 @@
+import { Theme } from "theme.slint";
+import { ParameterKnob, SegmentedControl } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+
+// Parameter-derived LFO traces. This is a compact working display rather
+// than a simulated oscilloscope: depth, spread, and mode visibly change it.
+component ModulationDisplay inherits Rectangle {
+    in property <int> mode;
+    in property <float> depth;
+    in property <float> spread;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    Rectangle { x: 0px; y: parent.height * 0.5; width: parent.width; height: 1px; background: Theme.border; }
+    for point in 52 : Rectangle {
+        private property <float> x_unit: point * 1.0 / 51.0;
+        private property <float> trace_phase: self.x_unit * 360 + (root.mode == 2 ? 45 : 0);
+        x: self.x_unit * parent.width;
+        y: parent.height * (0.5 - sin(self.trace_phase * 1deg) * (0.12 + root.depth * 0.31));
+        width: max(1px, parent.width / 50); height: 2px;
+        background: Theme.accent;
+    }
+    for point in 52 : Rectangle {
+        private property <float> x_unit: point * 1.0 / 51.0;
+        private property <float> trace_phase: self.x_unit * 360 + root.spread * 90;
+        x: self.x_unit * parent.width;
+        y: parent.height * (0.5 - sin(self.trace_phase * 1deg) * (0.12 + root.depth * 0.31));
+        width: max(1px, parent.width / 50); height: 2px;
+        background: Theme.focus.with-alpha(0.7);
+    }
+}
+
+export component ModulationDeviceFace inherits EffectDeviceShell {
+    name: "Mod";
+    kind: "FX / 3U";
+    in-out property <int> mode;
+    in-out property <float> rate;
+    in-out property <float> depth;
+    in-out property <float> character;
+    in-out property <float> feedback;
+    in-out property <float> spread;
+    in-out property <float> tone;
+    in-out property <float> stages;
+    callback mode-changed(int);
+    callback rate-changed(float);
+    callback depth-changed(float);
+    callback character-changed(float);
+    callback feedback-changed(float);
+    callback spread-changed(float);
+    callback tone-changed(float);
+    callback stages-changed(float);
+
+    private property <float> rate-hz: 0.02 * pow(600, root.rate);
+    private property <int> stage-count: 4 + round(root.stages * 4) * 2;
+    private property <string> color-label: root.mode == 2 ? "Center" : root.mode == 4 ? "Age" : "Delay";
+    private property <string> mode-detail: root.mode == 0 ? "MOVING DOUBLE"
+        : root.mode == 1 ? "THROUGH-ZERO SWEEP"
+        : root.mode == 2 ? "ALL-PASS CASCADE"
+        : root.mode == 3 ? "THREE VOICES" : "TAPE DOUBLE";
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text { text: root.mode-detail; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            SegmentedControl {
+                width: 286px; height: 22px;
+                options: ["CHORUS", "FLANGE", "PHASER", "ENS", "ADT"];
+                selected-index <=> root.mode;
+                selected(i) => { root.mode-changed(i); }
+            }
+        }
+        HorizontalLayout {
+            height: 108px;
+            spacing: 8px;
+            ModulationDisplay { width: 330px; height: 108px; mode: root.mode; depth: root.depth; spread: root.spread; }
+            VerticalLayout {
+                spacing: 2px;
+                Text { text: root.mode == 2 ? root.stage-count + " STAGES / STEREO PHASE" : root.mode == 3 ? "3 VOICES / STEREO PHASE" : "STEREO VARIABLE DELAY"; color: Theme.text-muted; font-size: 9px; horizontal-alignment: center; }
+                Rectangle { vertical-stretch: 1; }
+                Text { text: round(root.rate-hz * 100) / 100 + " Hz / " + round(root.depth * 100) + " DEPTH"; color: Theme.accent; font-size: 9px; horizontal-alignment: center; }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob { width: 72px; diameter: 40px; label: "Rate"; tooltip: "LFO speed"; value <=> root.rate; default-value: 0.445; value-text: round(root.rate-hz * 100) / 100 + " Hz"; changed(v) => { root.rate-changed(v); } }
+            ParameterKnob { width: 72px; diameter: 40px; label: "Depth"; tooltip: "Sweep amount"; value <=> root.depth; default-value: 0.45; value-text: round(root.depth * 100) + " %"; changed(v) => { root.depth-changed(v); } }
+            ParameterKnob { width: 72px; diameter: 40px; label: root.color-label; tooltip: "Delay, phase centre, or tape age"; value <=> root.character; default-value: 0.45; value-text: round(root.character * 100) + " %"; changed(v) => { root.character-changed(v); } }
+            ParameterKnob { width: 72px; diameter: 40px; label: "Feedback"; tooltip: "Regeneration or phase resonance"; bipolar: true; value <=> root.feedback; default-value: 0.5; value-text: round((root.feedback * 1.84 - 0.92) * 100) + " %"; changed(v) => { root.feedback-changed(v); } }
+            ParameterKnob { width: 72px; diameter: 40px; label: "Spread"; tooltip: "Stereo LFO phase offset"; value <=> root.spread; default-value: 0.65; value-text: round(root.spread * 100) + " %"; changed(v) => { root.spread-changed(v); } }
+            ParameterKnob { width: 72px; diameter: 40px; label: "Tone"; tooltip: "Brightness of the processed signal"; value <=> root.tone; default-value: 0.75; value-text: round(root.tone * 100) + " %"; changed(v) => { root.tone-changed(v); } }
+            ParameterKnob { width: 72px; diameter: 40px; label: "Stages"; tooltip: "Number of all-pass stages in Phaser mode"; enabled: root.mode == 2; value <=> root.stages; default-value: 0.5; value-text: root.stage-count + ""; changed(v) => { root.stages-changed(v); } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}

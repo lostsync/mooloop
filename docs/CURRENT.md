@@ -285,16 +285,20 @@ boundary.
   swap, and knob changes arrive as sample-timed `ParamValue` events. Effect
   chains persist in song files
   (`ChannelSetup.effects`, serde-defaulted for older manifests).
-- Nine effect kinds ship: a low-pass/high-pass filter, a drive/saturation
+- Ten effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
   oversampled, a stereo delay with damped cross-feedable feedback and
   digital/tape/reverse responses to a moving delay time, and a gate,
   compressor, and limiter sharing one detector and gain-computer module; a
-  seven-band parametric EQ with optional bounded spectrum telemetry; and a
-  generated-room convolution reverb. The reverb prepares a stereo room IR off
+  seven-band parametric EQ with optional bounded spectrum telemetry; a
+  generated-room convolution reverb; and one five-mode modulation processor
+  (chorus, flange, phaser, ensemble, and ADT). Its delay-based modes share a
+  bounded fractional stereo ring; Phaser uses a stereo all-pass cascade. The
+  generic host supplies their dry/wet blend, so the DSP returns the processed
+  signal only. The reverb prepares a stereo room IR off
   the audio thread, then runs fixed-partition convolution with a host-aligned
   512-frame latency. Device faces are width-quantized in rack units; delay,
-  gate, and compressor take 2U, while EQ and reverb take 3U.
+  gate, and compressor take 2U, while EQ, reverb, and Mod take 3U.
 - The dynamics effects detect on the louder of the two channels and apply one
   gain to both, so compression cannot walk the stereo image around. The
   limiter has no lookahead on purpose: the engine has no plugin-delay

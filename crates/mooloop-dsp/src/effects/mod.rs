@@ -15,6 +15,7 @@ mod drive;
 mod dynamics;
 mod eq;
 mod filter;
+mod modulation;
 mod reverb;
 
 pub use bitcrush::BitcrushEffect;
@@ -23,6 +24,7 @@ pub use drive::DriveEffect;
 pub use dynamics::{CompressorEffect, GateEffect, LimiterEffect};
 pub use eq::EqEffect;
 pub use filter::FilterEffect;
+pub use modulation::ModulationEffect;
 pub use reverb::{generate_room_ir, PreparedIr, ReverbEffect, StereoIr, CONVOLUTION_BLOCK_FRAMES};
 
 use mooloop_core::EffectParams;
@@ -38,6 +40,7 @@ use crate::node::AudioNode;
 pub fn build_effect(params: EffectParams, sample_rate: u32) -> Box<dyn AudioNode + Send> {
     match params {
         EffectParams::Eq(p) => Box::new(EqEffect::new(p, sample_rate)),
+        EffectParams::Modulation(p) => Box::new(ModulationEffect::new(p, sample_rate)),
         EffectParams::Filter(p) => Box::new(FilterEffect::new(p, sample_rate)),
         EffectParams::Drive(p) => Box::new(DriveEffect::new(p, sample_rate)),
         EffectParams::Bitcrush(p) => Box::new(BitcrushEffect::new(p)),
