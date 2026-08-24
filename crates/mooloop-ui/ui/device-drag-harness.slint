@@ -1,0 +1,93 @@
+import { EqDeviceFace } from "eq-device.slint";
+import { ReverbDeviceFace } from "reverb-device.slint";
+
+// Slint only generates Rust bindings for exported components that inherit
+// Window - EqDeviceFace/ReverbDeviceFace inherit EffectDeviceShell (a
+// Rectangle), so they can't be instantiated directly from a test. These
+// thin Window wrappers exist purely so the drag regression tests can drive
+// the real faces with real pointer events instead of invoking their
+// callbacks directly, which would pass even if event routing to the handle
+// were broken.
+export component EqDeviceDragHarness inherits Window {
+    in-out property <float> target;
+    in-out property <float> enabled;
+    in-out property <float> frequency;
+    in-out property <float> gain;
+    in-out property <float> q;
+    in-out property <float> character;
+    in property <[float]> band-data;
+    in property <[float]> spectrum-data;
+    in property <bool> analyzer-enabled;
+    callback target-changed(float);
+    callback enabled-changed(float);
+    callback frequency-changed(float);
+    callback gain-changed(float);
+    callback q-changed(float);
+    callback character-changed(float);
+    callback analyzer-toggled(bool);
+
+    width: 668px;
+    height: 268px;
+    EqDeviceFace {
+        width: 100%;
+        height: 100%;
+        target <=> root.target;
+        enabled <=> root.enabled;
+        frequency <=> root.frequency;
+        gain <=> root.gain;
+        q <=> root.q;
+        character <=> root.character;
+        band-data: root.band-data;
+        spectrum-data: root.spectrum-data;
+        analyzer-enabled: root.analyzer-enabled;
+        target-changed(v) => { root.target-changed(v); }
+        enabled-changed(v) => { root.enabled-changed(v); }
+        frequency-changed(v) => { root.frequency-changed(v); }
+        gain-changed(v) => { root.gain-changed(v); }
+        q-changed(v) => { root.q-changed(v); }
+        character-changed(v) => { root.character-changed(v); }
+        analyzer-toggled(v) => { root.analyzer-toggled(v); }
+    }
+}
+
+export component ReverbDeviceDragHarness inherits Window {
+    in-out property <int> shape;
+    in-out property <int> material;
+    in-out property <float> width-value;
+    in-out property <float> depth-value;
+    in-out property <float> height-value;
+    in-out property <float> decay-value;
+    in-out property <float> capture-x;
+    in-out property <float> capture-y;
+    callback shape-changed(int);
+    callback material-changed(int);
+    callback width-changed(float);
+    callback depth-changed(float);
+    callback height-changed(float);
+    callback decay-changed(float);
+    callback capture-x-changed(float);
+    callback capture-y-changed(float);
+
+    width: 668px;
+    height: 268px;
+    ReverbDeviceFace {
+        width: 100%;
+        height: 100%;
+        shape <=> root.shape;
+        material <=> root.material;
+        width-value <=> root.width-value;
+        depth-value <=> root.depth-value;
+        height-value <=> root.height-value;
+        decay-value <=> root.decay-value;
+        capture-x <=> root.capture-x;
+        capture-y <=> root.capture-y;
+        shape-changed(v) => { root.shape-changed(v); }
+        material-changed(v) => { root.material-changed(v); }
+        width-changed(v) => { root.width-changed(v); }
+        depth-changed(v) => { root.depth-changed(v); }
+        height-changed(v) => { root.height-changed(v); }
+        decay-changed(v) => { root.decay-changed(v); }
+        capture-x-changed(v) => { root.capture-x-changed(v); }
+        capture-y-changed(v) => { root.capture-y-changed(v); }
+    }
+}

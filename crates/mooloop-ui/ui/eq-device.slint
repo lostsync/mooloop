@@ -65,7 +65,16 @@ component EqResponseDisplay inherits Rectangle {
         x: frequency * parent.width - 7px; y: (1 - gain) * parent.height - 7px; width: 14px; height: 14px;
         enabled: root.band-value(index, 3) > 0.5;
         mouse-cursor: MouseCursor.crosshair;
-        moved => { root.point-dragged(index, clamp(self.mouse-x / parent.width, 0, 1), clamp(1 - self.mouse-y / parent.height, 0, 1)); }
+        // The handle re-centers under the pointer as it's dragged (its x/y
+        // are bound to frequency/gain above), so mouse-x/mouse-y are not a
+        // stable coordinate system - see the drag feedback-loop pitfall
+        // documented on controls.slint's MixerFader. Move relative to the
+        // press point instead of mapping mouse position directly.
+        moved => {
+            root.point-dragged(index,
+                clamp(self.frequency + (self.mouse-x - self.pressed-x) / parent.width, 0, 1),
+                clamp(self.gain - (self.mouse-y - self.pressed-y) / parent.height, 0, 1));
+        }
         Rectangle { width: 14px; height: 14px; border-radius: 7px; background: root.point-color(index); border-width: root.selected-target == index ? 2px : 1px; border-color: root.selected-target == index ? Theme.text : Theme.panel; }
     }
 }

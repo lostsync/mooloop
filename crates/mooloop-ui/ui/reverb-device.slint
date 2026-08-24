@@ -32,7 +32,16 @@ component RoomPlan inherits Rectangle {
         TouchArea {
             x: parent.width * root.capture-x - 7px; y: parent.height * root.capture-y - 7px;
             width: 14px; height: 14px; mouse-cursor: MouseCursor.crosshair;
-            moved => { root.capture-moved(clamp(self.mouse-x / parent.width, 0.05, 0.95), clamp(self.mouse-y / parent.height, 0.05, 0.95)); }
+            // The dot re-centers under the pointer as it's dragged (its x/y
+            // are bound to capture-x/y above), so mouse-x/mouse-y are not a
+            // stable coordinate system - see the drag feedback-loop pitfall
+            // documented on controls.slint's MixerFader. Move relative to
+            // the press point instead of mapping mouse position directly.
+            moved => {
+                root.capture-moved(
+                    clamp(root.capture-x + (self.mouse-x - self.pressed-x) / parent.width, 0.05, 0.95),
+                    clamp(root.capture-y + (self.mouse-y - self.pressed-y) / parent.height, 0.05, 0.95));
+            }
             Rectangle { width: 14px; height: 14px; border-radius: 7px; background: Theme.focus; border-width: 2px; border-color: Theme.panel; }
         }
     }

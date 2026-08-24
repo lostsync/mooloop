@@ -40,6 +40,11 @@ export { Theme }
 export { ControlGallery } from "gallery.slint";
 export { MockupCanvas, MockupItem } from "mockup.slint";
 export { DeviceRackConcepts } from "device-concepts.slint";
+// Exported standalone (rather than only reachable through the rack) so the
+// drag regression tests can drive them directly with real pointer events
+// instead of invoking their callbacks, which would pass even if event
+// routing to the handle were broken.
+export { EqDeviceDragHarness, ReverbDeviceDragHarness } from "device-drag-harness.slint";
 export { MixerStripRow }
 export { OutputTargetRow }
 
