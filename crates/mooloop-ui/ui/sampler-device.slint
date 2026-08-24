@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterFader, ParameterKnob, SelectorBank, ToolButton, ValueScale, ZoomScrollBar } from "controls.slint";
+import { MiniKnob, ParameterKnob, SelectorBank, ToolButton, ValueScale, ZoomScrollBar } from "controls.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
@@ -128,6 +128,7 @@ export component SamplerDeviceFace inherits Rectangle {
     in-out property <int> root-note: 60;
     in-out property <float> tune-semitones;
     in-out property <float> tune-cents;
+    in-out property <string> tune-label;
     in-out property <float> filter-cutoff;
     in-out property <float> filter-resonance;
     in-out property <float> filter-env;
@@ -334,62 +335,89 @@ export component SamplerDeviceFace inherits Rectangle {
             }
 
             HorizontalLayout {
-                spacing: 4px;
-                SampleField {
-                    label: "S"; tooltip: "Start frame";
-                    value: round(root.start-pos * root.sample-frames);
-                    maximum: root.sample-frames;
-                    changed(v) => {
-                        let abs = root.sample-frames > 0 ? v / root.sample-frames : 0;
-                        root.start-pos = min(abs, root.end-pos - 0.001); root.start-pos-changed(root.start-pos);
-                        if (root.loop-start < root.start-pos) { root.loop-start = root.start-pos; root.loop-start-changed(root.loop-start); }
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout {
+                            alignment: center; spacing: 1px;
+                            MiniKnob {
+                                diameter: 28px; fill: Theme.accent;
+                                value <=> root.tune-semitones; minimum: -24; maximum: 24; default-value: 0; step: 1;
+                                value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
+                                changed(v) => { root.tune-semitones-changed(v); }
+                            }
+                            Text { text: "Coarse"; font-size: 7px; color: Theme.text-faint; horizontal-alignment: center; }
+                        }
+                        VerticalLayout {
+                            alignment: center; spacing: 1px;
+                            MiniKnob {
+                                diameter: 28px; fill: Theme.accent;
+                                value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
+                                value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
+                                changed(v) => { root.tune-cents-changed(v); }
+                            }
+                            Text { text: "Fine"; font-size: 7px; color: Theme.text-faint; horizontal-alignment: center; }
+                        }
                     }
+                    // Musically meaningful readout for the coarse/fine pair:
+                    // the note name and frequency the tuned root note lands
+                    // on, since "+3 st / +40 ct" alone doesn't say what pitch
+                    // that actually is.
+                    Text { text: root.tune-label; font-size: 8px; color: Theme.text-muted; horizontal-alignment: center; }
                 }
-                SampleField {
-                    label: "E"; tooltip: "End frame";
-                    value: round(root.end-pos * root.sample-frames);
-                    maximum: root.sample-frames;
-                    changed(v) => {
-                        let abs = root.sample-frames > 0 ? v / root.sample-frames : 1;
-                        root.end-pos = max(abs, root.start-pos + 0.001); root.end-pos-changed(root.end-pos);
-                        if (root.loop-end > root.end-pos) { root.loop-end = root.end-pos; root.loop-end-changed(root.loop-end); }
+                Rectangle { width: 1px; background: Theme.border; }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        SampleField {
+                            label: "S"; tooltip: "Start frame";
+                            value: round(root.start-pos * root.sample-frames);
+                            maximum: root.sample-frames;
+                            changed(v) => {
+                                let abs = root.sample-frames > 0 ? v / root.sample-frames : 0;
+                                root.start-pos = min(abs, root.end-pos - 0.001); root.start-pos-changed(root.start-pos);
+                                if (root.loop-start < root.start-pos) { root.loop-start = root.start-pos; root.loop-start-changed(root.loop-start); }
+                            }
+                        }
+                        SampleField {
+                            label: "E"; tooltip: "End frame";
+                            value: round(root.end-pos * root.sample-frames);
+                            maximum: root.sample-frames;
+                            changed(v) => {
+                                let abs = root.sample-frames > 0 ? v / root.sample-frames : 1;
+                                root.end-pos = max(abs, root.start-pos + 0.001); root.end-pos-changed(root.end-pos);
+                                if (root.loop-end > root.end-pos) { root.loop-end = root.end-pos; root.loop-end-changed(root.loop-end); }
+                            }
+                        }
                     }
-                }
-                SampleField {
-                    label: "L"; tooltip: "Loop start frame";
-                    value: round(root.loop-start * root.sample-frames);
-                    maximum: root.sample-frames;
-                    changed(v) => {
-                        let abs = root.sample-frames > 0 ? v / root.sample-frames : 0;
-                        root.loop-start = clamp(abs, root.start-pos, root.loop-end - 0.001); root.loop-start-changed(root.loop-start);
-                    }
-                }
-                SampleField {
-                    label: "R"; tooltip: "Loop end frame";
-                    value: round(root.loop-end * root.sample-frames);
-                    maximum: root.sample-frames;
-                    changed(v) => {
-                        let abs = root.sample-frames > 0 ? v / root.sample-frames : 1;
-                        root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
+                    HorizontalLayout {
+                        spacing: 4px;
+                        SampleField {
+                            label: "L"; tooltip: "Loop start frame";
+                            value: round(root.loop-start * root.sample-frames);
+                            maximum: root.sample-frames;
+                            changed(v) => {
+                                let abs = root.sample-frames > 0 ? v / root.sample-frames : 0;
+                                root.loop-start = clamp(abs, root.start-pos, root.loop-end - 0.001); root.loop-start-changed(root.loop-start);
+                            }
+                        }
+                        SampleField {
+                            label: "R"; tooltip: "Loop end frame";
+                            value: round(root.loop-end * root.sample-frames);
+                            maximum: root.sample-frames;
+                            changed(v) => {
+                                let abs = root.sample-frames > 0 ? v / root.sample-frames : 1;
+                                root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
+                            }
+                        }
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }
-            }
-
-            HorizontalLayout {
-                spacing: 12px;
-                ParameterFader {
-                    horizontal-stretch: 1; label: "Coarse"; tooltip: "Coarse tuning in semitones";
-                    value <=> root.tune-semitones; minimum: -24; maximum: 24; default-value: 0; step: 1;
-                    value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
-                    changed(v) => { root.tune-semitones-changed(v); }
-                }
-                ParameterFader {
-                    horizontal-stretch: 1; label: "Fine"; tooltip: "Fine tuning in cents";
-                    value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
-                    value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
-                    changed(v) => { root.tune-cents-changed(v); }
-                }
             }
         }
 

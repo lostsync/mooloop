@@ -372,6 +372,7 @@ export component MainWindow inherits Window {
     in-out property <int> root-note: 60;
     in-out property <float> tune-semitones;
     in-out property <float> tune-cents;
+    in-out property <string> tune-label;
     in-out property <float> filter-cutoff;
     in-out property <float> filter-resonance;
     in-out property <float> filter-env;
@@ -1772,6 +1773,7 @@ export component MainWindow inherits Window {
                                             root-note <=> root.root-note;
                                             tune-semitones <=> root.tune-semitones;
                                             tune-cents <=> root.tune-cents;
+                                            tune-label <=> root.tune-label;
                                             filter-cutoff <=> root.filter-cutoff;
                                             filter-resonance <=> root.filter-resonance;
                                             filter-env <=> root.filter-env;

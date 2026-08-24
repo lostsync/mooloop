@@ -1637,6 +1637,7 @@ impl UiState {
         window.set_root_note(p.root_note as i32);
         window.set_tune_semitones(p.tune_semitones);
         window.set_tune_cents(p.tune_cents);
+        window.set_tune_label(tune_label(*p).into());
         window.set_loop_mode(match p.loop_mode {
             LoopMode::Off => 0,
             LoopMode::Forward => 1,
@@ -3918,8 +3919,6 @@ impl AppUi {
         wire_unit_param!(on_end_pos_changed, end);
         wire_unit_param!(on_loop_start_changed, loop_start);
         wire_unit_param!(on_loop_end_changed, loop_end);
-        wire_unit_param!(on_tune_semitones_changed, tune_semitones);
-        wire_unit_param!(on_tune_cents_changed, tune_cents);
         wire_unit_param!(on_filter_cutoff_changed, filter_cutoff);
         wire_unit_param!(on_filter_resonance_changed, filter_resonance);
         wire_unit_param!(on_sampler_drive_changed, drive);
@@ -3971,6 +3970,7 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let weak = window.as_weak();
             window.on_root_note_changed(move |note| {
                 let mut st = st.borrow_mut();
                 let ch = st.selected;
@@ -3978,6 +3978,51 @@ impl AppUi {
                     return;
                 };
                 channel.params.root_note = note.clamp(0, 127) as u8;
+                if let Some(window) = weak.upgrade() {
+                    window.set_tune_label(tune_label(channel.params).into());
+                }
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: ch as u8,
+                    params: channel.params,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_tune_semitones_changed(move |v: f32| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                channel.params.tune_semitones = v;
+                if let Some(window) = weak.upgrade() {
+                    window.set_tune_label(tune_label(channel.params).into());
+                }
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: ch as u8,
+                    params: channel.params,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_tune_cents_changed(move |v: f32| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                channel.params.tune_cents = v;
+                if let Some(window) = weak.upgrade() {
+                    window.set_tune_label(tune_label(channel.params).into());
+                }
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                     channel: ch as u8,
                     params: channel.params,
@@ -5520,6 +5565,37 @@ fn sample_description(sample: &SampleData) -> String {
 
 fn sample_duration(sample: &SampleData) -> f32 {
     sample.len() as f32 / sample.sample_rate.max(1) as f32
+}
+
+const NOTE_NAMES: [&str; 12] = [
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+];
+
+/// Nearest note name for a (possibly fractional) MIDI note number. A4 = 69.
+fn midi_to_note_name(midi: f64) -> String {
+    let rounded = midi.round().clamp(0.0, 127.0) as i64;
+    let name = NOTE_NAMES[rounded.rem_euclid(12) as usize];
+    let octave = rounded / 12 - 1;
+    format!("{name}{octave}")
+}
+
+fn midi_to_frequency_hz(midi: f64) -> f32 {
+    (440.0 * 2f64.powf((midi - 69.0) / 12.0)) as f32
+}
+
+/// The note name and frequency the sampler's root note actually plays at
+/// once coarse/fine tuning are applied — the musically meaningful readout
+/// for the Coarse/Fine knob pair, since "+3 st / +40 ct" alone doesn't say
+/// what pitch that is.
+fn tune_label(params: SamplerParams) -> String {
+    let midi = f64::from(params.root_note)
+        + f64::from(params.tune_semitones)
+        + f64::from(params.tune_cents) / 100.0;
+    format!(
+        "{} · {:.1} Hz",
+        midi_to_note_name(midi),
+        midi_to_frequency_hz(midi)
+    )
 }
 
 /// Decode a WAV/RIFF file into stereo f32 frames. hound's `samples::<f32>()`
