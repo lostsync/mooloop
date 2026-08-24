@@ -2069,19 +2069,29 @@ mod tests {
                 default_effect(mooloop_core::EffectKind::Filter),
             ));
         });
-        let closed = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(install_effect(
-                EffectTarget::Channel(0),
-                0,
-                default_effect(mooloop_core::EffectKind::Filter),
-            ));
-            render.apply_command(EngineCommand::SetEffectParam {
-                target: EffectTarget::Channel(0),
-                slot: 0,
-                id: mooloop_core::FILTER_PARAM_CUTOFF_HZ,
-                value: 100.0,
-            });
+        // The cutoff now ramps (see
+        // docs/plans/share-dsp-primitives/01-smooth-effect-parameters.md)
+        // rather than snapping, so a queued change doesn't fully close the
+        // filter within the same 1024-frame block it's queued in. Render
+        // one block to let the ramp settle, discard it, then measure the
+        // next — this still asserts the param change lands, just not
+        // instantaneously.
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let _ = render.apply_structural(install_effect(
+            EffectTarget::Channel(0),
+            0,
+            default_effect(mooloop_core::EffectKind::Filter),
+        ));
+        render.apply_command(EngineCommand::SetEffectParam {
+            target: EffectTarget::Channel(0),
+            slot: 0,
+            id: mooloop_core::FILTER_PARAM_CUTOFF_HZ,
+            value: 100.0,
         });
+        render.play();
+        render.process_block(1024);
+        render.process_block(1024);
+        let closed: f32 = render.master().l[..1024].iter().map(|s| s * s).sum();
         assert!(closed < open * 0.5, "open {open}, closed {closed}");
 
         // Bypass restores the dry sound.
