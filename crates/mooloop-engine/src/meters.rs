@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use mooloop_core::MAX_BUSES;
 use mooloop_core::{MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_SAMPLER_VOICES};
+use mooloop_dsp::SPECTRUM_BINS;
 
 /// Peak-hold cells for every bus, left and right interleaved.
 pub struct BusMeters {
@@ -33,6 +34,96 @@ pub struct BusMeters {
 /// way no matter what owns it.
 pub struct DeviceMeters {
     cells: Vec<AtomicU32>,
+}
+
+/// Latest display-oriented data for every device stage.
+///
+/// This is intentionally a distinct transport from `EngineEvent`: analyzer
+/// vectors are continuous observations, so a GUI wants the latest snapshot
+/// rather than every historical frame. More display features can be added to
+/// this stable device-stage address space without exposing PCM to the UI.
+pub struct DeviceTelemetry {
+    spectrum_enabled: Vec<AtomicU32>,
+    spectrum: Vec<AtomicU32>,
+}
+
+impl DeviceTelemetry {
+    const TARGETS: usize = MAX_CHANNELS + MAX_BUSES;
+    const STAGES: usize = MAX_EFFECTS_PER_CHANNEL + 1;
+
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            spectrum_enabled: (0..Self::TARGETS * Self::STAGES)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+            spectrum: (0..Self::TARGETS * Self::STAGES * SPECTRUM_BINS)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+        })
+    }
+
+    fn base(target: usize, stage: usize) -> Option<usize> {
+        (target < Self::TARGETS && stage < Self::STAGES)
+            .then_some((target * Self::STAGES + stage) * SPECTRUM_BINS)
+    }
+
+    fn enabled_index(target: usize, stage: usize) -> Option<usize> {
+        (target < Self::TARGETS && stage < Self::STAGES).then_some(target * Self::STAGES + stage)
+    }
+
+    /// Subscribe or unsubscribe a device stage. Disabled stages have no DSP
+    /// analysis cost beyond one atomic load at the host boundary.
+    pub fn set_spectrum_enabled(&self, target: usize, stage: usize, enabled: bool) {
+        if let Some(index) = Self::enabled_index(target, stage) {
+            self.spectrum_enabled[index].store(u32::from(enabled), Ordering::Relaxed);
+            if !enabled {
+                if let Some(base) = Self::base(target, stage) {
+                    for cell in &self.spectrum[base..base + SPECTRUM_BINS] {
+                        cell.store(0, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn spectrum_enabled(&self, target: usize, stage: usize) -> bool {
+        Self::enabled_index(target, stage)
+            .is_some_and(|index| self.spectrum_enabled[index].load(Ordering::Relaxed) != 0)
+    }
+
+    /// Publish a normalized log-frequency level vector from the audio thread.
+    pub fn publish_spectrum(&self, target: usize, stage: usize, levels: &[f32; SPECTRUM_BINS]) {
+        if let Some(base) = Self::base(target, stage) {
+            for (cell, level) in self.spectrum[base..base + SPECTRUM_BINS].iter().zip(levels) {
+                cell.store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Latest normalized log-frequency levels for a device stage.
+    pub fn read_spectrum(&self, target: usize, stage: usize) -> [f32; SPECTRUM_BINS] {
+        let mut levels = [0.0; SPECTRUM_BINS];
+        if let Some(base) = Self::base(target, stage) {
+            for (level, cell) in levels
+                .iter_mut()
+                .zip(&self.spectrum[base..base + SPECTRUM_BINS])
+            {
+                *level = f32::from_bits(cell.load(Ordering::Relaxed));
+            }
+        }
+        levels
+    }
+
+    /// Clear subscriptions and retained display data before a complete graph
+    /// replacement. The UI re-subscribes the new project after it is visible.
+    pub fn clear_spectra(&self) {
+        for cell in &self.spectrum_enabled {
+            cell.store(0, Ordering::Relaxed);
+        }
+        for cell in &self.spectrum {
+            cell.store(0, Ordering::Relaxed);
+        }
+    }
 }
 
 impl DeviceMeters {
@@ -70,7 +161,12 @@ impl DeviceMeters {
     pub fn take(&self, target: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
         let read = |index: usize| f32::from_bits(self.cells[index].swap(0, Ordering::Relaxed));
         Self::base(target, stage)
-            .map(|base| ((read(base), read(base + 1)), (read(base + 2), read(base + 3))))
+            .map(|base| {
+                (
+                    (read(base), read(base + 1)),
+                    (read(base + 2), read(base + 3)),
+                )
+            })
             .unwrap_or(((0.0, 0.0), (0.0, 0.0)))
     }
 }
@@ -190,6 +286,19 @@ mod tests {
         let meters = BusMeters::new();
         meters.publish(MAX_BUSES + 5, 1.0, 1.0);
         assert_eq!(meters.take(MAX_BUSES + 5), (0.0, 0.0));
+    }
+
+    #[test]
+    fn spectrum_telemetry_is_latest_value_and_can_be_disabled() {
+        let telemetry = DeviceTelemetry::new();
+        let levels = std::array::from_fn(|index| index as f32 / SPECTRUM_BINS as f32);
+        telemetry.set_spectrum_enabled(2, 1, true);
+        assert!(telemetry.spectrum_enabled(2, 1));
+        telemetry.publish_spectrum(2, 1, &levels);
+        assert_eq!(telemetry.read_spectrum(2, 1), levels);
+        telemetry.set_spectrum_enabled(2, 1, false);
+        assert!(!telemetry.spectrum_enabled(2, 1));
+        assert_eq!(telemetry.read_spectrum(2, 1), [0.0; SPECTRUM_BINS]);
     }
 
     #[test]

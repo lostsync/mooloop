@@ -2,11 +2,11 @@ import { Theme } from "theme.slint";
 import { ParameterKnob, SegmentedControl, ToggleButton } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
-// A deliberately bounded frequency plot. It is a response display first; the
-// spectrum layer is only drawn when requested so the future realtime analyzer
-// has an explicit performance switch instead of an invisible background cost.
+// A deliberately bounded frequency plot. The spectrum layer receives compact
+// display telemetry only when enabled, so it cannot create background DSP work.
 component EqResponseDisplay inherits Rectangle {
     in property <[float]> band-data;
+    in property <[float]> spectrum-data;
     in property <int> selected-target;
     in property <bool> spectrum-visible;
     callback point-dragged(int, float, float);
@@ -44,12 +44,10 @@ component EqResponseDisplay inherits Rectangle {
     clip: true;
     for grid in 7 : Rectangle { x: grid * parent.width / 6; width: 1px; height: 100%; background: Theme.border.with-alpha(0.32); }
     for grid in 5 : Rectangle { y: grid * parent.height / 4; width: 100%; height: 1px; background: Theme.border.with-alpha(grid == 2 ? 0.72 : 0.32); }
-    // A low-detail analyzer underlay reserves no DSP work when switched off.
-    for bar in 56 : Rectangle {
-        private property <float> xnorm: bar / 55;
-        private property <float> hill: 0.18 + 0.43 / (1 + pow((xnorm - 0.42) * 6, 2)) + 0.07 * sin(bar * 71deg);
-        x: bar * parent.width / 56; width: max(1px, parent.width / 56 - 1px);
-        y: parent.height * (1 - clamp(hill, 0.08, 0.82)); height: parent.height * clamp(hill, 0.08, 0.82);
+    for bar in 48 : Rectangle {
+        private property <float> level: bar < root.spectrum-data.length ? root.spectrum-data[bar] : 0;
+        x: bar * parent.width / 48; width: max(1px, parent.width / 48 - 1px);
+        y: parent.height * (1 - clamp(level, 0, 1)); height: parent.height * clamp(level, 0, 1);
         background: Theme.text-faint.with-alpha(root.spectrum-visible ? 0.16 : 0);
     }
     for sample in root.sample-count : Rectangle {
@@ -82,7 +80,8 @@ export component EqDeviceFace inherits EffectDeviceShell {
     in-out property <float> q;
     in-out property <float> character;
     in property <[float]> band-data;
-    in-out property <bool> analyzer-enabled: true;
+    in property <[float]> spectrum-data;
+    in property <bool> analyzer-enabled: false;
     callback target-changed(float);
     callback enabled-changed(float);
     callback frequency-changed(float);
@@ -103,10 +102,10 @@ export component EqDeviceFace inherits EffectDeviceShell {
             spacing: 4px;
             Text { text: "PARAMETRIC EQ"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
-            ToggleButton { width: 46px; height: 20px; text: "FFT"; tooltip: "Show spectrum analyzer"; checked <=> root.analyzer-enabled; toggled(v) => { root.analyzer-toggled(v); } }
+            ToggleButton { width: 46px; height: 20px; text: "FFT"; tooltip: "Show spectrum analyzer"; checked: root.analyzer-enabled; toggled(v) => { root.analyzer-toggled(v); } }
         }
         EqResponseDisplay {
-            height: 126px; width: 100%; band-data: root.band-data; selected-target: root.target-index; spectrum-visible: root.analyzer-enabled;
+            height: 126px; width: 100%; band-data: root.band-data; spectrum-data: root.spectrum-data; selected-target: root.target-index; spectrum-visible: root.analyzer-enabled;
             point-dragged(index, freq, gain) => { root.target-changed(index / 8); root.frequency-changed(freq); root.gain-changed(gain); }
         }
         HorizontalLayout {

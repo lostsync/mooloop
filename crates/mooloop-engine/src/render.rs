@@ -10,11 +10,11 @@ use mooloop_core::{
 };
 use mooloop_dsp::{
     balance_gains, build_effect, pan_gains, AudioNode, DrumSynth, DryAlign, Event, EventList,
-    MonoSynth, PolySynth, ProcessContext, SampleData, Sampler, StereoBus, TimedEvent,
-    MAX_BLOCK_SIZE,
+    MonoSynth, PolySynth, ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus,
+    TimedEvent, MAX_BLOCK_SIZE,
 };
 
-use crate::meters::{BusMeters, DeviceMeters, PlayheadMeters};
+use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, PlayheadMeters};
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
 use crate::StructuralCommand;
@@ -26,11 +26,12 @@ use crate::StructuralCommand;
 pub(crate) struct ReclaimedEffect {
     pub node: Option<Box<dyn AudioNode + Send>>,
     pub align: Option<Box<DryAlign>>,
+    pub analyzer: Option<Box<SpectrumAnalyzer>>,
 }
 
 impl ReclaimedEffect {
     fn is_empty(&self) -> bool {
-        self.node.is_none() && self.align.is_none()
+        self.node.is_none() && self.align.is_none() && self.analyzer.is_none()
     }
 }
 
@@ -56,7 +57,9 @@ struct PendingEffectParams {
 
 impl PendingEffectParams {
     const fn empty() -> Self {
-        Self { events: [None; MAX_PENDING_EFFECT_PARAMS] }
+        Self {
+            events: [None; MAX_PENDING_EFFECT_PARAMS],
+        }
     }
 
     fn clear(&mut self) {
@@ -113,6 +116,10 @@ struct EffectChain {
     /// latency, so the wet/dry blend never mixes time-misaligned signals.
     /// Allocated off the realtime thread, next to the node it belongs to.
     dry_align: [Option<Box<DryAlign>>; MAX_EFFECTS_PER_CHANNEL],
+    /// Input analyzers follow effect slots during reorders. They are generic
+    /// host instrumentation, not EQ-specific DSP state. The boxes are built
+    /// with nodes so empty addressable slots stay compact.
+    analyzers: [Option<Box<SpectrumAnalyzer>>; MAX_EFFECTS_PER_CHANNEL],
     /// One scratch buffer is enough: chain slots process sequentially, so no
     /// slot needs to retain its dry signal once its mix has been applied.
     /// Keeping this per-chain rather than per-slot makes the full 256-slot
@@ -131,6 +138,7 @@ impl EffectChain {
             input_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
             output_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
             dry_align: std::array::from_fn(|_| None),
+            analyzers: std::array::from_fn(|_| None),
             dry: StereoBus::with_capacity(MAX_BLOCK_SIZE),
         }
     }
@@ -141,6 +149,7 @@ impl EffectChain {
             let displaced = ReclaimedEffect {
                 node: self.nodes[slot].take(),
                 align: self.dry_align[slot].take(),
+                analyzer: self.analyzers[slot].take(),
             };
             if !displaced.is_empty() {
                 reclaim.push(displaced);
@@ -163,16 +172,19 @@ impl EffectChain {
         slot: usize,
         node: Box<dyn AudioNode + Send>,
         align: Option<Box<DryAlign>>,
+        analyzer: Box<SpectrumAnalyzer>,
     ) -> ReclaimedEffect {
         if slot < MAX_EFFECTS_PER_CHANNEL {
             ReclaimedEffect {
                 node: self.nodes[slot].replace(node),
                 align: std::mem::replace(&mut self.dry_align[slot], align),
+                analyzer: self.analyzers[slot].replace(analyzer),
             }
         } else {
             ReclaimedEffect {
                 node: Some(node),
                 align,
+                analyzer: Some(analyzer),
             }
         }
     }
@@ -182,11 +194,13 @@ impl EffectChain {
             ReclaimedEffect {
                 node: self.nodes[slot].take(),
                 align: self.dry_align[slot].take(),
+                analyzer: self.analyzers[slot].take(),
             }
         } else {
             ReclaimedEffect {
                 node: None,
                 align: None,
+                analyzer: None,
             }
         };
         if let Some(events) = self.events.get_mut(slot) {
@@ -207,6 +221,7 @@ impl EffectChain {
             self.input_trim.swap(slot_a, slot_b);
             self.output_trim.swap(slot_a, slot_b);
             self.dry_align.swap(slot_a, slot_b);
+            self.analyzers.swap(slot_a, slot_b);
         }
     }
 
@@ -240,7 +255,7 @@ impl EffectChain {
         for (slot, effect) in slots.iter().take(MAX_EFFECTS_PER_CHANNEL).enumerate() {
             let node = build_effect(effect.params, sample_rate);
             let align = DryAlign::new(node.latency_frames()).map(Box::new);
-            let displaced = self.install(slot, node, align);
+            let displaced = self.install(slot, node, align, Box::new(SpectrumAnalyzer::new()));
             if !displaced.is_empty() {
                 reclaim.push(displaced);
             }
@@ -255,9 +270,20 @@ impl EffectChain {
         &mut self,
         context: &ProcessContext,
         bus: &mut StereoBus,
-        device_meters: Option<(&DeviceMeters, usize)>,
+        device_display: Option<(&DeviceMeters, &DeviceTelemetry, usize)>,
     ) {
         for slot in 0..MAX_EFFECTS_PER_CHANNEL {
+            if let Some((_, telemetry, target)) = device_display {
+                if self.nodes[slot].is_some() && telemetry.spectrum_enabled(target, slot + 1) {
+                    if let Some(analyzer) = &mut self.analyzers[slot] {
+                        if let Some(levels) =
+                            analyzer.push(context.sample_rate, bus, context.frames)
+                        {
+                            telemetry.publish_spectrum(target, slot + 1, &levels);
+                        }
+                    }
+                }
+            }
             if self.bypassed[slot] {
                 // A bypassed slot keeps its queued events until re-enabled, so
                 // knob turns made while bypassed are not lost.
@@ -272,7 +298,7 @@ impl EffectChain {
                         &mut self.dry.r[..context.frames],
                     );
                 }
-                if let Some((meters, target)) = device_meters {
+                if let Some((meters, _, target)) = device_display {
                     let (left, right) = bus.peak(context.frames);
                     meters.publish_input(target, slot + 1, left, right);
                     meters.publish_output(target, slot + 1, left, right);
@@ -293,7 +319,7 @@ impl EffectChain {
                         &mut self.dry.r[..context.frames],
                     );
                 }
-                if let Some((meters, target)) = device_meters {
+                if let Some((meters, _, target)) = device_display {
                     let (left, right) = bus.peak(context.frames);
                     meters.publish_input(target, slot + 1, left, right);
                 }
@@ -307,7 +333,7 @@ impl EffectChain {
                     bus.l[frame] = (self.dry.l[frame] * dry + bus.l[frame] * wet) * trim;
                     bus.r[frame] = (self.dry.r[frame] * dry + bus.r[frame] * wet) * trim;
                 }
-                if let Some((meters, target)) = device_meters {
+                if let Some((meters, _, target)) = device_display {
                     let (left, right) = bus.peak(context.frames);
                     meters.publish_output(target, slot + 1, left, right);
                 }
@@ -549,6 +575,7 @@ pub(crate) struct RenderState {
     /// bus per block.
     meters: Arc<BusMeters>,
     device_meters: Arc<DeviceMeters>,
+    device_telemetry: Arc<DeviceTelemetry>,
     playhead_meters: Arc<PlayheadMeters>,
 }
 
@@ -569,6 +596,7 @@ impl RenderState {
             reclaim: Vec::new(),
             meters: BusMeters::new(),
             device_meters: DeviceMeters::new(),
+            device_telemetry: DeviceTelemetry::new(),
             playhead_meters: PlayheadMeters::new(),
         }
     }
@@ -581,6 +609,10 @@ impl RenderState {
 
     pub(crate) fn attach_device_meters(&mut self, meters: Arc<DeviceMeters>) {
         self.device_meters = meters;
+    }
+
+    pub(crate) fn attach_device_telemetry(&mut self, telemetry: Arc<DeviceTelemetry>) {
+        self.device_telemetry = telemetry;
     }
 
     pub(crate) fn attach_playhead_meters(&mut self, meters: Arc<PlayheadMeters>) {
@@ -691,15 +723,17 @@ impl RenderState {
                 slot,
                 node,
                 align,
+                analyzer,
             } => {
                 // `chain_for` borrows the two strip vectors rather than all of
                 // `self`, so `reclaim` stays independently borrowable here.
                 if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
-                    Some(chain.install(slot as usize, node, align))
+                    Some(chain.install(slot as usize, node, align, analyzer))
                 } else {
                     Some(ReclaimedEffect {
                         node: Some(node),
                         align,
+                        analyzer: Some(analyzer),
                     })
                 }
             }
@@ -864,21 +898,33 @@ impl RenderState {
                     chain.set_bypassed(slot as usize, bypassed);
                 }
             }
-            EngineCommand::SetEffectWetDry { target, slot, wet_dry } => {
+            EngineCommand::SetEffectWetDry {
+                target,
+                slot,
+                wet_dry,
+            } => {
                 if let Some(chain) = self.chain_mut(target) {
                     if let Some(value) = chain.wet_dry.get_mut(slot as usize) {
                         *value = wet_dry.clamp(0.0, 1.0);
                     }
                 }
             }
-            EngineCommand::SetEffectInputTrim { target, slot, input_trim } => {
+            EngineCommand::SetEffectInputTrim {
+                target,
+                slot,
+                input_trim,
+            } => {
                 if let Some(chain) = self.chain_mut(target) {
                     if let Some(value) = chain.input_trim.get_mut(slot as usize) {
                         *value = input_trim.clamp(0.0, MAX_TRIM_GAIN);
                     }
                 }
             }
-            EngineCommand::SetEffectOutputTrim { target, slot, output_trim } => {
+            EngineCommand::SetEffectOutputTrim {
+                target,
+                slot,
+                output_trim,
+            } => {
                 if let Some(chain) = self.chain_mut(target) {
                     if let Some(value) = chain.output_trim.get_mut(slot as usize) {
                         *value = output_trim.clamp(0.0, MAX_TRIM_GAIN);
@@ -973,10 +1019,15 @@ impl RenderState {
             strip.bus.clear(frames);
             strip.process(&context, &self.events[index]);
             let source_peak = strip.bus.peak(frames);
-            self.device_meters.publish_output(index, 0, source_peak.0, source_peak.1);
+            self.device_meters
+                .publish_output(index, 0, source_peak.0, source_peak.1);
             self.playhead_meters
                 .publish(index, &strip.sampler.voice_positions());
-            strip.effects.process(&context, &mut strip.bus, Some((&self.device_meters, index)));
+            strip.effects.process(
+                &context,
+                &mut strip.bus,
+                Some((&self.device_meters, &self.device_telemetry, index)),
+            );
             strip.output.apply_pan(&mut strip.bus, frames);
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
                 destination.bus.add_from(&strip.bus, frames);
@@ -998,7 +1049,15 @@ impl RenderState {
             let (input_l, input_r) = strip.bus.peak(frames);
             self.device_meters
                 .publish_input(MAX_CHANNELS + index, 0, input_l, input_r);
-            strip.effects.process(&context, &mut strip.bus, Some((&self.device_meters, MAX_CHANNELS + index)));
+            strip.effects.process(
+                &context,
+                &mut strip.bus,
+                Some((
+                    &self.device_meters,
+                    &self.device_telemetry,
+                    MAX_CHANNELS + index,
+                )),
+            );
             strip.output.apply_balance(&mut strip.bus, frames);
             // A muted bus still processes, so a delay or reverb tail on it
             // decays instead of freezing, but contributes nothing — and meters
@@ -1283,6 +1342,7 @@ mod tests {
             slot,
             node,
             align,
+            analyzer: Box::new(SpectrumAnalyzer::new()),
         }
     }
 
@@ -1291,7 +1351,11 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let filtered = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Channel(0),
+                0,
+                muffling_filter(),
+            ));
         });
         assert!(dry > 0.0, "reference render was silent");
         assert!(
@@ -1351,7 +1415,11 @@ mod tests {
             }
 
             let wet = rendered_energy(&project, |render| {
-                let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, build_effect(params, 48_000)));
+                let _ = render.apply_structural(install_effect(
+                    EffectTarget::Channel(0),
+                    0,
+                    build_effect(params, 48_000),
+                ));
             });
             assert!(
                 (wet - dry).abs() > dry * 0.01,
@@ -1373,7 +1441,8 @@ mod tests {
 
         let filtered = rendered_energy(&project, |render| {
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 3 });
-            let _ = render.apply_structural(install_effect(EffectTarget::Bus(3), 0, muffling_filter()));
+            let _ =
+                render.apply_structural(install_effect(EffectTarget::Bus(3), 0, muffling_filter()));
         });
         assert!(
             filtered < dry * 0.5,
@@ -1433,7 +1502,8 @@ mod tests {
             let mut buses = mooloop_core::default_buses();
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 5 });
             route(render, &mut buses, 5, 2);
-            let _ = render.apply_structural(install_effect(EffectTarget::Bus(2), 0, muffling_filter()));
+            let _ =
+                render.apply_structural(install_effect(EffectTarget::Bus(2), 0, muffling_filter()));
         });
         assert!(
             filtered < chained * 0.5,
@@ -1458,7 +1528,8 @@ mod tests {
             let mut buses = mooloop_core::default_buses();
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 2 });
             route(render, &mut buses, 2, 9);
-            let _ = render.apply_structural(install_effect(EffectTarget::Bus(9), 0, muffling_filter()));
+            let _ =
+                render.apply_structural(install_effect(EffectTarget::Bus(9), 0, muffling_filter()));
         });
         assert!(
             filtered < chained * 0.5,
@@ -1574,7 +1645,11 @@ mod tests {
         let meters = DeviceMeters::new();
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.attach_device_meters(meters.clone());
-        let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
+        let _ = render.apply_structural(install_effect(
+            EffectTarget::Channel(0),
+            0,
+            muffling_filter(),
+        ));
         render.play();
         render.process_block(1024);
 
@@ -1583,7 +1658,10 @@ mod tests {
         assert!(source_out.0 > 0.001, "source output should meter");
         let (effect_in, effect_out) = meters.take(0, 1);
         assert!(effect_in.0 > 0.001, "effect sees the source output");
-        assert!(effect_out.0 < effect_in.0, "filter output should differ from its input");
+        assert!(
+            effect_out.0 < effect_in.0,
+            "filter output should differ from its input"
+        );
     }
 
     #[test]
@@ -1598,10 +1676,20 @@ mod tests {
         render.process_block(1024);
 
         let (effect_in, effect_out) = meters.take(MAX_CHANNELS + 3, 1);
-        assert!(effect_in.0 > 0.001, "a bus effect sees what its bus received");
-        assert!(effect_out.0 < effect_in.0, "filter output should differ from its input");
+        assert!(
+            effect_in.0 > 0.001,
+            "a bus effect sees what its bus received"
+        );
+        assert!(
+            effect_out.0 < effect_in.0,
+            "filter output should differ from its input"
+        );
         let (channel_in, _) = meters.take(0, 1);
-        assert_eq!(channel_in, (0.0, 0.0), "the channel has no effect in slot 1");
+        assert_eq!(
+            channel_in,
+            (0.0, 0.0),
+            "the channel has no effect in slot 1"
+        );
     }
 
     /// Test node: an honest pure delay. What the container's dry path must be
@@ -1647,7 +1735,7 @@ mod tests {
         let mut chain = EffectChain::new();
         let node = Box::new(LatentDelay::new(LATENCY));
         let align = DryAlign::new(node.latency_frames()).map(Box::new);
-        let displaced = chain.install(0, node, align);
+        let displaced = chain.install(0, node, align, Box::new(SpectrumAnalyzer::new()));
         assert!(displaced.is_empty());
         chain.wet_dry[0] = 0.5;
 
@@ -1701,7 +1789,11 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let filtered = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(install_effect(EffectTarget::Bus(mooloop_core::MASTER_BUS), 0, muffling_filter()));
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Bus(mooloop_core::MASTER_BUS),
+                0,
+                muffling_filter(),
+            ));
         });
         assert!(filtered < dry * 0.5, "dry {dry}, filtered {filtered}");
     }
@@ -1711,29 +1803,57 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let host_dry = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Channel(0),
+                0,
+                muffling_filter(),
+            ));
             render.apply_command(EngineCommand::SetEffectWetDry {
-                target: EffectTarget::Channel(0), slot: 0, wet_dry: 0.0,
+                target: EffectTarget::Channel(0),
+                slot: 0,
+                wet_dry: 0.0,
             });
         });
-        assert!((host_dry / dry - 1.0).abs() < 0.1, "wet=0 must pass dry signal");
+        assert!(
+            (host_dry / dry - 1.0).abs() < 0.1,
+            "wet=0 must pass dry signal"
+        );
         let trimmed = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Channel(0),
+                0,
+                muffling_filter(),
+            ));
             render.apply_command(EngineCommand::SetEffectWetDry {
-                target: EffectTarget::Channel(0), slot: 0, wet_dry: 0.0,
+                target: EffectTarget::Channel(0),
+                slot: 0,
+                wet_dry: 0.0,
             });
             render.apply_command(EngineCommand::SetEffectOutputTrim {
-                target: EffectTarget::Channel(0), slot: 0, output_trim: 0.5,
+                target: EffectTarget::Channel(0),
+                slot: 0,
+                output_trim: 0.5,
             });
         });
-        assert!((trimmed / dry - 0.25).abs() < 0.08, "trim is amplitude, energy scales squared");
+        assert!(
+            (trimmed / dry - 0.25).abs() < 0.08,
+            "trim is amplitude, energy scales squared"
+        );
         let input_trimmed = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Channel(0),
+                0,
+                muffling_filter(),
+            ));
             render.apply_command(EngineCommand::SetEffectWetDry {
-                target: EffectTarget::Channel(0), slot: 0, wet_dry: 0.0,
+                target: EffectTarget::Channel(0),
+                slot: 0,
+                wet_dry: 0.0,
             });
             render.apply_command(EngineCommand::SetEffectInputTrim {
-                target: EffectTarget::Channel(0), slot: 0, input_trim: 0.5,
+                target: EffectTarget::Channel(0),
+                slot: 0,
+                input_trim: 0.5,
             });
         });
         assert!(
@@ -1749,10 +1869,18 @@ mod tests {
         // A wide-open filter passes (nearly) everything; closing it via a
         // queued ParamValue event must change the output.
         let open = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, default_effect(mooloop_core::EffectKind::Filter)));
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Channel(0),
+                0,
+                default_effect(mooloop_core::EffectKind::Filter),
+            ));
         });
         let closed = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, default_effect(mooloop_core::EffectKind::Filter)));
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Channel(0),
+                0,
+                default_effect(mooloop_core::EffectKind::Filter),
+            ));
             render.apply_command(EngineCommand::SetEffectParam {
                 target: EffectTarget::Channel(0),
                 slot: 0,
@@ -1764,7 +1892,11 @@ mod tests {
 
         // Bypass restores the dry sound.
         let bypassed = rendered_energy(&project, |render| {
-            let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Channel(0),
+                0,
+                muffling_filter(),
+            ));
             render.apply_command(EngineCommand::SetEffectBypassed {
                 target: EffectTarget::Channel(0),
                 slot: 0,
@@ -1780,7 +1912,11 @@ mod tests {
 
         // Swapping an occupied slot with an empty one moves the filter.
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, muffling_filter()));
+        let _ = render.apply_structural(install_effect(
+            EffectTarget::Channel(0),
+            0,
+            muffling_filter(),
+        ));
         render.apply_command(EngineCommand::SwapEffectSlots {
             target: EffectTarget::Channel(0),
             slot_a: 0,

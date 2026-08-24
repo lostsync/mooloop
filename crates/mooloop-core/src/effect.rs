@@ -315,7 +315,7 @@ impl Default for EqParams {
         bands[0] = EqBand { enabled: true, kind: EqBandKind::LowShelf, frequency_hz: 120.0, gain_db: 0.0, q: 0.707, q_profile: EqQProfile::Constant };
         bands[1] = EqBand { enabled: true, ..EqBand::bell(1_000.0) };
         bands[2] = EqBand { enabled: true, kind: EqBandKind::HighShelf, frequency_hz: 8_000.0, gain_db: 0.0, q: 0.707, q_profile: EqQProfile::Constant };
-        Self { bands, high_pass: EqPassFilter::high_pass(), low_pass: EqPassFilter::low_pass(), selected_target: default_eq_selected_target(), analyzer_enabled: true }
+        Self { bands, high_pass: EqPassFilter::high_pass(), low_pass: EqPassFilter::low_pass(), selected_target: default_eq_selected_target(), analyzer_enabled: false }
     }
 }
 

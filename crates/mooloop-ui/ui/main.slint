@@ -118,6 +118,8 @@ struct EffectSlotRow {
     p5: float,
     // EQ-only: seven groups of freq/gain/q/enabled/kind plus HP and LP.
     eq-band-data: [float],
+    eq-spectrum-data: [float],
+    eq-analyzer-enabled: bool,
     wet-dry: float,
     // Trims are carried in dB from unity; the Rust side stores linear gain.
     input-trim-db: float,
@@ -344,6 +346,7 @@ export component MainWindow inherits Window {
     // slot, descriptor index within the kind, normalized 0..1. One callback
     // covers every parameter of every effect kind.
     callback effect-param-changed(int, int, float);
+    callback eq-analyzer-changed(int, bool);
     callback reorder-effect(int, int);              // from slot, to slot
     in-out property <int> selected-note-step;
     in-out property <int> selected-note;
@@ -2130,12 +2133,15 @@ export component MainWindow inherits Window {
                                                 q: slot.p4;
                                                 character: slot.p5;
                                                 band-data: slot.eq-band-data;
+                                                spectrum-data: slot.eq-spectrum-data;
+                                                analyzer-enabled: slot.eq-analyzer-enabled;
                                                 target-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                 enabled-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                 frequency-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                 gain-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                 q-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                 character-changed(v) => { root.effect-param-changed(index, 5, v); }
+                                                analyzer-toggled(v) => { root.eq-analyzer-changed(index, v); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                         }

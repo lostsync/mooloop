@@ -6,14 +6,14 @@
 //! params) as the source of truth and mirrors every mutation to the engine
 //! via commands. The engine keeps its own pre-allocated copy.
 
+mod history;
 mod meter;
 mod settings;
-mod history;
 
 slint::include_modules!();
 
-use meter::{db_to_linear, linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use history::{Entry as HistoryEntry, History};
+use meter::{db_to_linear, linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BusSetup, Channel,
     ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind,
@@ -22,11 +22,11 @@ use mooloop_core::{
     PatternPlacement, PlaybackMode, PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel,
     RetriggerMode, SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
-    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
-    MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT,
-    MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
+    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS,
+    MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES,
+    MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
-use mooloop_dsp::{build_effect, DrumSynth, DryAlign, SampleData};
+use mooloop_dsp::{build_effect, DrumSynth, DryAlign, SampleData, SpectrumAnalyzer};
 use mooloop_engine::{
     EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope,
     StructuralCommand, WavEncoding,
@@ -57,6 +57,18 @@ enum PendingEngineMessage {
     Structural(StructuralCommand),
     ProjectEdit(ProjectEdit),
     Audio(AudioAction),
+    Telemetry(TelemetryAction),
+}
+
+/// Display subscriptions are handled by the pump, which exclusively owns the
+/// engine handle. They observe a device's signal; they are not audio-thread
+/// commands and never become modulation routes.
+enum TelemetryAction {
+    SetEffectSpectrumEnabled {
+        target: EffectTarget,
+        slot: u8,
+        enabled: bool,
+    },
 }
 
 /// One requested change from the Audio preferences page. These reach
@@ -69,7 +81,10 @@ enum AudioAction {
     ApplyPersisted(mooloop_engine::AudioConfig),
     /// Re-read the live JACK graph and driver status.
     RefreshTargets,
-    SelectOutput { port_l: String, port_r: String },
+    SelectOutput {
+        port_l: String,
+        port_r: String,
+    },
     SelectBufferSize(u32),
     SetAutoReconnect(bool),
 }
@@ -109,6 +124,15 @@ struct AudioActionSender(std::sync::mpsc::Sender<PendingEngineMessage>);
 impl AudioActionSender {
     fn send(&self, action: AudioAction) -> bool {
         self.0.send(PendingEngineMessage::Audio(action)).is_ok()
+    }
+}
+
+#[derive(Clone)]
+struct TelemetryActionSender(std::sync::mpsc::Sender<PendingEngineMessage>);
+
+impl TelemetryActionSender {
+    fn send(&self, action: TelemetryAction) -> bool {
+        self.0.send(PendingEngineMessage::Telemetry(action)).is_ok()
     }
 }
 
@@ -647,10 +671,14 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
             ]);
         }
         eq_band_data.extend_from_slice(&[
-            (eq.high_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(), eq.high_pass.q,
-            if eq.high_pass.enabled { 1.0 } else { 0.0 }, eq.high_pass.slope.to_index() as f32,
-            (eq.low_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(), eq.low_pass.q,
-            if eq.low_pass.enabled { 1.0 } else { 0.0 }, eq.low_pass.slope.to_index() as f32,
+            (eq.high_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
+            eq.high_pass.q,
+            if eq.high_pass.enabled { 1.0 } else { 0.0 },
+            eq.high_pass.slope.to_index() as f32,
+            (eq.low_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
+            eq.low_pass.q,
+            if eq.low_pass.enabled { 1.0 } else { 0.0 },
+            eq.low_pass.slope.to_index() as f32,
         ]);
     }
     EffectSlotRow {
@@ -664,6 +692,8 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         p4: p[4],
         p5: p[5],
         eq_band_data: eq_band_data.as_slice().into(),
+        eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
+        eq_analyzer_enabled: slot.params.eq().is_some_and(|eq| eq.analyzer_enabled),
         wet_dry: slot.wet_dry,
         input_trim_db: linear_to_db(slot.input_trim),
         output_trim_db: linear_to_db(slot.output_trim),
@@ -2379,6 +2409,7 @@ impl AppUi {
         let cmd_tx = EngineCommandSender(pending_tx.clone());
         let project_edit_tx = ProjectEditSender(pending_tx.clone());
         let audio_tx = AudioActionSender(pending_tx.clone());
+        let telemetry_tx = TelemetryActionSender(pending_tx.clone());
         let structural_tx = StructuralCommandSender(pending_tx);
         let sample_rate = handle.sample_rate();
         // Sample slots are published out-of-band, so source replacement asks
@@ -2449,7 +2480,8 @@ impl AppUi {
                 if let Err(error) = settings.save() {
                     settings.appearance = previous;
                     settings.general.developer_mode = previous_developer_mode;
-                    window.set_preferences_error(format!("Could not save settings: {error}").into());
+                    window
+                        .set_preferences_error(format!("Could not save settings: {error}").into());
                     return false;
                 }
                 sync_preferences_properties(&window, &settings);
@@ -3100,7 +3132,9 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_created(move |start_tick, midi_note, duration_ticks| {
-                let Some(window) = weak.upgrade() else { return 0 };
+                let Some(window) = weak.upgrade() else {
+                    return 0;
+                };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
@@ -3309,7 +3343,13 @@ impl AppUi {
                     note: edited,
                 });
                 drop(st);
-                record_project_history(&commands, before, &history_state, &window, "Note velocity changed");
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Note velocity changed",
+                );
             });
         }
 
@@ -3557,7 +3597,9 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_edit_command_requested(move |kind, index| {
                 let Some(window) = weak.upgrade() else { return };
-                let Ok(index) = usize::try_from(index) else { return };
+                let Ok(index) = usize::try_from(index) else {
+                    return;
+                };
                 if kind != 3 && commands.borrow().project_edit_pending {
                     return;
                 }
@@ -3583,8 +3625,13 @@ impl AppUi {
                         }
                     }
                     2 => {
-                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else { return };
-                        if st.borrow().channels.len() <= 1 { return; }
+                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index)
+                        else {
+                            return;
+                        };
+                        if st.borrow().channels.len() <= 1 {
+                            return;
+                        }
                         commands.borrow_mut().channel_clipboard = Some(copy);
                         sync_command_availability(&window, &commands.borrow());
                         if queue_channel_delete(&tx, &st, &window, index, "Channel cut") {
@@ -3593,20 +3640,28 @@ impl AppUi {
                         }
                     }
                     3 => {
-                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else { return };
+                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index)
+                        else {
+                            return;
+                        };
                         commands.borrow_mut().channel_clipboard = Some(copy);
                         sync_command_availability(&window, &commands.borrow());
                         window.set_status_message("Channel copied".into());
                     }
                     4 => {
-                        let Some(copy) = commands.borrow().channel_clipboard.clone() else { return };
+                        let Some(copy) = commands.borrow().channel_clipboard.clone() else {
+                            return;
+                        };
                         if queue_channel_insert(&tx, &st, &window, index, copy, "Channel pasted") {
                             commands.borrow_mut().project_edit_pending = true;
                             sync_command_availability(&window, &commands.borrow());
                         }
                     }
                     5 => {
-                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index) else { return };
+                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index)
+                        else {
+                            return;
+                        };
                         if queue_channel_insert(&tx, &st, &window, index, copy, "Channel cloned") {
                             commands.borrow_mut().project_edit_pending = true;
                             sync_command_availability(&window, &commands.borrow());
@@ -3666,6 +3721,31 @@ impl AppUi {
                 let _ = tx.send(EngineCommand::SetBusMuted {
                     bus: index as u8,
                     muted,
+                });
+            });
+        }
+
+        {
+            let telemetry = telemetry_tx.clone();
+            let st = state.clone();
+            window.on_eq_analyzer_changed(move |slot, enabled| {
+                let mut st = st.borrow_mut();
+                let target = st.effect_target;
+                let slot = slot as usize;
+                let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot))
+                else {
+                    return;
+                };
+                let mooloop_core::EffectParams::Eq(params) = &mut effect.params else {
+                    return;
+                };
+                params.analyzer_enabled = enabled;
+                let row = effect_slot_row(effect);
+                st.effect_slot_model.set_row_data(slot, row);
+                let _ = telemetry.send(TelemetryAction::SetEffectSpectrumEnabled {
+                    target,
+                    slot: slot as u8,
+                    enabled,
                 });
             });
         }
@@ -3827,6 +3907,7 @@ impl AppUi {
                     slot: tail_slot as u8,
                     node,
                     align,
+                    analyzer: Box::new(SpectrumAnalyzer::new()),
                 });
                 for position in (slot + 1..=tail_slot).rev() {
                     let _ = tx.send(EngineCommand::SwapEffectSlots {
@@ -3904,12 +3985,21 @@ impl AppUi {
             window.on_effect_wet_dry_changed(move |slot, wet_dry| {
                 let mut st = st.borrow_mut();
                 let target = st.effect_target;
-                let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot as usize)) else { return; };
+                let Some(effect) = st
+                    .effect_chain_mut()
+                    .and_then(|chain| chain.get_mut(slot as usize))
+                else {
+                    return;
+                };
                 effect.wet_dry = wet_dry.clamp(0.0, 1.0);
                 let value = effect.wet_dry;
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot as usize, row);
-                let _ = tx.send(EngineCommand::SetEffectWetDry { target, slot: slot as u8, wet_dry: value });
+                let _ = tx.send(EngineCommand::SetEffectWetDry {
+                    target,
+                    slot: slot as u8,
+                    wet_dry: value,
+                });
             });
         }
         {
@@ -3918,14 +4008,23 @@ impl AppUi {
             window.on_effect_input_trim_changed(move |slot, input_trim_db| {
                 let mut st = st.borrow_mut();
                 let target = st.effect_target;
-                let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot as usize)) else { return; };
+                let Some(effect) = st
+                    .effect_chain_mut()
+                    .and_then(|chain| chain.get_mut(slot as usize))
+                else {
+                    return;
+                };
                 // The knob works in dB from unity; the project and the wire
                 // carry linear gain.
                 effect.input_trim = db_to_linear(input_trim_db.clamp(METER_FLOOR_DB, 12.0));
                 let value = effect.input_trim;
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot as usize, row);
-                let _ = tx.send(EngineCommand::SetEffectInputTrim { target, slot: slot as u8, input_trim: value });
+                let _ = tx.send(EngineCommand::SetEffectInputTrim {
+                    target,
+                    slot: slot as u8,
+                    input_trim: value,
+                });
             });
         }
         {
@@ -3934,12 +4033,21 @@ impl AppUi {
             window.on_effect_output_trim_changed(move |slot, output_trim_db| {
                 let mut st = st.borrow_mut();
                 let target = st.effect_target;
-                let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot as usize)) else { return; };
+                let Some(effect) = st
+                    .effect_chain_mut()
+                    .and_then(|chain| chain.get_mut(slot as usize))
+                else {
+                    return;
+                };
                 effect.output_trim = db_to_linear(output_trim_db.clamp(METER_FLOOR_DB, 12.0));
                 let value = effect.output_trim;
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot as usize, row);
-                let _ = tx.send(EngineCommand::SetEffectOutputTrim { target, slot: slot as u8, output_trim: value });
+                let _ = tx.send(EngineCommand::SetEffectOutputTrim {
+                    target,
+                    slot: slot as u8,
+                    output_trim: value,
+                });
             });
         }
 
@@ -4099,8 +4207,12 @@ impl AppUi {
                 let start = (offset.clamp(0.0, 1.0) * total as f32).round() as usize;
                 let span = (visible_fraction.max(0.0) * total as f32).round().max(1.0) as usize;
                 let end = (start + span).min(total);
-                st.waveform_model
-                    .set_vec(waveform_peaks_windowed(sample, WAVEFORM_BINS, start, end));
+                st.waveform_model.set_vec(waveform_peaks_windowed(
+                    sample,
+                    WAVEFORM_BINS,
+                    start,
+                    end,
+                ));
             });
         }
 
@@ -5074,6 +5186,13 @@ impl AppUi {
                                 sync_command_availability(&window, &commands.borrow());
                             }
                         }
+                        PendingEngineMessage::Telemetry(action) => match action {
+                            TelemetryAction::SetEffectSpectrumEnabled {
+                                target,
+                                slot,
+                                enabled,
+                            } => handle.set_effect_spectrum_enabled(target, slot, enabled),
+                        },
                         PendingEngineMessage::Audio(action) => {
                             let Some(window) = weak.upgrade() else { return };
                             match action {
@@ -5275,6 +5394,10 @@ impl AppUi {
                             row.input_right_db = linear_to_db(in_r);
                             row.output_left_db = linear_to_db(out_l);
                             row.output_right_db = linear_to_db(out_r);
+                            if row.eq_analyzer_enabled {
+                                let spectrum = handle.effect_spectrum(state.effect_target, slot as u8);
+                                row.eq_spectrum_data = spectrum.as_slice().into();
+                            }
                             state.effect_slot_model.set_row_data(slot, row);
                         }
                     }
@@ -5514,10 +5637,36 @@ fn install_project_in_ui(
         }
     }
     state.borrow_mut().replace_project(project, samples, window);
+    sync_effect_spectrum_subscriptions(&state.borrow(), handle);
     window.set_playing(false);
     window.set_playlist_position_ticks(0);
     refresh_preset_menus(state, window);
     true
+}
+
+fn sync_effect_spectrum_subscriptions(state: &UiState, handle: &EngineHandle) {
+    for (channel, setup) in state.channels.iter().enumerate() {
+        for (slot, effect) in setup.effects.iter().enumerate() {
+            if let Some(eq) = effect.params.eq() {
+                handle.set_effect_spectrum_enabled(
+                    EffectTarget::Channel(channel as u8),
+                    slot as u8,
+                    eq.analyzer_enabled,
+                );
+            }
+        }
+    }
+    for (bus, setup) in state.buses.iter().enumerate() {
+        for (slot, effect) in setup.effects.iter().enumerate() {
+            if let Some(eq) = effect.params.eq() {
+                handle.set_effect_spectrum_enabled(
+                    EffectTarget::Bus(bus as u8),
+                    slot as u8,
+                    eq.analyzer_enabled,
+                );
+            }
+        }
+    }
 }
 
 fn preset_menu_label(preset: &PresetSummary) -> slint::SharedString {

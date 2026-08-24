@@ -151,6 +151,22 @@ outputs into a per-channel table read on the *following* block. One block of
 latency, deterministic, identical offline and realtime, and it makes graph
 order irrelevant. That remains the cheaper and more musical first move.
 
+### Display telemetry is observation, not a route
+
+Device displays may need a continuously changing view of their input or
+output: spectrum, waveform, gain reduction, a buffer read head, and similar
+information. These publish a fixed, bounded semantic vector into the engine's
+device-stage telemetry bank. The UI reads only the newest snapshot through
+atomics; it does not receive PCM or replay audio analysis itself.
+
+Display telemetry is deliberately not a modulation outlet. It has no timing
+guarantee beyond "latest available", cannot write parameters, and must not be
+used by audio nodes as an input. When a device exposes a musical control
+signal, it belongs in the modulator/matrix path above, where the engine can
+give it a declared rate, latency, and destination semantics. This preserves a
+single display path that any device can use without preempting the future
+typed control graph.
+
 **UI:** no patch cords. The assignment gesture is a labeled source chip on
 each modulator: click it, assignable knobs light up, drag one to set depth.
 Inlets and outlets exist in the data model without being drawn as wires.

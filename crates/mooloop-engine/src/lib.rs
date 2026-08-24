@@ -17,7 +17,7 @@ use std::sync::Arc;
 use arc_swap::{ArcSwap, ArcSwapOption};
 use jack::{AudioOut, Client, ClientOptions};
 use mooloop_core::{EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS};
-use mooloop_dsp::{AudioNode, DryAlign, SampleData};
+use mooloop_dsp::{AudioNode, DryAlign, SampleData, SpectrumAnalyzer, SPECTRUM_BINS};
 use rtrb::{Consumer, Producer};
 
 mod driver;
@@ -32,7 +32,7 @@ use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
-pub use meters::{BusMeters, DeviceMeters, PlayheadMeters};
+pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, PlayheadMeters};
 pub use offline::{
     ExportError, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, RenderSummary,
     WavEncoding,
@@ -55,6 +55,7 @@ pub enum StructuralCommand {
         slot: u8,
         node: Box<dyn AudioNode + Send>,
         align: Option<Box<DryAlign>>,
+        analyzer: Box<SpectrumAnalyzer>,
     },
     /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
     RemoveEffect { target: EffectTarget, slot: u8 },
@@ -163,10 +164,12 @@ impl Engine {
         let xrun_count = Arc::new(AtomicU64::new(0));
         let bus_meters = BusMeters::new();
         let device_meters = DeviceMeters::new();
+        let device_telemetry = DeviceTelemetry::new();
         let playhead_meters = PlayheadMeters::new();
         let mut render = RenderState::new(sample_rate, sample_slots.clone());
         render.attach_meters(bus_meters.clone());
         render.attach_device_meters(device_meters.clone());
+        render.attach_device_telemetry(device_telemetry.clone());
         render.attach_playhead_meters(playhead_meters.clone());
         let io = graph::GraphIo {
             out_l,
@@ -221,6 +224,7 @@ impl Engine {
                 reclaim_rx,
                 bus_meters,
                 device_meters,
+                device_telemetry,
                 playhead_meters,
                 sample_slots,
                 sample_rate,
@@ -242,6 +246,7 @@ pub struct EngineHandle {
     reclaim_rx: Consumer<StructuralReclaim>,
     bus_meters: Arc<BusMeters>,
     device_meters: Arc<DeviceMeters>,
+    device_telemetry: Arc<DeviceTelemetry>,
     playhead_meters: Arc<PlayheadMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     sample_rate: u32,
@@ -320,6 +325,7 @@ impl EngineHandle {
         // renderer publishes into its private, unread arrays while the UI
         // continues to read the startup arrays forever.
         render.attach_device_meters(self.device_meters.clone());
+        render.attach_device_telemetry(self.device_telemetry.clone());
         render.attach_playhead_meters(self.playhead_meters.clone());
         render.load_project(&project);
         let prepared = PreparedProject {
@@ -334,6 +340,7 @@ impl EngineHandle {
             .push(RealtimeCommand::InstallProject(prepared))
             .is_ok()
         {
+            self.device_telemetry.clear_spectra();
             self.install_generation = generation;
             true
         } else {
@@ -352,6 +359,25 @@ impl EngineHandle {
     /// `MAX_CHANNELS + bus index`. Stage 0 is the source; effect slots follow.
     pub fn take_device_peak(&self, target: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
         self.device_meters.take(target, stage)
+    }
+
+    /// Subscribe an effect stage's input to compact spectrum telemetry. This
+    /// is observation-only: it never participates in audio or modulation
+    /// signal flow, and disabled stages do not run spectral analysis.
+    pub fn set_effect_spectrum_enabled(&self, target: EffectTarget, slot: u8, enabled: bool) {
+        self.device_telemetry.set_spectrum_enabled(
+            effect_target_index(target),
+            usize::from(slot) + 1,
+            enabled,
+        );
+    }
+
+    /// The latest normalized log-frequency spectrum for one effect input.
+    /// The data is a display vector, not PCM; callers may poll it at their
+    /// own frame rate without affecting the audio callback.
+    pub fn effect_spectrum(&self, target: EffectTarget, slot: u8) -> [f32; SPECTRUM_BINS] {
+        self.device_telemetry
+            .read_spectrum(effect_target_index(target), usize::from(slot) + 1)
     }
 
     /// Every currently-active sampler voice's normalized playback position
@@ -408,8 +434,8 @@ impl EngineHandle {
     pub fn set_output_target(&mut self, target: Option<(String, String)>) -> Result<(), String> {
         let jack_client = self.client.as_client();
         let previous = self.output_target.load_full();
-        let next = target
-            .unwrap_or_else(|| (DEFAULT_OUTPUT_L.to_owned(), DEFAULT_OUTPUT_R.to_owned()));
+        let next =
+            target.unwrap_or_else(|| (DEFAULT_OUTPUT_L.to_owned(), DEFAULT_OUTPUT_R.to_owned()));
         if *previous != next {
             let _ = jack_client.disconnect_ports_by_name(OUT_L_NAME, &previous.0);
             let _ = jack_client.disconnect_ports_by_name(OUT_R_NAME, &previous.1);
@@ -446,5 +472,12 @@ impl EngineHandle {
             buffer_size: self.client.as_client().buffer_size(),
             current_target: (*self.output_target.load_full()).clone(),
         }
+    }
+}
+
+fn effect_target_index(target: EffectTarget) -> usize {
+    match target {
+        EffectTarget::Channel(channel) => usize::from(channel),
+        EffectTarget::Bus(bus) => MAX_CHANNELS + usize::from(bus),
     }
 }

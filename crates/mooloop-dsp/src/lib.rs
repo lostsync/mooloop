@@ -19,6 +19,7 @@
 //! `AudioNode` trait, processing the bus in place after the generator.
 
 pub mod align;
+pub mod analysis;
 pub mod bus;
 pub mod delayline;
 pub mod drumsynth;
@@ -37,6 +38,7 @@ pub mod shaper;
 pub mod smooth;
 
 pub use align::DryAlign;
+pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};
 pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;
