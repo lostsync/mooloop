@@ -89,6 +89,8 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("edit.cut-channel", "Cut Channel", "Edit", ctrl + "x"),
     action!("edit.copy-channel", "Copy Channel", "Edit", ctrl + "c"),
     action!("edit.paste-channel", "Paste Channel", "Edit", ctrl + "v"),
+    action!("edit.select-all", "Select All Notes", "Edit", ctrl + "a"),
+    action!("edit.delete-note", "Delete Selected Notes", "Edit", "delete"),
     action!("view.pane-next", "Next Pane", "View", ctrl + "right"),
     action!("view.pane-prev", "Previous Pane", "View", ctrl + "left"),
     action!("view.pane-steps", "Show Steps", "View", ctrl + "1"),
@@ -109,6 +111,16 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         ctrl + shift + "delete"
     ),
     action!("pattern.clone", "Clone Pattern", "Pattern", ctrl + alt + "d"),
+    // No default chord: every nearby Pattern-menu action already claims a
+    // Ctrl+<modifier>+key combination, and Ctrl+Alt+Delete is a poor choice
+    // to fight the desktop environment over. Still registered so it shows
+    // up in Preferences > Shortcuts for anyone who wants to bind it.
+    ActionSpec {
+        id: "pattern.clear",
+        label: "Clear Pattern",
+        category: "Pattern",
+        default: None,
+    },
 ];
 
 /// One key combination. `key` is a canonical lowercase identifier: a single

@@ -40,6 +40,7 @@ use mooloop_project::{
 use settings::{AppearancePreset, AppearanceSettings, ThemePalette, UiSettings};
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -771,6 +772,31 @@ fn queue_pattern_remove(
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
+/// Empties pattern `index`'s notes on every channel. The pattern itself,
+/// its length, and any playlist placements referencing it are untouched --
+/// it still exists and still plays, just silently.
+fn queue_pattern_clear(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    index: usize,
+    status: &'static str,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let samples = before.samples.clone();
+    if index >= project.pattern_lengths.len() {
+        return false;
+    }
+    for channel in &mut project.channels {
+        channel.notes[index].clear();
+    }
+    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+}
+
 #[derive(Clone, Copy)]
 enum LoadTarget {
     Song,
@@ -1117,14 +1143,14 @@ fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
     }
 }
 
-fn note_cell(note: NoteEvent, selected_id: Option<NoteId>) -> NoteCell {
+fn note_cell(note: NoteEvent, selected_ids: &HashSet<NoteId>) -> NoteCell {
     NoteCell {
         id: note.id as i32,
         start_tick: note.start_tick as i32,
         duration_ticks: note.duration_ticks as i32,
         note: note.note as i32,
         velocity: note.velocity as i32,
-        selected: selected_id == Some(note.id),
+        selected: selected_ids.contains(&note.id),
     }
 }
 
@@ -1160,6 +1186,11 @@ struct UiState {
     /// roll, the step grid, and the sampler all still mean a channel.
     effect_target: EffectTarget,
     selected_note_id: Option<NoteId>,
+    /// The full multi-selection, driving highlight and bulk delete. Always a
+    /// superset of `selected_note_id` when non-empty; the precision editor
+    /// (`refresh_selected_note_controls`) only shows fields when this has
+    /// settled on exactly one member, since it edits one note, not a group.
+    selected_note_ids: HashSet<NoteId>,
     bundle_path: Option<PathBuf>,
     dirty: bool,
     revision: u64,
@@ -1485,6 +1516,7 @@ impl UiState {
         // previous document had open means nothing in this one.
         self.effect_target = EffectTarget::Channel(project.selected_channel);
         self.selected_note_id = None;
+        self.selected_note_ids.clear();
         self.channels = channels;
         self.step_models = self
             .channels
@@ -1670,7 +1702,7 @@ impl UiState {
             .iter()
             .copied()
             .filter(|note| note.start_tick < length_ticks)
-            .map(|note| note_cell(note, self.selected_note_id))
+            .map(|note| note_cell(note, &self.selected_note_ids))
             .collect();
         self.note_model.set_vec(cells);
         self.refresh_selected_note_controls(window);
@@ -1678,6 +1710,12 @@ impl UiState {
 
     fn refresh_selected_note_controls(&self, window: &MainWindow) {
         window.set_has_selected_note(false);
+        // The precision editor shows one note's fields; once the selection
+        // is a group (Shift-click, Select All) there is no single note left
+        // to show them for.
+        if self.selected_note_ids.len() > 1 {
+            return;
+        }
         let Some(id) = self.selected_note_id else {
             return;
         };
@@ -1692,6 +1730,60 @@ impl UiState {
         window.set_selected_note(note.note as i32);
         window.set_selected_velocity(note.velocity as i32);
         window.set_selected_duration_ticks(note.duration_ticks as i32);
+    }
+
+    /// Replaces the whole note selection with exactly one note (or clears it
+    /// when `id` is `None`). Every single-note interaction -- rack step
+    /// edits, a plain piano-roll click, create/move/resize/velocity -- goes
+    /// through this, so a Shift-click or Select All selection never lingers
+    /// once the user touches a single note through any other gesture.
+    fn select_note(&mut self, id: Option<NoteId>) {
+        self.selected_note_id = id;
+        self.selected_note_ids.clear();
+        self.selected_note_ids.extend(id);
+    }
+
+    /// Adds or removes one note from the selection (Shift/Ctrl-click).
+    fn toggle_note_selection(&mut self, id: NoteId) {
+        if !self.selected_note_ids.remove(&id) {
+            self.selected_note_ids.insert(id);
+        }
+        self.selected_note_id = (self.selected_note_ids.len() == 1)
+            .then(|| *self.selected_note_ids.iter().next().unwrap());
+    }
+
+    /// Selects every note in `channel`'s current pattern (Ctrl+A).
+    fn select_all_notes(&mut self, channel: usize) {
+        let pattern = self.current_pattern;
+        let length_ticks = self.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+        self.selected_note_ids = self.channels[channel].notes[pattern]
+            .iter()
+            .filter(|note| note.start_tick < length_ticks)
+            .map(|note| note.id)
+            .collect();
+        self.selected_note_id = (self.selected_note_ids.len() == 1)
+            .then(|| *self.selected_note_ids.iter().next().unwrap());
+    }
+
+    /// Drops ids that no longer exist from the selection, e.g. after a batch
+    /// removal elsewhere in the rack or piano roll.
+    fn prune_note_selection(&mut self, removed: &[NoteId]) {
+        self.selected_note_ids.retain(|id| !removed.contains(id));
+        if self.selected_note_id.is_some_and(|id| removed.contains(&id)) {
+            self.selected_note_id = None;
+        }
+    }
+
+    /// Recomputes every step cell for `channel`'s current pattern. Used
+    /// after an edit (like a multi-note delete) that can touch notes spread
+    /// across many steps, where refreshing one step at a time would miss
+    /// the rest.
+    fn refresh_rack_row(&self, channel: usize) {
+        let notes = &self.channels[channel].notes[self.current_pattern];
+        let cells: Vec<StepCell> = (0..self.pattern_lengths[self.current_pattern])
+            .map(|step| rack_cell(notes, step))
+            .collect();
+        self.step_models[channel].set_vec(cells);
     }
 
     /// The chain the device rack is currently editing, channel or bus.
@@ -2086,6 +2178,7 @@ impl AppUi {
             selected: 0,
             effect_target: EffectTarget::Channel(0),
             selected_note_id: None,
+            selected_note_ids: HashSet::new(),
             bundle_path: None,
             dirty: false,
             revision: 0,
@@ -2702,6 +2795,9 @@ impl AppUi {
                     "pattern.add" => window.invoke_add_pattern_clicked(),
                     "pattern.clone" => window.invoke_pattern_clone_requested(),
                     "pattern.remove" => window.invoke_pattern_remove_requested(),
+                    "pattern.clear" => window.invoke_pattern_clear_requested(),
+                    "edit.select-all" => window.invoke_select_all_requested(),
+                    "edit.delete-note" => window.invoke_delete_selected_notes_requested(),
                     "view.zoom-in" => window.invoke_zoom_in_requested(),
                     "view.zoom-out" => window.invoke_zoom_out_requested(),
                     "view.pane-steps" => {
@@ -3023,7 +3119,7 @@ impl AppUi {
                 {
                     let mut st = st.borrow_mut();
                     st.current_pattern = p;
-                    st.selected_note_id = None;
+                    st.select_note(None);
                     st.show_pattern(p);
                 }
                 if let Some(w) = weak.upgrade() {
@@ -3055,7 +3151,7 @@ impl AppUi {
                     channel.notes.push(Vec::new());
                 }
                 st.current_pattern = pattern;
-                st.selected_note_id = None;
+                st.select_note(None);
                 st.show_pattern(pattern);
                 if let Some(window) = weak.upgrade() {
                     window.set_pattern_count(st.pattern_lengths.len() as i32);
@@ -3103,14 +3199,19 @@ impl AppUi {
                 }
                 st.pattern_lengths[pattern] = length;
                 let length_ticks = length as u32 * TICKS_PER_STEP;
-                if st.selected_note_id.is_some_and(|id| {
-                    st.channels[st.selected].notes[pattern]
-                        .iter()
-                        .find(|note| note.id == id)
-                        .is_none_or(|note| note.start_tick >= length_ticks)
-                }) {
-                    st.selected_note_id = None;
-                }
+                let notes = &st.channels[st.selected].notes[pattern];
+                let out_of_range: Vec<NoteId> = st
+                    .selected_note_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        notes
+                            .iter()
+                            .find(|note| note.id == *id)
+                            .is_none_or(|note| note.start_tick >= length_ticks)
+                    })
+                    .collect();
+                st.prune_note_selection(&out_of_range);
                 st.show_pattern(pattern);
                 if let Some(w) = weak.upgrade() {
                     w.set_pattern_length(length as i32);
@@ -3226,7 +3327,7 @@ impl AppUi {
                         60,
                     );
                     if channel == st.selected {
-                        st.selected_note_id = Some(note.id);
+                        st.select_note(Some(note.id));
                     }
                     let _ = tx.send(EngineCommand::UpsertNote {
                         pattern: pattern as u8,
@@ -3235,9 +3336,7 @@ impl AppUi {
                     });
                 } else {
                     st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                    if st.selected_note_id.is_some_and(|id| ids.contains(&id)) {
-                        st.selected_note_id = None;
-                    }
+                    st.prune_note_selection(&ids);
                     for id in ids {
                         let _ = tx.send(EngineCommand::RemoveNote {
                             pattern: pattern as u8,
@@ -3273,9 +3372,7 @@ impl AppUi {
                     .map(|note| note.id)
                     .collect();
                 st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                if st.selected_note_id.is_some_and(|id| ids.contains(&id)) {
-                    st.selected_note_id = None;
-                }
+                st.prune_note_selection(&ids);
                 for id in ids {
                     let _ = tx.send(EngineCommand::RemoveNote {
                         pattern: pattern as u8,
@@ -3327,7 +3424,8 @@ impl AppUi {
                         .unwrap() = note;
                     edited.push(note);
                 }
-                st.selected_note_id = (channel == st.selected).then_some(edited[0].id);
+                let primary = (channel == st.selected).then_some(edited[0].id);
+                st.select_note(primary);
                 st.refresh_rack_cell(channel, step);
                 if channel == st.selected {
                     if let Some(window) = weak.upgrade() {
@@ -3375,7 +3473,7 @@ impl AppUi {
                         60,
                     );
                     if channel == st.selected {
-                        st.selected_note_id = Some(note.id);
+                        st.select_note(Some(note.id));
                     }
                     let _ = tx.send(EngineCommand::UpsertNote {
                         pattern: pattern as u8,
@@ -3387,9 +3485,7 @@ impl AppUi {
                         return;
                     }
                     st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                    if st.selected_note_id.is_some_and(|id| ids.contains(&id)) {
-                        st.selected_note_id = None;
-                    }
+                    st.prune_note_selection(&ids);
                     for id in ids {
                         let _ = tx.send(EngineCommand::RemoveNote {
                             pattern: pattern as u8,
@@ -3428,9 +3524,7 @@ impl AppUi {
                     .map(|note| note.id)
                     .collect();
                 st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                if st.selected_note_id.is_some_and(|id| ids.contains(&id)) {
-                    st.selected_note_id = None;
-                }
+                st.prune_note_selection(&ids);
                 for id in ids {
                     let _ = tx.send(EngineCommand::RemoveNote {
                         pattern: pattern as u8,
@@ -3552,7 +3646,7 @@ impl AppUi {
                 {
                     *stored = note;
                 }
-                st.selected_note_id = Some(note.id);
+                st.select_note(Some(note.id));
                 st.refresh_rack_cell(channel, (start_tick / TICKS_PER_STEP) as usize);
                 st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
@@ -3584,7 +3678,7 @@ impl AppUi {
         {
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_piano_note_selected(move |id| {
+            window.on_piano_note_selected(move |id, shift, ctrl| {
                 let mut st = st.borrow_mut();
                 let id = id as NoteId;
                 let pattern = st.current_pattern;
@@ -3593,7 +3687,13 @@ impl AppUi {
                     .iter()
                     .any(|note| note.id == id)
                 {
-                    st.selected_note_id = Some(id);
+                    // Shift/Ctrl-click builds a multi-selection; a plain
+                    // click always collapses to just this note.
+                    if shift || ctrl {
+                        st.toggle_note_selection(id);
+                    } else {
+                        st.select_note(Some(id));
+                    }
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);
                     }
@@ -3632,7 +3732,7 @@ impl AppUi {
                     *note
                 };
                 st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                st.selected_note_id = Some(edited.id);
+                st.select_note(Some(edited.id));
                 st.refresh_rack_cell(channel, old_step as usize);
                 st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
                 st.refresh_note_editor(&window);
@@ -3667,7 +3767,7 @@ impl AppUi {
                 note.duration_ticks = (duration.max(1) as u32)
                     .min(length_ticks.saturating_sub(note.start_tick).max(1));
                 let edited = *note;
-                st.selected_note_id = Some(edited.id);
+                st.select_note(Some(edited.id));
                 st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
                     pattern: pattern as u8,
@@ -3697,7 +3797,7 @@ impl AppUi {
                     return;
                 };
                 let removed = st.channels[channel].notes[pattern].remove(index);
-                st.selected_note_id = None;
+                st.prune_note_selection(&[removed.id]);
                 st.refresh_rack_cell(channel, (removed.start_tick / TICKS_PER_STEP) as usize);
                 st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::RemoveNote {
@@ -3730,7 +3830,7 @@ impl AppUi {
                 };
                 note.velocity = velocity;
                 let edited = *note;
-                st.selected_note_id = Some(edited.id);
+                st.select_note(Some(edited.id));
                 st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
                 st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
@@ -3797,6 +3897,54 @@ impl AppUi {
                 .min(length_ticks.saturating_sub(note.start_tick).max(1))
         );
 
+        // Ctrl+A: select every note in the current channel's current
+        // pattern. Shares the same selection set Shift/Ctrl-click builds.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_select_all_requested(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let mut st = st.borrow_mut();
+                let channel = st.selected;
+                st.select_all_notes(channel);
+                st.refresh_note_editor(&window);
+            });
+        }
+
+        // Delete/Backspace, or the Edit menu row: removes every note in the
+        // current selection, whether that's one note or a whole Select-All.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_delete_selected_notes_requested(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let ids: Vec<NoteId> = st.borrow().selected_note_ids.iter().copied().collect();
+                if ids.is_empty() {
+                    return;
+                }
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                st.prune_note_selection(&ids);
+                st.refresh_rack_row(channel);
+                st.refresh_note_editor(&window);
+                for id in &ids {
+                    let _ = tx.send(EngineCommand::RemoveNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        id: *id,
+                    });
+                }
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Notes deleted");
+            });
+        }
+
         // Channel selection (for the bottom editor).
         {
             let st = state.clone();
@@ -3814,7 +3962,7 @@ impl AppUi {
                     }
                     guard.selected = ch;
                     guard.effect_target = EffectTarget::Channel(ch as u8);
-                    guard.selected_note_id = None;
+                    guard.select_note(None);
                 }
                 if let Some(w) = weak.upgrade() {
                     w.set_selected_channel(ch as i32);
@@ -3912,7 +4060,7 @@ impl AppUi {
                         return;
                     }
                     guard.reset_channel_source(channel, source);
-                    guard.selected_note_id = None;
+                    guard.select_note(None);
                     guard.sync_row_flags();
                     channel
                 };
@@ -3950,7 +4098,7 @@ impl AppUi {
                 st.reset_channel_source(index, source);
                 st.selected = index;
                 st.effect_target = EffectTarget::Channel(index as u8);
-                st.selected_note_id = None;
+                st.select_note(None);
                 let ch = &st.channels[index];
                 let row = ChannelRow {
                     name: ch.name.as_str().into(),
@@ -4107,6 +4255,23 @@ impl AppUi {
                 }
                 let index = st.borrow().current_pattern;
                 if queue_pattern_remove(&tx, &st, &window, index, "Pattern deleted") {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = project_edit_tx.clone();
+            let weak = window.as_weak();
+            window.on_pattern_clear_requested(move || {
+                let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                let index = st.borrow().current_pattern;
+                if queue_pattern_clear(&tx, &st, &window, index, "Pattern cleared") {
                     commands.borrow_mut().project_edit_pending = true;
                     sync_command_availability(&window, &commands.borrow());
                 }
@@ -6612,6 +6777,25 @@ mod tests {
         let cell = rack_cell(&carried, 1);
         assert_eq!(cell.substeps, 0b1111);
         assert_eq!(cell.onsets, 0);
+    }
+
+    #[test]
+    fn note_cell_reports_membership_in_a_multi_selection() {
+        let note = NoteEvent::new(5, 0, TICKS_PER_STEP, 60, 100);
+        assert!(!note_cell(note, &HashSet::new()).selected);
+
+        let mut selected = HashSet::new();
+        selected.insert(3);
+        assert!(
+            !note_cell(note, &selected).selected,
+            "a note not in the set should not read as selected"
+        );
+
+        selected.insert(5);
+        assert!(
+            note_cell(note, &selected).selected,
+            "every member of the set should read as selected, not just a lone primary"
+        );
     }
 
     #[test]

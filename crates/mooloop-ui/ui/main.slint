@@ -384,7 +384,7 @@ export component MainWindow inherits Window {
     property <length> piano-content-h: root.piano-note-count * root.piano-row-height;
 
     callback piano-note-created(int, int, int) -> int;  // start tick, MIDI note, duration ticks -> stable note ID
-    callback piano-note-selected(int);      // stable note ID
+    callback piano-note-selected(int, bool, bool); // stable note ID, shift held, ctrl held
     callback piano-note-moved(int, int, int); // ID, start tick, MIDI note
     callback piano-note-resized(int, int);  // ID, duration ticks
     callback piano-note-removed(int);       // stable note ID
@@ -607,6 +607,9 @@ export component MainWindow inherits Window {
     callback shortcut-key(string, bool, bool, bool, bool) -> bool;
     callback pattern-remove-requested();
     callback pattern-clone-requested();
+    callback pattern-clear-requested();
+    callback select-all-requested();
+    callback delete-selected-notes-requested();
 
     // Only the piano roll actually zooms today (the playlist has a snap
     // picker but no zoom, and the step grid/mixer aren't zoomable), so
@@ -828,7 +831,8 @@ export component MainWindow inherits Window {
                 MenuRow { text: "Copy Channel"; shortcut: "Ctrl+C"; selected => { root.edit-command-requested(3, root.selected-channel); } }
                 MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: root.channel-clipboard-available && root.channels.length < 16; selected => { root.edit-command-requested(4, root.selected-channel); } }
                 MenuSeparator {}
-                MenuRow { text: "Select All"; shortcut: "Ctrl+A"; enabled: false; selected => { } }
+                MenuRow { text: "Select All"; shortcut: "Ctrl+A"; selected => { root.select-all-requested(); } }
+                MenuRow { text: "Delete Selected Notes"; shortcut: "Delete"; selected => { root.delete-selected-notes-requested(); } }
             }
 
             MenuBarItem {
@@ -848,8 +852,7 @@ export component MainWindow inherits Window {
                     selected => { root.pattern-clone-requested(); }
                 }
                 MenuSeparator {}
-                // Target: clear the selected pattern's notes.
-                MenuRow { text: "Clear Pattern"; enabled: false; selected => { } }
+                MenuRow { text: "Clear Pattern"; selected => { root.pattern-clear-requested(); } }
                 MenuRow {
                     text: "Delete Pattern";
                     shortcut: "Ctrl+Shift+Delete";
@@ -1648,7 +1651,39 @@ export component MainWindow inherits Window {
                                         }
                                         TouchArea {
                                             mouse-cursor: pointer;
-                                            clicked => { root.pattern-selected(pattern); }
+                                            pointer-event(e) => {
+                                                if (e.kind == PointerEventKind.down) {
+                                                    root.pattern-selected(pattern);
+                                                    if (e.button == PointerEventButton.right) {
+                                                        pattern-context-menu.show();
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Right-click selects the pattern first --
+                                        // Clone/Clear/Delete all act on current-pattern,
+                                        // not an explicit index -- then opens the menu
+                                        // beside the row that owns those commands.
+                                        pattern-context-menu := PopupWindow {
+                                            x: 0px;
+                                            y: parent.height + 2px;
+                                            width: 150px;
+                                            height: pattern-context-frame.preferred-height;
+                                            close-policy: close-on-click;
+                                            pattern-context-frame := Rectangle {
+                                                background: Theme.surface;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                border-radius: 3px;
+                                                VerticalLayout {
+                                                    padding: 4px;
+                                                    MenuRow { text: "Clone Pattern"; shortcut: "Ctrl+Alt+D"; enabled: root.pattern-count < 256; selected => { root.pattern-clone-requested(); } }
+                                                    MenuRow { text: "Clear Pattern"; selected => { root.pattern-clear-requested(); } }
+                                                    MenuSeparator {}
+                                                    MenuRow { text: "Delete Pattern"; shortcut: "Ctrl+Shift+Delete"; enabled: root.pattern-count > 1; selected => { root.pattern-remove-requested(); } }
+                                                }
+                                            }
                                         }
                                     }
 
@@ -2644,7 +2679,7 @@ export component MainWindow inherits Window {
                                                     } else if (hit.found && e.button == PointerEventButton.left) {
                                                         self.create-click-armed = false;
                                                         create-click-timeout.running = false;
-                                                        root.piano-note-selected(hit.id);
+                                                        root.piano-note-selected(hit.id, e.modifiers.shift, e.modifiers.control);
                                                         self.grabbed-id = hit.id;
                                                         self.grab-mode = parent.grab-mode-at(self.mouse-x, self.mouse-y);
                                                         self.origin-x = self.mouse-x;

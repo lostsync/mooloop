@@ -99,6 +99,53 @@ fn one_note() -> Vec<NoteCell> {
     }]
 }
 
+fn two_notes() -> Vec<NoteCell> {
+    vec![
+        NoteCell {
+            id: 7,
+            start_tick: 0,
+            duration_ticks: TICKS_PER_STEP,
+            note: 60,
+            velocity: 100,
+            selected: false,
+        },
+        NoteCell {
+            id: 8,
+            start_tick: 4 * TICKS_PER_STEP,
+            duration_ticks: TICKS_PER_STEP,
+            note: 62,
+            velocity: 100,
+            selected: false,
+        },
+    ]
+}
+
+/// Click at `at`, optionally holding Shift, the way a Shift-click to extend a
+/// selection would arrive from the OS: modifier key down, then press/release,
+/// then modifier key up.
+fn click(window: &slint::Window, at: (f32, f32), shift: bool) {
+    let pos = LogicalPosition::new(at.0, at.1);
+    if shift {
+        window.dispatch_event(WindowEvent::KeyPressed {
+            text: slint::platform::Key::Shift.into(),
+        });
+    }
+    window.dispatch_event(WindowEvent::PointerMoved { position: pos });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: pos,
+        button: PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: pos,
+        button: PointerEventButton::Left,
+    });
+    if shift {
+        window.dispatch_event(WindowEvent::KeyReleased {
+            text: slint::platform::Key::Shift.into(),
+        });
+    }
+}
+
 #[test]
 fn dragging_a_note_body_tracks_the_pointer_the_whole_way() {
     let ui = harness(one_note());
@@ -276,4 +323,31 @@ fn double_clicking_empty_grid_creates_and_drags_note_length() {
     let (id, duration) = *sizes.last().expect("dragging after creation should resize the note");
     assert_eq!(id, 21);
     assert_eq!(duration, 4 * TICKS_PER_STEP);
+}
+
+#[test]
+fn plain_click_reports_no_modifiers_but_shift_click_does() {
+    let ui = harness(two_notes());
+    let selections: Rc<RefCell<Vec<(i32, bool, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let selections = selections.clone();
+        ui.on_piano_note_selected(move |id, shift, ctrl| {
+            selections.borrow_mut().push((id, shift, ctrl));
+        });
+    }
+
+    click(ui.window(), (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60)), false);
+    click(
+        ui.window(),
+        (tick_x(4 * TICKS_PER_STEP) + STEP_WIDTH / 2.0, note_centre_y(62)),
+        true,
+    );
+
+    let selections = selections.borrow();
+    assert_eq!(
+        selections.as_slice(),
+        &[(7, false, false), (8, true, false)],
+        "a plain click should report no modifiers; a Shift-click should report shift=true \
+         so Rust can add to the selection instead of replacing it"
+    );
 }
