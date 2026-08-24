@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use mooloop_core::MAX_BUSES;
-use mooloop_core::{MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL};
+use mooloop_core::{MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_SAMPLER_VOICES};
 
 /// Peak-hold cells for every bus, left and right interleaved.
 pub struct BusMeters {
@@ -110,6 +110,58 @@ impl BusMeters {
     }
 }
 
+const VOICES_PER_CHANNEL: usize = MAX_SAMPLER_VOICES as usize;
+
+/// Live per-voice sample playback position for every channel, for a UI
+/// playhead. Same shape as `BusMeters`/`DeviceMeters` and for the same
+/// reason: the GUI only ever wants the latest position, never a backlog, so
+/// a wait-free array of atomics fits better than the event ring.
+///
+/// Unlike the peak meters this is a plain store/load, not a held-until-read
+/// swap: a moving position has no "missed transient" to protect, the GUI
+/// just wants whatever the audio thread last published. An inactive voice
+/// publishes `f32::NAN`, which `read` filters out.
+pub struct PlayheadMeters {
+    cells: Vec<AtomicU32>,
+}
+
+impl PlayheadMeters {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            cells: (0..MAX_CHANNELS * VOICES_PER_CHANNEL)
+                .map(|_| AtomicU32::new(f32::NAN.to_bits()))
+                .collect(),
+        })
+    }
+
+    fn base(channel: usize) -> Option<usize> {
+        (channel < MAX_CHANNELS).then_some(channel * VOICES_PER_CHANNEL)
+    }
+
+    /// Publish `channel`'s voice positions, overwriting every slot. Called
+    /// on the audio thread, once per block.
+    pub fn publish(&self, channel: usize, positions: &[f32; VOICES_PER_CHANNEL]) {
+        let Some(base) = Self::base(channel) else {
+            return;
+        };
+        for (offset, position) in positions.iter().enumerate() {
+            self.cells[base + offset].store(position.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// Every currently-active voice position for `channel`. Called on the
+    /// GUI thread.
+    pub fn read(&self, channel: usize) -> Vec<f32> {
+        let Some(base) = Self::base(channel) else {
+            return Vec::new();
+        };
+        (base..base + VOICES_PER_CHANNEL)
+            .map(|index| f32::from_bits(self.cells[index].load(Ordering::Relaxed)))
+            .filter(|position| !position.is_nan())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +190,44 @@ mod tests {
         let meters = BusMeters::new();
         meters.publish(MAX_BUSES + 5, 1.0, 1.0);
         assert_eq!(meters.take(MAX_BUSES + 5), (0.0, 0.0));
+    }
+
+    #[test]
+    fn playhead_positions_start_and_stay_empty_until_published() {
+        let meters = PlayheadMeters::new();
+        assert!(meters.read(0).is_empty());
+    }
+
+    #[test]
+    fn playhead_read_reports_only_active_voices() {
+        let meters = PlayheadMeters::new();
+        let mut positions = [f32::NAN; VOICES_PER_CHANNEL];
+        positions[0] = 0.25;
+        positions[3] = 0.75;
+        meters.publish(2, &positions);
+        assert_eq!(meters.read(2), vec![0.25, 0.75]);
+        assert!(meters.read(1).is_empty());
+    }
+
+    #[test]
+    fn playhead_publish_overwrites_every_slot_including_now_inactive_ones() {
+        let meters = PlayheadMeters::new();
+        let mut active = [f32::NAN; VOICES_PER_CHANNEL];
+        active[0] = 0.5;
+        meters.publish(0, &active);
+        assert_eq!(meters.read(0), vec![0.5]);
+
+        // The voice released: the next block's publish must clear the old
+        // reading, not leave a stale playhead behind (unlike a held peak).
+        let idle = [f32::NAN; VOICES_PER_CHANNEL];
+        meters.publish(0, &idle);
+        assert!(meters.read(0).is_empty());
+    }
+
+    #[test]
+    fn out_of_range_playhead_channels_are_ignored_rather_than_panicking() {
+        let meters = PlayheadMeters::new();
+        meters.publish(MAX_CHANNELS + 5, &[0.5; VOICES_PER_CHANNEL]);
+        assert!(meters.read(MAX_CHANNELS + 5).is_empty());
     }
 }

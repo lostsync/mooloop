@@ -290,6 +290,21 @@ impl Sampler {
         self.params.choke_group
     }
 
+    /// Normalized (0..1) playback position of every active voice, for a UI
+    /// playhead. Inactive slots (and voices with no loaded sample) report
+    /// `f32::NAN`, which the caller filters out rather than drawing a
+    /// playhead at frame zero.
+    pub fn voice_positions(&self) -> [f32; MAX_SAMPLER_VOICES as usize] {
+        let mut positions = [f32::NAN; MAX_SAMPLER_VOICES as usize];
+        for (voice, position) in self.voices.iter().zip(positions.iter_mut()) {
+            if let (true, Some(sample)) = (voice.active, voice.sample.as_ref()) {
+                let len = sample.len().max(1) as f64;
+                *position = (voice.play_pos / len).clamp(0.0, 1.0) as f32;
+            }
+        }
+        positions
+    }
+
     /// Immediately invalidate all active voices. Sample handles remain owned
     /// by their slots/voices so resetting is allocation- and drop-free.
     pub fn reset(&mut self) {

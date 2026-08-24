@@ -14,7 +14,7 @@ use mooloop_dsp::{
     MAX_BLOCK_SIZE,
 };
 
-use crate::meters::{BusMeters, DeviceMeters};
+use crate::meters::{BusMeters, DeviceMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
 use crate::StructuralCommand;
@@ -549,6 +549,7 @@ pub(crate) struct RenderState {
     /// bus per block.
     meters: Arc<BusMeters>,
     device_meters: Arc<DeviceMeters>,
+    playhead_meters: Arc<PlayheadMeters>,
 }
 
 impl RenderState {
@@ -568,6 +569,7 @@ impl RenderState {
             reclaim: Vec::new(),
             meters: BusMeters::new(),
             device_meters: DeviceMeters::new(),
+            playhead_meters: PlayheadMeters::new(),
         }
     }
 
@@ -579,6 +581,10 @@ impl RenderState {
 
     pub(crate) fn attach_device_meters(&mut self, meters: Arc<DeviceMeters>) {
         self.device_meters = meters;
+    }
+
+    pub(crate) fn attach_playhead_meters(&mut self, meters: Arc<PlayheadMeters>) {
+        self.playhead_meters = meters;
     }
 
     pub fn from_project(
@@ -968,6 +974,8 @@ impl RenderState {
             strip.process(&context, &self.events[index]);
             let source_peak = strip.bus.peak(frames);
             self.device_meters.publish_output(index, 0, source_peak.0, source_peak.1);
+            self.playhead_meters
+                .publish(index, &strip.sampler.voice_positions());
             strip.effects.process(&context, &mut strip.bus, Some((&self.device_meters, index)));
             strip.output.apply_pan(&mut strip.bus, frames);
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {

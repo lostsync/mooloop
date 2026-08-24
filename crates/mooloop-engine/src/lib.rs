@@ -30,7 +30,7 @@ mod transport;
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
 
-pub use meters::{BusMeters, DeviceMeters};
+pub use meters::{BusMeters, DeviceMeters, PlayheadMeters};
 pub use offline::{
     ExportError, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, RenderSummary,
     WavEncoding,
@@ -150,9 +150,11 @@ impl Engine {
         let xrun_count = Arc::new(AtomicU64::new(0));
         let bus_meters = BusMeters::new();
         let device_meters = DeviceMeters::new();
+        let playhead_meters = PlayheadMeters::new();
         let mut render = RenderState::new(sample_rate, sample_slots.clone());
         render.attach_meters(bus_meters.clone());
         render.attach_device_meters(device_meters.clone());
+        render.attach_playhead_meters(playhead_meters.clone());
         let io = graph::GraphIo {
             out_l,
             out_r,
@@ -191,6 +193,7 @@ impl Engine {
                 reclaim_rx,
                 bus_meters,
                 device_meters,
+                playhead_meters,
                 sample_slots,
                 sample_rate,
                 install_generation: 0,
@@ -208,6 +211,7 @@ pub struct EngineHandle {
     reclaim_rx: Consumer<StructuralReclaim>,
     bus_meters: Arc<BusMeters>,
     device_meters: Arc<DeviceMeters>,
+    playhead_meters: Arc<PlayheadMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     sample_rate: u32,
     install_generation: u64,
@@ -277,11 +281,12 @@ impl EngineHandle {
             .expect("project install generation exhausted");
         let mut render = RenderState::new(self.sample_rate, self.sample_slots.clone());
         render.attach_meters(self.bus_meters.clone());
-        // A project swap replaces the complete renderer. Reconnect both meter
-        // transports before it reaches the audio thread: otherwise the new
-        // renderer publishes device peaks into its private, unread array while
-        // the UI continues to read the startup array forever.
+        // A project swap replaces the complete renderer. Reconnect every meter
+        // transport before it reaches the audio thread: otherwise the new
+        // renderer publishes into its private, unread arrays while the UI
+        // continues to read the startup arrays forever.
         render.attach_device_meters(self.device_meters.clone());
+        render.attach_playhead_meters(self.playhead_meters.clone());
         render.load_project(&project);
         let prepared = PreparedProject {
             generation,
@@ -313,6 +318,13 @@ impl EngineHandle {
     /// `MAX_CHANNELS + bus index`. Stage 0 is the source; effect slots follow.
     pub fn take_device_peak(&self, target: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
         self.device_meters.take(target, stage)
+    }
+
+    /// Every currently-active sampler voice's normalized playback position
+    /// on `channel`, for a UI playhead. Wait-free; see `meters` for why this
+    /// is a plain array read rather than another event.
+    pub fn playhead_positions(&self, channel: usize) -> Vec<f32> {
+        self.playhead_meters.read(channel)
     }
 
     pub fn sample_rate(&self) -> u32 {

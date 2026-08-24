@@ -817,6 +817,10 @@ struct UiState {
     note_model: Rc<VecModel<NoteCell>>,
     playlist_model: Rc<VecModel<PlaylistClip>>,
     waveform_model: Rc<VecModel<f32>>,
+    /// Normalized position of every currently active sampler voice on the
+    /// selected channel, refreshed each pump tick. Empty when idle, when a
+    /// different device kind is selected, or while editing a bus.
+    playhead_model: Rc<VecModel<f32>>,
     effect_slot_model: Rc<VecModel<EffectSlotRow>>,
     mixer_strip_model: Rc<VecModel<MixerStripRow>>,
     default_waveform: Vec<f32>,
@@ -1803,12 +1807,14 @@ impl AppUi {
         };
         let rows_model = Rc::new(VecModel::from(vec![row]));
         let waveform_model = Rc::new(VecModel::from(first.waveform.clone()));
+        let playhead_model = Rc::new(VecModel::from(Vec::<f32>::new()));
         let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
         let mixer_strip_model = Rc::new(VecModel::from(Vec::<MixerStripRow>::new()));
         window.set_channels(ModelRc::from(rows_model.clone()));
         window.set_notes(ModelRc::from(note_model.clone()));
         window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
         window.set_waveform(ModelRc::from(waveform_model.clone()));
+        window.set_playhead_positions(ModelRc::from(playhead_model.clone()));
         window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
         window.set_mixer_strips(ModelRc::from(mixer_strip_model.clone()));
         window.set_pattern_count(1);
@@ -1820,6 +1826,7 @@ impl AppUi {
             note_model,
             playlist_model,
             waveform_model,
+            playhead_model,
             effect_slot_model,
             mixer_strip_model,
             default_waveform,
@@ -5032,6 +5039,22 @@ impl AppUi {
                             state.effect_slot_model.set_row_data(slot, row);
                         }
                     }
+                }
+                {
+                    // A playhead only means anything for the selected
+                    // channel's sampler; otherwise leave it empty so no
+                    // stale line lingers over an unrelated device or a bus.
+                    let state = st.borrow();
+                    let is_sampler = state
+                        .channels
+                        .get(selected_channel)
+                        .is_some_and(|channel| channel.kind == DeviceKind::Sampler);
+                    let positions = if !editing_bus && is_sampler {
+                        handle.playhead_positions(selected_channel)
+                    } else {
+                        Vec::new()
+                    };
+                    state.playhead_model.set_vec(positions);
                 }
 
                 let (mp, sp, cf) = stats_in.get();

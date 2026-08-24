@@ -390,6 +390,7 @@ export component MainWindow inherits Window {
     in-out property <int> audio-sample-rate: 48000;
     in-out property <string> selected-channel-name;
     in-out property <[float]> waveform;
+    in-out property <[float]> playhead-positions;
     in-out property <int> sample-frames;
     in-out property <bool> can-previous-sample;
     in-out property <bool> can-next-sample;
@@ -1788,6 +1789,7 @@ export component MainWindow inherits Window {
                                             sample-name <=> root.sample-name;
                                             sample-description <=> root.sample-description;
                                             waveform <=> root.waveform;
+                                            playhead-positions <=> root.playhead-positions;
                                             sample-frames <=> root.sample-frames;
                                             can-previous-sample <=> root.can-previous-sample;
                                             can-next-sample <=> root.can-next-sample;
