@@ -1,6 +1,6 @@
 import { HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
+import { IconButton, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { JackControlSurface, OutputTargetRow } from "audio-preferences.slint";
 export { OutputTargetRow }
 
@@ -9,10 +9,21 @@ component PreferenceNavItem inherits Rectangle {
     in property <bool> selected;
     callback selected-page();
 
-    height: 30px;
-    border-radius: 3px;
-    background: tap.pressed ? Theme.surface-active : root.selected ? Theme.accent-active : transparent;
-    Text { x: 10px; width: parent.width - 20px; text: root.text; color: Theme.text; font-size: 11px; vertical-alignment: center; }
+    height: 28px;
+    background: tap.pressed ? Theme.surface-active : root.selected ? Theme.surface-raised : transparent;
+    Rectangle {
+        width: root.selected ? 2px : 0px;
+        height: parent.height;
+        background: Theme.accent;
+    }
+    Text {
+        x: 10px;
+        width: parent.width - 18px;
+        text: root.text;
+        color: root.selected ? Theme.text : Theme.text-muted;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
     tap := TouchArea { mouse-cursor: pointer; clicked => { root.selected-page(); } }
 }
 
@@ -42,38 +53,42 @@ export component PreferencesDialog inherits Rectangle {
     TouchArea { }
 
     Rectangle {
-        width: min(parent.width - 32px, 720px);
-        height: min(parent.height - 32px, 460px);
+        width: min(parent.width - 24px, 840px);
+        height: min(parent.height - 24px, 540px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        background: Theme.surface;
+        background: Theme.panel;
         border-width: 1px;
         border-color: Theme.border;
-        border-radius: 6px;
+        border-radius: 2px;
 
         VerticalBox {
             spacing: 0px;
             Rectangle {
-                height: 50px;
-                background: Theme.surface-raised;
-                border-radius: 6px;
+                height: 40px;
+                background: Theme.panel;
+                border-width: 0px;
                 HorizontalBox {
-                    padding: 16px;
-                    Text { text: "Preferences"; color: Theme.text; font-size: 16px; vertical-alignment: center; }
+                    padding: 10px;
+                    Text { text: "Preferences"; color: Theme.text; font-size: 14px; vertical-alignment: center; }
                     Rectangle { horizontal-stretch: 1; }
-                    ToolButton { text: "Close"; tooltip: "Close preferences"; clicked => { root.cancelled(); root.open = false; } }
+                    IconButton {
+                        icon: "M 4 4 L 12 12 M 12 4 L 4 12";
+                        tooltip: "Close preferences";
+                        size: 24px;
+                        clicked => { root.cancelled(); root.open = false; }
+                    }
                 }
             }
             HorizontalBox {
                 spacing: 0px;
                 Rectangle {
-                    width: 164px;
-                    background: Theme.panel;
-                    border-width: 1px;
-                    border-color: Theme.border;
+                    width: 132px;
+                    background: Theme.background;
+                    border-width: 0px;
                     VerticalBox {
-                        padding: 8px;
-                        spacing: 2px;
+                        padding: 4px;
+                        spacing: 0px;
                         PreferenceNavItem { text: "General"; selected: root.page == 0; selected-page => { root.page = 0; } }
                         PreferenceNavItem { text: "Audio"; selected: root.page == 1; selected-page => { root.page = 1; } }
                         PreferenceNavItem { text: "MIDI"; selected: root.page == 2; selected-page => { root.page = 2; } }
@@ -86,29 +101,22 @@ export component PreferencesDialog inherits Rectangle {
                     horizontal-stretch: 1;
                     background: Theme.surface;
                     VerticalBox {
-                        padding: 20px;
-                        spacing: 12px;
+                        padding: 12px;
+                        spacing: 8px;
                         if root.page == 0 : VerticalBox {
-                            spacing: 12px;
-                            Text { text: "General"; color: Theme.text; font-size: 16px; height: 24px; }
+                            spacing: 8px;
+                            Text { text: "General"; color: Theme.text; font-size: 14px; height: 20px; }
                             SectionLabel { text: "APPLICATION"; }
-                            Rectangle {
-                                height: 52px;
-                                background: Theme.surface-raised;
-                                border-width: 1px;
-                                border-color: Theme.border;
-                                border-radius: 3px;
-                                HorizontalBox {
-                                    padding: 10px;
-                                    spacing: 12px;
-                                    VerticalBox {
-                                        spacing: 2px;
-                                        Text { text: "Developer mode"; color: Theme.text; font-size: 11px; }
-                                        Text { text: "Show developer tools and diagnostics"; color: Theme.text-muted; font-size: 10px; }
-                                    }
-                                    Rectangle { horizontal-stretch: 1; }
-                                    ToggleButton { text: "Enabled"; tooltip: "Show developer preferences"; checked <=> root.developer-mode; }
+                            HorizontalBox {
+                                height: 36px;
+                                spacing: 8px;
+                                VerticalBox {
+                                    spacing: 0px;
+                                    Text { text: "Developer mode"; color: Theme.text; font-size: 11px; }
+                                    Text { text: "Show developer tools and diagnostics"; color: Theme.text-muted; font-size: 10px; }
                                 }
+                                Rectangle { horizontal-stretch: 1; }
+                                ToggleButton { text: "Enabled"; tooltip: "Show developer preferences"; checked <=> root.developer-mode; }
                             }
                         }
                         if root.page == 1 : ScrollView {
@@ -119,9 +127,10 @@ export component PreferencesDialog inherits Rectangle {
                             // body height the way the shorter pages do.
                             vertical-stretch: 1;
                             VerticalLayout {
-                                padding-right: 10px;
-                                spacing: 12px;
-                                Text { text: "Audio"; color: Theme.text; font-size: 16px; height: 24px; }
+                                width: parent.width - 8px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                Text { text: "Audio"; color: Theme.text; font-size: 14px; height: 20px; }
                                 SectionLabel { text: "DRIVER"; }
                                 HorizontalBox {
                                     spacing: 8px;
@@ -157,14 +166,14 @@ export component PreferencesDialog inherits Rectangle {
                             }
                         }
                         if root.page == 2 : VerticalBox {
-                            spacing: 12px;
-                            Text { text: "MIDI"; color: Theme.text; font-size: 16px; height: 24px; }
+                            spacing: 8px;
+                            Text { text: "MIDI"; color: Theme.text; font-size: 14px; height: 20px; }
                             SectionLabel { text: "MIDI DEVICES"; }
                             Text { text: "MIDI device settings will appear here."; color: Theme.text-muted; font-size: 11px; }
                         }
                         if root.page == 3 : VerticalBox {
-                            spacing: 12px;
-                            Text { text: "Appearance"; color: Theme.text; font-size: 16px; height: 24px; }
+                            spacing: 8px;
+                            Text { text: "Appearance"; color: Theme.text; font-size: 14px; height: 20px; }
                             SectionLabel { text: "THEME PRESET"; }
                             HorizontalBox {
                                 spacing: 6px;
@@ -220,8 +229,8 @@ export component PreferencesDialog inherits Rectangle {
                             }
                         }
                         if root.page == 4 && root.developer-mode : VerticalBox {
-                            spacing: 12px;
-                            Text { text: "Developer"; color: Theme.text; font-size: 16px; height: 24px; }
+                            spacing: 8px;
+                            Text { text: "Developer"; color: Theme.text; font-size: 14px; height: 20px; }
                             SectionLabel { text: "DEVELOPER TOOLS"; }
                         }
                         Rectangle { vertical-stretch: 1; }
@@ -229,14 +238,12 @@ export component PreferencesDialog inherits Rectangle {
                 }
             }
             Rectangle {
-                height: 52px;
-                background: Theme.surface-raised;
-                border-width: 1px;
-                border-color: Theme.border;
+                height: 40px;
+                background: Theme.panel;
+                border-width: 0px;
                 HorizontalBox {
-                    padding: 12px;
+                    padding: 8px;
                     spacing: 6px;
-                    ToolButton { text: "Reset appearance"; clicked => { root.appearance-preset = 0; root.appearance-accent = "#84CC16"; root.appearance-preview(root.appearance-preset, root.appearance-accent); } }
                     Rectangle { horizontal-stretch: 1; }
                     ToolButton { text: "Cancel"; clicked => { root.cancelled(); root.open = false; } }
                     ToolButton { text: "Apply"; clicked => { root.save(root.appearance-preset, root.appearance-accent, root.developer-mode); } }

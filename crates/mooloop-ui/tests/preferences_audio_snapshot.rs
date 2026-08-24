@@ -17,11 +17,10 @@ fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variab
     }
 }
 
-/// Center of the "Audio" row in the Preferences nav column, with the window
-/// at 800x600. Found by rendering with the default page (General) selected
-/// and locating the accent-active highlight band in the dumped snapshot:
-/// General is the 30px band at y in [144, 174), Audio follows at [176, 206).
-const AUDIO_NAV_ITEM: (f32, f32) = (138.0, 191.0);
+/// Center of the compact "Audio" vertical tab at 800x600, measured from the
+/// rendered dialog. The root layout distributes its body height, so use the
+/// visible tab rather than deriving this from nominal header dimensions.
+const AUDIO_NAV_ITEM: (f32, f32) = (78.0, 132.0);
 
 fn click_at(window: &slint::Window, p: (f32, f32)) {
     let position = LogicalPosition::new(p.0, p.1);
