@@ -106,6 +106,13 @@ pub(crate) struct AppearanceSettings {
     pub accent: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct GeneralSettings {
+    #[serde(default)]
+    pub developer_mode: bool,
+}
+
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
@@ -142,6 +149,8 @@ impl AppearanceSettings {
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct UiSettings {
     schema_version: u32,
+    #[serde(default)]
+    pub general: GeneralSettings,
     pub appearance: AppearanceSettings,
 }
 
@@ -149,6 +158,7 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
+            general: GeneralSettings::default(),
             appearance: AppearanceSettings::default(),
         }
     }
@@ -398,6 +408,9 @@ mod tests {
         let path = directory.path().join("settings.toml");
         let expected = UiSettings {
             schema_version: 1,
+            general: GeneralSettings {
+                developer_mode: true,
+            },
             appearance: AppearanceSettings::validated(AppearancePreset::Graphite, "#F59E0B")
                 .unwrap(),
         };
@@ -423,5 +436,17 @@ mod tests {
             UiSettings::load_from(&path),
             Err(SettingsError::Parse(_))
         ));
+    }
+
+    #[test]
+    fn defaults_missing_general_settings_for_existing_configs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n",
+        )
+        .unwrap();
+        assert!(!UiSettings::load_from(&path).unwrap().general.developer_mode);
     }
 }

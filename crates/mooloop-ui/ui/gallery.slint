@@ -15,7 +15,7 @@ import {
     BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
     ToolbarLabel, ToolbarRule, ToolIcons, ToolModeButton
 } from "toolbar.slint";
-import { AppearanceDialog } from "appearance-dialog.slint";
+import { PreferencesDialog } from "appearance-dialog.slint";
 import {
     DeviceAddSlot, DeviceFrame, DeviceRackMetrics
 } from "device-rack.slint";
@@ -40,6 +40,7 @@ export component ControlGallery inherits Window {
     in-out property <int> gallery-preset;
     in-out property <bool> gallery-dialog-open;
     in-out property <string> gallery-accent: "#84CC16";
+    in-out property <bool> gallery-developer-mode;
     in-out property <float> bipolar-value: 0.5;
     in-out property <float> mini-volume: 0.8;
     in-out property <float> mini-pan: 0;
@@ -699,13 +700,14 @@ export component ControlGallery inherits Window {
         }
     }
 
-    AppearanceDialog {
+    PreferencesDialog {
         width: parent.width;
         height: parent.height;
         open <=> root.gallery-dialog-open;
-        preset <=> root.gallery-preset;
-        accent-text <=> root.gallery-accent;
-        preview(preset, accent) => { root.use-preset(preset); }
-        save(preset, accent) => { root.use-preset(preset); true }
+        appearance-preset <=> root.gallery-preset;
+        appearance-accent <=> root.gallery-accent;
+        developer-mode <=> root.gallery-developer-mode;
+        appearance-preview(preset, accent) => { root.use-preset(preset); }
+        save(preset, accent, developer-mode) => { root.use-preset(preset); true }
     }
 }

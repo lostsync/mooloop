@@ -11,7 +11,7 @@ import {
 } from "toolbar.slint";
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
-import { AppearanceDialog } from "appearance-dialog.slint";
+import { PreferencesDialog } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
@@ -148,15 +148,16 @@ export component MainWindow inherits Window {
     in-out property <float> source-output-right-db: -60;
     in-out property <float> selected-channel-volume-db: 0;
 
-    // ---- appearance settings ----
-    in-out property <bool> appearance-open;
-    in-out property <int> appearance-preset;
-    in-out property <string> appearance-accent: "#84CC16";
-    in-out property <string> appearance-error;
-    callback appearance-opened();
-    callback appearance-preview(int, string);
-    callback appearance-save(int, string) -> bool;
-    callback appearance-cancelled();
+    // ---- preferences ----
+    in-out property <bool> preferences-open;
+    in-out property <int> preferences-appearance-preset;
+    in-out property <string> preferences-appearance-accent: "#84CC16";
+    in-out property <bool> preferences-developer-mode;
+    in-out property <string> preferences-error;
+    callback preferences-opened();
+    callback preferences-appearance-preview(int, string);
+    callback preferences-save(int, string, bool) -> bool;
+    callback preferences-cancelled();
 
     // ---- document lifecycle ----
     in-out property <string> document-title: "Untitled - mooloop";
@@ -783,10 +784,10 @@ export component MainWindow inherits Window {
                 }
                 MenuSeparator {}
                 MenuRow {
-                    text: "Appearance...";
+                    text: "Preferences...";
                     selected => {
-                        root.appearance-opened();
-                        root.appearance-open = true;
+                        root.preferences-opened();
+                        root.preferences-open = true;
                     }
                 }
             }
@@ -895,10 +896,10 @@ export component MainWindow inherits Window {
 
                         IconButton {
                             text: "⚙";
-                            tooltip: "Appearance settings";
+                            tooltip: "Preferences";
                             clicked => {
-                                root.appearance-opened();
-                                root.appearance-open = true;
+                                root.preferences-opened();
+                                root.preferences-open = true;
                             }
                         }
                     }
@@ -2680,16 +2681,17 @@ export component MainWindow inherits Window {
         }
     }
 
-    AppearanceDialog {
+    PreferencesDialog {
         width: parent.width;
         height: parent.height;
-        open <=> root.appearance-open;
-        preset <=> root.appearance-preset;
-        accent-text <=> root.appearance-accent;
-        validation-error: root.appearance-error;
-        preview(preset, accent) => { root.appearance-preview(preset, accent); }
-        save(preset, accent) => { root.appearance-save(preset, accent) }
-        cancelled => { root.appearance-cancelled(); }
+        open <=> root.preferences-open;
+        appearance-preset <=> root.preferences-appearance-preset;
+        appearance-accent <=> root.preferences-appearance-accent;
+        developer-mode <=> root.preferences-developer-mode;
+        validation-error: root.preferences-error;
+        appearance-preview(preset, accent) => { root.preferences-appearance-preview(preset, accent); }
+        save(preset, accent, developer-mode) => { root.preferences-save(preset, accent, developer-mode) }
+        cancelled => { root.preferences-cancelled(); }
     }
     SavePresetDialog {
         width: parent.width;

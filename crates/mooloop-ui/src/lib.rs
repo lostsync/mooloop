@@ -117,10 +117,11 @@ fn apply_theme(window: &MainWindow, palette: ThemePalette) {
     theme.set_meter_clip(palette.meter_clip.color());
 }
 
-fn sync_appearance_properties(window: &MainWindow, appearance: &AppearanceSettings) {
-    window.set_appearance_preset(appearance.preset.index());
-    window.set_appearance_accent(appearance.accent.as_str().into());
-    window.set_appearance_error("".into());
+fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
+    window.set_preferences_appearance_preset(settings.appearance.preset.index());
+    window.set_preferences_appearance_accent(settings.appearance.accent.as_str().into());
+    window.set_preferences_developer_mode(settings.general.developer_mode);
+    window.set_preferences_error("".into());
 }
 
 /// UI-side state for one channel. `notes` is the pattern bank.
@@ -1701,21 +1702,21 @@ impl AppUi {
         {
             let settings = ui_settings.borrow();
             apply_theme(&window, settings.appearance.palette());
-            sync_appearance_properties(&window, &settings.appearance);
+            sync_preferences_properties(&window, &settings);
         }
         {
             let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_appearance_opened(move || {
+            window.on_preferences_opened(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let settings = settings.borrow();
                 apply_theme(&window, settings.appearance.palette());
-                sync_appearance_properties(&window, &settings.appearance);
+                sync_preferences_properties(&window, &settings);
             });
         }
         {
             let weak = window.as_weak();
-            window.on_appearance_preview(move |preset, accent| {
+            window.on_preferences_appearance_preview(move |preset, accent| {
                 let Some(window) = weak.upgrade() else { return };
                 match AppearanceSettings::validated(
                     AppearancePreset::from_index(preset),
@@ -1723,16 +1724,16 @@ impl AppUi {
                 ) {
                     Ok(appearance) => {
                         apply_theme(&window, appearance.palette());
-                        window.set_appearance_error("".into());
+                        window.set_preferences_error("".into());
                     }
-                    Err(error) => window.set_appearance_error(error.to_string().into()),
+                    Err(error) => window.set_preferences_error(error.to_string().into()),
                 }
             });
         }
         {
             let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_appearance_save(move |preset, accent| {
+            window.on_preferences_save(move |preset, accent, developer_mode| {
                 let Some(window) = weak.upgrade() else {
                     return false;
                 };
@@ -1742,7 +1743,7 @@ impl AppUi {
                 ) {
                     Ok(appearance) => appearance,
                     Err(error) => {
-                        window.set_appearance_error(error.to_string().into());
+                        window.set_preferences_error(error.to_string().into());
                         return false;
                     }
                 };
@@ -1750,23 +1751,26 @@ impl AppUi {
                 let mut settings = settings.borrow_mut();
                 let previous = settings.appearance.clone();
                 settings.appearance = appearance;
+                let previous_developer_mode = settings.general.developer_mode;
+                settings.general.developer_mode = developer_mode;
                 if let Err(error) = settings.save() {
                     settings.appearance = previous;
-                    window.set_appearance_error(format!("Could not save settings: {error}").into());
+                    settings.general.developer_mode = previous_developer_mode;
+                    window.set_preferences_error(format!("Could not save settings: {error}").into());
                     return false;
                 }
-                sync_appearance_properties(&window, &settings.appearance);
+                sync_preferences_properties(&window, &settings);
                 true
             });
         }
         {
             let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_appearance_cancelled(move || {
+            window.on_preferences_cancelled(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let settings = settings.borrow();
                 apply_theme(&window, settings.appearance.palette());
-                sync_appearance_properties(&window, &settings.appearance);
+                sync_preferences_properties(&window, &settings);
             });
         }
 
