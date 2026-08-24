@@ -46,9 +46,11 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-23
-- Sessions: 2
+- Sessions: 3
 - Notes: Set up this file at Adam's request. Refreshed the README
-  screenshot.
+  screenshot. Sampler UI overhaul: waveform zoom/scroll, sample-accurate
+  trim/loop fields, compact tuning knobs with a note/frequency readout, a
+  per-voice playhead, and no more auto-loaded kick on a new channel.
 
 ### GLM (glm-5.3) — opencode
 - First seen: 2026-08-23
