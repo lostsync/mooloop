@@ -143,7 +143,7 @@ impl Default for JackSettings {
         Self {
             output_port_l: None,
             output_port_r: None,
-            buffer_size: None,
+            buffer_size: Some(256),
             auto_reconnect: true,
         }
     }

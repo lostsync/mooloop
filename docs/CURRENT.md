@@ -95,7 +95,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - A two-pane Preferences dialog with General, Audio, MIDI, and Appearance pages;
   General persists developer mode and reveals the presently empty Developer page.
   Appearance presets and custom accents preview live and persist on Apply or OK.
-  Shared audio controls, tooltips, and master peak-meter ballistics.
+  Shared audio controls, tooltips, and master peak-meter ballistics. A fresh
+  install requests a 256-frame JACK buffer by default (Preferences > Audio
+  picks from 64/128/256/512/1024/2048); a saved config that already has a
+  buffer size choice keeps it, and the engine falls back to the server's
+  current buffer size with a printed warning if the request is rejected.
+  Sluggish input latency is a buffer-size symptom to check here before
+  assuming a DSP bottleneck.
 - A traditional menu bar above the toolbar (`menubar.slint`): File, Edit,
   Pattern, Channel, View, and Help. Menus are declared where their window
   callbacks are in scope, so an item is one `MenuRow` line and a new action is
