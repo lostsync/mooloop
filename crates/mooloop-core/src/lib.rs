@@ -20,7 +20,8 @@ pub use channel::{
 };
 pub use effect::{
     BitcrushParams, CompressorParams, DelayMode, DelayParams, DriveCurve, DriveParams, EffectKind,
-    EffectParams, EffectSlotState, FilterMode, FilterParams, GateParams, LimiterParams, ParamCurve,
+    EffectParams, EffectSlotState, EqBand, EqBandKind, EqParams, EqPassFilter, EqQProfile, EqSlope,
+    FilterMode, FilterParams, GateParams, LimiterParams, ParamCurve,
     ParamDescriptor, BITCRUSH_PARAM_BITS, BITCRUSH_PARAM_DOWNSAMPLE, BITCRUSH_PARAM_MIX,
     COMP_PARAM_ATTACK_MS, COMP_PARAM_KNEE_DB, COMP_PARAM_MAKEUP_DB, COMP_PARAM_RATIO,
     COMP_PARAM_RELEASE_MS, COMP_PARAM_THRESHOLD_DB, DELAY_MAX_TIME_MS, DELAY_PARAM_CROSS,
@@ -29,6 +30,8 @@ pub use effect::{
     FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_MODE, FILTER_PARAM_RESONANCE, GATE_PARAM_ATTACK_MS,
     GATE_PARAM_HOLD_MS, GATE_PARAM_RANGE_DB, GATE_PARAM_RELEASE_MS, GATE_PARAM_THRESHOLD_DB,
     LIMITER_PARAM_CEILING_DB, LIMITER_PARAM_GAIN_DB, LIMITER_PARAM_RELEASE_MS,
+    EQ_MAX_BANDS, EQ_PARAM_CHARACTER, EQ_PARAM_ENABLED, EQ_PARAM_FREQUENCY_HZ, EQ_PARAM_GAIN_DB,
+    EQ_PARAM_Q, EQ_PARAM_TARGET,
 };
 pub use mixer::{
     compile_bus_graph, compile_render_order, default_buses, default_render_order, is_legal_route,

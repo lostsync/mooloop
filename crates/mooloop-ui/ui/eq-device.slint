@@ -1,0 +1,130 @@
+import { Theme } from "theme.slint";
+import { ParameterKnob, SegmentedControl, ToggleButton } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+
+// A deliberately bounded frequency plot. It is a response display first; the
+// spectrum layer is only drawn when requested so the future realtime analyzer
+// has an explicit performance switch instead of an invisible background cost.
+component EqResponseDisplay inherits Rectangle {
+    in property <[float]> band-data;
+    in property <int> selected-target;
+    in property <bool> spectrum-visible;
+    callback point-dragged(int, float, float);
+    private property <int> sample-count: 140;
+
+    pure function band-value(index: int, field: int) -> float {
+        return index * 5 + field < root.band-data.length ? root.band-data[index * 5 + field] : 0;
+    }
+    pure function band-shape(index: int, x: float) -> float {
+        let frequency = 20 * pow(1000, clamp(x, 0, 1));
+        let center = 20 * pow(1000, clamp(root.band-value(index, 0), 0, 1));
+        let ratio = max(frequency / center, center / frequency);
+        let bell = 1 / (1 + pow(max(1, ratio) - 1, max(0.35, root.band-value(index, 2))));
+        return root.band-value(index, 4) == 1 ? 1 / (1 + pow(frequency / center, 1.6))
+            : root.band-value(index, 4) == 2 ? 1 / (1 + pow(center / frequency, 1.6)) : bell;
+    }
+    pure function response-db(x: float) -> float {
+        let b0 = root.band-value(0, 3) > 0.5 ? (root.band-value(0, 1) * 36 - 18) * root.band-shape(0, x) : 0;
+        let b1 = root.band-value(1, 3) > 0.5 ? (root.band-value(1, 1) * 36 - 18) * root.band-shape(1, x) : 0;
+        let b2 = root.band-value(2, 3) > 0.5 ? (root.band-value(2, 1) * 36 - 18) * root.band-shape(2, x) : 0;
+        let b3 = root.band-value(3, 3) > 0.5 ? (root.band-value(3, 1) * 36 - 18) * root.band-shape(3, x) : 0;
+        let b4 = root.band-value(4, 3) > 0.5 ? (root.band-value(4, 1) * 36 - 18) * root.band-shape(4, x) : 0;
+        let b5 = root.band-value(5, 3) > 0.5 ? (root.band-value(5, 1) * 36 - 18) * root.band-shape(5, x) : 0;
+        let b6 = root.band-value(6, 3) > 0.5 ? (root.band-value(6, 1) * 36 - 18) * root.band-shape(6, x) : 0;
+        return clamp(b0 + b1 + b2 + b3 + b4 + b5 + b6, -24, 24);
+    }
+    pure function point-color(index: int) -> color {
+        return index == 0 ? #eab308 : index == 1 ? #84cc16 : index == 2 ? #22c55e
+            : index == 3 ? #06b6d4 : index == 4 ? #3b82f6 : index == 5 ? #a855f7 : #ec4899;
+    }
+
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    for grid in 7 : Rectangle { x: grid * parent.width / 6; width: 1px; height: 100%; background: Theme.border.with-alpha(0.32); }
+    for grid in 5 : Rectangle { y: grid * parent.height / 4; width: 100%; height: 1px; background: Theme.border.with-alpha(grid == 2 ? 0.72 : 0.32); }
+    // A low-detail analyzer underlay reserves no DSP work when switched off.
+    for bar in 56 : Rectangle {
+        private property <float> xnorm: bar / 55;
+        private property <float> hill: 0.18 + 0.43 / (1 + pow((xnorm - 0.42) * 6, 2)) + 0.07 * sin(bar * 71deg);
+        x: bar * parent.width / 56; width: max(1px, parent.width / 56 - 1px);
+        y: parent.height * (1 - clamp(hill, 0.08, 0.82)); height: parent.height * clamp(hill, 0.08, 0.82);
+        background: Theme.text-faint.with-alpha(root.spectrum-visible ? 0.16 : 0);
+    }
+    for sample in root.sample-count : Rectangle {
+        private property <float> x0: sample / (root.sample-count - 1);
+        private property <float> x1: min(1, (sample + 1) / (root.sample-count - 1));
+        private property <float> y0: 0.5 - root.response-db(x0) / 48;
+        private property <float> y1: 0.5 - root.response-db(x1) / 48;
+        x: x0 * parent.width; y: min(y0, y1) * parent.height;
+        width: max(1px, parent.width / root.sample-count + 0.5px); height: max(1px, abs(y1 - y0) * parent.height);
+        background: Theme.accent;
+    }
+    for index in 7 : TouchArea {
+        private property <float> frequency: root.band-value(index, 0);
+        private property <float> gain: root.band-value(index, 1);
+        x: frequency * parent.width - 7px; y: (1 - gain) * parent.height - 7px; width: 14px; height: 14px;
+        enabled: root.band-value(index, 3) > 0.5;
+        mouse-cursor: MouseCursor.crosshair;
+        moved => { root.point-dragged(index, clamp(self.mouse-x / parent.width, 0, 1), clamp(1 - self.mouse-y / parent.height, 0, 1)); }
+        Rectangle { width: 14px; height: 14px; border-radius: 7px; background: root.point-color(index); border-width: root.selected-target == index ? 2px : 1px; border-color: root.selected-target == index ? Theme.text : Theme.panel; }
+    }
+}
+
+export component EqDeviceFace inherits EffectDeviceShell {
+    name: "EQ";
+    kind: "FX / 3U";
+    in-out property <float> target;
+    in-out property <float> enabled;
+    in-out property <float> frequency;
+    in-out property <float> gain;
+    in-out property <float> q;
+    in-out property <float> character;
+    in property <[float]> band-data;
+    in-out property <bool> analyzer-enabled: true;
+    callback target-changed(float);
+    callback enabled-changed(float);
+    callback frequency-changed(float);
+    callback gain-changed(float);
+    callback q-changed(float);
+    callback character-changed(float);
+    callback analyzer-toggled(bool);
+
+    private property <int> target-index: round(root.target * 8);
+    private property <float> frequency-hz: 20 * pow(1000, root.frequency);
+    private property <float> gain-db: root.gain * 36 - 18;
+    private property <float> q-value: 0.15 * pow(120, root.q);
+    private property <bool> pass-target: root.target-index >= 7;
+
+    VerticalLayout {
+        padding: 6px; padding-top: DeviceRackMetrics.header-height + 6px; spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text { text: "PARAMETRIC EQ"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            ToggleButton { width: 46px; height: 20px; text: "FFT"; tooltip: "Show spectrum analyzer"; checked <=> root.analyzer-enabled; toggled(v) => { root.analyzer-toggled(v); } }
+        }
+        EqResponseDisplay {
+            height: 126px; width: 100%; band-data: root.band-data; selected-target: root.target-index; spectrum-visible: root.analyzer-enabled;
+            point-dragged(index, freq, gain) => { root.target-changed(index / 8); root.frequency-changed(freq); root.gain-changed(gain); }
+        }
+        HorizontalLayout {
+            spacing: 3px;
+            for label[index] in ["LOW", "1", "2", "3", "4", "5", "6", "HIGH", "LP"] : ToggleButton {
+                width: index == 0 || index >= 7 ? 40px : 25px; height: 22px; text: label; tooltip: "Select EQ band";
+                checked: root.target-index == index; toggled(_) => { root.target-changed(index / 8); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            ToggleButton { width: 30px; height: 22px; text: "ON"; tooltip: "Enable selected EQ section"; checked: root.enabled >= 0.5; toggled(v) => { root.enabled-changed(v ? 1 : 0); } }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob { width: 86px; diameter: 40px; label: "Freq"; tooltip: "Selected band frequency"; value <=> root.frequency; default-value: 0.566; value-text: round(root.frequency-hz) + " Hz"; changed(v) => { root.frequency-changed(v); } }
+            ParameterKnob { width: 86px; diameter: 40px; label: "Gain"; tooltip: "Selected band boost or cut"; enabled: !root.pass-target; bipolar: true; value <=> root.gain; default-value: 0.5; value-text: round(root.gain-db * 10) / 10 + " dB"; changed(v) => { root.gain-changed(v); } }
+            ParameterKnob { width: 86px; diameter: 40px; label: "Q"; tooltip: "Selected band width or pass resonance"; value <=> root.q; default-value: 0.32; value-text: round(root.q-value * 100) / 100; changed(v) => { root.q-changed(v); } }
+            Rectangle { horizontal-stretch: 1; }
+            SegmentedControl { width: root.pass-target ? 170px : 110px; height: 24px; options: root.pass-target ? ["6", "12", "18", "24", "36"] : ["CONST", "PROP"]; selected-index: round(root.character * 4); selected(i) => { root.character-changed(i / 4); } }
+        }
+    }
+}

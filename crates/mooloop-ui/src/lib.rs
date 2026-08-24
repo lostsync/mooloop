@@ -592,6 +592,7 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Gate => 4,
         EffectKind::Compressor => 5,
         EffectKind::Limiter => 6,
+        EffectKind::Eq => 7,
     }
 }
 
@@ -602,6 +603,7 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
     match kind {
         EffectKind::Filter | EffectKind::Drive | EffectKind::Bitcrush | EffectKind::Limiter => 1,
         EffectKind::Delay | EffectKind::Gate | EffectKind::Compressor => 2,
+        EffectKind::Eq => 3,
     }
 }
 
@@ -633,6 +635,24 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         "{} has more parameters than EffectSlotRow can carry",
         kind.label()
     );
+    let mut eq_band_data = Vec::new();
+    if let Some(eq) = slot.params.eq() {
+        for band in eq.bands {
+            eq_band_data.extend_from_slice(&[
+                (band.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
+                (band.gain_db + 18.0) / 36.0,
+                band.q,
+                if band.enabled { 1.0 } else { 0.0 },
+                band.kind.to_index() as f32,
+            ]);
+        }
+        eq_band_data.extend_from_slice(&[
+            (eq.high_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(), eq.high_pass.q,
+            if eq.high_pass.enabled { 1.0 } else { 0.0 }, eq.high_pass.slope.to_index() as f32,
+            (eq.low_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(), eq.low_pass.q,
+            if eq.low_pass.enabled { 1.0 } else { 0.0 }, eq.low_pass.slope.to_index() as f32,
+        ]);
+    }
     EffectSlotRow {
         kind: effect_kind_index(kind),
         units: effect_kind_units(kind),
@@ -643,6 +663,7 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         p3: p[3],
         p4: p[4],
         p5: p[5],
+        eq_band_data: eq_band_data.as_slice().into(),
         wet_dry: slot.wet_dry,
         input_trim_db: linear_to_db(slot.input_trim),
         output_trim_db: linear_to_db(slot.output_trim),

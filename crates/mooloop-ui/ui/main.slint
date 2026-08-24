@@ -28,6 +28,7 @@ import { DelayDeviceFace } from "delay-device.slint";
 import { GateDeviceFace } from "gate-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
 import { LimiterDeviceFace } from "limiter-device.slint";
+import { EqDeviceFace } from "eq-device.slint";
 import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
@@ -103,7 +104,7 @@ struct PlaylistClip {
 // kind costs a device face and nothing here.
 struct EffectSlotRow {
     // Matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay,
-    // 4=Gate, 5=Compressor, 6=Limiter.
+    // 4=Gate, 5=Compressor, 6=Limiter, 7=EQ.
     kind: int,
     // Rack units this device's face occupies. Devices with more working
     // controls get more width rather than compressing their controls.
@@ -115,6 +116,8 @@ struct EffectSlotRow {
     p3: float,
     p4: float,
     p5: float,
+    // EQ-only: seven groups of freq/gain/q/enabled/kind plus HP and LP.
+    eq-band-data: [float],
     wet-dry: float,
     // Trims are carried in dB from unity; the Rust side stores linear gain.
     input-trim-db: float,
@@ -2110,6 +2113,29 @@ export component MainWindow inherits Window {
                                                 ceiling-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                 release-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                 gain-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
+                                            if slot.kind == 7 : EqDeviceFace {
+                                                x: DeviceRackMetrics.rail-width;
+                                                y: 0px;
+                                                width: parent.content-width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                target: slot.p0;
+                                                enabled: slot.p1;
+                                                frequency: slot.p2;
+                                                gain: slot.p3;
+                                                q: slot.p4;
+                                                character: slot.p5;
+                                                band-data: slot.eq-band-data;
+                                                target-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                enabled-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                frequency-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                gain-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                q-changed(v) => { root.effect-param-changed(index, 4, v); }
+                                                character-changed(v) => { root.effect-param-changed(index, 5, v); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                         }

@@ -11,6 +11,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectKind {
+    Eq,
     Filter,
     Drive,
     Bitcrush,
@@ -22,7 +23,8 @@ pub enum EffectKind {
 
 impl EffectKind {
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 7] = [
+    pub const ALL: [EffectKind; 8] = [
+        EffectKind::Eq,
         EffectKind::Filter,
         EffectKind::Drive,
         EffectKind::Bitcrush,
@@ -35,6 +37,7 @@ impl EffectKind {
     /// Display name for device headers and the add-effect picker.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Eq => "EQ",
             Self::Filter => "Filter",
             Self::Drive => "Drive",
             Self::Bitcrush => "Bitcrush",
@@ -49,6 +52,7 @@ impl EffectKind {
     /// [`ParamDescriptor::id`] for the value that goes on the wire.
     pub fn descriptors(self) -> &'static [ParamDescriptor] {
         match self {
+            Self::Eq => &EQ_DESCRIPTORS,
             Self::Filter => &FILTER_DESCRIPTORS,
             Self::Drive => &DRIVE_DESCRIPTORS,
             Self::Bitcrush => &BITCRUSH_DESCRIPTORS,
@@ -67,6 +71,7 @@ impl EffectKind {
     /// Default parameter set for a freshly added effect of this kind.
     pub fn default_params(self) -> EffectParams {
         match self {
+            Self::Eq => EffectParams::Eq(EqParams::default()),
             Self::Filter => EffectParams::Filter(FilterParams::default()),
             Self::Drive => EffectParams::Drive(DriveParams::default()),
             Self::Bitcrush => EffectParams::Bitcrush(BitcrushParams::default()),
@@ -171,6 +176,158 @@ impl ParamDescriptor {
             _ => natural.clamp(self.min, self.max),
         }
     }
+}
+
+// --- Equalizer -------------------------------------------------------------
+
+/// The EQ has seven musical bands. High- and low-pass filters are separate
+/// from this count, matching the way engineers usually think about a channel
+/// EQ rather than spending a bell band on cleanup.
+pub const EQ_MAX_BANDS: usize = 7;
+
+/// `Event::ParamValue` ids for [`EqParams`]. These operate on the selected
+/// EQ target, so the UI needs one stable control set rather than a dump of
+/// seven duplicated controls.
+pub const EQ_PARAM_TARGET: u32 = 0;
+pub const EQ_PARAM_ENABLED: u32 = 1;
+pub const EQ_PARAM_FREQUENCY_HZ: u32 = 2;
+pub const EQ_PARAM_GAIN_DB: u32 = 3;
+pub const EQ_PARAM_Q: u32 = 4;
+/// Bell bands: 0 constant-Q, 1 proportional-Q. Pass filters: slope index.
+pub const EQ_PARAM_CHARACTER: u32 = 5;
+
+static EQ_DESCRIPTORS: [ParamDescriptor; 6] = [
+    ParamDescriptor { id: EQ_PARAM_TARGET, name: "Band", unit: "", min: 0.0, max: 8.0, curve: ParamCurve::Stepped(9), default: 1.0 },
+    ParamDescriptor { id: EQ_PARAM_ENABLED, name: "On", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Stepped(2), default: 1.0 },
+    ParamDescriptor { id: EQ_PARAM_FREQUENCY_HZ, name: "Freq", unit: "Hz", min: 20.0, max: 20_000.0, curve: ParamCurve::Exponential, default: 1_000.0 },
+    ParamDescriptor { id: EQ_PARAM_GAIN_DB, name: "Gain", unit: "dB", min: -18.0, max: 18.0, curve: ParamCurve::Linear, default: 0.0 },
+    ParamDescriptor { id: EQ_PARAM_Q, name: "Q", unit: "", min: 0.15, max: 18.0, curve: ParamCurve::Exponential, default: 0.707 },
+    ParamDescriptor { id: EQ_PARAM_CHARACTER, name: "Shape", unit: "", min: 0.0, max: 4.0, curve: ParamCurve::Stepped(5), default: 0.0 },
+];
+
+/// A band's response topology. The first and last default bands are shelves;
+/// any active interior band is a peaking filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EqBandKind {
+    #[default]
+    Bell,
+    LowShelf,
+    HighShelf,
+}
+
+impl EqBandKind {
+    pub fn from_index(index: i32) -> Self {
+        match index { 1 => Self::LowShelf, 2 => Self::HighShelf, _ => Self::Bell }
+    }
+    pub fn to_index(self) -> i32 {
+        match self { Self::Bell => 0, Self::LowShelf => 1, Self::HighShelf => 2 }
+    }
+}
+
+/// Bell bandwidth profile. Proportional Q is the familiar API behavior: a
+/// larger cut or boost produces a narrower, more assertive curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EqQProfile {
+    #[default]
+    Constant,
+    Proportional,
+}
+
+impl EqQProfile {
+    pub fn from_index(index: i32) -> Self { if index >= 1 { Self::Proportional } else { Self::Constant } }
+    pub fn to_index(self) -> i32 { match self { Self::Constant => 0, Self::Proportional => 1 } }
+}
+
+/// One band in the seven-band EQ bank.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EqBand {
+    pub enabled: bool,
+    pub kind: EqBandKind,
+    pub frequency_hz: f32,
+    pub gain_db: f32,
+    pub q: f32,
+    pub q_profile: EqQProfile,
+}
+
+impl EqBand {
+    pub const fn bell(frequency_hz: f32) -> Self {
+        Self { enabled: false, kind: EqBandKind::Bell, frequency_hz, gain_db: 0.0, q: 0.707, q_profile: EqQProfile::Constant }
+    }
+}
+
+/// Octave slope for dedicated high- and low-pass filters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EqSlope {
+    #[default]
+    Db6,
+    Db12,
+    Db18,
+    Db24,
+    Db36,
+}
+
+impl EqSlope {
+    pub fn from_index(index: i32) -> Self {
+        match index { 1 => Self::Db12, 2 => Self::Db18, 3 => Self::Db24, 4 => Self::Db36, _ => Self::Db6 }
+    }
+    pub fn to_index(self) -> i32 {
+        match self { Self::Db6 => 0, Self::Db12 => 1, Self::Db18 => 2, Self::Db24 => 3, Self::Db36 => 4 }
+    }
+    pub fn stages(self) -> usize { match self { Self::Db6 => 1, Self::Db12 => 2, Self::Db18 => 3, Self::Db24 => 4, Self::Db36 => 6 } }
+}
+
+/// Independent low- or high-pass cleanup filter.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EqPassFilter {
+    pub enabled: bool,
+    pub frequency_hz: f32,
+    pub q: f32,
+    pub slope: EqSlope,
+}
+
+impl EqPassFilter {
+    const fn high_pass() -> Self { Self { enabled: false, frequency_hz: 30.0, q: 0.707, slope: EqSlope::Db12 } }
+    const fn low_pass() -> Self { Self { enabled: false, frequency_hz: 18_000.0, q: 0.707, slope: EqSlope::Db12 } }
+}
+
+/// Full persisted EQ state. `selected_target` is retained so reopening an EQ
+/// returns to the band the user was shaping, without treating it as a seventh
+/// automation destination.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EqParams {
+    pub bands: [EqBand; EQ_MAX_BANDS],
+    pub high_pass: EqPassFilter,
+    pub low_pass: EqPassFilter,
+    #[serde(default = "default_eq_selected_target")]
+    pub selected_target: u8,
+    #[serde(default)]
+    pub analyzer_enabled: bool,
+}
+
+const fn default_eq_selected_target() -> u8 { 1 }
+
+impl Default for EqParams {
+    fn default() -> Self {
+        let mut bands = [EqBand::bell(1_000.0); EQ_MAX_BANDS];
+        bands[0] = EqBand { enabled: true, kind: EqBandKind::LowShelf, frequency_hz: 120.0, gain_db: 0.0, q: 0.707, q_profile: EqQProfile::Constant };
+        bands[1] = EqBand { enabled: true, ..EqBand::bell(1_000.0) };
+        bands[2] = EqBand { enabled: true, kind: EqBandKind::HighShelf, frequency_hz: 8_000.0, gain_db: 0.0, q: 0.707, q_profile: EqQProfile::Constant };
+        Self { bands, high_pass: EqPassFilter::high_pass(), low_pass: EqPassFilter::low_pass(), selected_target: default_eq_selected_target(), analyzer_enabled: true }
+    }
+}
+
+impl EqParams {
+    pub const HIGH_PASS_TARGET: usize = EQ_MAX_BANDS;
+    pub const LOW_PASS_TARGET: usize = EQ_MAX_BANDS + 1;
+
+    pub fn selected_target(self) -> usize { usize::from(self.selected_target).min(Self::LOW_PASS_TARGET) }
+
+    pub fn selected_band(self) -> Option<EqBand> { self.bands.get(self.selected_target()).copied() }
+
+    fn set_selected_target(&mut self, value: f32) { self.selected_target = value.round().clamp(0.0, Self::LOW_PASS_TARGET as f32) as u8; }
 }
 
 // --- Filter ----------------------------------------------------------------
@@ -806,6 +963,7 @@ impl Default for LimiterParams {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "state", rename_all = "snake_case")]
 pub enum EffectParams {
+    Eq(EqParams),
     Filter(FilterParams),
     Drive(DriveParams),
     Bitcrush(BitcrushParams),
@@ -818,6 +976,7 @@ pub enum EffectParams {
 impl EffectParams {
     pub fn kind(&self) -> EffectKind {
         match self {
+            Self::Eq(_) => EffectKind::Eq,
             Self::Filter(_) => EffectKind::Filter,
             Self::Drive(_) => EffectKind::Drive,
             Self::Bitcrush(_) => EffectKind::Bitcrush,
@@ -831,6 +990,13 @@ impl EffectParams {
     pub fn filter(&self) -> Option<&FilterParams> {
         match self {
             Self::Filter(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn eq(&self) -> Option<&EqParams> {
+        match self {
+            Self::Eq(p) => Some(p),
             _ => None,
         }
     }
@@ -881,6 +1047,31 @@ impl EffectParams {
     /// id this kind does not have.
     pub fn get(&self, id: u32) -> Option<f32> {
         match self {
+            Self::Eq(p) => match id {
+                EQ_PARAM_TARGET => Some(f32::from(p.selected_target)),
+                EQ_PARAM_ENABLED => Some(if match p.selected_target() {
+                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].enabled,
+                    EqParams::HIGH_PASS_TARGET => p.high_pass.enabled,
+                    _ => p.low_pass.enabled,
+                } { 1.0 } else { 0.0 }),
+                EQ_PARAM_FREQUENCY_HZ => Some(match p.selected_target() {
+                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].frequency_hz,
+                    EqParams::HIGH_PASS_TARGET => p.high_pass.frequency_hz,
+                    _ => p.low_pass.frequency_hz,
+                }),
+                EQ_PARAM_GAIN_DB => Some(if p.selected_target() < EQ_MAX_BANDS { p.bands[p.selected_target()].gain_db } else { 0.0 }),
+                EQ_PARAM_Q => Some(match p.selected_target() {
+                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].q,
+                    EqParams::HIGH_PASS_TARGET => p.high_pass.q,
+                    _ => p.low_pass.q,
+                }),
+                EQ_PARAM_CHARACTER => Some(match p.selected_target() {
+                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].q_profile.to_index() as f32,
+                    EqParams::HIGH_PASS_TARGET => p.high_pass.slope.to_index() as f32,
+                    _ => p.low_pass.slope.to_index() as f32,
+                }),
+                _ => None,
+            },
             Self::Filter(p) => match id {
                 FILTER_PARAM_CUTOFF_HZ => Some(p.cutoff_hz),
                 FILTER_PARAM_RESONANCE => Some(p.resonance),
@@ -945,6 +1136,33 @@ impl EffectParams {
         let descriptor = self.kind().descriptor(id)?;
         let value = descriptor.clamp_natural(value);
         match self {
+            Self::Eq(p) => match id {
+                EQ_PARAM_TARGET => p.set_selected_target(value),
+                EQ_PARAM_ENABLED => match p.selected_target() {
+                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].enabled = value >= 0.5,
+                    EqParams::HIGH_PASS_TARGET => p.high_pass.enabled = value >= 0.5,
+                    _ => p.low_pass.enabled = value >= 0.5,
+                },
+                EQ_PARAM_FREQUENCY_HZ => match p.selected_target() {
+                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].frequency_hz = value,
+                    EqParams::HIGH_PASS_TARGET => p.high_pass.frequency_hz = value,
+                    _ => p.low_pass.frequency_hz = value,
+                },
+                EQ_PARAM_GAIN_DB => {
+                    if p.selected_target() < EQ_MAX_BANDS { p.bands[p.selected_target()].gain_db = value; }
+                }
+                EQ_PARAM_Q => match p.selected_target() {
+                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].q = value,
+                    EqParams::HIGH_PASS_TARGET => p.high_pass.q = value,
+                    _ => p.low_pass.q = value,
+                },
+                EQ_PARAM_CHARACTER => match p.selected_target() {
+                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].q_profile = EqQProfile::from_index(value.round() as i32),
+                    EqParams::HIGH_PASS_TARGET => p.high_pass.slope = EqSlope::from_index(value.round() as i32),
+                    _ => p.low_pass.slope = EqSlope::from_index(value.round() as i32),
+                },
+                _ => return None,
+            },
             Self::Filter(p) => match id {
                 FILTER_PARAM_CUTOFF_HZ => p.cutoff_hz = value,
                 FILTER_PARAM_RESONANCE => p.resonance = value,

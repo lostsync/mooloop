@@ -1315,6 +1315,9 @@ mod tests {
             // be transparent, so they would prove nothing here.
             let mut params = kind.default_params();
             match kind {
+                mooloop_core::EffectKind::Eq => {
+                    params.set(mooloop_core::EQ_PARAM_GAIN_DB, 18.0);
+                }
                 mooloop_core::EffectKind::Filter => {
                     params.set(mooloop_core::FILTER_PARAM_CUTOFF_HZ, 100.0);
                 }

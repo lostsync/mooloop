@@ -13,12 +13,14 @@ mod bitcrush;
 mod delay;
 mod drive;
 mod dynamics;
+mod eq;
 mod filter;
 
 pub use bitcrush::BitcrushEffect;
 pub use delay::DelayEffect;
 pub use drive::DriveEffect;
 pub use dynamics::{CompressorEffect, GateEffect, LimiterEffect};
+pub use eq::EqEffect;
 pub use filter::FilterEffect;
 
 use mooloop_core::EffectParams;
@@ -33,6 +35,7 @@ use crate::node::AudioNode;
 /// constructor means a new effect kind is wired in exactly once.
 pub fn build_effect(params: EffectParams, sample_rate: u32) -> Box<dyn AudioNode + Send> {
     match params {
+        EffectParams::Eq(p) => Box::new(EqEffect::new(p, sample_rate)),
         EffectParams::Filter(p) => Box::new(FilterEffect::new(p, sample_rate)),
         EffectParams::Drive(p) => Box::new(DriveEffect::new(p, sample_rate)),
         EffectParams::Bitcrush(p) => Box::new(BitcrushEffect::new(p)),

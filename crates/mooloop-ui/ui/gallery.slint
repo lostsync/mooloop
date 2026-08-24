@@ -26,6 +26,7 @@ import { DelayDeviceFace } from "delay-device.slint";
 import { GateDeviceFace } from "gate-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
 import { LimiterDeviceFace } from "limiter-device.slint";
+import { EqDeviceFace } from "eq-device.slint";
 
 export component ControlGallery inherits Window {
     title: "mooloop control gallery";
@@ -597,6 +598,16 @@ export component ControlGallery inherits Window {
                             x: 0px; y: 0px; width: parent.width; height: parent.height;
                             slot-index: 7; slot-count: 8;
                             ceiling: 0.75; release: 0.6294; gain: 0.5;
+                        }
+                    }
+                    DeviceFrame {
+                        width: DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap * 2;
+                        height: DeviceRackMetrics.face-height;
+                        EqDeviceFace {
+                            x: 0px; y: 0px; width: parent.width; height: parent.height;
+                            slot-index: 8; slot-count: 9;
+                            target: 0.25; enabled: 1; frequency: 0.61; gain: 0.64; q: 0.32; character: 0.25;
+                            band-data: [0.18, 0.58, 0.707, 1, 1, 0.35, 0.42, 0.707, 1, 0, 0.53, 0.66, 1.4, 1, 0, 0.67, 0.39, 0.9, 1, 0, 0.76, 0.57, 0.707, 1, 0, 0.84, 0.45, 1.1, 1, 0, 0.93, 0.62, 0.707, 1, 2, 0.1, 0.707, 1, 1, 0.96, 0.707, 1, 1];
                         }
                     }
                     DeviceAddSlot { }
