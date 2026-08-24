@@ -46,7 +46,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-24
-- Sessions: 13
+- Sessions: 14
 - Notes: Set up this file at Adam's request. Refreshed the README
   screenshot. Sampler UI overhaul: waveform zoom/scroll, sample-accurate
   trim/loop fields, compact tuning knobs with a note/frequency readout, a
@@ -59,7 +59,9 @@ work session you can recall being part of, and don't stress over precision.
   Assignable keyboard shortcuts: the action registry (`actions.rs`,
   `docs/ACTIONS.md`), a generic key dispatcher replacing the old hardcoded
   chain, pane switching and piano-roll zoom shortcuts, undoable pattern
-  clone/remove, and the Preferences > Shortcuts page.
+  clone/remove, and the Preferences > Shortcuts page. Closed out FOCUS.md's
+  command-layer step: piano-roll multi-select (Shift/Ctrl-click, Select
+  All, bulk delete), Clear Pattern, and a pattern right-click context menu.
 
 ### GLM (glm-5.3) — opencode
 - First seen: 2026-08-23
