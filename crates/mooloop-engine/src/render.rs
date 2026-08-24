@@ -100,6 +100,9 @@ struct EffectChain {
     /// Processed in order after whatever produced the audio. Slots are `None`
     /// until a node is installed structurally.
     nodes: [Option<Box<dyn AudioNode + Send>>; MAX_EFFECTS_PER_CHANNEL],
+    /// One past the highest occupied node slot. Keeps the realtime pass
+    /// proportional to the populated chain instead of its addressable size.
+    bound: usize,
     /// Tracks a slot's persisted device identity independently of the trait
     /// object. Prepared resource replacements use this to refuse stale work.
     kinds: [Option<mooloop_core::EffectKind>; MAX_EFFECTS_PER_CHANNEL],
@@ -138,6 +141,7 @@ impl EffectChain {
     fn new() -> Self {
         Self {
             nodes: std::array::from_fn(|_| None),
+            bound: 0,
             kinds: [None; MAX_EFFECTS_PER_CHANNEL],
             resource_keys: [None; MAX_EFFECTS_PER_CHANNEL],
             events: [PendingEffectParams::empty(); MAX_EFFECTS_PER_CHANNEL],
@@ -173,6 +177,15 @@ impl EffectChain {
         self.wet_dry = [1.0; MAX_EFFECTS_PER_CHANNEL];
         self.input_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
         self.output_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
+        self.bound = 0;
+    }
+
+    fn refresh_bound(&mut self) {
+        self.bound = self
+            .nodes
+            .iter()
+            .rposition(Option::is_some)
+            .map_or(0, |slot| slot + 1);
     }
 
     /// Install a node together with its dry-path delay, returning whichever
@@ -190,6 +203,7 @@ impl EffectChain {
         if slot < MAX_EFFECTS_PER_CHANNEL {
             self.kinds[slot] = Some(kind);
             self.resource_keys[slot] = resource_key;
+            self.bound = self.bound.max(slot + 1);
             ReclaimedEffect {
                 node: self.nodes[slot].replace(node),
                 align: std::mem::replace(&mut self.dry_align[slot], align),
@@ -260,6 +274,7 @@ impl EffectChain {
         if let Some(bypassed) = self.bypassed.get_mut(slot) {
             *bypassed = false;
         }
+        self.refresh_bound();
         removed
     }
 
@@ -275,6 +290,7 @@ impl EffectChain {
             self.output_trim.swap(slot_a, slot_b);
             self.dry_align.swap(slot_a, slot_b);
             self.analyzers.swap(slot_a, slot_b);
+            self.refresh_bound();
         }
     }
 
@@ -332,7 +348,7 @@ impl EffectChain {
         bus: &mut StereoBus,
         device_display: Option<(&DeviceMeters, &DeviceTelemetry, usize)>,
     ) {
-        for slot in 0..MAX_EFFECTS_PER_CHANNEL {
+        for slot in 0..self.bound {
             if let Some((_, telemetry, target)) = device_display {
                 if self.nodes[slot].is_some() && telemetry.spectrum_enabled(target, slot + 1) {
                     if let Some(analyzer) = &mut self.analyzers[slot] {
@@ -1286,6 +1302,7 @@ mod tests {
 
         let render = RenderState::from_project(48_000, &project, &[]);
         assert!(render.strips[0].effects.nodes[MAX_EFFECTS_PER_CHANNEL - 1].is_some());
+        assert_eq!(render.strips[0].effects.bound, MAX_EFFECTS_PER_CHANNEL);
     }
 
     /// Builds a project around `channel` with one triggering note. A fresh
@@ -1826,6 +1843,35 @@ mod tests {
                 bus.r[frame] = self.right.pop_front().unwrap_or(0.0);
             }
         }
+    }
+
+    #[test]
+    fn effect_chain_bound_tracks_sparse_slots() {
+        let mut chain = EffectChain::new();
+        assert_eq!(chain.bound, 0);
+
+        for slot in [2, 5] {
+            let displaced = chain.install(
+                slot,
+                mooloop_core::EffectKind::Delay,
+                None,
+                Box::new(LatentDelay::new(1)),
+                None,
+                Box::new(SpectrumAnalyzer::new()),
+            );
+            assert!(displaced.is_empty());
+        }
+        assert_eq!(chain.bound, 6);
+
+        chain.swap(5, 1);
+        assert_eq!(chain.bound, 3);
+        assert!(chain.nodes[1].is_some());
+        assert!(chain.nodes[2].is_some());
+
+        assert!(chain.remove(2).node.is_some());
+        assert_eq!(chain.bound, 2);
+        assert!(chain.remove(1).node.is_some());
+        assert_eq!(chain.bound, 0);
     }
 
     #[test]
