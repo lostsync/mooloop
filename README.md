@@ -165,6 +165,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 - [Roadmap](docs/ROADMAP.md): dependency-ordered future work.
 - [Audio core architecture](docs/AUDIO_ARCHITECTURE.md): the target boundary
   between editable projects, compiled render plans, and realtime execution.
+- [Application structure and flow](docs/ARCHITECTURE.md): a Mermaid map of
+  the crates, control plane, realtime audio path, persistence, and export.
 - [Modulation plan](docs/MODULATION_PLAN.md): the approved parameter,
   modulation, and effect-suite design.
 - [Buffer engine hypothesis](docs/BUFFER_ENGINE.md): the unimplemented
