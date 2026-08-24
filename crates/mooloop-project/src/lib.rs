@@ -906,12 +906,12 @@ fn validate_setups(setups: &[ChannelSetup]) -> Result<(), Error> {
             )));
         }
         if !channel.volume.is_finite()
-            || !(0.0..=1.0).contains(&channel.volume)
+            || !(0.0..=mooloop_core::MAX_LINEAR_GAIN).contains(&channel.volume)
             || !channel.pan.is_finite()
             || !(-1.0..=1.0).contains(&channel.pan)
         {
             return Err(Error::Invalid(format!(
-                "channel {index} has invalid mixer values"
+                "channel {index} mixer output or pan is outside its allowed range"
             )));
         }
         if channel.kind != setup.source.kind() {
@@ -939,95 +939,189 @@ fn validate_source(index: usize, source: &ChannelSource) -> Result<(), Error> {
 }
 
 fn validate_drum_synth(channel: usize, params: DrumSynthParams) -> Result<(), Error> {
-    let valid = params.choke_group <= MAX_CHOKE_GROUP
-        && in_range(params.decay, 0.0, 10.0)
-        && in_range(params.tune_semitones, -48.0, 48.0)
-        && in_range(params.drive, 0.0, 1.0)
-        && in_range(params.punch, 0.0, 1.0)
-        && in_range(params.kick_start_hz, 20.0, 20_000.0)
-        && in_range(params.kick_end_hz, 20.0, 20_000.0)
-        && in_range(params.kick_sweep, 0.0, 10.0)
-        && in_range(params.kick_click, 0.0, 1.0)
-        && in_range(params.snare_tone_hz, 20.0, 20_000.0)
-        && in_range(params.snare_tone2_hz, 20.0, 20_000.0)
-        && in_range(params.snare_tone2_mix, 0.0, 1.0)
-        && in_range(params.snare_noise_mix, 0.0, 1.0)
-        && in_range(params.snare_noise_decay, 0.0, 10.0)
-        && in_range(params.snare_noise_color, 0.0, 1.0)
-        && in_range(params.hat_hp_hz, 20.0, 20_000.0)
-        && in_range(params.hat_metallic, 0.0, 1.0);
-    if !valid {
-        return Err(Error::Invalid(format!(
-            "channel {channel} has invalid drum synth parameters"
-        )));
+    if params.choke_group > MAX_CHOKE_GROUP {
+        return Err(invalid_integer(
+            channel,
+            "drum synth choke group",
+            params.choke_group,
+            0,
+            MAX_CHOKE_GROUP,
+        ));
+    }
+    for (field, value, min, max) in [
+        ("drum decay", params.decay, 0.0, 10.0),
+        ("drum tune", params.tune_semitones, -48.0, 48.0),
+        ("drum drive", params.drive, 0.0, 1.0),
+        ("drum punch", params.punch, 0.0, 1.0),
+        ("kick start frequency", params.kick_start_hz, 20.0, 20_000.0),
+        ("kick end frequency", params.kick_end_hz, 20.0, 20_000.0),
+        ("kick sweep", params.kick_sweep, 0.0, 10.0),
+        ("kick click", params.kick_click, 0.0, 1.0),
+        ("snare tone frequency", params.snare_tone_hz, 20.0, 20_000.0),
+        (
+            "snare second tone frequency",
+            params.snare_tone2_hz,
+            20.0,
+            20_000.0,
+        ),
+        ("snare second tone mix", params.snare_tone2_mix, 0.0, 1.0),
+        ("snare noise mix", params.snare_noise_mix, 0.0, 1.0),
+        ("snare noise decay", params.snare_noise_decay, 0.0, 10.0),
+        ("snare noise color", params.snare_noise_color, 0.0, 1.0),
+        ("hat high-pass frequency", params.hat_hp_hz, 20.0, 20_000.0),
+        ("hat metallic", params.hat_metallic, 0.0, 1.0),
+    ] {
+        validate_range(channel, field, value, min, max)?;
     }
     Ok(())
 }
 
 fn validate_mono_synth(channel: usize, params: MonoSynthParams) -> Result<(), Error> {
-    let oscillators_valid = params.osc.iter().all(|osc| {
-        in_range(osc.semitones, -48.0, 48.0)
-            && in_range(osc.cents, -100.0, 100.0)
-            && in_range(osc.level, 0.0, 1.0)
-            && in_range(osc.pulse_width, 0.05, 0.95)
-    });
-    let valid = oscillators_valid
-        && in_range(params.glide, 0.0, 10.0)
-        && in_range(params.attack, 0.0, 10.0)
-        && in_range(params.decay, 0.0, 10.0)
-        && in_range(params.sustain, 0.0, 1.0)
-        && in_range(params.release, 0.0, 10.0)
-        && in_range(params.filter_cutoff, 0.0, 1.0)
-        && in_range(params.filter_resonance, 0.0, 1.0)
-        && in_range(params.filter_env_amount, -1.0, 1.0)
-        && in_range(params.drive, 0.0, 1.0)
-        && in_range(params.lfo.rate_hz, 0.0, 20.0)
-        && in_range(params.lfo.to_pitch, -24.0, 24.0)
-        && in_range(params.lfo.to_filter, -4.0, 4.0)
-        && in_range(params.lfo.to_pulse_width, -0.45, 0.45)
-        && in_range(params.lfo.to_amp, 0.0, 1.0);
-    if !valid {
-        return Err(Error::Invalid(format!(
-            "channel {channel} has invalid mono synth parameters"
-        )));
+    validate_synth_params(
+        channel,
+        "mono synth",
+        &params.osc,
+        params.glide,
+        params.attack,
+        params.decay,
+        params.sustain,
+        params.release,
+        params.filter_cutoff,
+        params.filter_resonance,
+        params.filter_env_amount,
+        params.drive,
+        params.lfo.rate_hz,
+        params.lfo.to_pitch,
+        params.lfo.to_filter,
+        params.lfo.to_pulse_width,
+        params.lfo.to_amp,
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_synth_params(
+    channel: usize,
+    kind: &str,
+    oscillators: &[mooloop_core::OscParams],
+    glide: f32,
+    attack: f32,
+    decay: f32,
+    sustain: f32,
+    release: f32,
+    cutoff: f32,
+    resonance: f32,
+    env: f32,
+    drive: f32,
+    rate: f32,
+    pitch: f32,
+    filter: f32,
+    pulse: f32,
+    amp: f32,
+) -> Result<(), Error> {
+    for (index, osc) in oscillators.iter().enumerate() {
+        validate_range(
+            channel,
+            &format!("{kind} oscillator {} semitones", index + 1),
+            osc.semitones,
+            -48.0,
+            48.0,
+        )?;
+        validate_range(
+            channel,
+            &format!("{kind} oscillator {} cents", index + 1),
+            osc.cents,
+            -100.0,
+            100.0,
+        )?;
+        validate_range(
+            channel,
+            &format!("{kind} oscillator {} level", index + 1),
+            osc.level,
+            0.0,
+            1.0,
+        )?;
+        validate_range(
+            channel,
+            &format!("{kind} oscillator {} pulse width", index + 1),
+            osc.pulse_width,
+            0.05,
+            0.95,
+        )?;
+    }
+    for (field, value, min, max) in [
+        ("glide", glide, 0.0, 10.0),
+        ("attack", attack, 0.0, 10.0),
+        ("decay", decay, 0.0, 10.0),
+        ("sustain", sustain, 0.0, 1.0),
+        ("release", release, 0.0, 10.0),
+        ("filter cutoff", cutoff, 0.0, 1.0),
+        ("filter resonance", resonance, 0.0, 1.0),
+        ("filter envelope", env, -1.0, 1.0),
+        ("drive", drive, 0.0, 1.0),
+        ("LFO rate", rate, 0.0, 20.0),
+        ("LFO pitch", pitch, -24.0, 24.0),
+        ("LFO filter", filter, -4.0, 4.0),
+        ("LFO pulse width", pulse, -0.45, 0.45),
+        ("LFO amplitude", amp, 0.0, 1.0),
+    ] {
+        validate_range(channel, &format!("{kind} {field}"), value, min, max)?;
     }
     Ok(())
 }
 
 fn validate_poly_synth(channel: usize, params: PolySynthParams) -> Result<(), Error> {
-    let oscillators_valid = params.osc.iter().all(|osc| {
-        in_range(osc.semitones, -48.0, 48.0)
-            && in_range(osc.cents, -100.0, 100.0)
-            && in_range(osc.level, 0.0, 1.0)
-            && in_range(osc.pulse_width, 0.05, 0.95)
-    });
-    let valid = oscillators_valid
-        && in_range(params.glide, 0.0, 10.0)
-        && in_range(params.attack, 0.0, 10.0)
-        && in_range(params.decay, 0.0, 10.0)
-        && in_range(params.sustain, 0.0, 1.0)
-        && in_range(params.release, 0.0, 10.0)
-        && in_range(params.filter_cutoff, 0.0, 1.0)
-        && in_range(params.filter_resonance, 0.0, 1.0)
-        && in_range(params.filter_env_amount, -1.0, 1.0)
-        && in_range(params.drive, 0.0, 1.0)
-        && in_range(params.lfo.rate_hz, 0.0, 20.0)
-        && in_range(params.lfo.to_pitch, -24.0, 24.0)
-        && in_range(params.lfo.to_filter, -4.0, 4.0)
-        && in_range(params.lfo.to_pulse_width, -0.45, 0.45)
-        && in_range(params.lfo.to_amp, 0.0, 1.0)
-        && (1..=MAX_POLY_VOICES).contains(&params.polyphony)
-        && in_range(params.spread, 0.0, 1.0);
-    if !valid {
-        return Err(Error::Invalid(format!(
-            "channel {channel} has invalid poly synth parameters"
-        )));
+    validate_synth_params(
+        channel,
+        "poly synth",
+        &params.osc,
+        params.glide,
+        params.attack,
+        params.decay,
+        params.sustain,
+        params.release,
+        params.filter_cutoff,
+        params.filter_resonance,
+        params.filter_env_amount,
+        params.drive,
+        params.lfo.rate_hz,
+        params.lfo.to_pitch,
+        params.lfo.to_filter,
+        params.lfo.to_pulse_width,
+        params.lfo.to_amp,
+    )?;
+    if !(1..=MAX_POLY_VOICES).contains(&params.polyphony) {
+        return Err(invalid_integer(
+            channel,
+            "poly synth voice count",
+            params.polyphony,
+            1,
+            MAX_POLY_VOICES,
+        ));
     }
+    validate_range(channel, "poly synth stereo spread", params.spread, 0.0, 1.0)?;
     Ok(())
 }
 
-fn in_range(value: f32, min: f32, max: f32) -> bool {
-    value.is_finite() && (min..=max).contains(&value)
+fn validate_range(
+    channel: usize,
+    field: &str,
+    value: f32,
+    min: f32,
+    max: f32,
+) -> Result<(), Error> {
+    if value.is_finite() && (min..=max).contains(&value) {
+        return Ok(());
+    }
+    Err(Error::Invalid(format!(
+        "channel {channel} {field} is {value:?}; expected {min}..={max}"
+    )))
+}
+
+fn invalid_integer(channel: usize, field: &str, value: u8, min: u8, max: u8) -> Error {
+    Error::Invalid(format!(
+        "channel {channel} {field} is {value}; expected {min}..={max}"
+    ))
 }
 
 fn validate_sampler(channel: usize, params: SamplerParams) -> Result<(), Error> {
@@ -1505,6 +1599,24 @@ id = "default_kick"
     }
 
     #[test]
+    fn accepts_the_ui_output_gain_ceiling() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("loud.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.channel.volume = mooloop_core::MAX_LINEAR_GAIN;
+
+        save_song(&bundle, &project, AssetMode::Referenced)
+            .expect("the UI's +12 dB output setting must be saveable");
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected a song");
+        };
+        assert_eq!(
+            loaded.channels[0].setup.channel.volume,
+            mooloop_core::MAX_LINEAR_GAIN
+        );
+    }
+
+    #[test]
     fn rejects_mismatched_or_invalid_synth_sources() {
         let mut project = Project {
             swing_percent: 49,
@@ -1546,7 +1658,9 @@ id = "default_kick"
             .params
             .lfo
             .rate_hz = 400.0;
-        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        let error = validate_project(&project).unwrap_err().to_string();
+        assert!(error.contains("LFO rate"), "{error}");
+        assert!(error.contains("expected 0..=20"), "{error}");
 
         let mut project = Project::default();
         project.channels[0] = mooloop_core::ProjectChannel::poly_synth(0, 1);

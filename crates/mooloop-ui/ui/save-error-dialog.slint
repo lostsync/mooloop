@@ -1,0 +1,52 @@
+import { Theme } from "theme.slint";
+import { ToolButton } from "controls.slint";
+
+// Persistence failures are rare, but a one-line status bar can elide the
+// location and range the user needs to repair a hand-edited document.
+export component SaveErrorDialog inherits Rectangle {
+    in-out property <bool> open;
+    in property <string> title: "Could not save";
+    in property <string> detail;
+    callback dismissed;
+
+    visible: root.open;
+    background: #00000099;
+    z: 200;
+
+    TouchArea { }
+
+    Rectangle {
+        width: min(parent.width - 32px, 520px);
+        height: 230px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.warning;
+        border-radius: 6px;
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+
+            Text { text: root.title; color: Theme.text; font-size: 16px; }
+            Text {
+                text: root.detail;
+                color: Theme.text-muted;
+                font-size: 11px;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+            HorizontalLayout {
+                alignment: end;
+                ToolButton {
+                    text: "Dismiss";
+                    active: true;
+                    width: 88px;
+                    height: 30px;
+                    clicked => { root.dismissed(); root.open = false; }
+                }
+            }
+        }
+    }
+}

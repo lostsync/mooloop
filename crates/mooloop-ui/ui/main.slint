@@ -13,6 +13,7 @@ import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { AppearanceDialog } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
+import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
 import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
@@ -162,6 +163,10 @@ export component MainWindow inherits Window {
     in-out property <bool> embed-assets: true;
     in-out property <bool> document-busy;
     in-out property <string> status-message;
+    in-out property <bool> save-error-open;
+    in-out property <string> save-error-title;
+    in-out property <string> save-error-detail;
+    callback save-error-dismissed();
     in-out property <bool> export-open;
     in-out property <int> export-format;
     in-out property <int> export-bitrate: 2;
@@ -2695,6 +2700,15 @@ export component MainWindow inherits Window {
         category-text <=> root.save-preset-category;
         save-confirmed(name, category) => { root.save-preset-confirmed(name, category); }
         cancelled => { root.save-preset-cancelled(); }
+    }
+
+    SaveErrorDialog {
+        width: parent.width;
+        height: parent.height;
+        open <=> root.save-error-open;
+        title <=> root.save-error-title;
+        detail <=> root.save-error-detail;
+        dismissed => { root.save-error-dismissed(); }
     }
     ExportDialog {
         width: parent.width;

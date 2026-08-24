@@ -17,6 +17,11 @@ pub const MAX_PATTERNS: usize = u8::MAX as usize + 1;
 /// product cap.
 pub const MAX_EFFECTS_PER_CHANNEL: usize = u8::MAX as usize + 1;
 
+/// Largest persisted linear gain for a channel/device output. This is the
+/// +12 dB endpoint shared by the UI trim controls, rounded slightly upward so
+/// a value produced from that dB conversion always remains representable.
+pub const MAX_LINEAR_GAIN: f32 = 4.0;
+
 /// Instrument kind for a channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,7 +38,7 @@ pub struct Channel {
     pub name: String,
     pub kind: DeviceKind,
     pub muted: bool,
-    /// Linear output volume in [0, 1].
+    /// Linear output volume in [0, `MAX_LINEAR_GAIN`] (+12 dB).
     pub volume: f32,
     /// Stereo pan in [-1, 1].
     pub pan: f32,

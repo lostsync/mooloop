@@ -22,7 +22,7 @@ use mooloop_core::{
     PatternPlacement, PlaybackMode, PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel,
     RetriggerMode, SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
-    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
+    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
     MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT,
     MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
@@ -302,6 +302,10 @@ enum DocumentResult {
     SavedPreset {
         label: &'static str,
         report: SaveReport,
+    },
+    SaveFailed {
+        action: &'static str,
+        error: String,
     },
     Loaded {
         path: PathBuf,
@@ -1994,7 +1998,10 @@ impl AppUi {
                                     .collect(),
                             })
                         })
-                        .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                        .unwrap_or_else(|error| DocumentResult::SaveFailed {
+                            action: "song",
+                            error: error.to_string(),
+                        });
                     let _ = tx.send(result);
                 });
             };
@@ -2038,7 +2045,10 @@ impl AppUi {
                             label: "Kit saved",
                             report,
                         })
-                        .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                        .unwrap_or_else(|error| DocumentResult::SaveFailed {
+                            action: "kit",
+                            error: error.to_string(),
+                        });
                     let _ = tx.send(result);
                 });
             });
@@ -2073,7 +2083,10 @@ impl AppUi {
                             label: "Channel saved",
                             report,
                         })
-                        .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                        .unwrap_or_else(|error| DocumentResult::SaveFailed {
+                            action: "channel",
+                            error: error.to_string(),
+                        });
                     let _ = tx.send(result);
                 });
             });
@@ -2257,7 +2270,10 @@ impl AppUi {
                     };
                     let result = result
                         .map(|report| DocumentResult::SavedPreset { label, report })
-                        .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                        .unwrap_or_else(|error| DocumentResult::SaveFailed {
+                            action: "preset",
+                            error: error.to_string(),
+                        });
                     let _ = tx.send(result);
                 });
             });
@@ -3278,7 +3294,7 @@ impl AppUi {
                     return;
                 };
                 // Gain stages share the container's +12 dB headroom.
-                channel.volume = volume.clamp(0.0, 4.0);
+                channel.volume = volume.clamp(0.0, MAX_LINEAR_GAIN);
                 let volume = channel.volume;
                 st.sync_row_flags();
                 // The source device's output-trim knob is the same parameter;
@@ -4645,6 +4661,12 @@ impl AppUi {
                         DocumentResult::Exported { path } => {
                             window
                                 .set_status_message(format!("Exported {}", path.display()).into());
+                        }
+                        DocumentResult::SaveFailed { action, error } => {
+                            window.set_save_error_title(format!("Could not save {action}").into());
+                            window.set_save_error_detail(error.clone().into());
+                            window.set_save_error_open(true);
+                            window.set_status_message(format!("Save {action} failed").into());
                         }
                         DocumentResult::Failed(error) => {
                             window.set_status_message(format!("Error: {error}").into());

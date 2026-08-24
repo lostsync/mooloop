@@ -15,7 +15,9 @@ pub mod synth;
 pub mod time;
 
 pub use bridge::{EngineCommand, EngineEvent};
-pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS};
+pub use channel::{
+    Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS,
+};
 pub use effect::{
     BitcrushParams, CompressorParams, DelayMode, DelayParams, DriveCurve, DriveParams, EffectKind,
     EffectParams, EffectSlotState, FilterMode, FilterParams, GateParams, LimiterParams, ParamCurve,

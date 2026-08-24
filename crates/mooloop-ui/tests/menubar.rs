@@ -113,3 +113,22 @@ fn disabled_rows_swallow_clicks() {
     click(ui.window(), EDIT_X, TITLE_Y);
     assert_eq!(ui.get_editor_page(), 0);
 }
+
+#[test]
+fn save_error_dialog_keeps_the_full_reason_visible_until_dismissed() {
+    let ui = harness();
+    ui.set_save_error_title("Could not save song".into());
+    ui.set_save_error_detail(
+        "invalid document: channel 3 mono synth LFO rate is 400.0; expected 0..=20".into(),
+    );
+    ui.set_save_error_open(true);
+
+    assert!(ui.get_save_error_open());
+    assert!(ui.get_save_error_detail().contains("channel 3"));
+
+    ui.invoke_save_error_dismissed();
+    // The Rust callback is intentionally only a notification; closing is an
+    // in-Slint action so the dialog also works in isolated UI tests.
+    ui.set_save_error_open(false);
+    assert!(!ui.get_save_error_open());
+}
