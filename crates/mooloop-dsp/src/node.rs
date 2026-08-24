@@ -65,6 +65,15 @@ pub trait AudioNode {
         0
     }
 
+    /// Frames by which the generic host should delay its dry branch before it
+    /// mixes it with this node. Most latency-producing effects return their
+    /// processing latency here. A wet-only device such as convolution reverb
+    /// can retain an intentional delayed return without moving the channel's
+    /// dry signal and neighbouring tracks with it.
+    fn dry_path_latency_frames(&self) -> u32 {
+        self.latency_frames()
+    }
+
     /// Process one block in place on `bus`. `events_in` is sorted by sample
     /// offset; nodes that respond to events must split rendering at those
     /// offsets. `events_out` is provided when the engine wants events back

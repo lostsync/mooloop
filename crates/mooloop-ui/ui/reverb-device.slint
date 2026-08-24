@@ -1,0 +1,114 @@
+import { Theme } from "theme.slint";
+import { ParameterKnob, SegmentedControl } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+
+// The plan is a parameter display, not decoration: dimensions set the room
+// aspect and the capture point changes the generated early-reflection timing.
+component RoomPlan inherits Rectangle {
+    in property <float> width-m;
+    in property <float> depth-m;
+    in property <float> capture-x;
+    in property <float> capture-y;
+    callback capture-moved(float, float);
+    private property <float> aspect: clamp(root.width-m / max(0.1, root.depth-m), 0.42, 2.25);
+    private property <length> room-width: min(root.width - 12px, (root.height - 12px) * root.aspect);
+    private property <length> room-height: min(root.height - 12px, (root.width - 12px) / root.aspect);
+    private property <length> room-x: (root.width - root.room-width) * 0.5;
+    private property <length> room-y: (root.height - root.room-height) * 0.5;
+
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    Rectangle {
+        x: root.room-x; y: root.room-y; width: root.room-width; height: root.room-height;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.text-faint.with-alpha(0.6);
+        for column in 5 : Rectangle { x: column * parent.width / 4; width: 1px; height: 100%; background: Theme.border.with-alpha(0.42); }
+        for row in 5 : Rectangle { y: row * parent.height / 4; width: 100%; height: 1px; background: Theme.border.with-alpha(0.42); }
+        // Fixed asymmetric source marker; only the capture point is edited.
+        Rectangle { x: parent.width * 0.32 - 4px; y: parent.height * 0.29 - 4px; width: 8px; height: 8px; border-radius: 1px; background: Theme.accent; }
+        TouchArea {
+            x: parent.width * root.capture-x - 7px; y: parent.height * root.capture-y - 7px;
+            width: 14px; height: 14px; mouse-cursor: MouseCursor.crosshair;
+            moved => { root.capture-moved(clamp(self.mouse-x / parent.width, 0.05, 0.95), clamp(self.mouse-y / parent.height, 0.05, 0.95)); }
+            Rectangle { width: 14px; height: 14px; border-radius: 7px; background: Theme.focus; border-width: 2px; border-color: Theme.panel; }
+        }
+    }
+}
+
+export component ReverbDeviceFace inherits EffectDeviceShell {
+    name: "Reverb";
+    kind: "FX / 3U";
+    in-out property <int> shape;
+    in-out property <int> material;
+    in-out property <float> width-value;
+    in-out property <float> depth-value;
+    in-out property <float> height-value;
+    in-out property <float> decay-value;
+    in-out property <float> capture-x;
+    in-out property <float> capture-y;
+    callback shape-changed(int);
+    callback material-changed(int);
+    callback width-changed(float);
+    callback depth-changed(float);
+    callback height-changed(float);
+    callback decay-changed(float);
+    callback capture-x-changed(float);
+    callback capture-y-changed(float);
+
+    private property <float> width-m: 2 * pow(15, root.width-value);
+    private property <float> depth-m: 2 * pow(25, root.depth-value);
+    private property <float> height-m: 2 * pow(10, root.height-value);
+    private property <float> decay-s: 0.15 * pow(53.333333, root.decay-value);
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text { text: "GENERATED ROOM"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            SegmentedControl {
+                width: 162px; height: 22px;
+                options: ["STUDIO", "CHAMBER", "HALL"];
+                selected-index <=> root.shape;
+                selected(i) => { root.shape-changed(i); }
+            }
+            SegmentedControl {
+                width: 172px; height: 22px;
+                options: ["PLASTER", "WOOD", "BRICK", "CURTAIN"];
+                selected-index <=> root.material;
+                selected(i) => { root.material-changed(i); }
+            }
+        }
+        HorizontalLayout {
+            height: 116px;
+            spacing: 6px;
+            RoomPlan {
+                width: 272px; height: 116px;
+                width-m: root.width-m; depth-m: root.depth-m;
+                capture-x: root.capture-x; capture-y: root.capture-y;
+                capture-moved(x, y) => { root.capture-x-changed(x); root.capture-y-changed(y); }
+            }
+            VerticalLayout {
+                spacing: 2px;
+                Text { text: round(root.width-m * 10) / 10 + " m W  /  " + round(root.depth-m * 10) / 10 + " m D  /  " + round(root.height-m * 10) / 10 + " m H"; color: Theme.text-muted; font-size: 9px; horizontal-alignment: center; }
+                Text { text: "CAPTURE " + round(root.capture-x * 100) + ", " + round(root.capture-y * 100); color: Theme.text-faint; font-size: 8px; horizontal-alignment: center; }
+                Rectangle { vertical-stretch: 1; }
+                Text { text: round(root.decay-s * 100) / 100 + " s / STEREO IR"; color: Theme.accent; font-size: 9px; horizontal-alignment: center; }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob { width: 86px; diameter: 40px; label: "Width"; tooltip: "Room width"; value <=> root.width-value; default-value: 0.4057; value-text: round(root.width-m * 10) / 10 + " m"; changed(v) => { root.width-changed(v); } }
+            ParameterKnob { width: 86px; diameter: 40px; label: "Depth"; tooltip: "Room depth"; value <=> root.depth-value; default-value: 0.4307; value-text: round(root.depth-m * 10) / 10 + " m"; changed(v) => { root.depth-changed(v); } }
+            ParameterKnob { width: 86px; diameter: 40px; label: "Height"; tooltip: "Ceiling height"; value <=> root.height-value; default-value: 0.2041; value-text: round(root.height-m * 10) / 10 + " m"; changed(v) => { root.height-changed(v); } }
+            ParameterKnob { width: 86px; diameter: 40px; label: "Decay"; tooltip: "Time for the generated room tail to fade"; value <=> root.decay-value; default-value: 0.5257; value-text: round(root.decay-s * 100) / 100 + " s"; changed(v) => { root.decay-changed(v); } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}

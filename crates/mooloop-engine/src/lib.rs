@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use jack::{AudioOut, Client, ClientOptions};
-use mooloop_core::{EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS};
+use mooloop_core::{EffectKind, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS};
 use mooloop_dsp::{AudioNode, DryAlign, SampleData, SpectrumAnalyzer, SPECTRUM_BINS};
 use rtrb::{Consumer, Producer};
 
@@ -53,9 +53,24 @@ pub enum StructuralCommand {
     InstallEffect {
         target: EffectTarget,
         slot: u8,
+        kind: EffectKind,
+        resource_key: Option<u64>,
         node: Box<dyn AudioNode + Send>,
         align: Option<Box<DryAlign>>,
         analyzer: Box<SpectrumAnalyzer>,
+    },
+    /// Replace an installed node only when the destination still contains the
+    /// requested kind. Resource-backed devices use this after preparing new
+    /// state on a worker, so a delayed result cannot overwrite a removed or
+    /// reordered unrelated device.
+    ReplaceEffect {
+        target: EffectTarget,
+        slot: u8,
+        expected_kind: EffectKind,
+        expected_resource_key: u64,
+        resource_key: u64,
+        node: Box<dyn AudioNode + Send>,
+        align: Option<Box<DryAlign>>,
     },
     /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
     RemoveEffect { target: EffectTarget, slot: u8 },

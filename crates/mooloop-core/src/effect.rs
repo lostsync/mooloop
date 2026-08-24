@@ -1054,6 +1054,30 @@ impl Default for ReverbParams {
     }
 }
 
+impl ReverbParams {
+    /// Stable control-side identity for a prepared IR. This is not a project
+    /// serialization format or an audio checksum; it lets a delayed prepared
+    /// resource prove which room state it was built from before replacing a
+    /// live node at a block boundary.
+    pub fn fingerprint(self) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for value in [
+            self.shape.to_index() as u32,
+            self.material.to_index() as u32,
+            self.width_m.to_bits(),
+            self.depth_m.to_bits(),
+            self.height_m.to_bits(),
+            self.decay_s.to_bits(),
+            self.capture_x.to_bits(),
+            self.capture_y.to_bits(),
+        ] {
+            hash ^= u64::from(value);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+        hash
+    }
+}
+
 // --- Dynamics --------------------------------------------------------------
 //
 // Gate, compressor, and limiter share the detector and gain computers in
@@ -1662,7 +1686,14 @@ impl EffectSlotState {
 
     /// A slot holding this kind's defaults.
     pub fn of_kind(kind: EffectKind) -> Self {
-        Self::new(kind.default_params())
+        let mut slot = Self::new(kind.default_params());
+        // Unlike filter/drive, an IR contains only the room return. Start at
+        // a useful send-like balance rather than replacing the source with
+        // ambience when this device is added to an insert chain.
+        if kind == EffectKind::Reverb {
+            slot.wet_dry = 0.35;
+        }
+        slot
     }
 
     pub fn filter(params: FilterParams) -> Self {

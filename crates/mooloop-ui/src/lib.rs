@@ -17,10 +17,12 @@ use meter::{db_to_linear, linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_D
 use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BusSetup, Channel,
     ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind,
-    EffectSlotState, EffectTarget, EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit,
+    EffectParams, EffectSlotState, EffectTarget, EngineCommand, EngineEvent, HatCharacter,
+    KickCharacter, Kit,
     LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave,
     PatternPlacement, PlaybackMode, PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel,
-    RetriggerMode, SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
+    RetriggerMode, ReverbParams, SampleReference, SamplerParams, SamplerState, SnareCharacter,
+    VoiceMode,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS,
     MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES,
@@ -58,6 +60,17 @@ enum PendingEngineMessage {
     ProjectEdit(ProjectEdit),
     Audio(AudioAction),
     Telemetry(TelemetryAction),
+}
+
+/// A prepared-room request stays off the UI and audio threads. A short
+/// coalescing interval means pointer drags regenerate the final room state,
+/// not every intermediate pixel.
+#[derive(Clone, Copy)]
+struct ReverbBuildRequest {
+    target: EffectTarget,
+    slot: u8,
+    expected_resource_key: u64,
+    params: ReverbParams,
 }
 
 /// Display subscriptions are handled by the pump, which exclusively owns the
@@ -605,7 +618,7 @@ fn time_to_norm(t: f32) -> f32 {
 
 /// Number of positional parameter fields `EffectSlotRow` carries. Raising it
 /// means adding matching `pN` fields to the Slint struct too.
-const EFFECT_ROW_PARAMS: usize = 6;
+const EFFECT_ROW_PARAMS: usize = 8;
 
 fn effect_kind_index(kind: EffectKind) -> i32 {
     match kind {
@@ -617,6 +630,7 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Compressor => 5,
         EffectKind::Limiter => 6,
         EffectKind::Eq => 7,
+        EffectKind::Reverb => 8,
     }
 }
 
@@ -627,7 +641,7 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
     match kind {
         EffectKind::Filter | EffectKind::Drive | EffectKind::Bitcrush | EffectKind::Limiter => 1,
         EffectKind::Delay | EffectKind::Gate | EffectKind::Compressor => 2,
-        EffectKind::Eq => 3,
+        EffectKind::Eq | EffectKind::Reverb => 3,
     }
 }
 
@@ -691,6 +705,8 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         p3: p[3],
         p4: p[4],
         p5: p[5],
+        p6: p[6],
+        p7: p[7],
         eq_band_data: eq_band_data.as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: slot.params.eq().is_some_and(|eq| eq.analyzer_enabled),
@@ -2412,6 +2428,49 @@ impl AppUi {
         let telemetry_tx = TelemetryActionSender(pending_tx.clone());
         let structural_tx = StructuralCommandSender(pending_tx);
         let sample_rate = handle.sample_rate();
+        let (reverb_build_tx, reverb_build_rx) =
+            std::sync::mpsc::channel::<ReverbBuildRequest>();
+        let reverb_structural_tx = structural_tx.clone();
+        std::thread::spawn(move || {
+            const REGEN_SETTLE: std::time::Duration = std::time::Duration::from_millis(80);
+            while let Ok(first) = reverb_build_rx.recv() {
+                let mut pending = vec![first];
+                loop {
+                    match reverb_build_rx.recv_timeout(REGEN_SETTLE) {
+                        Ok(request) => {
+                            if let Some(existing) = pending.iter_mut().find(|existing| {
+                                existing.target == request.target && existing.slot == request.slot
+                            }) {
+                                // Preserve the first key: it is the IR that
+                                // actually owns the live slot until this
+                                // coalesced replacement lands.
+                                existing.params = request.params;
+                            } else {
+                                pending.push(request);
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                }
+                for request in pending {
+                    let params = EffectParams::Reverb(request.params);
+                    let node = build_effect(params, sample_rate);
+                    let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
+                    if !reverb_structural_tx.send(StructuralCommand::ReplaceEffect {
+                        target: request.target,
+                        slot: request.slot,
+                        expected_kind: EffectKind::Reverb,
+                        expected_resource_key: request.expected_resource_key,
+                        resource_key: request.params.fingerprint(),
+                        node,
+                        align,
+                    }) {
+                        return;
+                    }
+                }
+            }
+        });
         // Sample slots are published out-of-band, so source replacement asks
         // the pump (which owns the EngineHandle) to restore the built-in sample.
         let (sample_reset_tx, sample_reset_rx) = std::sync::mpsc::channel::<usize>();
@@ -3901,10 +3960,12 @@ impl AppUi {
                 // node: construction allocates, so it happens off the audio
                 // thread and rides the same structural command.
                 let node = build_effect(params, sample_rate);
-                let align = DryAlign::new(node.latency_frames()).map(Box::new);
+                let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
                 let _ = stx.send(StructuralCommand::InstallEffect {
                     target,
                     slot: tail_slot as u8,
+                    kind,
+                    resource_key: params.reverb().map(|params| params.fingerprint()),
                     node,
                     align,
                     analyzer: Box::new(SpectrumAnalyzer::new()),
@@ -4053,6 +4114,7 @@ impl AppUi {
 
         {
             let tx = cmd_tx.clone();
+            let reverb_tx = reverb_build_tx.clone();
             let st = state.clone();
             // One callback for every parameter of every effect kind: the
             // rack sends a descriptor index and a normalized position, and
@@ -4075,20 +4137,32 @@ impl AppUi {
                     return;
                 };
                 let id = descriptor.id;
+                let reverb_expected_key = effect.params.reverb().map(|params| params.fingerprint());
                 let Some(value) = effect
                     .params
                     .set(id, descriptor.from_normalized(normalized))
                 else {
                     return;
                 };
+                let reverb_request = reverb_expected_key
+                    .zip(effect.params.reverb().copied());
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot, row);
-                let _ = tx.send(EngineCommand::SetEffectParam {
-                    target,
-                    slot: slot as u8,
-                    id,
-                    value,
-                });
+                if let Some((expected_resource_key, params)) = reverb_request {
+                    let _ = reverb_tx.send(ReverbBuildRequest {
+                        target,
+                        slot: slot as u8,
+                        expected_resource_key,
+                        params,
+                    });
+                } else {
+                    let _ = tx.send(EngineCommand::SetEffectParam {
+                        target,
+                        slot: slot as u8,
+                        id,
+                        value,
+                    });
+                }
             });
         }
 

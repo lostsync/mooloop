@@ -100,6 +100,13 @@ struct EffectChain {
     /// Processed in order after whatever produced the audio. Slots are `None`
     /// until a node is installed structurally.
     nodes: [Option<Box<dyn AudioNode + Send>>; MAX_EFFECTS_PER_CHANNEL],
+    /// Tracks a slot's persisted device identity independently of the trait
+    /// object. Prepared resource replacements use this to refuse stale work.
+    kinds: [Option<mooloop_core::EffectKind>; MAX_EFFECTS_PER_CHANNEL],
+    /// Control-side identity of an asynchronously prepared device resource.
+    /// Ordinary effects leave this empty; resource-backed replacements must
+    /// match it before they are allowed to take a slot.
+    resource_keys: [Option<u64>; MAX_EFFECTS_PER_CHANNEL],
     /// Per-slot parameter events, queued between blocks by
     /// `EngineCommand::SetEffectParam` and consumed by the next block. Kept
     /// separate from the note-event lists so slot addressing is trivial and
@@ -131,6 +138,8 @@ impl EffectChain {
     fn new() -> Self {
         Self {
             nodes: std::array::from_fn(|_| None),
+            kinds: [None; MAX_EFFECTS_PER_CHANNEL],
+            resource_keys: [None; MAX_EFFECTS_PER_CHANNEL],
             events: [PendingEffectParams::empty(); MAX_EFFECTS_PER_CHANNEL],
             event_scratch: EventList::empty(),
             bypassed: [false; MAX_EFFECTS_PER_CHANNEL],
@@ -159,6 +168,8 @@ impl EffectChain {
             events.clear();
         }
         self.bypassed = [false; MAX_EFFECTS_PER_CHANNEL];
+        self.kinds = [None; MAX_EFFECTS_PER_CHANNEL];
+        self.resource_keys = [None; MAX_EFFECTS_PER_CHANNEL];
         self.wet_dry = [1.0; MAX_EFFECTS_PER_CHANNEL];
         self.input_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
         self.output_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
@@ -170,11 +181,15 @@ impl EffectChain {
     fn install(
         &mut self,
         slot: usize,
+        kind: mooloop_core::EffectKind,
+        resource_key: Option<u64>,
         node: Box<dyn AudioNode + Send>,
         align: Option<Box<DryAlign>>,
         analyzer: Box<SpectrumAnalyzer>,
     ) -> ReclaimedEffect {
         if slot < MAX_EFFECTS_PER_CHANNEL {
+            self.kinds[slot] = Some(kind);
+            self.resource_keys[slot] = resource_key;
             ReclaimedEffect {
                 node: self.nodes[slot].replace(node),
                 align: std::mem::replace(&mut self.dry_align[slot], align),
@@ -185,6 +200,36 @@ impl EffectChain {
                 node: Some(node),
                 align,
                 analyzer: Some(analyzer),
+            }
+        }
+    }
+
+    /// Replace only the realtime node and latency aligner. Host controls and
+    /// display instrumentation deliberately remain attached to the slot.
+    fn replace_if_kind(
+        &mut self,
+        slot: usize,
+        expected_kind: mooloop_core::EffectKind,
+        expected_resource_key: u64,
+        resource_key: u64,
+        node: Box<dyn AudioNode + Send>,
+        align: Option<Box<DryAlign>>,
+    ) -> ReclaimedEffect {
+        if slot < MAX_EFFECTS_PER_CHANNEL
+            && self.kinds[slot] == Some(expected_kind)
+            && self.resource_keys[slot] == Some(expected_resource_key)
+        {
+            self.resource_keys[slot] = Some(resource_key);
+            ReclaimedEffect {
+                node: self.nodes[slot].replace(node),
+                align: std::mem::replace(&mut self.dry_align[slot], align),
+                analyzer: None,
+            }
+        } else {
+            ReclaimedEffect {
+                node: Some(node),
+                align,
+                analyzer: None,
             }
         }
     }
@@ -206,6 +251,12 @@ impl EffectChain {
         if let Some(events) = self.events.get_mut(slot) {
             events.clear();
         }
+        if let Some(kind) = self.kinds.get_mut(slot) {
+            *kind = None;
+        }
+        if let Some(resource_key) = self.resource_keys.get_mut(slot) {
+            *resource_key = None;
+        }
         if let Some(bypassed) = self.bypassed.get_mut(slot) {
             *bypassed = false;
         }
@@ -215,6 +266,8 @@ impl EffectChain {
     fn swap(&mut self, slot_a: usize, slot_b: usize) {
         if slot_a < MAX_EFFECTS_PER_CHANNEL && slot_b < MAX_EFFECTS_PER_CHANNEL {
             self.nodes.swap(slot_a, slot_b);
+            self.kinds.swap(slot_a, slot_b);
+            self.resource_keys.swap(slot_a, slot_b);
             self.events.swap(slot_a, slot_b);
             self.bypassed.swap(slot_a, slot_b);
             self.wet_dry.swap(slot_a, slot_b);
@@ -254,8 +307,15 @@ impl EffectChain {
         self.clear(reclaim);
         for (slot, effect) in slots.iter().take(MAX_EFFECTS_PER_CHANNEL).enumerate() {
             let node = build_effect(effect.params, sample_rate);
-            let align = DryAlign::new(node.latency_frames()).map(Box::new);
-            let displaced = self.install(slot, node, align, Box::new(SpectrumAnalyzer::new()));
+            let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
+            let displaced = self.install(
+                slot,
+                effect.kind(),
+                effect.params.reverb().map(|params| params.fingerprint()),
+                node,
+                align,
+                Box::new(SpectrumAnalyzer::new()),
+            );
             if !displaced.is_empty() {
                 reclaim.push(displaced);
             }
@@ -721,6 +781,8 @@ impl RenderState {
             StructuralCommand::InstallEffect {
                 target,
                 slot,
+                kind,
+                resource_key,
                 node,
                 align,
                 analyzer,
@@ -728,12 +790,38 @@ impl RenderState {
                 // `chain_for` borrows the two strip vectors rather than all of
                 // `self`, so `reclaim` stays independently borrowable here.
                 if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
-                    Some(chain.install(slot as usize, node, align, analyzer))
+                    Some(chain.install(slot as usize, kind, resource_key, node, align, analyzer))
                 } else {
                     Some(ReclaimedEffect {
                         node: Some(node),
                         align,
                         analyzer: Some(analyzer),
+                    })
+                }
+            }
+            StructuralCommand::ReplaceEffect {
+                target,
+                slot,
+                expected_kind,
+                expected_resource_key,
+                resource_key,
+                node,
+                align,
+            } => {
+                if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
+                    Some(chain.replace_if_kind(
+                        slot as usize,
+                        expected_kind,
+                        expected_resource_key,
+                        resource_key,
+                        node,
+                        align,
+                    ))
+                } else {
+                    Some(ReclaimedEffect {
+                        node: Some(node),
+                        align,
+                        analyzer: None,
                     })
                 }
             }
@@ -1336,10 +1424,12 @@ mod tests {
         slot: u8,
         node: Box<dyn AudioNode + Send>,
     ) -> StructuralCommand {
-        let align = DryAlign::new(node.latency_frames()).map(Box::new);
+        let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
         StructuralCommand::InstallEffect {
             target,
             slot,
+            kind: mooloop_core::EffectKind::Filter,
+            resource_key: None,
             node,
             align,
             analyzer: Box::new(SpectrumAnalyzer::new()),
@@ -1411,6 +1501,11 @@ mod tests {
                     params.set(mooloop_core::DELAY_PARAM_TIME_MS, 5.0);
                     params.set(mooloop_core::DELAY_PARAM_FEEDBACK, 0.6);
                     params.set(mooloop_core::DELAY_PARAM_MIX, 1.0);
+                }
+                mooloop_core::EffectKind::Reverb => {
+                    // The convolution path is entirely wet and delayed by one
+                    // partition, so any generated response differs clearly
+                    // from the dry reference inside this render window.
                 }
             }
 
@@ -1735,7 +1830,14 @@ mod tests {
         let mut chain = EffectChain::new();
         let node = Box::new(LatentDelay::new(LATENCY));
         let align = DryAlign::new(node.latency_frames()).map(Box::new);
-        let displaced = chain.install(0, node, align, Box::new(SpectrumAnalyzer::new()));
+        let displaced = chain.install(
+            0,
+            mooloop_core::EffectKind::Delay,
+            None,
+            node,
+            align,
+            Box::new(SpectrumAnalyzer::new()),
+        );
         assert!(displaced.is_empty());
         chain.wet_dry[0] = 0.5;
 
@@ -1766,6 +1868,48 @@ mod tests {
             bus.l[LATENCY + 1..].iter().all(|s| *s == 0.0),
             "no second, misaligned copy of the impulse may follow"
         );
+    }
+
+    #[test]
+    fn prepared_resource_replacement_refuses_a_stale_slot_key() {
+        let mut chain = EffectChain::new();
+        let initial = Box::new(LatentDelay::new(1));
+        let initial_align = DryAlign::new(initial.latency_frames()).map(Box::new);
+        let displaced = chain.install(
+            0,
+            mooloop_core::EffectKind::Reverb,
+            Some(10),
+            initial,
+            initial_align,
+            Box::new(SpectrumAnalyzer::new()),
+        );
+        assert!(displaced.is_empty());
+
+        let stale = Box::new(LatentDelay::new(2));
+        let stale_align = DryAlign::new(stale.latency_frames()).map(Box::new);
+        let rejected = chain.replace_if_kind(
+            0,
+            mooloop_core::EffectKind::Reverb,
+            9,
+            11,
+            stale,
+            stale_align,
+        );
+        assert!(rejected.node.is_some());
+        assert_eq!(chain.resource_keys[0], Some(10));
+
+        let current = Box::new(LatentDelay::new(2));
+        let current_align = DryAlign::new(current.latency_frames()).map(Box::new);
+        let replaced = chain.replace_if_kind(
+            0,
+            mooloop_core::EffectKind::Reverb,
+            10,
+            11,
+            current,
+            current_align,
+        );
+        assert!(replaced.node.is_some());
+        assert_eq!(chain.resource_keys[0], Some(11));
     }
 
     #[test]

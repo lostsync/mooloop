@@ -407,6 +407,13 @@ impl AudioNode for ReverbEffect {
         CONVOLUTION_BLOCK_FRAMES as u32
     }
 
+    fn dry_path_latency_frames(&self) -> u32 {
+        // There is no direct component in the generated IR. Delaying the
+        // host dry branch would move this whole insert against other channels;
+        // keep the convolution latency as the room return's natural pre-delay.
+        0
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

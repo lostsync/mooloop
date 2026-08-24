@@ -76,9 +76,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   generic dry/wet blend, independent input and output trims, insertion/removal actions, and separate
   held input/output peaks; its dry path is preallocated and runs after the
   device DSP, so parallel processing works even when an effect itself has no
-  mix parameter. The dry path is delayed by the device's reported latency
-  before the blend, so latency-introducing effects do not comb-filter their
-  own dry copy. Buses meter their effect slots the same way channels do: the
+  mix parameter. The dry path is delayed by the device's declared dry-path
+  alignment latency before the blend, so latency-introducing effects do not
+  comb-filter their own dry copy; wet-only returns may retain their own
+  intentional pre-delay. Buses meter their effect slots the same way channels do: the
   rack polls whichever chain it shows, and a bus's head face reads its summed
   input and post-chain peak. Sources have a blank input meter because they generate rather
   than receive audio.
@@ -284,13 +285,16 @@ boundary.
   swap, and knob changes arrive as sample-timed `ParamValue` events. Effect
   chains persist in song files
   (`ChannelSetup.effects`, serde-defaulted for older manifests).
-- Seven effect kinds ship: a low-pass/high-pass filter, a drive/saturation
+- Nine effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
   oversampled, a stereo delay with damped cross-feedable feedback and
   digital/tape/reverse responses to a moving delay time, and a gate,
-  compressor, and limiter sharing one detector and gain-computer module.
-  Device faces are width-quantized in rack units; the delay, gate, and
-  compressor take 2U.
+  compressor, and limiter sharing one detector and gain-computer module; a
+  seven-band parametric EQ with optional bounded spectrum telemetry; and a
+  generated-room convolution reverb. The reverb prepares a stereo room IR off
+  the audio thread, then runs fixed-partition convolution with a host-aligned
+  512-frame latency. Device faces are width-quantized in rack units; delay,
+  gate, and compressor take 2U, while EQ and reverb take 3U.
 - The dynamics effects detect on the louder of the two channels and apply one
   gain to both, so compression cannot walk the stereo image around. The
   limiter has no lookahead on purpose: the engine has no plugin-delay
