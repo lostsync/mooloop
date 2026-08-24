@@ -11,7 +11,7 @@ import {
 } from "toolbar.slint";
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
-import { PreferencesDialog, OutputTargetRow } from "appearance-dialog.slint";
+import { PreferencesDialog, OutputTargetRow, ShortcutRow } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
@@ -47,6 +47,7 @@ export { DeviceRackConcepts } from "device-concepts.slint";
 export { EqDeviceDragHarness, ReverbDeviceDragHarness } from "device-drag-harness.slint";
 export { MixerStripRow }
 export { OutputTargetRow }
+export { ShortcutRow }
 
 // One step cell used in the step-grid models.
 struct StepCell {
@@ -174,6 +175,8 @@ export component MainWindow inherits Window {
     in property <string> preferences-audio-sample-rate-text;
     in property <bool> preferences-audio-auto-reconnect;
     in property <string> preferences-audio-error;
+    in property <[ShortcutRow]> preferences-shortcut-rows;
+    in-out property <string> preferences-shortcut-capturing-id;
     callback preferences-opened();
     callback preferences-appearance-preview(int, string);
     callback preferences-save(int, string, bool) -> bool;
@@ -182,6 +185,9 @@ export component MainWindow inherits Window {
     callback preferences-audio-select-output(string, string, string);
     callback preferences-audio-select-buffer-size(int);
     callback preferences-audio-auto-reconnect-toggled(bool);
+    callback preferences-shortcut-rebind-key(string, string, bool, bool, bool, bool);
+    callback preferences-shortcut-reset(string);
+    callback preferences-shortcut-reset-all();
 
     // ---- document lifecycle ----
     in-out property <string> document-title: "Untitled - mooloop";
@@ -593,83 +599,157 @@ export component MainWindow inherits Window {
     callback swing-changed(int);
     callback toggle-play();
 
-    // Keyboard transport: Space toggles play/pause. Gives an input path
-    // independent of mouse clicks (also useful for diagnosing input issues).
-    // Ctrl shortcuts mirror the menubar. A Ctrl+letter key event reaches
-    // us as a control character on some backends and as plain text with a
-    // modifier on others, so the control characters match on their own
-    // (they cannot be typed without Ctrl) while plain letters additionally
-    // require the modifier.
+    // Every action a shortcut can target is named and looked up in Rust
+    // (see `actions.rs`); this window only decodes a raw key event into a
+    // canonical (key, ctrl, shift, alt, meta) tuple and hands it off. The
+    // return value says whether some action consumed it. See
+    // `docs/ACTIONS.md`.
+    callback shortcut-key(string, bool, bool, bool, bool) -> bool;
+    callback pattern-remove-requested();
+    callback pattern-clone-requested();
+
+    // Only the piano roll actually zooms today (the playlist has a snap
+    // picker but no zoom, and the step grid/mixer aren't zoomable), so
+    // these implement themselves here rather than round-tripping through
+    // Rust: `piano-step-width` is a private view property, not exposed to
+    // Rust. Same 1.15/0.87 factor the existing Ctrl+Shift+wheel handler on
+    // the piano roll's time scrollbar uses. Unlike that pointer-centered
+    // version, this doesn't re-center the scroll position -- doing so needs
+    // the `piano-scroll` id, which (unlike `root.piano-step-width`) isn't
+    // reachable from this root-level callback, only from within its own
+    // nested scroll area -- so a keyboard zoom just changes scale in place.
+    callback zoom-in-requested();
+    zoom-in-requested => {
+        if (root.editor-page == 1) {
+            root.piano-step-width = clamp(root.piano-step-width * 1.15, 20px, 72px);
+        }
+    }
+    callback zoom-out-requested();
+    zoom-out-requested => {
+        if (root.editor-page == 1) {
+            root.piano-step-width = clamp(root.piano-step-width * 0.87, 20px, 72px);
+        }
+    }
+
     forward-focus: keys;
     keys := FocusScope {
         key-pressed(event) => {
-            if (event.text == " ") {
-                root.toggle-play();
-                accept
-            } else if (event.text == "\u{f}") {
-                root.open-song();
-                accept
-            } else if (event.text == "\u{13}") {
-                if (event.modifiers.shift) {
-                    root.save-song-as();
-                } else {
-                    root.save-song();
-                }
-                accept
-            } else if (event.text == "\u{5}") {
-                root.export-audio();
-                accept
-            } else if (event.text == "\u{11}") {
-                root.quit-requested();
-                accept
-            } else if (event.text == "\u{1a}") {
-                root.edit-command-requested(0, root.selected-channel);
-                accept
-            } else if (event.modifiers.control && !event.modifiers.shift) {
-                let k = event.text.to-lowercase();
-                if (k == "o") {
-                    root.open-song();
-                    accept
-                } else if (k == "s") {
-                    root.save-song();
-                    accept
-                } else if (k == "e") {
-                    root.export-audio();
-                    accept
-                } else if (k == "q") {
-                    root.quit-requested();
-                    accept
-                } else if (k == "c") {
-                    root.edit-command-requested(3, root.selected-channel);
-                    accept
-                } else if (k == "x") {
-                    root.edit-command-requested(2, root.selected-channel);
-                    accept
-                } else if (k == "v") {
-                    root.edit-command-requested(4, root.selected-channel);
-                    accept
-                } else if (k == "z") {
-                    root.edit-command-requested(0, root.selected-channel);
-                    accept
-                } else {
-                    reject
-                }
-            } else if (event.modifiers.control && event.modifiers.shift) {
-                if (event.text.to-lowercase() == "s") {
-                    root.save-song-as();
-                    accept
-                } else if (event.text.to-lowercase() == "z") {
-                    root.edit-command-requested(1, root.selected-channel);
-                    accept
-                } else {
-                    reject
-                }
-            } else if (event.text == Key.UpArrow) {
+            if (root.preferences-open) {
+                // The Shortcuts prefpane owns key capture for (re)binding
+                // while it's open; no global action should fire underneath it.
+                reject
+            } else if (event.text == Key.UpArrow && !event.modifiers.control) {
                 root.channel-selected(max(0, root.selected-channel - 1));
                 accept
-            } else if (event.text == Key.DownArrow) {
+            } else if (event.text == Key.DownArrow && !event.modifiers.control) {
                 root.channel-selected(min(root.channels.length - 1, root.selected-channel + 1));
                 accept
+            } else if (event.text == " ") {
+                root.shortcut-key("space", false, false, false, false) ? accept : reject
+            } else if (event.text == Key.LeftArrow) {
+                root.shortcut-key("left", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.RightArrow) {
+                root.shortcut-key("right", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.UpArrow) {
+                root.shortcut-key("up", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.DownArrow) {
+                root.shortcut-key("down", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.Delete) {
+                root.shortcut-key("delete", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.Backspace) {
+                root.shortcut-key("backspace", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.Escape) {
+                root.shortcut-key("escape", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.Tab) {
+                root.shortcut-key("tab", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.Return) {
+                root.shortcut-key("return", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.Home) {
+                root.shortcut-key("home", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.End) {
+                root.shortcut-key("end", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.PageUp) {
+                root.shortcut-key("pageup", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.PageDown) {
+                root.shortcut-key("pagedown", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == Key.Insert) {
+                root.shortcut-key("insert", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            // A bare modifier keypress (pressing Ctrl down, before whatever
+            // it's chorded with) reports `event.text` as that modifier's own
+            // key code -- and Slint's codes for Shift/Control/Alt/AltGr/
+            // CapsLock/ShiftR/ControlR/Meta/MetaR (0x10-0x18) land exactly on
+            // top of the Ctrl+P..Ctrl+X sentinel range below. Left
+            // unguarded, pressing Ctrl alone was resolving as Ctrl+Q (quit)
+            // on every single Ctrl+<something> shortcut. Reject these
+            // outright before the sentinel ladder gets a chance to
+            // misread them.
+            } else if (event.text == Key.Shift || event.text == Key.Control
+                    || event.text == Key.Alt || event.text == Key.AltGr
+                    || event.text == Key.CapsLock || event.text == Key.ShiftR
+                    || event.text == Key.ControlR || event.text == Key.Meta
+                    || event.text == Key.MetaR) {
+                reject
+            // Ctrl+<letter> arrives as the raw ASCII control code for that
+            // letter (0x01 = Ctrl+A .. 0x1A = Ctrl+Z) on some backends,
+            // rather than as plain text with `event.modifiers.control` set
+            // -- a terminal-era convention, not a Slint quirk. `shift` stays
+            // reliable from `event.modifiers` either way. Written out once,
+            // mechanically; a new Ctrl+letter action never needs a new
+            // branch here, only a new `actions.rs` entry. Ctrl+H/I/J are
+            // not decoded here because their control codes (0x08/0x09/0x0A)
+            // are indistinguishable from Backspace/Tab/Return, which are
+            // handled above.
+            } else if (event.text == "\u{1}") {
+                root.shortcut-key("a", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{2}") {
+                root.shortcut-key("b", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{3}") {
+                root.shortcut-key("c", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{4}") {
+                root.shortcut-key("d", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{5}") {
+                root.shortcut-key("e", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{6}") {
+                root.shortcut-key("f", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{7}") {
+                root.shortcut-key("g", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{b}") {
+                root.shortcut-key("k", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{c}") {
+                root.shortcut-key("l", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{d}") {
+                root.shortcut-key("m", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{e}") {
+                root.shortcut-key("n", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{f}") {
+                root.shortcut-key("o", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{10}") {
+                root.shortcut-key("p", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{11}") {
+                root.shortcut-key("q", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{12}") {
+                root.shortcut-key("r", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{13}") {
+                root.shortcut-key("s", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{14}") {
+                root.shortcut-key("t", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{15}") {
+                root.shortcut-key("u", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{16}") {
+                root.shortcut-key("v", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{17}") {
+                root.shortcut-key("w", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{18}") {
+                root.shortcut-key("x", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{19}") {
+                root.shortcut-key("y", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.text == "\u{1a}") {
+                root.shortcut-key("z", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            } else if (event.modifiers.control) {
+                // Non-letter Ctrl combos (digits, `=`, `-`, ...) are
+                // reported reliably via `event.modifiers.control` on this
+                // backend, so no sentinel decoding is needed for them.
+                root.shortcut-key(event.text.to-lowercase(), true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
             } else {
                 reject
             }
@@ -757,16 +837,25 @@ export component MainWindow inherits Window {
                 open-menu <=> menu-bar.open-menu;
                 MenuRow {
                     text: "New Pattern";
+                    shortcut: "Ctrl+Shift+P";
                     enabled: root.pattern-count < 256;
                     selected => { root.add-pattern-clicked(); }
                 }
-                // Target: duplicate the selected pattern's notes and length.
-                MenuRow { text: "Clone Pattern"; enabled: false; selected => { } }
+                MenuRow {
+                    text: "Clone Pattern";
+                    shortcut: "Ctrl+Alt+D";
+                    enabled: root.pattern-count < 256;
+                    selected => { root.pattern-clone-requested(); }
+                }
                 MenuSeparator {}
                 // Target: clear the selected pattern's notes.
                 MenuRow { text: "Clear Pattern"; enabled: false; selected => { } }
-                // Target: remove the selected pattern and its placements.
-                MenuRow { text: "Delete Pattern"; enabled: false; selected => { } }
+                MenuRow {
+                    text: "Delete Pattern";
+                    shortcut: "Ctrl+Shift+Delete";
+                    enabled: root.pattern-count > 1;
+                    selected => { root.pattern-remove-requested(); }
+                }
             }
 
             MenuBarItem {
@@ -2800,6 +2889,8 @@ export component MainWindow inherits Window {
         audio-sample-rate-text: root.preferences-audio-sample-rate-text;
         audio-auto-reconnect: root.preferences-audio-auto-reconnect;
         audio-error: root.preferences-audio-error;
+        shortcut-rows: root.preferences-shortcut-rows;
+        shortcut-capturing-id <=> root.preferences-shortcut-capturing-id;
         appearance-preview(preset, accent) => { root.preferences-appearance-preview(preset, accent); }
         save(preset, accent, developer-mode) => { root.preferences-save(preset, accent, developer-mode) }
         cancelled => { root.preferences-cancelled(); }
@@ -2807,6 +2898,9 @@ export component MainWindow inherits Window {
         audio-select-output(client, port-l, port-r) => { root.preferences-audio-select-output(client, port-l, port-r); }
         audio-select-buffer-size(i) => { root.preferences-audio-select-buffer-size(i); }
         audio-auto-reconnect-toggled(v) => { root.preferences-audio-auto-reconnect-toggled(v); }
+        shortcut-rebind-key(id, key, ctrl, shift, alt, meta) => { root.preferences-shortcut-rebind-key(id, key, ctrl, shift, alt, meta); }
+        shortcut-reset(id) => { root.preferences-shortcut-reset(id); }
+        shortcut-reset-all => { root.preferences-shortcut-reset-all(); }
     }
     SavePresetDialog {
         width: parent.width;

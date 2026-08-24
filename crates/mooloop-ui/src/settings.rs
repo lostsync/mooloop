@@ -212,6 +212,16 @@ impl AppearanceSettings {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct ShortcutSettings {
+    /// Action id -> `KeyChord::display()` text. Only entries that differ
+    /// from the registry default are stored, so `actions::ACTIONS` can grow
+    /// without a settings migration.
+    #[serde(default)]
+    pub overrides: std::collections::HashMap<String, String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct UiSettings {
@@ -221,6 +231,8 @@ pub(crate) struct UiSettings {
     pub appearance: AppearanceSettings,
     #[serde(default)]
     pub audio: AudioSettings,
+    #[serde(default)]
+    pub shortcuts: ShortcutSettings,
 }
 
 impl Default for UiSettings {
@@ -230,6 +242,7 @@ impl Default for UiSettings {
             general: GeneralSettings::default(),
             appearance: AppearanceSettings::default(),
             audio: AudioSettings::default(),
+            shortcuts: ShortcutSettings::default(),
         }
     }
 }
@@ -492,6 +505,11 @@ mod tests {
                     auto_reconnect: false,
                 },
             },
+            shortcuts: ShortcutSettings {
+                overrides: [("edit.undo".to_owned(), "Ctrl+Alt+Z".to_owned())]
+                    .into_iter()
+                    .collect(),
+            },
         };
         expected.save_to(&path).unwrap();
         assert_eq!(UiSettings::load_from(&path).unwrap(), expected);
@@ -563,5 +581,21 @@ mod tests {
         )
         .unwrap();
         assert!(!UiSettings::load_from(&path).unwrap().general.developer_mode);
+    }
+
+    #[test]
+    fn defaults_missing_shortcut_settings_for_existing_configs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n",
+        )
+        .unwrap();
+        assert!(UiSettings::load_from(&path)
+            .unwrap()
+            .shortcuts
+            .overrides
+            .is_empty());
     }
 }

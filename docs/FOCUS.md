@@ -43,11 +43,14 @@ generalizes to nothing.
 
 Shortcuts and context menus are command *surfaces*. They dispatch the same
 commands the menu bar does. A shortcut that reaches into a widget's internal
-state is a bug, not a shortcut.
-
-This is also the moment to break up `mooloop-ui/src/lib.rs` (5.5k lines,
-mostly callback wiring) and `main.slint`. Don't schedule that separately;
-it falls out of routing edits through one layer.
+state is a bug, not a shortcut. **This now has a real implementation**: see
+`ACTIONS.md` for the action registry every keyboard shortcut resolves
+through, and its Preferences > Shortcuts page for (re)assignment. Pattern
+add/clone/remove route through the same undo-recorded whole-project-edit
+pipeline channel cut/copy/paste/clone/delete already used, so two of the
+seven `enabled: false` rows (Clone Pattern, Delete Pattern) are live; Clear
+Pattern and Select All remain disabled, and right-click context menus for
+patterns are still open.
 
 Done when: undo works across rack steps, notes, playlist placements,
 channels, and patterns; every menu row is either enabled or deleted; the

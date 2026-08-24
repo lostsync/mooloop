@@ -6,6 +6,7 @@
 //! params) as the source of truth and mirrors every mutation to the engine
 //! via commands. The engine keeps its own pre-allocated copy.
 
+mod actions;
 mod history;
 mod meter;
 mod settings;
@@ -200,6 +201,39 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window.set_preferences_audio_error("".into());
 }
 
+/// Builds the Preferences > Shortcuts page's row model from the action
+/// registry (`actions.rs`) and the currently loaded bindings.
+/// `is_first_in_category` is computed here rather than in `.slint`, since a
+/// `for` loop there has no clean way to compare against the previous item.
+fn shortcut_rows(table: &actions::ShortcutTable) -> Vec<ShortcutRow> {
+    let mut previous_category = "";
+    actions::ACTIONS
+        .iter()
+        .map(|spec| {
+            let is_first_in_category = spec.category != previous_category;
+            previous_category = spec.category;
+            ShortcutRow {
+                id: spec.id.into(),
+                label: spec.label.into(),
+                category: spec.category.into(),
+                chord: table
+                    .chord_for(spec.id)
+                    .map(|chord| chord.to_string())
+                    .unwrap_or_default()
+                    .into(),
+                is_default: table.is_default(spec.id),
+                is_first_in_category,
+            }
+        })
+        .collect()
+}
+
+fn sync_shortcut_rows(window: &MainWindow, table: &actions::ShortcutTable) {
+    window.set_preferences_shortcut_rows(ModelRc::from(Rc::new(VecModel::from(shortcut_rows(
+        table,
+    )))));
+}
+
 /// Re-read live JACK driver status and connectable output targets, and push
 /// them onto the window. Called from the pump, which is the only place that
 /// holds `EngineHandle`; a non-realtime JACK graph query, not something to
@@ -375,6 +409,65 @@ struct CommandState {
     channel_clipboard: Option<ChannelClipboard>,
     history: History<ProjectSnapshot>,
     project_edit_pending: bool,
+    pane: Pane,
+}
+
+/// The work-surface/lower-dock combination a `view.pane-*` shortcut
+/// targets. `mixer-visible` and `editor-page` are independent Slint
+/// properties (the step grid or mixer sits above an always-visible
+/// Source/Notes/Playlist dock), so there is no single UI property that
+/// says "which pane is current" -- this is tracked here instead of derived,
+/// so Next/Prev cycles predictably even though Steps and the dock tabs are
+/// simultaneously visible.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Pane {
+    Steps,
+    Mixer,
+    #[default]
+    Source,
+    Notes,
+    Playlist,
+}
+
+const PANE_CYCLE: [Pane; 5] = [
+    Pane::Steps,
+    Pane::Mixer,
+    Pane::Source,
+    Pane::Notes,
+    Pane::Playlist,
+];
+
+fn apply_pane(window: &MainWindow, pane: Pane) {
+    match pane {
+        Pane::Steps => window.set_mixer_visible(false),
+        Pane::Mixer => window.set_mixer_visible(true),
+        Pane::Source => {
+            window.set_mixer_visible(false);
+            window.set_editor_page(0);
+        }
+        Pane::Notes => {
+            window.set_mixer_visible(false);
+            window.set_editor_page(1);
+        }
+        Pane::Playlist => {
+            window.set_mixer_visible(false);
+            window.set_editor_page(2);
+        }
+    }
+}
+
+fn cycle_pane(current: Pane, forward: bool) -> Pane {
+    let position = PANE_CYCLE
+        .iter()
+        .position(|pane| *pane == current)
+        .unwrap_or(0);
+    let len = PANE_CYCLE.len();
+    let next = if forward {
+        (position + 1) % len
+    } else {
+        (position + len - 1) % len
+    };
+    PANE_CYCLE[next]
 }
 
 #[derive(Clone, Copy)]
@@ -604,6 +697,77 @@ fn queue_channel_delete(
     project.channels.remove(index);
     samples.remove(index);
     project.selected_channel = index.min(project.channels.len() - 1) as u8;
+    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+}
+
+/// Duplicates pattern `index`'s length and every channel's notes for it,
+/// inserting the copy immediately after. Existing playlist placements (and
+/// `current_pattern`) keep pointing at the same pattern *content*, which
+/// means shifting any index greater than `index` up by one to follow the
+/// insertion; the new clone becomes the selected pattern, mirroring
+/// `queue_channel_insert` selecting the pasted/cloned channel.
+fn queue_pattern_clone(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    index: usize,
+    status: &'static str,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let samples = before.samples.clone();
+    if project.pattern_lengths.len() >= MAX_PATTERNS || index >= project.pattern_lengths.len() {
+        return false;
+    }
+    let length = project.pattern_lengths[index];
+    project.pattern_lengths.insert(index + 1, length);
+    for channel in &mut project.channels {
+        let notes = channel.notes[index].clone();
+        channel.notes.insert(index + 1, notes);
+    }
+    for placement in &mut project.playlist {
+        if placement.pattern as usize > index {
+            placement.pattern += 1;
+        }
+    }
+    project.current_pattern = (index + 1) as u16;
+    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+}
+
+/// Removes pattern `index` and every channel's notes for it. Playlist
+/// placements on the removed pattern are dropped; placements on later
+/// patterns are reindexed down by one to keep pointing at the same
+/// content, mirroring the clone side of this pair.
+fn queue_pattern_remove(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    index: usize,
+    status: &'static str,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let samples = before.samples.clone();
+    if project.pattern_lengths.len() <= 1 || index >= project.pattern_lengths.len() {
+        return false;
+    }
+    project.pattern_lengths.remove(index);
+    for channel in &mut project.channels {
+        channel.notes.remove(index);
+    }
+    project.playlist.retain(|placement| placement.pattern as usize != index);
+    for placement in &mut project.playlist {
+        if placement.pattern as usize > index {
+            placement.pattern -= 1;
+        }
+    }
+    project.current_pattern = index.min(project.pattern_lengths.len() - 1) as u16;
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
@@ -2497,6 +2661,167 @@ impl AppUi {
             sync_preferences_properties(&window, &settings);
             audio_tx.send(AudioAction::ApplyPersisted(settings.audio.engine_config()));
         }
+
+        // The action registry (`actions.rs`, `docs/ACTIONS.md`): resolves a
+        // decoded key chord to a stable action id, then this dispatches to
+        // whichever existing window callback already performs it. Keyboard
+        // and menu therefore always agree, since a keyboard shortcut is
+        // never anything more than an alternate way to invoke the same
+        // callback the matching menu row calls.
+        let shortcut_table = Rc::new(RefCell::new(actions::ShortcutTable::build(
+            &ui_settings.borrow().shortcuts.overrides,
+        )));
+        {
+            let table = shortcut_table.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_shortcut_key(move |key, ctrl, shift, alt, meta| {
+                let Some(window) = weak.upgrade() else {
+                    return false;
+                };
+                let chord = actions::KeyChord::new(ctrl, shift, alt, meta, key.as_str());
+                let Some(action_id) = table.borrow().resolve(&chord) else {
+                    return false;
+                };
+                let channel = window.get_selected_channel();
+                match action_id {
+                    "transport.play-pause" => window.invoke_toggle_play(),
+                    "file.open" => window.invoke_open_song(),
+                    "file.save" => window.invoke_save_song(),
+                    "file.save-as" => window.invoke_save_song_as(),
+                    "file.export" => window.invoke_export_audio(),
+                    "file.quit" => window.invoke_quit_requested(),
+                    "edit.undo" => window.invoke_edit_command_requested(0, channel),
+                    "edit.redo" => window.invoke_edit_command_requested(1, channel),
+                    "edit.cut-channel" => window.invoke_edit_command_requested(2, channel),
+                    "edit.copy-channel" => window.invoke_edit_command_requested(3, channel),
+                    "edit.paste-channel" => window.invoke_edit_command_requested(4, channel),
+                    "channel.clone" => window.invoke_edit_command_requested(5, channel),
+                    "channel.remove" => window.invoke_edit_command_requested(6, channel),
+                    "channel.add" => window.invoke_add_channel_clicked(0),
+                    "pattern.add" => window.invoke_add_pattern_clicked(),
+                    "pattern.clone" => window.invoke_pattern_clone_requested(),
+                    "pattern.remove" => window.invoke_pattern_remove_requested(),
+                    "view.zoom-in" => window.invoke_zoom_in_requested(),
+                    "view.zoom-out" => window.invoke_zoom_out_requested(),
+                    "view.pane-steps" => {
+                        commands.borrow_mut().pane = Pane::Steps;
+                        apply_pane(&window, Pane::Steps);
+                    }
+                    "view.pane-mixer" => {
+                        commands.borrow_mut().pane = Pane::Mixer;
+                        apply_pane(&window, Pane::Mixer);
+                    }
+                    "view.pane-source" => {
+                        commands.borrow_mut().pane = Pane::Source;
+                        apply_pane(&window, Pane::Source);
+                    }
+                    "view.pane-notes" => {
+                        commands.borrow_mut().pane = Pane::Notes;
+                        apply_pane(&window, Pane::Notes);
+                    }
+                    "view.pane-playlist" => {
+                        commands.borrow_mut().pane = Pane::Playlist;
+                        apply_pane(&window, Pane::Playlist);
+                    }
+                    "view.pane-next" => {
+                        let pane = cycle_pane(commands.borrow().pane, true);
+                        commands.borrow_mut().pane = pane;
+                        apply_pane(&window, pane);
+                    }
+                    "view.pane-prev" => {
+                        let pane = cycle_pane(commands.borrow().pane, false);
+                        commands.borrow_mut().pane = pane;
+                        apply_pane(&window, pane);
+                    }
+                    _ => return false,
+                }
+                true
+            });
+        }
+        sync_shortcut_rows(&window, &shortcut_table.borrow());
+        {
+            let settings = ui_settings.clone();
+            let table = shortcut_table.clone();
+            let weak = window.as_weak();
+            window.on_preferences_shortcut_rebind_key(move |action_id, key, ctrl, shift, alt, meta| {
+                let Some(window) = weak.upgrade() else { return };
+                let chord = actions::KeyChord::new(ctrl, shift, alt, meta, key.as_str());
+                // Assigning a chord already owned by another action clears
+                // that action rather than leaving two actions pointing at
+                // the same chord: `ShortcutTable::resolve` would only ever
+                // reach one of them, so a silent second owner is worse than
+                // a visible unbind.
+                let owners: Vec<&'static str> = table.borrow().owners_of(&chord, action_id.as_str());
+                let mut settings = settings.borrow_mut();
+                for owner in &owners {
+                    settings
+                        .shortcuts
+                        .overrides
+                        .insert((*owner).to_string(), String::new());
+                }
+                settings
+                    .shortcuts
+                    .overrides
+                    .insert(action_id.to_string(), chord.to_string());
+                let result = settings.save();
+                *table.borrow_mut() = actions::ShortcutTable::build(&settings.shortcuts.overrides);
+                drop(settings);
+                sync_shortcut_rows(&window, &table.borrow());
+                match result {
+                    Ok(()) => {
+                        if let Some(owner) = owners.first() {
+                            let label = actions::ACTIONS
+                                .iter()
+                                .find(|spec| spec.id == *owner)
+                                .map_or(*owner, |spec| spec.label);
+                            window.set_status_message(format!("{label} is now unbound").into());
+                        } else {
+                            window.set_status_message("Shortcut updated".into());
+                        }
+                    }
+                    Err(error) => {
+                        window.set_status_message(format!("Could not save shortcut: {error}").into());
+                    }
+                }
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let table = shortcut_table.clone();
+            let weak = window.as_weak();
+            window.on_preferences_shortcut_reset(move |action_id| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut settings = settings.borrow_mut();
+                settings.shortcuts.overrides.remove(action_id.as_str());
+                let result = settings.save();
+                *table.borrow_mut() = actions::ShortcutTable::build(&settings.shortcuts.overrides);
+                drop(settings);
+                sync_shortcut_rows(&window, &table.borrow());
+                if let Err(error) = result {
+                    window.set_status_message(format!("Could not save shortcut: {error}").into());
+                }
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let table = shortcut_table.clone();
+            let weak = window.as_weak();
+            window.on_preferences_shortcut_reset_all(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let mut settings = settings.borrow_mut();
+                settings.shortcuts.overrides.clear();
+                let result = settings.save();
+                *table.borrow_mut() = actions::ShortcutTable::build(&settings.shortcuts.overrides);
+                drop(settings);
+                sync_shortcut_rows(&window, &table.borrow());
+                window.set_status_message(if result.is_ok() {
+                    "Shortcuts reset to defaults".into()
+                } else {
+                    "Could not save shortcuts".into()
+                });
+            });
+        }
         {
             let settings = ui_settings.clone();
             let tx = audio_tx.clone();
@@ -3745,6 +4070,45 @@ impl AppUi {
                         }
                     }
                     _ => {}
+                }
+            });
+        }
+
+        // Pattern clone/remove reuse the same whole-project undo pipeline
+        // channel cut/copy/paste/clone/delete use above: mutate a `Project`
+        // snapshot's pattern-indexed vectors and queue it as one undoable
+        // edit, rather than a bespoke realtime engine command.
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = project_edit_tx.clone();
+            let weak = window.as_weak();
+            window.on_pattern_clone_requested(move || {
+                let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                let index = st.borrow().current_pattern;
+                if queue_pattern_clone(&tx, &st, &window, index, "Pattern cloned") {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = project_edit_tx.clone();
+            let weak = window.as_weak();
+            window.on_pattern_remove_requested(move || {
+                let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                let index = st.borrow().current_pattern;
+                if queue_pattern_remove(&tx, &st, &window, index, "Pattern deleted") {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
                 }
             });
         }

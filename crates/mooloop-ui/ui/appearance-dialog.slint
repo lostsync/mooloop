@@ -27,6 +27,215 @@ component PreferenceNavItem inherits Rectangle {
     tap := TouchArea { mouse-cursor: pointer; clicked => { root.selected-page(); } }
 }
 
+// One row of the action registry (`actions.rs`), as shown in the
+// Preferences > Shortcuts page. `is-first-in-category` marks a section
+// boundary in the flat `shortcut-rows` list, computed in Rust so this file
+// doesn't need adjacency logic over a `for` loop.
+export struct ShortcutRow {
+    id: string,
+    label: string,
+    category: string,
+    chord: string,
+    is-default: bool,
+    is-first-in-category: bool,
+}
+
+export component ShortcutRowView inherits Rectangle {
+    in property <ShortcutRow> entry;
+    in property <bool> capturing;
+    callback record-clicked();
+    callback reset-clicked();
+    callback key-captured(string, bool, bool, bool, bool);
+    callback capture-cancelled();
+
+    height: 30px;
+    border-radius: 3px;
+    background: capture-focus.has-focus ? Theme.surface-active : transparent;
+
+    HorizontalBox {
+        padding: 4px;
+        spacing: 8px;
+        Text {
+            text: root.entry.label;
+            color: Theme.text;
+            font-size: 11px;
+            vertical-alignment: center;
+            width: 150px;
+        }
+        Text {
+            text: root.capturing ? "Press keys... (Esc cancels)" : (root.entry.chord == "" ? "Not set" : root.entry.chord);
+            color: root.capturing ? Theme.accent : (root.entry.chord == "" ? Theme.text-faint : Theme.text-muted);
+            font-size: 10px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        ToolButton {
+            text: root.capturing ? "Cancel" : "Record";
+            clicked => {
+                if (root.capturing) {
+                    root.capture-cancelled();
+                } else {
+                    root.record-clicked();
+                    capture-focus.focus();
+                }
+            }
+        }
+        ToolButton {
+            text: "Reset";
+            enabled: !root.entry.is-default;
+            clicked => { root.reset-clicked(); }
+        }
+    }
+
+    // Captures the next raw key event while `capturing` is true. This is
+    // deliberately its own small `FocusScope` rather than reusing
+    // `main.slint`'s root one: that one is disabled outright while
+    // Preferences is open (see the comment there), specifically so a row
+    // like this can own the next keypress instead. The decode chain below
+    // has to match `main.slint`'s `keys := FocusScope` exactly (same
+    // backend, same Ctrl+letter-as-control-character quirk) -- kept in
+    // sync by hand since Slint has no clean way to share it across files
+    // without risking an unproven language feature in a rarely-exercised
+    // path.
+    capture-focus := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if (!root.capturing) {
+                reject
+            } else if (event.text == Key.Escape) {
+                root.capture-cancelled();
+                accept
+            } else if (event.text == " ") {
+                root.key-captured("space", false, false, false, false);
+                accept
+            } else if (event.text == Key.LeftArrow) {
+                root.key-captured("left", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.RightArrow) {
+                root.key-captured("right", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.UpArrow) {
+                root.key-captured("up", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.DownArrow) {
+                root.key-captured("down", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.Delete) {
+                root.key-captured("delete", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.Backspace) {
+                root.key-captured("backspace", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.Tab) {
+                root.key-captured("tab", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.Return) {
+                root.key-captured("return", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.Home) {
+                root.key-captured("home", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.End) {
+                root.key-captured("end", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.PageUp) {
+                root.key-captured("pageup", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.PageDown) {
+                root.key-captured("pagedown", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == Key.Insert) {
+                root.key-captured("insert", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            // See the matching guard in `main.slint`'s `keys := FocusScope`:
+            // a bare modifier keypress reports its own key code, which
+            // collides with the Ctrl+P..Ctrl+X sentinel range below.
+            } else if (event.text == Key.Shift || event.text == Key.Control
+                    || event.text == Key.Alt || event.text == Key.AltGr
+                    || event.text == Key.CapsLock || event.text == Key.ShiftR
+                    || event.text == Key.ControlR || event.text == Key.Meta
+                    || event.text == Key.MetaR) {
+                reject
+            } else if (event.text == "\u{1}") {
+                root.key-captured("a", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{2}") {
+                root.key-captured("b", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{3}") {
+                root.key-captured("c", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{4}") {
+                root.key-captured("d", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{5}") {
+                root.key-captured("e", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{6}") {
+                root.key-captured("f", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{7}") {
+                root.key-captured("g", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{b}") {
+                root.key-captured("k", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{c}") {
+                root.key-captured("l", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{d}") {
+                root.key-captured("m", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{e}") {
+                root.key-captured("n", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{f}") {
+                root.key-captured("o", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{10}") {
+                root.key-captured("p", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{11}") {
+                root.key-captured("q", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{12}") {
+                root.key-captured("r", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{13}") {
+                root.key-captured("s", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{14}") {
+                root.key-captured("t", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{15}") {
+                root.key-captured("u", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{16}") {
+                root.key-captured("v", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{17}") {
+                root.key-captured("w", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{18}") {
+                root.key-captured("x", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{19}") {
+                root.key-captured("y", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.text == "\u{1a}") {
+                root.key-captured("z", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                root.key-captured(event.text.to-lowercase(), event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
+                accept
+            } else {
+                reject
+            }
+        }
+    }
+}
+
 export component PreferencesDialog inherits Rectangle {
     in-out property <bool> open;
     in-out property <int> appearance-preset;
@@ -38,6 +247,8 @@ export component PreferencesDialog inherits Rectangle {
     in property <string> audio-sample-rate-text;
     in property <bool> audio-auto-reconnect;
     in property <string> audio-error;
+    in property <[ShortcutRow]> shortcut-rows;
+    in-out property <string> shortcut-capturing-id;
     callback appearance-preview(int, string);
     callback save(int, string, bool) -> bool;
     callback cancelled;
@@ -45,6 +256,9 @@ export component PreferencesDialog inherits Rectangle {
     callback audio-select-output(string, string, string);
     callback audio-select-buffer-size(int);
     callback audio-auto-reconnect-toggled(bool);
+    callback shortcut-rebind-key(string, string, bool, bool, bool, bool);
+    callback shortcut-reset(string);
+    callback shortcut-reset-all();
 
     private property <int> page: 0;
     visible: root.open;
@@ -93,7 +307,8 @@ export component PreferencesDialog inherits Rectangle {
                         PreferenceNavItem { text: "Audio"; selected: root.page == 1; selected-page => { root.page = 1; } }
                         PreferenceNavItem { text: "MIDI"; selected: root.page == 2; selected-page => { root.page = 2; } }
                         PreferenceNavItem { text: "Appearance"; selected: root.page == 3; selected-page => { root.page = 3; } }
-                        if root.developer-mode : PreferenceNavItem { text: "Developer"; selected: root.page == 4; selected-page => { root.page = 4; } }
+                        PreferenceNavItem { text: "Shortcuts"; selected: root.page == 4; selected-page => { root.page = 4; } }
+                        if root.developer-mode : PreferenceNavItem { text: "Developer"; selected: root.page == 5; selected-page => { root.page = 5; } }
                         Rectangle { vertical-stretch: 1; }
                     }
                 }
@@ -228,7 +443,43 @@ export component PreferencesDialog inherits Rectangle {
                                 }
                             }
                         }
-                        if root.page == 4 && root.developer-mode : VerticalBox {
+                        if root.page == 4 : VerticalBox {
+                            spacing: 8px;
+                            HorizontalBox {
+                                padding: 0px;
+                                Text { text: "Shortcuts"; color: Theme.text; font-size: 14px; height: 20px; vertical-alignment: center; }
+                                Rectangle { horizontal-stretch: 1; }
+                                ToolButton { text: "Reset All"; clicked => { root.shortcut-reset-all(); } }
+                            }
+                            Text {
+                                text: "Click Record, then press the key combination to assign.";
+                                color: Theme.text-muted;
+                                font-size: 10px;
+                            }
+                            ScrollView {
+                                vertical-stretch: 1;
+                                VerticalLayout {
+                                    padding-right: 10px;
+                                    spacing: 2px;
+                                    for row in root.shortcut-rows : VerticalLayout {
+                                        spacing: 2px;
+                                        if row.is-first-in-category : SectionLabel { text: row.category; }
+                                        ShortcutRowView {
+                                            entry: row;
+                                            capturing: root.shortcut-capturing-id == row.id;
+                                            record-clicked => { root.shortcut-capturing-id = row.id; }
+                                            reset-clicked => { root.shortcut-reset(row.id); }
+                                            capture-cancelled => { root.shortcut-capturing-id = ""; }
+                                            key-captured(key, ctrl, shift, alt, meta) => {
+                                                root.shortcut-capturing-id = "";
+                                                root.shortcut-rebind-key(row.id, key, ctrl, shift, alt, meta);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if root.page == 5 && root.developer-mode : VerticalBox {
                             spacing: 8px;
                             Text { text: "Developer"; color: Theme.text; font-size: 14px; height: 20px; }
                             SectionLabel { text: "DEVELOPER TOOLS"; }

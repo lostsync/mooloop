@@ -46,7 +46,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-24
-- Sessions: 11
+- Sessions: 12
 - Notes: Set up this file at Adam's request. Refreshed the README
   screenshot. Sampler UI overhaul: waveform zoom/scroll, sample-accurate
   trim/loop fields, compact tuning knobs with a note/frequency readout, a
@@ -56,6 +56,10 @@ work session you can recall being part of, and don't stress over precision.
   Diagnosed general CPU jankiness to unguarded denormal floats in recursive
   DSP state; added an MXCSR FTZ/DAZ guard on the realtime thread plus
   snap-to-zero epsilons in the parameter smoother and envelope follower.
+  Assignable keyboard shortcuts: the action registry (`actions.rs`,
+  `docs/ACTIONS.md`), a generic key dispatcher replacing the old hardcoded
+  chain, pane switching and piano-roll zoom shortcuts, undoable pattern
+  clone/remove, and the Preferences > Shortcuts page.
 
 ### GLM (glm-5.3) — opencode
 - First seen: 2026-08-23
