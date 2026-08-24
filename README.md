@@ -116,13 +116,34 @@ including compact hexadecimal value or command entry where that representation
 is musically useful. The exact interaction and command set have not been
 designed, and no part of this workflow is implemented yet.
 
-## Build
+## Development Setup
 
 Requirements:
 
 - Rust toolchain from `rust-toolchain.toml`.
 - JACK development libraries.
 - A running JACK server or PipeWire JACK compatibility layer.
+- The [`mold`](https://github.com/rui314/mold) linker. The checked-in Cargo
+  configuration selects it to keep Mooloop's Slint-heavy binaries from making
+  development builds unnecessarily slow. On Fedora:
+
+  ```sh
+  sudo dnf install mold
+  ```
+
+  Verify the prerequisite with `command -v mold`. Developers who prefer a
+  different linker can override or remove the `rustflags` entry in their local
+  Cargo configuration.
+
+When using several Mooloop worktrees, point their Cargo commands at one
+machine-local cache so dependencies do not rebuild per worktree:
+
+```sh
+export CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/mooloop/cargo-target"
+```
+
+Keep this in shell or user-local configuration, not the repository config:
+Cargo does not expand `${USER}` in `config.toml` values.
 
 Run the application:
 
