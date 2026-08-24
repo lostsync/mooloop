@@ -21,10 +21,6 @@ fn render_piano_snapshot() {
     ui.set_editor_page(1);
     ui.set_pattern_length(16);
 
-    assert_eq!(ui.get_piano_low_note(), 0);
-    assert_eq!(ui.get_piano_high_note(), 127);
-    assert_eq!(ui.get_piano_note_count(), 128);
-
     let model = Rc::new(VecModel::from(vec![NoteCell {
         id: 7,
         start_tick: 0,

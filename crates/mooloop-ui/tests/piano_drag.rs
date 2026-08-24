@@ -27,6 +27,8 @@ const ROW_HEIGHT: f32 = 8.0;
 const STEP_WIDTH: f32 = 32.0;
 const TICKS_PER_STEP: i32 = 24;
 const HIGH_NOTE: i32 = 84;
+const H_SCROLLBAR_Y: f32 = 673.0;
+const V_SCROLLBAR_X: f32 = 946.0;
 
 fn note_centre_y(midi_note: i32) -> f32 {
     GRID_TOP_Y + (HIGH_NOTE - midi_note) as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0
@@ -122,6 +124,28 @@ fn dragging_a_note_body_tracks_the_pointer_the_whole_way() {
         "the note should land where the pointer did, not one snap step in"
     );
     assert_eq!(note, 62, "the note should follow the pointer's pitch");
+}
+
+#[test]
+fn piano_scrollbar_grips_zoom_both_axes() {
+    let ui = harness(one_note());
+
+    // The horizontal bar belongs to the bottom edge of the grid. Pulling its
+    // left end inward shrinks the visible time fraction and therefore zooms in.
+    let before_time_zoom = ui.window().take_snapshot().unwrap();
+    drag(ui.window(), (GRID_ORIGIN_X + 2.0, H_SCROLLBAR_Y), (120.0, H_SCROLLBAR_Y));
+    assert!(
+        ui.window().take_snapshot().unwrap().as_bytes() != before_time_zoom.as_bytes(),
+        "dragging a time-scrollbar grip should zoom time"
+    );
+
+    // The pitch bar is on the right edge. Its top grip works the same way.
+    let before_pitch_zoom = ui.window().take_snapshot().unwrap();
+    drag(ui.window(), (V_SCROLLBAR_X, GRID_TOP_Y + 2.0), (V_SCROLLBAR_X, 450.0));
+    assert!(
+        ui.window().take_snapshot().unwrap().as_bytes() != before_pitch_zoom.as_bytes(),
+        "dragging a pitch-scrollbar grip should zoom pitch"
+    );
 }
 
 #[test]

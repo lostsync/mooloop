@@ -2222,30 +2222,6 @@ export component MainWindow inherits Window {
                                     Tooltip { text: @markdown("Piano-roll note grid"); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
-                                // Time axis: drag the thumb to scroll, drag a
-                                // grip to zoom around the fixed opposite end.
-                                // Replaces the old −/+ FlatButton pair.
-                                ZoomScrollBar {
-                                    height: 14px;
-                                    min-width: 140px;
-                                    horizontal-stretch: 2;
-                                    offset: clamp(-piano-scroll.viewport-x
-                                        / max(1px, root.piano-content-w - piano-scroll.visible-width), 0, 1);
-                                    visible-fraction: clamp(
-                                        piano-scroll.visible-width / max(1px, root.piano-content-w), 0, 1);
-                                    scrolled(v) => {
-                                        piano-scroll.viewport-x = -v * max(0px,
-                                            root.piano-content-w - piano-scroll.visible-width);
-                                    }
-                                    zoomed(o, f) => {
-                                        root.piano-step-width = clamp(
-                                            piano-scroll.visible-width / max(1, root.pattern-length * f),
-                                            20px, 72px);
-                                        piano-scroll.viewport-x = -o * max(0px,
-                                            root.piano-content-w - piano-scroll.visible-width);
-                                    }
-                                    Tooltip { text: @markdown("Drag to scroll time. Drag an end grip to zoom."); }
-                                }
                             }
                         }
 
@@ -2285,6 +2261,10 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                     }
+                                    // Matches the time scrollbar below the grid
+                                    // so the keyboard's parameter labels stay
+                                    // aligned with the lanes on the right.
+                                    Rectangle { height: 14px; background: Theme.panel; }
                                     Text {
                                         height: 17px;
                                         text: "LANE";
@@ -2320,6 +2300,11 @@ export component MainWindow inherits Window {
                                         root.pattern-length * root.piano-step-width);
                                     viewport-height: max(self.visible-height,
                                         root.piano-note-count * root.piano-row-height);
+                                    // Start around the working register (C6 at
+                                    // the top) even though the canvas spans the
+                                    // full MIDI range. Subsequent pan/zoom
+                                    // interactions take ownership of this value.
+                                    viewport-y: -(root.piano-high-note - 84) * root.piano-row-height;
                                     Rectangle {
                                         x: 0px;
                                         width: root.pattern-length * root.piano-step-width;
@@ -2516,6 +2501,37 @@ export component MainWindow inherits Window {
                                                     self.grab-mode = 0;
                                                 }
                                             }
+                                            // Ctrl+wheel zooms pitch under the pointer.
+                                            // Add Shift to zoom time instead. Ordinary wheel
+                                            // input is left to ScrollView for panning.
+                                            scroll-event(e) => {
+                                                if (e.modifiers.control && e.delta-y != 0px) {
+                                                    let factor = e.delta-y < 0px ? 1.15 : 0.87;
+                                                    if (e.modifiers.shift) {
+                                                        let old-width = root.piano-step-width;
+                                                        let next-width = clamp(old-width * factor, 20px, 72px);
+                                                        let content-x = self.mouse-x - piano-scroll.viewport-x;
+                                                        root.piano-step-width = next-width;
+                                                        piano-scroll.viewport-x = clamp(
+                                                            self.mouse-x - content-x * next-width / old-width,
+                                                            min(0px, piano-scroll.visible-width - root.piano-content-w),
+                                                            0px);
+                                                    } else {
+                                                        let old-height = root.piano-row-height;
+                                                        let next-height = clamp(old-height * factor, 5px, 16px);
+                                                        let content-y = self.mouse-y - piano-scroll.viewport-y;
+                                                        root.piano-row-height = next-height;
+                                                        piano-scroll.viewport-y = clamp(
+                                                            self.mouse-y - content-y * next-height / old-height,
+                                                            min(0px, piano-scroll.visible-height - root.piano-content-h),
+                                                            0px);
+                                                    }
+                                                    accept
+                                                } else { reject }
+                                            }
+                                            Tooltip {
+                                                text: @markdown("Ctrl+wheel zooms pitch. Ctrl+Shift+wheel zooms time.");
+                                            }
                                         }
                                     }
                                     }
@@ -2543,6 +2559,34 @@ export component MainWindow inherits Window {
                                         }
                                         Tooltip { text: @markdown("Drag to scroll pitch. Drag an end grip to zoom."); }
                                     }
+                                }
+
+                                // The bottom edge is the time scrollbar: drag
+                                // its body to pan and either marked end to zoom.
+                                HorizontalLayout {
+                                    height: 14px;
+                                    spacing: 2px;
+                                    ZoomScrollBar {
+                                        height: 14px;
+                                        horizontal-stretch: 1;
+                                        offset: clamp(-piano-scroll.viewport-x
+                                            / max(1px, root.piano-content-w - piano-scroll.visible-width), 0, 1);
+                                        visible-fraction: clamp(
+                                            piano-scroll.visible-width / max(1px, root.piano-content-w), 0, 1);
+                                        scrolled(v) => {
+                                            piano-scroll.viewport-x = -v * max(0px,
+                                                root.piano-content-w - piano-scroll.visible-width);
+                                        }
+                                        zoomed(o, f) => {
+                                            root.piano-step-width = clamp(
+                                                piano-scroll.visible-width / max(1, root.pattern-length * f),
+                                                20px, 72px);
+                                            piano-scroll.viewport-x = -o * max(0px,
+                                                root.piano-content-w - piano-scroll.visible-width);
+                                        }
+                                        Tooltip { text: @markdown("Drag to scroll time. Drag an end grip to zoom."); }
+                                    }
+                                    Rectangle { width: 12px; }
                                 }
 
                                 Rectangle {
