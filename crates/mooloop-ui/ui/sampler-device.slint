@@ -47,6 +47,73 @@ component SampleMarker inherits Rectangle {
     }
 }
 
+// Sample-frame-accurate numeric entry, for placing trim/loop points more
+// precisely than dragging a `SampleMarker` allows. No prev/next arrows
+// (a sample can be hundreds of thousands of frames long, so +/-1 buttons
+// would be useless) — drag or scroll to change it instead, the same idiom
+// as `StepperField`, with Ctrl/Shift dropping to the finest 1-frame step
+// the same way the knobs' fine-drag does. `value` is purely display-driven
+// from outside (like `SampleMarker.x`); `changed` reports the proposed new
+// absolute frame so the caller can clamp and convert it.
+component SampleField inherits Rectangle {
+    in property <string> label;
+    in property <string> tooltip: root.label;
+    in property <int> value;
+    in property <int> maximum: 1;
+    callback changed(int);
+
+    private property <int> pressed-value;
+    private property <bool> fine-drag;
+    private property <int> coarse-step: max(1, root.maximum / 1000);
+
+    height: 22px;
+    width: layout.preferred-width;
+    border-radius: 3px;
+    background: Theme.surface-raised;
+    accessible-role: spinbox;
+    accessible-label: root.tooltip;
+
+    layout := HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 3px;
+        Text {
+            text: root.label;
+            color: Theme.text-faint;
+            font-size: 8px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.value;
+            color: Theme.text;
+            font-size: 9px;
+            font-family: "monospace";
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            min-width: 48px;
+        }
+    }
+    TouchArea {
+        mouse-cursor: ns-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.pressed-value = root.value;
+                root.fine-drag = e.modifiers.control || e.modifiers.shift;
+            } else if (e.kind == PointerEventKind.move && self.pressed) {
+                let step = root.fine-drag ? 1 : root.coarse-step;
+                let next = root.pressed-value + round((self.pressed-y - self.mouse-y) / 4px) * step;
+                root.changed(clamp(next, 0, root.maximum));
+            }
+        }
+        scroll-event(e) => {
+            let step = (e.modifiers.control || e.modifiers.shift) ? 1 : root.coarse-step;
+            root.changed(clamp(root.value + (e.delta-y > 0 ? step : -step), 0, root.maximum));
+            accept
+        }
+    }
+    Tooltip { text: @markdown("**\{root.tooltip}** \{root.value}"); }
+}
+
 export component SamplerDeviceFace inherits Rectangle {
     in-out property <int> page;
     in-out property <float> attack;
@@ -75,6 +142,7 @@ export component SamplerDeviceFace inherits Rectangle {
     in-out property <string> sample-name;
     in-out property <string> sample-description;
     in-out property <[float]> waveform;
+    in-out property <int> sample-frames;
     in-out property <bool> can-previous-sample;
     in-out property <bool> can-next-sample;
     // Pure view state: which slice of the sample the waveform is
@@ -263,6 +331,49 @@ export component SamplerDeviceFace inherits Rectangle {
                     root.waveform-view-visible-fraction = f;
                     root.waveform-view-changed(o, f);
                 }
+            }
+
+            HorizontalLayout {
+                spacing: 4px;
+                SampleField {
+                    label: "S"; tooltip: "Start frame";
+                    value: round(root.start-pos * root.sample-frames);
+                    maximum: root.sample-frames;
+                    changed(v) => {
+                        let abs = root.sample-frames > 0 ? v / root.sample-frames : 0;
+                        root.start-pos = min(abs, root.end-pos - 0.001); root.start-pos-changed(root.start-pos);
+                        if (root.loop-start < root.start-pos) { root.loop-start = root.start-pos; root.loop-start-changed(root.loop-start); }
+                    }
+                }
+                SampleField {
+                    label: "E"; tooltip: "End frame";
+                    value: round(root.end-pos * root.sample-frames);
+                    maximum: root.sample-frames;
+                    changed(v) => {
+                        let abs = root.sample-frames > 0 ? v / root.sample-frames : 1;
+                        root.end-pos = max(abs, root.start-pos + 0.001); root.end-pos-changed(root.end-pos);
+                        if (root.loop-end > root.end-pos) { root.loop-end = root.end-pos; root.loop-end-changed(root.loop-end); }
+                    }
+                }
+                SampleField {
+                    label: "L"; tooltip: "Loop start frame";
+                    value: round(root.loop-start * root.sample-frames);
+                    maximum: root.sample-frames;
+                    changed(v) => {
+                        let abs = root.sample-frames > 0 ? v / root.sample-frames : 0;
+                        root.loop-start = clamp(abs, root.start-pos, root.loop-end - 0.001); root.loop-start-changed(root.loop-start);
+                    }
+                }
+                SampleField {
+                    label: "R"; tooltip: "Loop end frame";
+                    value: round(root.loop-end * root.sample-frames);
+                    maximum: root.sample-frames;
+                    changed(v) => {
+                        let abs = root.sample-frames > 0 ? v / root.sample-frames : 1;
+                        root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
             }
 
             HorizontalLayout {

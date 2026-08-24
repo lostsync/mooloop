@@ -1611,6 +1611,12 @@ impl UiState {
         window.set_sample_name(ch.sample_name.as_str().into());
         window.set_sample_description(ch.sample_description.as_str().into());
         window.set_sample_duration(ch.sample_duration);
+        window.set_sample_frames(
+            ch.sample_data
+                .as_ref()
+                .map(|sample| sample.frames.len() as i32)
+                .unwrap_or(0),
+        );
         self.waveform_model.set_vec(ch.waveform.clone());
         // A newly selected channel's waveform view starts fully zoomed out;
         // a stale zoom window from the previous channel would otherwise
