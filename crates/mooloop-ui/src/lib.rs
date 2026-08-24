@@ -56,6 +56,22 @@ enum PendingEngineMessage {
     Command(EngineCommand),
     Structural(StructuralCommand),
     ProjectEdit(ProjectEdit),
+    Audio(AudioAction),
+}
+
+/// One requested change from the Audio preferences page. These reach
+/// `EngineHandle` directly rather than through `EngineCommand`: they are
+/// non-realtime JACK API calls (port connect/disconnect, buffer resize), not
+/// realtime-thread state, but `handle` still only lives inside the pump.
+enum AudioAction {
+    /// Apply settings loaded from disk at startup, before the user has
+    /// touched the Audio page.
+    ApplyPersisted(mooloop_engine::AudioConfig),
+    /// Re-read the live JACK graph and driver status.
+    RefreshTargets,
+    SelectOutput { port_l: String, port_r: String },
+    SelectBufferSize(u32),
+    SetAutoReconnect(bool),
 }
 
 #[derive(Clone)]
@@ -86,6 +102,19 @@ impl ProjectEditSender {
         self.0.send(PendingEngineMessage::ProjectEdit(edit)).is_ok()
     }
 }
+
+#[derive(Clone)]
+struct AudioActionSender(std::sync::mpsc::Sender<PendingEngineMessage>);
+
+impl AudioActionSender {
+    fn send(&self, action: AudioAction) -> bool {
+        self.0.send(PendingEngineMessage::Audio(action)).is_ok()
+    }
+}
+
+/// Fixed JACK buffer size choices offered by the segmented control on the
+/// Audio preferences page. Index-addressed to match `SegmentedControl`.
+const JACK_BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 const WAVEFORM_BINS: usize = 256;
 const DRUM_PREVIEW_BINS: usize = 144;
 
@@ -122,6 +151,48 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window.set_preferences_appearance_accent(settings.appearance.accent.as_str().into());
     window.set_preferences_developer_mode(settings.general.developer_mode);
     window.set_preferences_error("".into());
+    let buffer_index = settings
+        .audio
+        .jack
+        .buffer_size
+        .and_then(|frames| JACK_BUFFER_SIZES.iter().position(|&f| f == frames))
+        .map(|i| i as i32)
+        .unwrap_or(-1);
+    window.set_preferences_audio_buffer_size_index(buffer_index);
+    window.set_preferences_audio_auto_reconnect(settings.audio.jack.auto_reconnect);
+    window.set_preferences_audio_error("".into());
+}
+
+/// Re-read live JACK driver status and connectable output targets, and push
+/// them onto the window. Called from the pump, which is the only place that
+/// holds `EngineHandle`; a non-realtime JACK graph query, not something to
+/// run every tick.
+fn sync_audio_status(handle: &EngineHandle, window: &MainWindow) {
+    let status = handle.driver_status();
+    let rows: Vec<OutputTargetRow> = handle
+        .available_output_targets()
+        .into_iter()
+        .map(|target| {
+            let selected = target.port_l == status.current_target.0
+                && target.port_r == status.current_target.1;
+            OutputTargetRow {
+                client: target.client.into(),
+                port_l: target.port_l.into(),
+                port_r: target.port_r.into(),
+                selected,
+            }
+        })
+        .collect();
+    window.set_preferences_audio_output_targets(ModelRc::from(Rc::new(VecModel::from(rows))));
+    let buffer_index = JACK_BUFFER_SIZES
+        .iter()
+        .position(|&f| f == status.buffer_size)
+        .map(|i| i as i32)
+        .unwrap_or(-1);
+    window.set_preferences_audio_buffer_size_index(buffer_index);
+    window.set_preferences_audio_sample_rate_text(
+        format!("{} Hz — set by the JACK server", status.sample_rate).into(),
+    );
 }
 
 /// UI-side state for one channel. `notes` is the pattern bank.
@@ -1697,83 +1768,6 @@ impl AppUi {
         handle.send(EngineCommand::SetTempo(INITIAL_BPM as f64));
         handle.send(EngineCommand::SetSwing(DEFAULT_SWING_PERCENT));
 
-        // --- Appearance settings and live preview ---
-        let ui_settings = Rc::new(RefCell::new(UiSettings::load_or_default()));
-        {
-            let settings = ui_settings.borrow();
-            apply_theme(&window, settings.appearance.palette());
-            sync_preferences_properties(&window, &settings);
-        }
-        {
-            let settings = ui_settings.clone();
-            let weak = window.as_weak();
-            window.on_preferences_opened(move || {
-                let Some(window) = weak.upgrade() else { return };
-                let settings = settings.borrow();
-                apply_theme(&window, settings.appearance.palette());
-                sync_preferences_properties(&window, &settings);
-            });
-        }
-        {
-            let weak = window.as_weak();
-            window.on_preferences_appearance_preview(move |preset, accent| {
-                let Some(window) = weak.upgrade() else { return };
-                match AppearanceSettings::validated(
-                    AppearancePreset::from_index(preset),
-                    accent.as_str(),
-                ) {
-                    Ok(appearance) => {
-                        apply_theme(&window, appearance.palette());
-                        window.set_preferences_error("".into());
-                    }
-                    Err(error) => window.set_preferences_error(error.to_string().into()),
-                }
-            });
-        }
-        {
-            let settings = ui_settings.clone();
-            let weak = window.as_weak();
-            window.on_preferences_save(move |preset, accent, developer_mode| {
-                let Some(window) = weak.upgrade() else {
-                    return false;
-                };
-                let appearance = match AppearanceSettings::validated(
-                    AppearancePreset::from_index(preset),
-                    accent.as_str(),
-                ) {
-                    Ok(appearance) => appearance,
-                    Err(error) => {
-                        window.set_preferences_error(error.to_string().into());
-                        return false;
-                    }
-                };
-                apply_theme(&window, appearance.palette());
-                let mut settings = settings.borrow_mut();
-                let previous = settings.appearance.clone();
-                settings.appearance = appearance;
-                let previous_developer_mode = settings.general.developer_mode;
-                settings.general.developer_mode = developer_mode;
-                if let Err(error) = settings.save() {
-                    settings.appearance = previous;
-                    settings.general.developer_mode = previous_developer_mode;
-                    window.set_preferences_error(format!("Could not save settings: {error}").into());
-                    return false;
-                }
-                sync_preferences_properties(&window, &settings);
-                true
-            });
-        }
-        {
-            let settings = ui_settings.clone();
-            let weak = window.as_weak();
-            window.on_preferences_cancelled(move || {
-                let Some(window) = weak.upgrade() else { return };
-                let settings = settings.borrow();
-                apply_theme(&window, settings.appearance.palette());
-                sync_preferences_properties(&window, &settings);
-            });
-        }
-
         // --- Channel rack state: start with one empty channel ---
         //
         // `default_sample`/`default_waveform`/etc. are kept only to resolve
@@ -2363,11 +2357,123 @@ impl AppUi {
         let (pending_tx, pending_rx) = std::sync::mpsc::channel::<PendingEngineMessage>();
         let cmd_tx = EngineCommandSender(pending_tx.clone());
         let project_edit_tx = ProjectEditSender(pending_tx.clone());
+        let audio_tx = AudioActionSender(pending_tx.clone());
         let structural_tx = StructuralCommandSender(pending_tx);
         let sample_rate = handle.sample_rate();
         // Sample slots are published out-of-band, so source replacement asks
         // the pump (which owns the EngineHandle) to restore the built-in sample.
         let (sample_reset_tx, sample_reset_rx) = std::sync::mpsc::channel::<usize>();
+
+        // --- Preferences: appearance applies live from here; audio reaches
+        //     the engine through the pump below, the only place that owns
+        //     `EngineHandle`. ---
+        let ui_settings = Rc::new(RefCell::new(UiSettings::load_or_default()));
+        {
+            let settings = ui_settings.borrow();
+            apply_theme(&window, settings.appearance.palette());
+            sync_preferences_properties(&window, &settings);
+            audio_tx.send(AudioAction::ApplyPersisted(settings.audio.engine_config()));
+        }
+        {
+            let settings = ui_settings.clone();
+            let tx = audio_tx.clone();
+            let weak = window.as_weak();
+            window.on_preferences_opened(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let settings = settings.borrow();
+                apply_theme(&window, settings.appearance.palette());
+                sync_preferences_properties(&window, &settings);
+                tx.send(AudioAction::RefreshTargets);
+            });
+        }
+        {
+            let weak = window.as_weak();
+            window.on_preferences_appearance_preview(move |preset, accent| {
+                let Some(window) = weak.upgrade() else { return };
+                match AppearanceSettings::validated(
+                    AppearancePreset::from_index(preset),
+                    accent.as_str(),
+                ) {
+                    Ok(appearance) => {
+                        apply_theme(&window, appearance.palette());
+                        window.set_preferences_error("".into());
+                    }
+                    Err(error) => window.set_preferences_error(error.to_string().into()),
+                }
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_save(move |preset, accent, developer_mode| {
+                let Some(window) = weak.upgrade() else {
+                    return false;
+                };
+                let appearance = match AppearanceSettings::validated(
+                    AppearancePreset::from_index(preset),
+                    accent.as_str(),
+                ) {
+                    Ok(appearance) => appearance,
+                    Err(error) => {
+                        window.set_preferences_error(error.to_string().into());
+                        return false;
+                    }
+                };
+                apply_theme(&window, appearance.palette());
+                let mut settings = settings.borrow_mut();
+                let previous = settings.appearance.clone();
+                settings.appearance = appearance;
+                let previous_developer_mode = settings.general.developer_mode;
+                settings.general.developer_mode = developer_mode;
+                if let Err(error) = settings.save() {
+                    settings.appearance = previous;
+                    settings.general.developer_mode = previous_developer_mode;
+                    window.set_preferences_error(format!("Could not save settings: {error}").into());
+                    return false;
+                }
+                sync_preferences_properties(&window, &settings);
+                true
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_cancelled(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let settings = settings.borrow();
+                apply_theme(&window, settings.appearance.palette());
+                sync_preferences_properties(&window, &settings);
+            });
+        }
+        {
+            let tx = audio_tx.clone();
+            window.on_preferences_audio_refresh_targets(move || {
+                tx.send(AudioAction::RefreshTargets);
+            });
+        }
+        {
+            let tx = audio_tx.clone();
+            window.on_preferences_audio_select_output(move |_client, port_l, port_r| {
+                tx.send(AudioAction::SelectOutput {
+                    port_l: port_l.to_string(),
+                    port_r: port_r.to_string(),
+                });
+            });
+        }
+        {
+            let tx = audio_tx.clone();
+            window.on_preferences_audio_select_buffer_size(move |index| {
+                if let Some(&frames) = JACK_BUFFER_SIZES.get(index as usize) {
+                    tx.send(AudioAction::SelectBufferSize(frames));
+                }
+            });
+        }
+        {
+            let tx = audio_tx;
+            window.on_preferences_audio_auto_reconnect_toggled(move |enabled| {
+                tx.send(AudioAction::SetAutoReconnect(enabled));
+            });
+        }
 
         // Transport callbacks.
         {
@@ -4591,6 +4697,7 @@ impl AppUi {
         let st = state.clone();
         let commands = command_state.clone();
         let default_sample_for_pump = default_sample.clone();
+        let ui_settings_for_pump = ui_settings.clone();
         let pump = Timer::default();
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
         let stats = Rc::new(std::cell::Cell::new((0.0f32, false, 0usize)));
@@ -4944,6 +5051,91 @@ impl AppUi {
                             } else {
                                 window.set_status_message("Channel edit is waiting for audio".into());
                                 sync_command_availability(&window, &commands.borrow());
+                            }
+                        }
+                        PendingEngineMessage::Audio(action) => {
+                            let Some(window) = weak.upgrade() else { return };
+                            match action {
+                                AudioAction::ApplyPersisted(config) => {
+                                    if let Some(target) = config.output_target.clone() {
+                                        if let Err(error) = handle.set_output_target(Some(target)) {
+                                            eprintln!(
+                                                "mooloop: could not apply saved output target: {error}"
+                                            );
+                                        }
+                                    }
+                                    if let Some(frames) = config.buffer_size {
+                                        if let Err(error) = handle.set_buffer_size(frames) {
+                                            eprintln!(
+                                                "mooloop: could not apply saved buffer size: {error}"
+                                            );
+                                        }
+                                    }
+                                    handle.set_auto_reconnect(config.auto_reconnect);
+                                    sync_audio_status(&handle, &window);
+                                }
+                                AudioAction::RefreshTargets => {
+                                    sync_audio_status(&handle, &window);
+                                }
+                                AudioAction::SelectOutput { port_l, port_r } => {
+                                    match handle
+                                        .set_output_target(Some((port_l.clone(), port_r.clone())))
+                                    {
+                                        Ok(()) => {
+                                            let mut settings = ui_settings_for_pump.borrow_mut();
+                                            settings.audio.jack.output_port_l = Some(port_l);
+                                            settings.audio.jack.output_port_r = Some(port_r);
+                                            if let Err(error) = settings.save() {
+                                                window.set_preferences_audio_error(
+                                                    format!("Could not save settings: {error}")
+                                                        .into(),
+                                                );
+                                            } else {
+                                                window.set_preferences_audio_error("".into());
+                                            }
+                                            drop(settings);
+                                            sync_audio_status(&handle, &window);
+                                        }
+                                        Err(error) => {
+                                            window.set_preferences_audio_error(error.into())
+                                        }
+                                    }
+                                }
+                                AudioAction::SelectBufferSize(frames) => {
+                                    match handle.set_buffer_size(frames) {
+                                        Ok(()) => {
+                                            let mut settings = ui_settings_for_pump.borrow_mut();
+                                            settings.audio.jack.buffer_size = Some(frames);
+                                            if let Err(error) = settings.save() {
+                                                window.set_preferences_audio_error(
+                                                    format!("Could not save settings: {error}")
+                                                        .into(),
+                                                );
+                                            } else {
+                                                window.set_preferences_audio_error("".into());
+                                            }
+                                            drop(settings);
+                                            sync_audio_status(&handle, &window);
+                                        }
+                                        Err(error) => {
+                                            window.set_preferences_audio_error(error.into())
+                                        }
+                                    }
+                                }
+                                AudioAction::SetAutoReconnect(enabled) => {
+                                    handle.set_auto_reconnect(enabled);
+                                    let mut settings = ui_settings_for_pump.borrow_mut();
+                                    settings.audio.jack.auto_reconnect = enabled;
+                                    if let Err(error) = settings.save() {
+                                        window.set_preferences_audio_error(
+                                            format!("Could not save settings: {error}").into(),
+                                        );
+                                    } else {
+                                        window.set_preferences_audio_error("".into());
+                                    }
+                                    drop(settings);
+                                    window.set_preferences_audio_auto_reconnect(enabled);
+                                }
                             }
                         }
                     }

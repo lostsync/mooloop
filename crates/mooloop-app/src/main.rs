@@ -9,7 +9,7 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let (engine, handle) = mooloop_engine::Engine::new()?;
+    let (engine, handle) = mooloop_engine::Engine::new(mooloop_engine::AudioConfig::default())?;
     let app = mooloop_ui::AppUi::new(handle)?;
     // `engine` stays alive on the stack for the duration of the event loop and
     // is dropped (deactivating JACK) when `run` returns.

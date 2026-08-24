@@ -1,6 +1,8 @@
-import { HorizontalBox, LineEdit, VerticalBox } from "std-widgets.slint";
+import { HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { SectionLabel, ToggleButton, ToolButton } from "controls.slint";
+import { SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
+import { JackControlSurface, OutputTargetRow } from "audio-preferences.slint";
+export { OutputTargetRow }
 
 component PreferenceNavItem inherits Rectangle {
     in property <string> text;
@@ -20,9 +22,18 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <string> appearance-accent;
     in-out property <bool> developer-mode;
     in property <string> validation-error;
+    in property <[OutputTargetRow]> audio-output-targets;
+    in property <int> audio-buffer-size-index;
+    in property <string> audio-sample-rate-text;
+    in property <bool> audio-auto-reconnect;
+    in property <string> audio-error;
     callback appearance-preview(int, string);
     callback save(int, string, bool) -> bool;
     callback cancelled;
+    callback audio-refresh-targets();
+    callback audio-select-output(string, string, string);
+    callback audio-select-buffer-size(int);
+    callback audio-auto-reconnect-toggled(bool);
 
     private property <int> page: 0;
     visible: root.open;
@@ -100,11 +111,50 @@ export component PreferencesDialog inherits Rectangle {
                                 }
                             }
                         }
-                        if root.page == 1 : VerticalBox {
-                            spacing: 12px;
-                            Text { text: "Audio"; color: Theme.text; font-size: 16px; height: 24px; }
-                            SectionLabel { text: "AUDIO DEVICE"; }
-                            Text { text: "Audio device settings will appear here."; color: Theme.text-muted; font-size: 11px; }
+                        if root.page == 1 : ScrollView {
+                            // The JACK control surface's content length is not
+                            // fixed (a future ALSA surface may need more or
+                            // less), so this page scrolls internally instead
+                            // of assuming everything fits the dialog's fixed
+                            // body height the way the shorter pages do.
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                padding-right: 10px;
+                                spacing: 12px;
+                                Text { text: "Audio"; color: Theme.text; font-size: 16px; height: 24px; }
+                                SectionLabel { text: "DRIVER"; }
+                                HorizontalBox {
+                                    spacing: 8px;
+                                    padding: 0px;
+                                    SegmentedControl { width: 96px; options: ["JACK"]; selected-index: 0; }
+                                    Text { text: "ALSA support is planned."; color: Theme.text-faint; font-size: 10px; vertical-alignment: center; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                                HorizontalBox {
+                                    spacing: 8px;
+                                    padding: 0px;
+                                    Text { text: "Device in"; color: Theme.text; font-size: 11px; vertical-alignment: center; }
+                                    Text {
+                                        text: "input capture isn't implemented yet";
+                                        color: Theme.text-faint;
+                                        font-size: 10px;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    ToolButton { text: "None"; enabled: false; }
+                                }
+                                JackControlSurface {
+                                    output-targets: root.audio-output-targets;
+                                    buffer-size-index: root.audio-buffer-size-index;
+                                    sample-rate-text: root.audio-sample-rate-text;
+                                    auto-reconnect: root.audio-auto-reconnect;
+                                    error: root.audio-error;
+                                    refresh-targets => { root.audio-refresh-targets(); }
+                                    select-output(client, port-l, port-r) => { root.audio-select-output(client, port-l, port-r); }
+                                    select-buffer-size(i) => { root.audio-select-buffer-size(i); }
+                                    auto-reconnect-toggled(v) => { root.audio-auto-reconnect-toggled(v); }
+                                }
+                            }
                         }
                         if root.page == 2 : VerticalBox {
                             spacing: 12px;

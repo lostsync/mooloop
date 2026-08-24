@@ -1,10 +1,11 @@
 //! JACK adapter around the allocation-free shared render state.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use jack::ProcessHandler;
-use jack::{AudioOut, Client, Control, Port, ProcessScope};
+use jack::{AudioOut, Client, Control, Port, PortId, ProcessScope};
 use mooloop_core::EngineEvent;
 use mooloop_dsp::MAX_BLOCK_SIZE;
 use rtrb::Consumer;
@@ -134,12 +135,41 @@ impl ProcessHandler for Graph {
 
 pub(crate) struct Notifications {
     pub xrun_count: Arc<AtomicU64>,
+    /// Whether to retry connecting `target` when the port graph changes and
+    /// it is currently unconnected. Shared with `EngineHandle::set_auto_reconnect`.
+    pub auto_reconnect: Arc<AtomicBool>,
+    /// The configured output target, shared with `EngineHandle`.
+    pub target: Arc<ArcSwap<(String, String)>>,
 }
 
 impl jack::NotificationHandler for Notifications {
     fn xrun(&mut self, _: &Client) -> Control {
         self.xrun_count.fetch_add(1, Ordering::Relaxed);
         Control::Continue
+    }
+
+    // Runs on JACK's notification thread, not the realtime audio thread, so
+    // ordinary allocation and the `ArcSwap` load below are fine here. A
+    // hot-plugged device (e.g. headphones) surfaces to a JACK client as
+    // ports registering, not as a "default device changed" event, so port
+    // registration is what auto-reconnect actually watches.
+    fn port_registration(&mut self, client: &Client, _port_id: PortId, is_registered: bool) {
+        if !is_registered || !self.auto_reconnect.load(Ordering::Relaxed) {
+            return;
+        }
+        let target = self.target.load_full();
+        if client.port_by_name(&target.0).is_none() || client.port_by_name(&target.1).is_none() {
+            return;
+        }
+        for (src, dst) in [
+            (crate::OUT_L_NAME, target.0.as_str()),
+            (crate::OUT_R_NAME, target.1.as_str()),
+        ] {
+            match client.connect_ports_by_name(src, dst) {
+                Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
+                Err(e) => eprintln!("mooloop: auto-reconnect could not connect {src} -> {dst} ({e})"),
+            }
+        }
     }
 }
 

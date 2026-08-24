@@ -113,6 +113,73 @@ pub(crate) struct GeneralSettings {
     pub developer_mode: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum AudioDriverKind {
+    #[default]
+    Jack,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct JackSettings {
+    #[serde(default)]
+    pub output_port_l: Option<String>,
+    #[serde(default)]
+    pub output_port_r: Option<String>,
+    /// `None` leaves the JACK server's current buffer size alone.
+    #[serde(default)]
+    pub buffer_size: Option<u32>,
+    #[serde(default = "default_true")]
+    pub auto_reconnect: bool,
+}
+
+impl Default for JackSettings {
+    fn default() -> Self {
+        Self {
+            output_port_l: None,
+            output_port_r: None,
+            buffer_size: None,
+            auto_reconnect: true,
+        }
+    }
+}
+
+impl JackSettings {
+    pub(crate) fn output_target(&self) -> Option<(String, String)> {
+        match (&self.output_port_l, &self.output_port_r) {
+            (Some(l), Some(r)) => Some((l.clone(), r.clone())),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct AudioSettings {
+    #[serde(default)]
+    pub driver: AudioDriverKind,
+    #[serde(default)]
+    pub jack: JackSettings,
+}
+
+impl AudioSettings {
+    /// Maps this crate's persisted settings onto the engine's driver-facing
+    /// config. Kept as an explicit conversion, not a shared type, so
+    /// `mooloop-engine` never depends on `mooloop-ui`'s settings schema.
+    pub(crate) fn engine_config(&self) -> mooloop_engine::AudioConfig {
+        mooloop_engine::AudioConfig {
+            buffer_size: self.jack.buffer_size,
+            output_target: self.jack.output_target(),
+            auto_reconnect: self.jack.auto_reconnect,
+        }
+    }
+}
+
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
@@ -152,6 +219,8 @@ pub(crate) struct UiSettings {
     #[serde(default)]
     pub general: GeneralSettings,
     pub appearance: AppearanceSettings,
+    #[serde(default)]
+    pub audio: AudioSettings,
 }
 
 impl Default for UiSettings {
@@ -160,6 +229,7 @@ impl Default for UiSettings {
             schema_version: SCHEMA_VERSION,
             general: GeneralSettings::default(),
             appearance: AppearanceSettings::default(),
+            audio: AudioSettings::default(),
         }
     }
 }
@@ -413,9 +483,54 @@ mod tests {
             },
             appearance: AppearanceSettings::validated(AppearancePreset::Graphite, "#F59E0B")
                 .unwrap(),
+            audio: AudioSettings {
+                driver: AudioDriverKind::Jack,
+                jack: JackSettings {
+                    output_port_l: Some("Carla:audio-in1".to_owned()),
+                    output_port_r: Some("Carla:audio-in2".to_owned()),
+                    buffer_size: Some(256),
+                    auto_reconnect: false,
+                },
+            },
         };
         expected.save_to(&path).unwrap();
         assert_eq!(UiSettings::load_from(&path).unwrap(), expected);
+    }
+
+    #[test]
+    fn defaults_missing_audio_settings_for_existing_configs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n",
+        )
+        .unwrap();
+        let audio = UiSettings::load_from(&path).unwrap().audio;
+        assert_eq!(audio, AudioSettings::default());
+        assert!(audio.jack.auto_reconnect);
+        assert_eq!(audio.jack.output_target(), None);
+    }
+
+    #[test]
+    fn maps_jack_settings_onto_engine_config() {
+        let jack = JackSettings {
+            output_port_l: Some("Carla:audio-in1".to_owned()),
+            output_port_r: Some("Carla:audio-in2".to_owned()),
+            buffer_size: Some(512),
+            auto_reconnect: true,
+        };
+        let audio = AudioSettings {
+            driver: AudioDriverKind::Jack,
+            jack,
+        };
+        let config = audio.engine_config();
+        assert_eq!(config.buffer_size, Some(512));
+        assert_eq!(
+            config.output_target,
+            Some(("Carla:audio-in1".to_owned(), "Carla:audio-in2".to_owned()))
+        );
+        assert!(config.auto_reconnect);
     }
 
     #[test]

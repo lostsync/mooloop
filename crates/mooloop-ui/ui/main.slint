@@ -11,7 +11,7 @@ import {
 } from "toolbar.slint";
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
-import { PreferencesDialog } from "appearance-dialog.slint";
+import { PreferencesDialog, OutputTargetRow } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
@@ -38,6 +38,7 @@ export { ControlGallery } from "gallery.slint";
 export { MockupCanvas, MockupItem } from "mockup.slint";
 export { DeviceRackConcepts } from "device-concepts.slint";
 export { MixerStripRow }
+export { OutputTargetRow }
 
 // One step cell used in the step-grid models.
 struct StepCell {
@@ -154,10 +155,19 @@ export component MainWindow inherits Window {
     in-out property <string> preferences-appearance-accent: "#84CC16";
     in-out property <bool> preferences-developer-mode;
     in-out property <string> preferences-error;
+    in property <[OutputTargetRow]> preferences-audio-output-targets;
+    in property <int> preferences-audio-buffer-size-index;
+    in property <string> preferences-audio-sample-rate-text;
+    in property <bool> preferences-audio-auto-reconnect;
+    in property <string> preferences-audio-error;
     callback preferences-opened();
     callback preferences-appearance-preview(int, string);
     callback preferences-save(int, string, bool) -> bool;
     callback preferences-cancelled();
+    callback preferences-audio-refresh-targets();
+    callback preferences-audio-select-output(string, string, string);
+    callback preferences-audio-select-buffer-size(int);
+    callback preferences-audio-auto-reconnect-toggled(bool);
 
     // ---- document lifecycle ----
     in-out property <string> document-title: "Untitled - mooloop";
@@ -2689,9 +2699,18 @@ export component MainWindow inherits Window {
         appearance-accent <=> root.preferences-appearance-accent;
         developer-mode <=> root.preferences-developer-mode;
         validation-error: root.preferences-error;
+        audio-output-targets: root.preferences-audio-output-targets;
+        audio-buffer-size-index: root.preferences-audio-buffer-size-index;
+        audio-sample-rate-text: root.preferences-audio-sample-rate-text;
+        audio-auto-reconnect: root.preferences-audio-auto-reconnect;
+        audio-error: root.preferences-audio-error;
         appearance-preview(preset, accent) => { root.preferences-appearance-preview(preset, accent); }
         save(preset, accent, developer-mode) => { root.preferences-save(preset, accent, developer-mode) }
         cancelled => { root.preferences-cancelled(); }
+        audio-refresh-targets => { root.preferences-audio-refresh-targets(); }
+        audio-select-output(client, port-l, port-r) => { root.preferences-audio-select-output(client, port-l, port-r); }
+        audio-select-buffer-size(i) => { root.preferences-audio-select-buffer-size(i); }
+        audio-auto-reconnect-toggled(v) => { root.preferences-audio-auto-reconnect-toggled(v); }
     }
     SavePresetDialog {
         width: parent.width;

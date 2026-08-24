@@ -1,0 +1,111 @@
+import { Theme } from "theme.slint";
+import { SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
+
+// One JACK client offered as an output destination, as the Rust side
+// discovers it from the live port graph.
+export struct OutputTargetRow {
+    client: string,
+    port-l: string,
+    port-r: string,
+    selected: bool,
+}
+
+component OutputTargetItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback picked();
+
+    height: 26px;
+    border-radius: 3px;
+    background: tap.pressed ? Theme.surface-active : root.selected ? Theme.accent-active : transparent;
+    Text {
+        x: 8px;
+        width: parent.width - 16px;
+        text: root.text;
+        color: Theme.text;
+        font-size: 11px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    tap := TouchArea { mouse-cursor: pointer; clicked => { root.picked(); } }
+}
+
+// The JACK-specific half of the Audio preferences page. A future ALSA
+// control surface is a sibling component next to this one, not a rewrite of
+// it, since the two drivers expose genuinely different controls (JACK has no
+// settable sample rate; ALSA has no server-wide buffer to warn about).
+export component JackControlSurface inherits VerticalLayout {
+    in property <[OutputTargetRow]> output-targets;
+    in property <[string]> buffer-size-options: ["64", "128", "256", "512", "1024", "2048"];
+    in property <int> buffer-size-index;
+    in property <string> sample-rate-text;
+    in property <bool> auto-reconnect;
+    in property <string> error;
+    callback refresh-targets();
+    callback select-output(string, string, string);
+    callback select-buffer-size(int);
+    callback auto-reconnect-toggled(bool);
+
+    spacing: 12px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        SectionLabel { text: "OUTPUT DEVICE"; }
+        Rectangle { horizontal-stretch: 1; }
+        ToolButton {
+            text: "Refresh";
+            tooltip: "Rescan the JACK graph for connectable destinations";
+            clicked => { root.refresh-targets(); }
+        }
+    }
+    Rectangle {
+        // Sized to its content rather than clipped to a fixed height: this
+        // page is already one scrollable region (see the ScrollView in
+        // appearance-dialog.slint), so the target list does not need its own
+        // nested scroll area too.
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: 3px;
+        VerticalLayout {
+            padding: 4px;
+            spacing: 2px;
+            if root.output-targets.length == 0 : Text {
+                text: "No connectable JACK inputs found.";
+                color: Theme.text-muted;
+                font-size: 10px;
+                height: 20px;
+            }
+            for target in root.output-targets : OutputTargetItem {
+                text: target.client;
+                selected: target.selected;
+                picked => { root.select-output(target.client, target.port-l, target.port-r); }
+            }
+        }
+    }
+
+    SectionLabel { text: "BUFFER SIZE"; }
+    SegmentedControl {
+        options: root.buffer-size-options;
+        selected-index: root.buffer-size-index;
+        selected(i) => { root.select-buffer-size(i); }
+    }
+    Text {
+        text: "Changes the buffer for every JACK client on this machine.";
+        color: Theme.text-faint;
+        font-size: 9px;
+        height: 12px;
+    }
+
+    SectionLabel { text: "SAMPLE RATE"; }
+    Text { text: root.sample-rate-text; color: Theme.text; font-size: 11px; height: 18px; }
+
+    ToggleButton {
+        text: "Auto-reconnect output";
+        tooltip: "Reconnects to the output above when it reappears on the JACK graph — for example after unplugging and replugging a device.";
+        checked: root.auto-reconnect;
+        toggled(v) => { root.auto-reconnect-toggled(v); }
+    }
+
+    if root.error != "" : Text { text: root.error; color: Theme.destructive; font-size: 10px; height: 18px; }
+}

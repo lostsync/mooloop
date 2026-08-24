@@ -2,7 +2,7 @@
 //!
 //! Workflow:
 //! ```no_run
-//! let (engine, mut handle) = mooloop_engine::Engine::new().unwrap();
+//! let (engine, mut handle) = mooloop_engine::Engine::new(Default::default()).unwrap();
 //! handle.send(mooloop_core::EngineCommand::Play);
 //! while let Some(ev) = handle.poll() { /* update UI */ }
 //! # let _ = engine;
@@ -11,15 +11,16 @@
 //! `Engine` owns the JACK `AsyncClient` and must stay alive for as long as the
 //! handle is used. Dropping `Engine` deactivates audio.
 
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use arc_swap::ArcSwapOption;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use jack::{AudioOut, Client, ClientOptions};
 use mooloop_core::{EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS};
 use mooloop_dsp::{AudioNode, DryAlign, SampleData};
 use rtrb::{Consumer, Producer};
 
+mod driver;
 mod graph;
 mod meters;
 mod offline;
@@ -30,6 +31,7 @@ mod transport;
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
 
+pub use driver::{AudioConfig, DriverStatus, OutputTarget};
 pub use meters::{BusMeters, DeviceMeters, PlayheadMeters};
 pub use offline::{
     ExportError, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, RenderSummary,
@@ -90,6 +92,8 @@ const QUEUE_CAPACITY: usize = 1024;
 const CLIENT_NAME: &str = "mooloop";
 const OUT_L_NAME: &str = "mooloop:out_l";
 const OUT_R_NAME: &str = "mooloop:out_r";
+const DEFAULT_OUTPUT_L: &str = "system:playback_1";
+const DEFAULT_OUTPUT_R: &str = "system:playback_2";
 
 #[derive(Debug)]
 pub enum Error {
@@ -112,7 +116,7 @@ impl std::error::Error for Error {}
 
 /// Keep-alive guard for the audio engine. Dropping this shuts down JACK.
 pub struct Engine {
-    _client: AsyncClient,
+    _client: Arc<AsyncClient>,
 }
 
 impl Engine {
@@ -120,10 +124,19 @@ impl Engine {
     /// start the realtime thread. All channel devices and the pattern bank are
     /// pre-allocated to pool size; every channel starts with an empty sample
     /// slot until the user loads a WAV or a project assigns one.
-    pub fn new() -> Result<(Engine, EngineHandle), Error> {
+    pub fn new(config: AudioConfig) -> Result<(Engine, EngineHandle), Error> {
         let (client, _status) = Client::new(CLIENT_NAME, ClientOptions::NO_START_SERVER)
             .map_err(|e| Error::ClientOpen(e.to_string()))?;
         let sample_rate = client.sample_rate();
+
+        if let Some(frames) = config.buffer_size {
+            if let Err(e) = client.set_buffer_size(frames) {
+                eprintln!(
+                    "mooloop: could not set JACK buffer size to {frames} frames ({e}); \
+                     leaving the server's current buffer size in place"
+                );
+            }
+        }
 
         let (cmd_tx, cmd_rx): (Producer<RealtimeCommand>, Consumer<RealtimeCommand>) =
             rtrb::RingBuffer::new(QUEUE_CAPACITY);
@@ -164,15 +177,30 @@ impl Engine {
         };
         let graph = Graph::new(io, Box::new(render), xrun_count.clone());
 
-        let async_client = client
-            .activate_async(graph::Notifications { xrun_count }, graph)
-            .map_err(|e| Error::Activate(e.to_string()))?;
+        let target = config
+            .output_target
+            .unwrap_or_else(|| (DEFAULT_OUTPUT_L.to_owned(), DEFAULT_OUTPUT_R.to_owned()));
+        let output_target = Arc::new(ArcSwap::from_pointee(target.clone()));
+        let auto_reconnect = Arc::new(AtomicBool::new(config.auto_reconnect));
 
-        // Best-effort: wire our outputs to system playback so the app is
-        // audible out of the box. User-configurable routing comes later.
+        let async_client = client
+            .activate_async(
+                graph::Notifications {
+                    xrun_count,
+                    auto_reconnect: auto_reconnect.clone(),
+                    target: output_target.clone(),
+                },
+                graph,
+            )
+            .map_err(|e| Error::Activate(e.to_string()))?;
+        let async_client = Arc::new(async_client);
+
+        // Best-effort: wire our outputs to the configured target so the app is
+        // audible out of the box. Auto-reconnect (if enabled) picks this back
+        // up whenever the JACK graph changes and this connection is missing.
         let c = async_client.as_client();
         let sources = [OUT_L_NAME, OUT_R_NAME];
-        let destinations = ["system:playback_1", "system:playback_2"];
+        let destinations = [target.0.as_str(), target.1.as_str()];
         for (src, dst) in sources.iter().zip(destinations.iter()) {
             match c.connect_ports_by_name(src, dst) {
                 Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
@@ -185,7 +213,7 @@ impl Engine {
 
         Ok((
             Engine {
-                _client: async_client,
+                _client: async_client.clone(),
             },
             EngineHandle {
                 cmd_tx,
@@ -197,6 +225,9 @@ impl Engine {
                 sample_slots,
                 sample_rate,
                 install_generation: 0,
+                client: async_client,
+                output_target,
+                auto_reconnect,
             },
         ))
     }
@@ -215,6 +246,9 @@ pub struct EngineHandle {
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     sample_rate: u32,
     install_generation: u64,
+    client: Arc<AsyncClient>,
+    output_target: Arc<ArcSwap<(String, String)>>,
+    auto_reconnect: Arc<AtomicBool>,
 }
 
 impl EngineHandle {
@@ -335,5 +369,82 @@ impl EngineHandle {
     /// work such as waveform peak generation.
     pub fn sample_snapshot(&self, channel: usize) -> Option<Arc<SampleData>> {
         self.sample_slots.get(channel)?.load_full()
+    }
+
+    /// JACK input ports grouped by owning client, as candidate output
+    /// destinations. A non-realtime JACK graph query; call it when the audio
+    /// preferences page opens or on an explicit refresh, not every frame.
+    pub fn available_output_targets(&self) -> Vec<OutputTarget> {
+        let jack_client = self.client.as_client();
+        let ports = jack_client.ports(None, None, jack::PortFlags::IS_INPUT);
+        let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
+        for port in ports {
+            let Some((client_name, _)) = port.split_once(':') else {
+                continue;
+            };
+            match grouped.iter_mut().find(|(name, _)| name == client_name) {
+                Some((_, ports)) => ports.push(port),
+                None => grouped.push((client_name.to_owned(), vec![port])),
+            }
+        }
+        grouped
+            .into_iter()
+            .filter_map(|(client, ports)| {
+                let mut ports = ports.into_iter();
+                let port_l = ports.next()?;
+                let port_r = ports.next()?;
+                Some(OutputTarget {
+                    client,
+                    port_l,
+                    port_r,
+                })
+            })
+            .collect()
+    }
+
+    /// Disconnect the previously configured output target (if connected) and
+    /// connect the new one, or the system default if `target` is `None`.
+    /// Non-realtime JACK calls; control-thread only.
+    pub fn set_output_target(&mut self, target: Option<(String, String)>) -> Result<(), String> {
+        let jack_client = self.client.as_client();
+        let previous = self.output_target.load_full();
+        let next = target
+            .unwrap_or_else(|| (DEFAULT_OUTPUT_L.to_owned(), DEFAULT_OUTPUT_R.to_owned()));
+        if *previous != next {
+            let _ = jack_client.disconnect_ports_by_name(OUT_L_NAME, &previous.0);
+            let _ = jack_client.disconnect_ports_by_name(OUT_R_NAME, &previous.1);
+        }
+        for (src, dst) in [(OUT_L_NAME, &next.0), (OUT_R_NAME, &next.1)] {
+            match jack_client.connect_ports_by_name(src, dst) {
+                Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
+                Err(e) => return Err(format!("could not connect {src} to {dst}: {e}")),
+            }
+        }
+        self.output_target.store(Arc::new(next));
+        Ok(())
+    }
+
+    /// Request a new JACK buffer size. This is server-wide: it changes the
+    /// buffer for every JACK client connected, not only mooloop.
+    pub fn set_buffer_size(&mut self, frames: u32) -> Result<(), String> {
+        self.client
+            .as_client()
+            .set_buffer_size(frames)
+            .map_err(|e| format!("could not change the JACK buffer size: {e}"))
+    }
+
+    /// Enable or disable retrying the configured output target when the JACK
+    /// port graph changes and the target is currently unconnected.
+    pub fn set_auto_reconnect(&mut self, enabled: bool) {
+        self.auto_reconnect.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Live driver state for populating the preferences dialog.
+    pub fn driver_status(&self) -> DriverStatus {
+        DriverStatus {
+            sample_rate: self.sample_rate,
+            buffer_size: self.client.as_client().buffer_size(),
+            current_target: (*self.output_target.load_full()).clone(),
+        }
     }
 }
