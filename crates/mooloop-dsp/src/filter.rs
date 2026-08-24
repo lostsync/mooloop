@@ -1,5 +1,19 @@
 //! Small filters shared by the synth voices. The sampler keeps its own
-//! inline per-voice filter math; new instruments use these.
+//! inline per-voice filter math rather than calling `Svf` directly, and this
+//! is a measured decision, not inertia: `Svf::next_sample`/`tick` recompute
+//! `g`/`damping`/`a1`/`a2`/`a3` (including a `tan()`) from cutoff/resonance
+//! on every call, and the sampler needs one shared coefficient set applied
+//! to both channels of a stereo frame, which is exactly what its inline
+//! version does — computing them once and ticking L/R against the same
+//! coefficients — while calling `Svf::next_sample` once per channel would
+//! recompute them twice. A synthetic benchmark isolating just this
+//! (32 voices, 4s of audio at 48 kHz, coefficients varying every 1000
+//! frames) measured shared-coefficient-per-frame at ~154ms versus
+//! per-channel-recompute at ~310ms — about 2x, dominated by the doubled
+//! `tan()`. `docs/plans/share-dsp-primitives/03-collapse-duplicate-implementations.md`
+//! asked for exactly this measurement before converting; this is the
+//! result. New instruments (mono, not stereo-per-voice) use `Svf` directly,
+//! where the doubling doesn't apply.
 
 /// A topology-preserving state-variable low-pass filter (Chamberlin/Zavalishin
 /// form). Unlike a biquad it stays well behaved while cutoff moves every

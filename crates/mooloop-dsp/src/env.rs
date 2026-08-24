@@ -2,6 +2,20 @@
 //! ADSR (parameterized directly from `SamplerParams`); these are the generic
 //! versions new instruments use.
 //!
+//! The sampler's copy is not a performance decision (its `advance`/`configure`
+//! are already scalar and cheap, character-identical to `Adsr`'s) — it's
+//! `note_on` that genuinely differs. `Adsr::note_on` deliberately does *not*
+//! reset `level` (see its doc comment: attacking from wherever the envelope
+//! already is, so a legato retrigger over a synth voice's own release tail
+//! doesn't click). The sampler's `trigger` always hard-resets — level,
+//! filter state, and playback position together — because a triggered voice
+//! restarts a *sample* from its start, including when `select_voice` steals
+//! an already-sounding voice; that's a fresh onset by design, not a legato
+//! retrigger. Swapping in `Adsr` as-is would silently change that: a stolen
+//! voice would attack from its previous level instead of zero. Kept
+//! separate for this reason, not measured cost — see `filter.rs`'s header
+//! for the sampler decision that *was* about cost.
+//!
 //! All envelopes are sample-based, allocation-free, and cheap enough to run
 //! per-sample on the realtime thread.
 
