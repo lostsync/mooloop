@@ -10,10 +10,11 @@
 # roughly 10 GB still available throughout, so it is the default; drop to
 # `-j 2` explicitly for a full `--workspace` run.
 jobs = 3
-# All task worktrees use this persistent cache instead of rebuilding Slint and
-# the dependency graph into a new target directory for every branch. Cargo
-# commands must remain sequential as required by AGENTS.md.
-target-dir = "/home/lost/projects/mooloop/target"
+# Keep build output portable across usernames and workstations. Cargo's TOML
+# configuration does not expand shell variables such as ${USER}; its default
+# workspace-local `target/` directory does. A workstation that needs a shared
+# cache across worktrees can set CARGO_TARGET_DIR in its machine-local shell
+# configuration. Cargo commands must remain sequential as required by AGENTS.md.
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
