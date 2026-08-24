@@ -114,6 +114,72 @@ impl Default for OnePoleHp {
     }
 }
 
+/// A one-pole low-pass filter: the tone/damping stage several effects
+/// reimplemented inline (drive's tilt, delay's feedback damping,
+/// modulation's tone control). Not for envelope-modulated cutoff sweeps —
+/// reach for [`Svf`] there, this is for smoothing a spectral tilt or damping
+/// a feedback path where the cutoff itself changes slowly if at all.
+#[derive(Clone, Copy, Debug)]
+pub struct OnePoleLp {
+    state: f32,
+    coeff: f32,
+}
+
+impl OnePoleLp {
+    pub fn new() -> Self {
+        Self {
+            state: 0.0,
+            coeff: 0.0,
+        }
+    }
+
+    pub fn set_cutoff(&mut self, cutoff_hz: f32, sample_rate: u32) {
+        let cutoff = cutoff_hz.clamp(10.0, sample_rate as f32 * 0.45);
+        self.coeff = 1.0 - (-core::f32::consts::TAU * cutoff / sample_rate as f32).exp();
+    }
+
+    pub fn reset(&mut self) {
+        self.state = 0.0;
+    }
+
+    pub fn next_sample(&mut self, input: f32) -> f32 {
+        self.state += (input - self.state) * self.coeff;
+        self.state
+    }
+}
+
+impl Default for OnePoleLp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A first-order all-pass stage: unity gain at every frequency, phase shift
+/// only. The building block of phaser stages, reverb diffusers, and
+/// fractional-delay interpolation. `coefficient` is supplied per call rather
+/// than stored, since callers like a phaser cascade recompute it every
+/// sample from a swept frequency.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AllPass {
+    z: f32,
+}
+
+impl AllPass {
+    pub fn new() -> Self {
+        Self { z: 0.0 }
+    }
+
+    pub fn reset(&mut self) {
+        self.z = 0.0;
+    }
+
+    pub fn next(&mut self, input: f32, coefficient: f32) -> f32 {
+        let output = -coefficient * input + self.z;
+        self.z = input + coefficient * output;
+        output
+    }
+}
+
 /// Soft saturation matching the sampler's drive stage: pre-gain into `tanh`
 /// with output compensation so low drive settings stay near unity gain.
 pub fn apply_drive(input: f32, drive: f32) -> f32 {
@@ -177,5 +243,60 @@ mod tests {
         let driven = apply_drive(0.25, 1.0);
         assert!(driven > 0.9);
         assert!(driven <= 1.0);
+    }
+
+    #[test]
+    fn one_pole_lp_attenuates_high_frequencies() {
+        let sr = 48_000;
+        let mut filter = OnePoleLp::new();
+        filter.set_cutoff(200.0, sr);
+        let mut peak = 0.0f32;
+        for i in 0..sr as usize {
+            let t = i as f32 / sr as f32;
+            let input = (t * 8_000.0 * core::f32::consts::TAU).sin();
+            let out = filter.next_sample(input);
+            if i > sr as usize / 2 {
+                peak = peak.max(out.abs());
+            }
+        }
+        assert!(peak < 0.05, "peak {peak}");
+    }
+
+    #[test]
+    fn one_pole_lp_passes_dc() {
+        let sr = 48_000;
+        let mut filter = OnePoleLp::new();
+        filter.set_cutoff(1_000.0, sr);
+        let mut last = 0.0;
+        for _ in 0..sr as usize {
+            last = filter.next_sample(1.0);
+        }
+        assert!((last - 1.0).abs() < 0.01, "dc settled at {last}");
+    }
+
+    #[test]
+    fn all_pass_preserves_energy_but_shifts_phase() {
+        let mut filter = AllPass::new();
+        let frames = 4_096;
+        let coefficient = 0.5;
+        let mut energy_in = 0.0f32;
+        let mut energy_out = 0.0f32;
+        let mut differs = false;
+        for i in 0..frames {
+            let input = (i as f32 * 0.05).sin();
+            let output = filter.next(input, coefficient);
+            if i > 64 {
+                energy_in += input * input;
+                energy_out += output * output;
+                if (input - output).abs() > 1e-3 {
+                    differs = true;
+                }
+            }
+        }
+        assert!(
+            (energy_in - energy_out).abs() < energy_in * 0.05,
+            "all-pass should preserve energy: in {energy_in}, out {energy_out}"
+        );
+        assert!(differs, "all-pass should shift phase, not pass through unchanged");
     }
 }

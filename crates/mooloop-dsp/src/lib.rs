@@ -11,8 +11,9 @@
 //!   (see `docs/EFFECTS_PLAN.md` and `docs/MODULATION_PLAN.md`).
 //! - [`align`]: the dry-path latency delay the engine's effect container
 //!   blends against.
-//! - [`env`], [`osc`], [`lfo`], [`filter`], [`shaper`], [`smooth`]: building
-//!   blocks shared by the synths and effects.
+//! - [`env`], [`osc`], [`lfo`], [`filter`], [`biquad`], [`scale`],
+//!   [`shaper`], [`smooth`]: building blocks shared by the synths and
+//!   effects.
 //!
 //! The synths implement `AudioNode` but are not yet wired into channels or
 //! the UI; that integration is a later step. Effects implement the same
@@ -20,6 +21,7 @@
 
 pub mod align;
 pub mod analysis;
+pub mod biquad;
 pub mod bus;
 pub mod delayline;
 pub mod drumsynth;
@@ -34,6 +36,7 @@ pub mod node;
 pub mod osc;
 pub mod polysynth;
 pub mod sampler;
+pub mod scale;
 pub mod shaper;
 pub mod smooth;
 
