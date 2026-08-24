@@ -41,8 +41,10 @@ or dependable production tool.
   chain, fader, pan, mute, and live meter, and can feed any other bus in any
   order. Selecting a bus points the device rack at it, so building a chain
   across a group of channels works exactly like building one on a channel.
-- Versioned song, kit, and channel-preset bundles with optional embedded
-  samples.
+- Versioned song, kit, channel, and generator-preset bundles with optional
+  embedded samples. Every UI setting is bounded to its persistable range, so
+  normal use cannot make a save fail; a malformed document instead identifies
+  its exact channel, parameter, and allowed range in a persistent error dialog.
 - Initial undo/redo for channel structure and piano-roll note edits; menu,
   keyboard, and channel context-menu actions share one command path.
 - Offline WAV and MP3 export.
