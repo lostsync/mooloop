@@ -16,6 +16,7 @@ pub enum EffectKind {
     Drive,
     Bitcrush,
     Delay,
+    Reverb,
     Gate,
     Compressor,
     Limiter,
@@ -23,12 +24,13 @@ pub enum EffectKind {
 
 impl EffectKind {
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 8] = [
+    pub const ALL: [EffectKind; 9] = [
         EffectKind::Eq,
         EffectKind::Filter,
         EffectKind::Drive,
         EffectKind::Bitcrush,
         EffectKind::Delay,
+        EffectKind::Reverb,
         EffectKind::Gate,
         EffectKind::Compressor,
         EffectKind::Limiter,
@@ -42,6 +44,7 @@ impl EffectKind {
             Self::Drive => "Drive",
             Self::Bitcrush => "Bitcrush",
             Self::Delay => "Delay",
+            Self::Reverb => "Reverb",
             Self::Gate => "Gate",
             Self::Compressor => "Comp",
             Self::Limiter => "Limiter",
@@ -57,6 +60,7 @@ impl EffectKind {
             Self::Drive => &DRIVE_DESCRIPTORS,
             Self::Bitcrush => &BITCRUSH_DESCRIPTORS,
             Self::Delay => &DELAY_DESCRIPTORS,
+            Self::Reverb => &REVERB_DESCRIPTORS,
             Self::Gate => &GATE_DESCRIPTORS,
             Self::Compressor => &COMPRESSOR_DESCRIPTORS,
             Self::Limiter => &LIMITER_DESCRIPTORS,
@@ -76,6 +80,7 @@ impl EffectKind {
             Self::Drive => EffectParams::Drive(DriveParams::default()),
             Self::Bitcrush => EffectParams::Bitcrush(BitcrushParams::default()),
             Self::Delay => EffectParams::Delay(DelayParams::default()),
+            Self::Reverb => EffectParams::Reverb(ReverbParams::default()),
             Self::Gate => EffectParams::Gate(GateParams::default()),
             Self::Compressor => EffectParams::Compressor(CompressorParams::default()),
             Self::Limiter => EffectParams::Limiter(LimiterParams::default()),
@@ -197,12 +202,60 @@ pub const EQ_PARAM_Q: u32 = 4;
 pub const EQ_PARAM_CHARACTER: u32 = 5;
 
 static EQ_DESCRIPTORS: [ParamDescriptor; 6] = [
-    ParamDescriptor { id: EQ_PARAM_TARGET, name: "Band", unit: "", min: 0.0, max: 8.0, curve: ParamCurve::Stepped(9), default: 1.0 },
-    ParamDescriptor { id: EQ_PARAM_ENABLED, name: "On", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Stepped(2), default: 1.0 },
-    ParamDescriptor { id: EQ_PARAM_FREQUENCY_HZ, name: "Freq", unit: "Hz", min: 20.0, max: 20_000.0, curve: ParamCurve::Exponential, default: 1_000.0 },
-    ParamDescriptor { id: EQ_PARAM_GAIN_DB, name: "Gain", unit: "dB", min: -18.0, max: 18.0, curve: ParamCurve::Linear, default: 0.0 },
-    ParamDescriptor { id: EQ_PARAM_Q, name: "Q", unit: "", min: 0.15, max: 18.0, curve: ParamCurve::Exponential, default: 0.707 },
-    ParamDescriptor { id: EQ_PARAM_CHARACTER, name: "Shape", unit: "", min: 0.0, max: 4.0, curve: ParamCurve::Stepped(5), default: 0.0 },
+    ParamDescriptor {
+        id: EQ_PARAM_TARGET,
+        name: "Band",
+        unit: "",
+        min: 0.0,
+        max: 8.0,
+        curve: ParamCurve::Stepped(9),
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: EQ_PARAM_ENABLED,
+        name: "On",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Stepped(2),
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: EQ_PARAM_FREQUENCY_HZ,
+        name: "Freq",
+        unit: "Hz",
+        min: 20.0,
+        max: 20_000.0,
+        curve: ParamCurve::Exponential,
+        default: 1_000.0,
+    },
+    ParamDescriptor {
+        id: EQ_PARAM_GAIN_DB,
+        name: "Gain",
+        unit: "dB",
+        min: -18.0,
+        max: 18.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: EQ_PARAM_Q,
+        name: "Q",
+        unit: "",
+        min: 0.15,
+        max: 18.0,
+        curve: ParamCurve::Exponential,
+        default: 0.707,
+    },
+    ParamDescriptor {
+        id: EQ_PARAM_CHARACTER,
+        name: "Shape",
+        unit: "",
+        min: 0.0,
+        max: 4.0,
+        curve: ParamCurve::Stepped(5),
+        default: 0.0,
+    },
 ];
 
 /// A band's response topology. The first and last default bands are shelves;
@@ -218,10 +271,18 @@ pub enum EqBandKind {
 
 impl EqBandKind {
     pub fn from_index(index: i32) -> Self {
-        match index { 1 => Self::LowShelf, 2 => Self::HighShelf, _ => Self::Bell }
+        match index {
+            1 => Self::LowShelf,
+            2 => Self::HighShelf,
+            _ => Self::Bell,
+        }
     }
     pub fn to_index(self) -> i32 {
-        match self { Self::Bell => 0, Self::LowShelf => 1, Self::HighShelf => 2 }
+        match self {
+            Self::Bell => 0,
+            Self::LowShelf => 1,
+            Self::HighShelf => 2,
+        }
     }
 }
 
@@ -236,8 +297,19 @@ pub enum EqQProfile {
 }
 
 impl EqQProfile {
-    pub fn from_index(index: i32) -> Self { if index >= 1 { Self::Proportional } else { Self::Constant } }
-    pub fn to_index(self) -> i32 { match self { Self::Constant => 0, Self::Proportional => 1 } }
+    pub fn from_index(index: i32) -> Self {
+        if index >= 1 {
+            Self::Proportional
+        } else {
+            Self::Constant
+        }
+    }
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Constant => 0,
+            Self::Proportional => 1,
+        }
+    }
 }
 
 /// One band in the seven-band EQ bank.
@@ -253,7 +325,14 @@ pub struct EqBand {
 
 impl EqBand {
     pub const fn bell(frequency_hz: f32) -> Self {
-        Self { enabled: false, kind: EqBandKind::Bell, frequency_hz, gain_db: 0.0, q: 0.707, q_profile: EqQProfile::Constant }
+        Self {
+            enabled: false,
+            kind: EqBandKind::Bell,
+            frequency_hz,
+            gain_db: 0.0,
+            q: 0.707,
+            q_profile: EqQProfile::Constant,
+        }
     }
 }
 
@@ -271,12 +350,32 @@ pub enum EqSlope {
 
 impl EqSlope {
     pub fn from_index(index: i32) -> Self {
-        match index { 1 => Self::Db12, 2 => Self::Db18, 3 => Self::Db24, 4 => Self::Db36, _ => Self::Db6 }
+        match index {
+            1 => Self::Db12,
+            2 => Self::Db18,
+            3 => Self::Db24,
+            4 => Self::Db36,
+            _ => Self::Db6,
+        }
     }
     pub fn to_index(self) -> i32 {
-        match self { Self::Db6 => 0, Self::Db12 => 1, Self::Db18 => 2, Self::Db24 => 3, Self::Db36 => 4 }
+        match self {
+            Self::Db6 => 0,
+            Self::Db12 => 1,
+            Self::Db18 => 2,
+            Self::Db24 => 3,
+            Self::Db36 => 4,
+        }
     }
-    pub fn stages(self) -> usize { match self { Self::Db6 => 1, Self::Db12 => 2, Self::Db18 => 3, Self::Db24 => 4, Self::Db36 => 6 } }
+    pub fn stages(self) -> usize {
+        match self {
+            Self::Db6 => 1,
+            Self::Db12 => 2,
+            Self::Db18 => 3,
+            Self::Db24 => 4,
+            Self::Db36 => 6,
+        }
+    }
 }
 
 /// Independent low- or high-pass cleanup filter.
@@ -289,8 +388,22 @@ pub struct EqPassFilter {
 }
 
 impl EqPassFilter {
-    const fn high_pass() -> Self { Self { enabled: false, frequency_hz: 30.0, q: 0.707, slope: EqSlope::Db12 } }
-    const fn low_pass() -> Self { Self { enabled: false, frequency_hz: 18_000.0, q: 0.707, slope: EqSlope::Db12 } }
+    const fn high_pass() -> Self {
+        Self {
+            enabled: false,
+            frequency_hz: 30.0,
+            q: 0.707,
+            slope: EqSlope::Db12,
+        }
+    }
+    const fn low_pass() -> Self {
+        Self {
+            enabled: false,
+            frequency_hz: 18_000.0,
+            q: 0.707,
+            slope: EqSlope::Db12,
+        }
+    }
 }
 
 /// Full persisted EQ state. `selected_target` is retained so reopening an EQ
@@ -307,15 +420,40 @@ pub struct EqParams {
     pub analyzer_enabled: bool,
 }
 
-const fn default_eq_selected_target() -> u8 { 1 }
+const fn default_eq_selected_target() -> u8 {
+    1
+}
 
 impl Default for EqParams {
     fn default() -> Self {
         let mut bands = [EqBand::bell(1_000.0); EQ_MAX_BANDS];
-        bands[0] = EqBand { enabled: true, kind: EqBandKind::LowShelf, frequency_hz: 120.0, gain_db: 0.0, q: 0.707, q_profile: EqQProfile::Constant };
-        bands[1] = EqBand { enabled: true, ..EqBand::bell(1_000.0) };
-        bands[2] = EqBand { enabled: true, kind: EqBandKind::HighShelf, frequency_hz: 8_000.0, gain_db: 0.0, q: 0.707, q_profile: EqQProfile::Constant };
-        Self { bands, high_pass: EqPassFilter::high_pass(), low_pass: EqPassFilter::low_pass(), selected_target: default_eq_selected_target(), analyzer_enabled: false }
+        bands[0] = EqBand {
+            enabled: true,
+            kind: EqBandKind::LowShelf,
+            frequency_hz: 120.0,
+            gain_db: 0.0,
+            q: 0.707,
+            q_profile: EqQProfile::Constant,
+        };
+        bands[1] = EqBand {
+            enabled: true,
+            ..EqBand::bell(1_000.0)
+        };
+        bands[2] = EqBand {
+            enabled: true,
+            kind: EqBandKind::HighShelf,
+            frequency_hz: 8_000.0,
+            gain_db: 0.0,
+            q: 0.707,
+            q_profile: EqQProfile::Constant,
+        };
+        Self {
+            bands,
+            high_pass: EqPassFilter::high_pass(),
+            low_pass: EqPassFilter::low_pass(),
+            selected_target: default_eq_selected_target(),
+            analyzer_enabled: false,
+        }
     }
 }
 
@@ -323,11 +461,17 @@ impl EqParams {
     pub const HIGH_PASS_TARGET: usize = EQ_MAX_BANDS;
     pub const LOW_PASS_TARGET: usize = EQ_MAX_BANDS + 1;
 
-    pub fn selected_target(self) -> usize { usize::from(self.selected_target).min(Self::LOW_PASS_TARGET) }
+    pub fn selected_target(self) -> usize {
+        usize::from(self.selected_target).min(Self::LOW_PASS_TARGET)
+    }
 
-    pub fn selected_band(self) -> Option<EqBand> { self.bands.get(self.selected_target()).copied() }
+    pub fn selected_band(self) -> Option<EqBand> {
+        self.bands.get(self.selected_target()).copied()
+    }
 
-    fn set_selected_target(&mut self, value: f32) { self.selected_target = value.round().clamp(0.0, Self::LOW_PASS_TARGET as f32) as u8; }
+    fn set_selected_target(&mut self, value: f32) {
+        self.selected_target = value.round().clamp(0.0, Self::LOW_PASS_TARGET as f32) as u8;
+    }
 }
 
 // --- Filter ----------------------------------------------------------------
@@ -725,6 +869,191 @@ impl Default for DelayParams {
     }
 }
 
+// --- Reverb ----------------------------------------------------------------
+
+/// `Event::ParamValue` ids for [`ReverbParams`].
+///
+/// These describe a generated room rather than a conventional feedback
+/// network. The control side turns the complete parameter set into a prepared
+/// impulse response; the realtime node only convolves against that response.
+pub const REVERB_PARAM_SHAPE: u32 = 0;
+pub const REVERB_PARAM_MATERIAL: u32 = 1;
+pub const REVERB_PARAM_WIDTH_M: u32 = 2;
+pub const REVERB_PARAM_DEPTH_M: u32 = 3;
+pub const REVERB_PARAM_HEIGHT_M: u32 = 4;
+pub const REVERB_PARAM_DECAY_S: u32 = 5;
+pub const REVERB_PARAM_CAPTURE_X: u32 = 6;
+pub const REVERB_PARAM_CAPTURE_Y: u32 = 7;
+
+static REVERB_DESCRIPTORS: [ParamDescriptor; 8] = [
+    ParamDescriptor {
+        id: REVERB_PARAM_SHAPE,
+        name: "Shape",
+        unit: "",
+        min: 0.0,
+        max: 2.0,
+        curve: ParamCurve::Stepped(3),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: REVERB_PARAM_MATERIAL,
+        name: "Material",
+        unit: "",
+        min: 0.0,
+        max: 3.0,
+        curve: ParamCurve::Stepped(4),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: REVERB_PARAM_WIDTH_M,
+        name: "Width",
+        unit: "m",
+        min: 2.0,
+        max: 30.0,
+        curve: ParamCurve::Exponential,
+        default: 6.0,
+    },
+    ParamDescriptor {
+        id: REVERB_PARAM_DEPTH_M,
+        name: "Depth",
+        unit: "m",
+        min: 2.0,
+        max: 50.0,
+        curve: ParamCurve::Exponential,
+        default: 8.0,
+    },
+    ParamDescriptor {
+        id: REVERB_PARAM_HEIGHT_M,
+        name: "Height",
+        unit: "m",
+        min: 2.0,
+        max: 20.0,
+        curve: ParamCurve::Exponential,
+        default: 3.2,
+    },
+    ParamDescriptor {
+        id: REVERB_PARAM_DECAY_S,
+        name: "Decay",
+        unit: "s",
+        min: 0.15,
+        max: 8.0,
+        curve: ParamCurve::Exponential,
+        default: 1.2,
+    },
+    ParamDescriptor {
+        id: REVERB_PARAM_CAPTURE_X,
+        name: "Mic X",
+        unit: "",
+        min: 0.05,
+        max: 0.95,
+        curve: ParamCurve::Linear,
+        default: 0.72,
+    },
+    ParamDescriptor {
+        id: REVERB_PARAM_CAPTURE_Y,
+        name: "Mic Y",
+        unit: "",
+        min: 0.05,
+        max: 0.95,
+        curve: ParamCurve::Linear,
+        default: 0.66,
+    },
+];
+
+/// Geometric family used by the room-IR generator. Dimensions remain explicit
+/// in every family; shape changes the reflection density and tail diffusion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReverbShape {
+    #[default]
+    Studio,
+    Chamber,
+    Hall,
+}
+
+impl ReverbShape {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Chamber,
+            2 => Self::Hall,
+            _ => Self::Studio,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Studio => 0,
+            Self::Chamber => 1,
+            Self::Hall => 2,
+        }
+    }
+}
+
+/// Broad wall absorption profiles used by the generated room. They alter both
+/// reflection loss and high-frequency decay before the IR reaches the player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReverbMaterial {
+    #[default]
+    Plaster,
+    Wood,
+    Brick,
+    Curtain,
+}
+
+impl ReverbMaterial {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Wood,
+            2 => Self::Brick,
+            3 => Self::Curtain,
+            _ => Self::Plaster,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Plaster => 0,
+            Self::Wood => 1,
+            Self::Brick => 2,
+            Self::Curtain => 3,
+        }
+    }
+}
+
+/// Parameters for the generated-room convolution reverb.
+///
+/// `capture_x` and `capture_y` are normalized room-plan coordinates. The
+/// source remains in a musically useful asymmetric fixed position so moving
+/// the capture point changes early timing and stereo perspective without
+/// turning the compact face into a full acoustic CAD tool.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReverbParams {
+    pub shape: ReverbShape,
+    pub material: ReverbMaterial,
+    pub width_m: f32,
+    pub depth_m: f32,
+    pub height_m: f32,
+    pub decay_s: f32,
+    pub capture_x: f32,
+    pub capture_y: f32,
+}
+
+impl Default for ReverbParams {
+    fn default() -> Self {
+        Self {
+            shape: ReverbShape::default(),
+            material: ReverbMaterial::default(),
+            width_m: 6.0,
+            depth_m: 8.0,
+            height_m: 3.2,
+            decay_s: 1.2,
+            capture_x: 0.72,
+            capture_y: 0.66,
+        }
+    }
+}
+
 // --- Dynamics --------------------------------------------------------------
 //
 // Gate, compressor, and limiter share the detector and gain computers in
@@ -968,6 +1297,7 @@ pub enum EffectParams {
     Drive(DriveParams),
     Bitcrush(BitcrushParams),
     Delay(DelayParams),
+    Reverb(ReverbParams),
     Gate(GateParams),
     Compressor(CompressorParams),
     Limiter(LimiterParams),
@@ -981,6 +1311,7 @@ impl EffectParams {
             Self::Drive(_) => EffectKind::Drive,
             Self::Bitcrush(_) => EffectKind::Bitcrush,
             Self::Delay(_) => EffectKind::Delay,
+            Self::Reverb(_) => EffectKind::Reverb,
             Self::Gate(_) => EffectKind::Gate,
             Self::Compressor(_) => EffectKind::Compressor,
             Self::Limiter(_) => EffectKind::Limiter,
@@ -1022,6 +1353,13 @@ impl EffectParams {
         }
     }
 
+    pub fn reverb(&self) -> Option<&ReverbParams> {
+        match self {
+            Self::Reverb(p) => Some(p),
+            _ => None,
+        }
+    }
+
     pub fn gate(&self) -> Option<&GateParams> {
         match self {
             Self::Gate(p) => Some(p),
@@ -1049,17 +1387,27 @@ impl EffectParams {
         match self {
             Self::Eq(p) => match id {
                 EQ_PARAM_TARGET => Some(f32::from(p.selected_target)),
-                EQ_PARAM_ENABLED => Some(if match p.selected_target() {
-                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].enabled,
-                    EqParams::HIGH_PASS_TARGET => p.high_pass.enabled,
-                    _ => p.low_pass.enabled,
-                } { 1.0 } else { 0.0 }),
+                EQ_PARAM_ENABLED => Some(
+                    if match p.selected_target() {
+                        0..EQ_MAX_BANDS => p.bands[p.selected_target()].enabled,
+                        EqParams::HIGH_PASS_TARGET => p.high_pass.enabled,
+                        _ => p.low_pass.enabled,
+                    } {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ),
                 EQ_PARAM_FREQUENCY_HZ => Some(match p.selected_target() {
                     0..EQ_MAX_BANDS => p.bands[p.selected_target()].frequency_hz,
                     EqParams::HIGH_PASS_TARGET => p.high_pass.frequency_hz,
                     _ => p.low_pass.frequency_hz,
                 }),
-                EQ_PARAM_GAIN_DB => Some(if p.selected_target() < EQ_MAX_BANDS { p.bands[p.selected_target()].gain_db } else { 0.0 }),
+                EQ_PARAM_GAIN_DB => Some(if p.selected_target() < EQ_MAX_BANDS {
+                    p.bands[p.selected_target()].gain_db
+                } else {
+                    0.0
+                }),
                 EQ_PARAM_Q => Some(match p.selected_target() {
                     0..EQ_MAX_BANDS => p.bands[p.selected_target()].q,
                     EqParams::HIGH_PASS_TARGET => p.high_pass.q,
@@ -1102,6 +1450,17 @@ impl EffectParams {
                 DELAY_PARAM_CROSS => Some(p.cross),
                 DELAY_PARAM_TONE => Some(p.tone),
                 DELAY_PARAM_MIX => Some(p.mix),
+                _ => None,
+            },
+            Self::Reverb(p) => match id {
+                REVERB_PARAM_SHAPE => Some(p.shape.to_index() as f32),
+                REVERB_PARAM_MATERIAL => Some(p.material.to_index() as f32),
+                REVERB_PARAM_WIDTH_M => Some(p.width_m),
+                REVERB_PARAM_DEPTH_M => Some(p.depth_m),
+                REVERB_PARAM_HEIGHT_M => Some(p.height_m),
+                REVERB_PARAM_DECAY_S => Some(p.decay_s),
+                REVERB_PARAM_CAPTURE_X => Some(p.capture_x),
+                REVERB_PARAM_CAPTURE_Y => Some(p.capture_y),
                 _ => None,
             },
             Self::Gate(p) => match id {
@@ -1149,7 +1508,9 @@ impl EffectParams {
                     _ => p.low_pass.frequency_hz = value,
                 },
                 EQ_PARAM_GAIN_DB => {
-                    if p.selected_target() < EQ_MAX_BANDS { p.bands[p.selected_target()].gain_db = value; }
+                    if p.selected_target() < EQ_MAX_BANDS {
+                        p.bands[p.selected_target()].gain_db = value;
+                    }
                 }
                 EQ_PARAM_Q => match p.selected_target() {
                     0..EQ_MAX_BANDS => p.bands[p.selected_target()].q = value,
@@ -1157,8 +1518,13 @@ impl EffectParams {
                     _ => p.low_pass.q = value,
                 },
                 EQ_PARAM_CHARACTER => match p.selected_target() {
-                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].q_profile = EqQProfile::from_index(value.round() as i32),
-                    EqParams::HIGH_PASS_TARGET => p.high_pass.slope = EqSlope::from_index(value.round() as i32),
+                    0..EQ_MAX_BANDS => {
+                        p.bands[p.selected_target()].q_profile =
+                            EqQProfile::from_index(value.round() as i32)
+                    }
+                    EqParams::HIGH_PASS_TARGET => {
+                        p.high_pass.slope = EqSlope::from_index(value.round() as i32)
+                    }
                     _ => p.low_pass.slope = EqSlope::from_index(value.round() as i32),
                 },
                 _ => return None,
@@ -1196,6 +1562,19 @@ impl EffectParams {
                 DELAY_PARAM_CROSS => p.cross = value,
                 DELAY_PARAM_TONE => p.tone = value,
                 DELAY_PARAM_MIX => p.mix = value,
+                _ => return None,
+            },
+            Self::Reverb(p) => match id {
+                REVERB_PARAM_SHAPE => p.shape = ReverbShape::from_index(value.round() as i32),
+                REVERB_PARAM_MATERIAL => {
+                    p.material = ReverbMaterial::from_index(value.round() as i32)
+                }
+                REVERB_PARAM_WIDTH_M => p.width_m = value,
+                REVERB_PARAM_DEPTH_M => p.depth_m = value,
+                REVERB_PARAM_HEIGHT_M => p.height_m = value,
+                REVERB_PARAM_DECAY_S => p.decay_s = value,
+                REVERB_PARAM_CAPTURE_X => p.capture_x = value,
+                REVERB_PARAM_CAPTURE_Y => p.capture_y = value,
                 _ => return None,
             },
             Self::Gate(p) => match id {
@@ -1260,9 +1639,15 @@ pub struct EffectSlotState {
     pub output_trim: f32,
 }
 
-fn default_wet_dry() -> f32 { 1.0 }
-fn default_input_trim() -> f32 { 1.0 }
-fn default_output_trim() -> f32 { 1.0 }
+fn default_wet_dry() -> f32 {
+    1.0
+}
+fn default_input_trim() -> f32 {
+    1.0
+}
+fn default_output_trim() -> f32 {
+    1.0
+}
 
 impl EffectSlotState {
     pub fn new(params: EffectParams) -> Self {
@@ -1370,9 +1755,9 @@ mod tests {
         for kind in EffectKind::ALL {
             let params = kind.default_params();
             for descriptor in kind.descriptors() {
-                let actual = params
-                    .get(descriptor.id)
-                    .unwrap_or_else(|| panic!("{}/{} has no getter", kind.label(), descriptor.name));
+                let actual = params.get(descriptor.id).unwrap_or_else(|| {
+                    panic!("{}/{} has no getter", kind.label(), descriptor.name)
+                });
                 assert!(
                     (actual - descriptor.default).abs() <= 1e-4,
                     "{}/{}: descriptor says {}, params say {actual}",
@@ -1405,7 +1790,10 @@ mod tests {
     #[test]
     fn set_clamps_through_the_descriptor() {
         let mut params = EffectParams::Filter(FilterParams::default());
-        assert_eq!(params.set(FILTER_PARAM_CUTOFF_HZ, 1_000_000.0), Some(20_000.0));
+        assert_eq!(
+            params.set(FILTER_PARAM_CUTOFF_HZ, 1_000_000.0),
+            Some(20_000.0)
+        );
         assert_eq!(params.set(FILTER_PARAM_RESONANCE, -5.0), Some(0.0));
         assert_eq!(params.set(99, 1.0), None);
 

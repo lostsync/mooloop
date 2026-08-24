@@ -43,8 +43,9 @@ pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;
 pub use effects::{
-    build_effect, BitcrushEffect, CompressorEffect, DelayEffect, DriveEffect, FilterEffect,
-    GateEffect, LimiterEffect,
+    build_effect, generate_room_ir, BitcrushEffect, CompressorEffect, DelayEffect, DriveEffect,
+    FilterEffect, GateEffect, LimiterEffect, PreparedIr, ReverbEffect, StereoIr,
+    CONVOLUTION_BLOCK_FRAMES,
 };
 pub use event::{Event, EventList, TimedEvent};
 pub use monosynth::MonoSynth;
