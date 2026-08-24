@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterFader, ParameterKnob, SelectorBank, ToolButton, ValueScale } from "controls.slint";
+import { ParameterFader, ParameterKnob, SelectorBank, ToolButton, ValueScale, ZoomScrollBar } from "controls.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
@@ -77,6 +77,10 @@ export component SamplerDeviceFace inherits Rectangle {
     in-out property <[float]> waveform;
     in-out property <bool> can-previous-sample;
     in-out property <bool> can-next-sample;
+    // Pure view state: which slice of the sample the waveform is
+    // zoomed/scrolled to. Not sent to the engine, not persisted.
+    in-out property <float> waveform-view-offset: 0;
+    in-out property <float> waveform-view-visible-fraction: 1;
 
     callback attack-changed(float);
     callback decay-changed(float);
@@ -104,6 +108,14 @@ export component SamplerDeviceFace inherits Rectangle {
     callback load-sample-clicked();
     callback previous-sample-clicked();
     callback next-sample-clicked();
+    callback waveform-view-changed(float, float);
+
+    // Maps a position normalized against the whole sample (0..1) to a
+    // position normalized against the currently visible zoom window, for
+    // markers/playhead drawn over the (possibly windowed) waveform bars.
+    pure function to-view(pos: float) -> float {
+        return (pos - root.waveform-view-offset) / max(0.0001, root.waveform-view-visible-fraction);
+    }
 
     VerticalLayout {
         padding: 6px;
@@ -176,18 +188,18 @@ export component SamplerDeviceFace inherits Rectangle {
                     background: Theme.border; opacity: 0.45;
                 }
                 Rectangle {
-                    width: clamp(root.start-pos, 0, 1) * parent.width;
+                    width: clamp(root.to-view(root.start-pos), 0, 1) * parent.width;
                     height: parent.height; background: Theme.background; opacity: 0.66;
                 }
                 Rectangle {
-                    x: clamp(root.end-pos, 0, 1) * parent.width;
+                    x: clamp(root.to-view(root.end-pos), 0, 1) * parent.width;
                     width: parent.width - self.x;
                     height: parent.height; background: Theme.background; opacity: 0.66;
                 }
                 if root.loop-mode != 0 : Rectangle {
-                    x: clamp(root.loop-start, root.start-pos, root.end-pos) * parent.width;
-                    width: max(1px, (clamp(root.loop-end, root.start-pos, root.end-pos)
-                        - clamp(root.loop-start, root.start-pos, root.end-pos)) * parent.width);
+                    x: clamp(root.to-view(clamp(root.loop-start, root.start-pos, root.end-pos)), 0, 1) * parent.width;
+                    width: max(1px, (clamp(root.to-view(clamp(root.loop-end, root.start-pos, root.end-pos)), 0, 1)
+                        - clamp(root.to-view(clamp(root.loop-start, root.start-pos, root.end-pos)), 0, 1)) * parent.width);
                     height: parent.height; background: Theme.accent-active; opacity: 0.32;
                 }
                 Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border; }
@@ -199,30 +211,57 @@ export component SamplerDeviceFace inherits Rectangle {
                     background: Theme.text-muted;
                 }
                 SampleMarker {
-                    x: clamp(root.start-pos, 0, 1) * (parent.width - 1px); height: parent.height;
+                    x: clamp(root.to-view(root.start-pos), 0, 1) * (parent.width - 1px); height: parent.height;
+                    opacity: root.to-view(root.start-pos) >= 0 && root.to-view(root.start-pos) <= 1 ? 1.0 : 0.0;
                     editor-width: parent.width; marker-label: "S"; marker-color: Theme.accent;
                     moved(v) => {
-                        root.start-pos = min(v, root.end-pos - 0.001); root.start-pos-changed(root.start-pos);
+                        let abs = root.waveform-view-offset + v * root.waveform-view-visible-fraction;
+                        root.start-pos = min(abs, root.end-pos - 0.001); root.start-pos-changed(root.start-pos);
                         if (root.loop-start < root.start-pos) { root.loop-start = root.start-pos; root.loop-start-changed(root.loop-start); }
                     }
                 }
                 SampleMarker {
-                    x: clamp(root.end-pos, 0, 1) * (parent.width - 1px); height: parent.height;
+                    x: clamp(root.to-view(root.end-pos), 0, 1) * (parent.width - 1px); height: parent.height;
+                    opacity: root.to-view(root.end-pos) >= 0 && root.to-view(root.end-pos) <= 1 ? 1.0 : 0.0;
                     editor-width: parent.width; marker-label: "E"; marker-color: Theme.accent; label-at-bottom: true;
                     moved(v) => {
-                        root.end-pos = max(v, root.start-pos + 0.001); root.end-pos-changed(root.end-pos);
+                        let abs = root.waveform-view-offset + v * root.waveform-view-visible-fraction;
+                        root.end-pos = max(abs, root.start-pos + 0.001); root.end-pos-changed(root.end-pos);
                         if (root.loop-end > root.end-pos) { root.loop-end = root.end-pos; root.loop-end-changed(root.loop-end); }
                     }
                 }
                 SampleMarker {
-                    x: clamp(root.loop-start, 0, 1) * (parent.width - 1px); height: parent.height;
+                    x: clamp(root.to-view(root.loop-start), 0, 1) * (parent.width - 1px); height: parent.height;
+                    opacity: root.to-view(root.loop-start) >= 0 && root.to-view(root.loop-start) <= 1 ? 1.0 : 0.0;
                     editor-width: parent.width; marker-label: "L"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning; label-at-bottom: true;
-                    moved(v) => { root.loop-start = clamp(v, root.start-pos, root.loop-end - 0.001); root.loop-start-changed(root.loop-start); }
+                    moved(v) => {
+                        let abs = root.waveform-view-offset + v * root.waveform-view-visible-fraction;
+                        root.loop-start = clamp(abs, root.start-pos, root.loop-end - 0.001); root.loop-start-changed(root.loop-start);
+                    }
                 }
                 SampleMarker {
-                    x: clamp(root.loop-end, 0, 1) * (parent.width - 1px); height: parent.height;
+                    x: clamp(root.to-view(root.loop-end), 0, 1) * (parent.width - 1px); height: parent.height;
+                    opacity: root.to-view(root.loop-end) >= 0 && root.to-view(root.loop-end) <= 1 ? 1.0 : 0.0;
                     editor-width: parent.width; marker-label: "R"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning;
-                    moved(v) => { root.loop-end = clamp(v, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end); }
+                    moved(v) => {
+                        let abs = root.waveform-view-offset + v * root.waveform-view-visible-fraction;
+                        root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
+                    }
+                }
+            }
+
+            ZoomScrollBar {
+                height: 12px;
+                offset: root.waveform-view-offset;
+                visible-fraction: root.waveform-view-visible-fraction;
+                scrolled(v) => {
+                    root.waveform-view-offset = v;
+                    root.waveform-view-changed(root.waveform-view-offset, root.waveform-view-visible-fraction);
+                }
+                zoomed(o, f) => {
+                    root.waveform-view-offset = o;
+                    root.waveform-view-visible-fraction = f;
+                    root.waveform-view-changed(o, f);
                 }
             }
 

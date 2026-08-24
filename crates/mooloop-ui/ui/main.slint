@@ -391,7 +391,10 @@ export component MainWindow inherits Window {
     in-out property <[float]> waveform;
     in-out property <bool> can-previous-sample;
     in-out property <bool> can-next-sample;
+    in-out property <float> waveform-view-offset;
+    in-out property <float> waveform-view-visible-fraction: 1;
 
+    callback waveform-view-changed(float, float);
     callback attack-changed(float);
     callback decay-changed(float);
     callback sustain-changed(float);
@@ -1784,6 +1787,9 @@ export component MainWindow inherits Window {
                                             waveform <=> root.waveform;
                                             can-previous-sample <=> root.can-previous-sample;
                                             can-next-sample <=> root.can-next-sample;
+                                            waveform-view-offset <=> root.waveform-view-offset;
+                                            waveform-view-visible-fraction <=> root.waveform-view-visible-fraction;
+                                            waveform-view-changed(o, f) => { root.waveform-view-changed(o, f); }
                                             attack-changed(v) => { root.attack-changed(v); }
                                             decay-changed(v) => { root.decay-changed(v); }
                                             sustain-changed(v) => { root.sustain-changed(v); }

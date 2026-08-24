@@ -1612,6 +1612,11 @@ impl UiState {
         window.set_sample_description(ch.sample_description.as_str().into());
         window.set_sample_duration(ch.sample_duration);
         self.waveform_model.set_vec(ch.waveform.clone());
+        // A newly selected channel's waveform view starts fully zoomed out;
+        // a stale zoom window from the previous channel would otherwise
+        // misalign against this one's sample length.
+        window.set_waveform_view_offset(0.0);
+        window.set_waveform_view_visible_fraction(1.0);
         window.set_can_previous_sample(ch.can_previous_sample);
         window.set_can_next_sample(ch.can_next_sample);
         window.set_attack(time_to_norm(p.attack));
@@ -3916,6 +3921,31 @@ impl AppUi {
         wire_unit_param!(on_rate_reduction_changed, rate_reduction);
 
         {
+            // Pure view state: re-bin the waveform for whatever range is
+            // now visible so zooming in reveals real detail rather than
+            // just stretching the full-sample overview's fixed bins.
+            let st = state.clone();
+            window.on_waveform_view_changed(move |offset: f32, visible_fraction: f32| {
+                let st = st.borrow();
+                let Some(channel) = st.channels.get(st.selected) else {
+                    return;
+                };
+                let Some(sample) = channel.sample_data.as_ref() else {
+                    return;
+                };
+                let total = sample.frames.len();
+                if total == 0 {
+                    return;
+                }
+                let start = (offset.clamp(0.0, 1.0) * total as f32).round() as usize;
+                let span = (visible_fraction.max(0.0) * total as f32).round().max(1.0) as usize;
+                let end = (start + span).min(total);
+                st.waveform_model
+                    .set_vec(waveform_peaks_windowed(sample, WAVEFORM_BINS, start, end));
+            });
+        }
+
+        {
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_reverse_playback_changed(move |reverse| {
@@ -5434,15 +5464,35 @@ fn load_sample_at_path(path: &Path) -> Result<LoadedSample, String> {
 }
 
 fn waveform_peaks(sample: &SampleData, max_bins: usize) -> Vec<f32> {
-    if sample.frames.is_empty() || max_bins == 0 {
+    peaks_from_frames(&sample.frames, max_bins)
+}
+
+/// Like `waveform_peaks`, but bins only the frames in `[start_frame,
+/// end_frame)`. Used to re-derive real detail for whatever range the
+/// waveform view is zoomed/scrolled to, rather than just stretching the
+/// full-sample overview's fixed bins.
+fn waveform_peaks_windowed(
+    sample: &SampleData,
+    max_bins: usize,
+    start_frame: usize,
+    end_frame: usize,
+) -> Vec<f32> {
+    let len = sample.frames.len();
+    let start = start_frame.min(len);
+    let end = end_frame.clamp(start, len);
+    peaks_from_frames(&sample.frames[start..end], max_bins)
+}
+
+fn peaks_from_frames(frames: &[[f32; 2]], max_bins: usize) -> Vec<f32> {
+    if frames.is_empty() || max_bins == 0 {
         return Vec::new();
     }
-    let bins = max_bins.min(sample.frames.len());
+    let bins = max_bins.min(frames.len());
     let mut peaks = (0..bins)
         .map(|bin| {
-            let start = bin * sample.frames.len() / bins;
-            let end = ((bin + 1) * sample.frames.len() / bins).max(start + 1);
-            sample.frames[start..end]
+            let start = bin * frames.len() / bins;
+            let end = ((bin + 1) * frames.len() / bins).max(start + 1);
+            frames[start..end]
                 .iter()
                 .map(|frame| frame[0].abs().max(frame[1].abs()))
                 .fold(0.0f32, f32::max)
