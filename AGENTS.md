@@ -47,6 +47,14 @@ dirty and the changes are not part of the task you're about to start:
 Leaving uncommitted work behind while moving on to something else is the
 exact failure mode this file exists to prevent.
 
+### Documentation exception
+
+An untracked Markdown file directly under `docs/` may be treated as an
+intentional project note: inspect it, then add and commit it with the current
+documentation work without asking for separate confirmation. This exception
+does not apply to modified files, files outside `docs/`, generated artifacts,
+or any non-Markdown content.
+
 ## One task = one branch = one worktree
 
 Never do a task's work directly on `main`, and never do two unrelated
