@@ -138,6 +138,17 @@ impl OnePoleLp {
         self.coeff = 1.0 - (-core::f32::consts::TAU * cutoff / sample_rate as f32).exp();
     }
 
+    /// Set the leak coefficient directly, bypassing the Hz mapping. For a
+    /// caller that already smooths the coefficient itself rather than a
+    /// cutoff control (see `DelayEffect`'s damping, which smooths this value
+    /// directly to skip a `powf` per sample — the coefficient is bounded in
+    /// `[0, 1]` at both ends of that ramp, so interpolating it directly
+    /// can't destabilize the filter the way interpolating a biquad's
+    /// coefficients can).
+    pub fn set_coeff(&mut self, coeff: f32) {
+        self.coeff = coeff.clamp(0.0, 1.0);
+    }
+
     pub fn reset(&mut self) {
         self.state = 0.0;
     }
@@ -272,6 +283,19 @@ mod tests {
             last = filter.next_sample(1.0);
         }
         assert!((last - 1.0).abs() < 0.01, "dc settled at {last}");
+    }
+
+    #[test]
+    fn set_coeff_matches_the_equivalent_set_cutoff() {
+        let sr = 48_000;
+        let mut via_cutoff = OnePoleLp::new();
+        via_cutoff.set_cutoff(1_000.0, sr);
+        let mut via_coeff = OnePoleLp::new();
+        via_coeff.set_coeff(1.0 - (-core::f32::consts::TAU * 1_000.0 / sr as f32).exp());
+        for i in 0..64 {
+            let input = (i as f32 * 0.1).sin();
+            assert_eq!(via_cutoff.next_sample(input), via_coeff.next_sample(input));
+        }
     }
 
     #[test]
