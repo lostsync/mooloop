@@ -16,11 +16,17 @@ use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, MIN_READ_OFFSET};
 use crate::event::{Event, EventList};
 use crate::node::{AudioNode, ProcessContext};
+use crate::smooth::Smoothed;
 
 const MAX_DELAY_MS: f32 = 64.0;
 const MAX_PHASER_STAGES: usize = 12;
 const TONE_MIN_HZ: f32 = 350.0;
 const TONE_MAX_HZ: f32 = 20_000.0;
+/// Time constant for depth, feedback, spread, tone, and color: all continuous
+/// and audible, all currently stepped once per block on every knob move.
+/// Rate is deliberately excluded — it feeds a phase increment, so a step in
+/// rate is not a step in output. Stages and mode are discrete.
+const PARAM_SMOOTH_S: f32 = 0.01;
 
 pub struct ModulationEffect {
     params: ModulationParams,
@@ -33,6 +39,11 @@ pub struct ModulationEffect {
     tone_r: f32,
     phaser_l: [AllPass; MAX_PHASER_STAGES],
     phaser_r: [AllPass; MAX_PHASER_STAGES],
+    depth: Smoothed,
+    feedback: Smoothed,
+    spread: Smoothed,
+    tone: Smoothed,
+    color: Smoothed,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -50,6 +61,7 @@ impl AllPass {
 
 impl ModulationEffect {
     pub fn new(params: ModulationParams, sample_rate: u32) -> Self {
+        let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, sample_rate);
         Self {
             params,
             sample_rate,
@@ -61,6 +73,11 @@ impl ModulationEffect {
             tone_r: 0.0,
             phaser_l: [AllPass::default(); MAX_PHASER_STAGES],
             phaser_r: [AllPass::default(); MAX_PHASER_STAGES],
+            depth: smoothed(params.depth.clamp(0.0, 1.0)),
+            feedback: smoothed(params.feedback.clamp(-0.92, 0.92)),
+            spread: smoothed(params.spread.clamp(0.0, 1.0)),
+            tone: smoothed(params.tone.clamp(0.0, 1.0)),
+            color: smoothed(params.color.clamp(0.0, 1.0)),
         }
     }
 
@@ -68,8 +85,15 @@ impl ModulationEffect {
         self.params
     }
 
+    /// Replace the parameter set wholesale (project load) — jump straight to
+    /// the new values, there is nothing to click coming from a fresh load.
     pub fn set_params(&mut self, params: ModulationParams) {
         self.params = params;
+        self.depth.reset_to(params.depth.clamp(0.0, 1.0));
+        self.feedback.reset_to(params.feedback.clamp(-0.92, 0.92));
+        self.spread.reset_to(params.spread.clamp(0.0, 1.0));
+        self.tone.reset_to(params.tone.clamp(0.0, 1.0));
+        self.color.reset_to(params.color.clamp(0.0, 1.0));
     }
 
     fn apply_param(&mut self, id: u32, value: f32) {
@@ -78,11 +102,26 @@ impl ModulationEffect {
                 self.params.mode = ModulationMode::from_index(value.round() as i32)
             }
             MODULATION_PARAM_RATE_HZ => self.params.rate_hz = value.clamp(0.02, 12.0),
-            MODULATION_PARAM_DEPTH => self.params.depth = value.clamp(0.0, 1.0),
-            MODULATION_PARAM_COLOR => self.params.color = value.clamp(0.0, 1.0),
-            MODULATION_PARAM_FEEDBACK => self.params.feedback = value.clamp(-0.92, 0.92),
-            MODULATION_PARAM_SPREAD => self.params.spread = value.clamp(0.0, 1.0),
-            MODULATION_PARAM_TONE => self.params.tone = value.clamp(0.0, 1.0),
+            MODULATION_PARAM_DEPTH => {
+                self.params.depth = value.clamp(0.0, 1.0);
+                self.depth.set_target(self.params.depth);
+            }
+            MODULATION_PARAM_COLOR => {
+                self.params.color = value.clamp(0.0, 1.0);
+                self.color.set_target(self.params.color);
+            }
+            MODULATION_PARAM_FEEDBACK => {
+                self.params.feedback = value.clamp(-0.92, 0.92);
+                self.feedback.set_target(self.params.feedback);
+            }
+            MODULATION_PARAM_SPREAD => {
+                self.params.spread = value.clamp(0.0, 1.0);
+                self.spread.set_target(self.params.spread);
+            }
+            MODULATION_PARAM_TONE => {
+                self.params.tone = value.clamp(0.0, 1.0);
+                self.tone.set_target(self.params.tone);
+            }
             MODULATION_PARAM_STAGES => self.params.stages = value.round().clamp(4.0, 12.0) as u8,
             _ => {}
         }
@@ -90,10 +129,19 @@ impl ModulationEffect {
 
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         for i in start..end {
+            let depth = self.depth.advance();
+            let feedback = self.feedback.advance();
+            let spread = self.spread.advance();
+            let tone = self.tone.advance();
+            let color = self.color.advance();
             let (input_l, input_r) = (bus.l[i], bus.r[i]);
             let (wet_l, wet_r) = match self.params.mode {
-                ModulationMode::Phaser => self.phaser_sample(input_l, input_r),
-                mode => self.delay_sample(input_l, input_r, mode),
+                ModulationMode::Phaser => {
+                    self.phaser_sample(input_l, input_r, feedback, spread, depth, color, tone)
+                }
+                mode => {
+                    self.delay_sample(input_l, input_r, mode, depth, feedback, spread, color, tone)
+                }
             };
             bus.l[i] = wet_l;
             bus.r[i] = wet_r;
@@ -102,26 +150,25 @@ impl ModulationEffect {
         }
     }
 
-    fn delay_sample(&mut self, input_l: f32, input_r: f32, mode: ModulationMode) -> (f32, f32) {
+    #[allow(clippy::too_many_arguments)]
+    fn delay_sample(
+        &mut self,
+        input_l: f32,
+        input_r: f32,
+        mode: ModulationMode,
+        depth: f32,
+        feedback: f32,
+        spread: f32,
+        color: f32,
+        tone: f32,
+    ) -> (f32, f32) {
         let lfo_l = (self.phase * core::f32::consts::TAU).sin();
-        let lfo_r = ((self.phase + self.params.spread * 0.25) * core::f32::consts::TAU).sin();
+        let lfo_r = ((self.phase + spread * 0.25) * core::f32::consts::TAU).sin();
         let (base_ms, swing_ms) = match mode {
-            ModulationMode::Chorus => (
-                8.0 + 18.0 * self.params.color,
-                0.5 + 10.0 * self.params.depth,
-            ),
-            ModulationMode::Flange => (
-                0.7 + 5.0 * self.params.color,
-                0.15 + 5.5 * self.params.depth,
-            ),
-            ModulationMode::Ensemble => (
-                6.0 + 14.0 * self.params.color,
-                1.0 + 8.0 * self.params.depth,
-            ),
-            ModulationMode::Adt => (
-                14.0 + 28.0 * self.params.color,
-                0.08 + 2.5 * self.params.depth,
-            ),
+            ModulationMode::Chorus => (8.0 + 18.0 * color, 0.5 + 10.0 * depth),
+            ModulationMode::Flange => (0.7 + 5.0 * color, 0.15 + 5.5 * depth),
+            ModulationMode::Ensemble => (6.0 + 14.0 * color, 1.0 + 8.0 * depth),
+            ModulationMode::Adt => (14.0 + 28.0 * color, 0.08 + 2.5 * depth),
             ModulationMode::Phaser => unreachable!(),
         };
         let to_frames = |ms: f32| {
@@ -148,49 +195,55 @@ impl ModulationEffect {
         }
         self.feedback_l = wet_l;
         self.feedback_r = wet_r;
-        let cross = self.params.spread * 0.35;
+        let cross = spread * 0.35;
         self.line.write(
-            input_l
-                + self.params.feedback
-                    * (self.feedback_l * (1.0 - cross) + self.feedback_r * cross),
-            input_r
-                + self.params.feedback
-                    * (self.feedback_r * (1.0 - cross) + self.feedback_l * cross),
+            input_l + feedback * (self.feedback_l * (1.0 - cross) + self.feedback_r * cross),
+            input_r + feedback * (self.feedback_r * (1.0 - cross) + self.feedback_l * cross),
         );
-        self.tone_filter(wet_l, wet_r)
+        self.tone_filter(wet_l, wet_r, tone)
     }
 
-    fn phaser_sample(&mut self, input_l: f32, input_r: f32) -> (f32, f32) {
-        let spread_phase = self.phase + self.params.spread * 0.25;
+    #[allow(clippy::too_many_arguments)]
+    fn phaser_sample(
+        &mut self,
+        input_l: f32,
+        input_r: f32,
+        feedback: f32,
+        spread: f32,
+        depth: f32,
+        color: f32,
+        tone: f32,
+    ) -> (f32, f32) {
+        let spread_phase = self.phase + spread * 0.25;
         let sweep_l = (self.phase * core::f32::consts::TAU).sin();
         let sweep_r = (spread_phase * core::f32::consts::TAU).sin();
         let stages = usize::from(self.params.stages).clamp(4, MAX_PHASER_STAGES);
-        let mut left = input_l + self.feedback_l * self.params.feedback;
-        let mut right = input_r + self.feedback_r * self.params.feedback;
+        let mut left = input_l + self.feedback_l * feedback;
+        let mut right = input_r + self.feedback_r * feedback;
         for stage in 0..stages {
             let tilt = (stage as f32 / (stages - 1).max(1) as f32 - 0.5) * 1.1;
             left = self.phaser_l[stage].next(
                 left,
-                allpass_coefficient(self.phaser_hz(sweep_l + tilt), self.sample_rate),
+                allpass_coefficient(self.phaser_hz(sweep_l + tilt, depth, color), self.sample_rate),
             );
             right = self.phaser_r[stage].next(
                 right,
-                allpass_coefficient(self.phaser_hz(sweep_r + tilt), self.sample_rate),
+                allpass_coefficient(self.phaser_hz(sweep_r + tilt, depth, color), self.sample_rate),
             );
         }
         self.feedback_l = left;
         self.feedback_r = right;
-        self.tone_filter(left, right)
+        self.tone_filter(left, right, tone)
     }
 
-    fn phaser_hz(&self, lfo: f32) -> f32 {
-        let center = 220.0 * 28.0f32.powf(self.params.color);
-        let octaves = 0.15 + self.params.depth * 2.2;
+    fn phaser_hz(&self, lfo: f32, depth: f32, color: f32) -> f32 {
+        let center = 220.0 * 28.0f32.powf(color);
+        let octaves = 0.15 + depth * 2.2;
         (center * 2.0f32.powf(lfo * octaves)).clamp(60.0, self.sample_rate as f32 * 0.42)
     }
 
-    fn tone_filter(&mut self, left: f32, right: f32) -> (f32, f32) {
-        let hz = TONE_MIN_HZ * (TONE_MAX_HZ / TONE_MIN_HZ).powf(self.params.tone);
+    fn tone_filter(&mut self, left: f32, right: f32, tone: f32) -> (f32, f32) {
+        let hz = TONE_MIN_HZ * (TONE_MAX_HZ / TONE_MIN_HZ).powf(tone);
         let coefficient = (1.0
             - (-core::f32::consts::TAU * hz / self.sample_rate.max(1) as f32).exp())
         .clamp(0.0, 1.0);
@@ -217,7 +270,15 @@ impl AudioNode for ModulationEffect {
         events_in: &EventList,
         _events_out: Option<&mut EventList>,
     ) {
-        self.sample_rate = ctx.sample_rate.max(1);
+        let sample_rate = ctx.sample_rate.max(1);
+        if sample_rate != self.sample_rate {
+            self.sample_rate = sample_rate;
+            self.depth.set_time(PARAM_SMOOTH_S, sample_rate);
+            self.feedback.set_time(PARAM_SMOOTH_S, sample_rate);
+            self.spread.set_time(PARAM_SMOOTH_S, sample_rate);
+            self.tone.set_time(PARAM_SMOOTH_S, sample_rate);
+            self.color.set_time(PARAM_SMOOTH_S, sample_rate);
+        }
         let frames = ctx.frames.min(bus.capacity());
         let mut position = 0;
         for event in events_in.iter() {
@@ -295,5 +356,42 @@ mod tests {
             .map(|(a, b)| (a - b).abs())
             .sum();
         assert!(difference > 10.0);
+    }
+
+    #[test]
+    fn depth_change_mid_block_does_not_click() {
+        use crate::event::TimedEvent;
+
+        let frames = 8_192;
+        let mut bus = StereoBus::with_capacity(frames);
+        for i in 0..frames {
+            let s = (i as f32 / SR as f32 * 220.0 * core::f32::consts::TAU).sin() * 0.4;
+            bus.l[i] = s;
+            bus.r[i] = s;
+        }
+        let mut effect = ModulationEffect::new(
+            ModulationParams {
+                depth: 0.0,
+                tone: 1.0,
+                ..ModulationParams::default()
+            },
+            SR,
+        );
+        let mut events = EventList::empty();
+        assert!(events.push(TimedEvent {
+            offset: (frames / 2) as u32,
+            event: Event::ParamValue {
+                id: MODULATION_PARAM_DEPTH,
+                value: 1.0,
+            },
+        }));
+        effect.process(&context(frames), &mut bus, &events, None);
+        let max_step = (1..frames)
+            .map(|i| (bus.l[i] - bus.l[i - 1]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_step < 0.2,
+            "depth change left a discontinuity of {max_step}"
+        );
     }
 }

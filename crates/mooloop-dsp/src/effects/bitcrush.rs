@@ -11,6 +11,11 @@ use mooloop_core::{
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::node::{AudioNode, ProcessContext};
+use crate::smooth::Smoothed;
+
+/// Mix is the only continuous, audible parameter here: bit depth and
+/// downsample rate are intentionally steppy, the effect *is* the aliasing.
+const MIX_SMOOTH_S: f32 = 0.005;
 
 pub struct BitcrushEffect {
     params: BitcrushParams,
@@ -22,16 +27,25 @@ pub struct BitcrushEffect {
     /// Whether anything has been latched yet. Without this the effect would
     /// output its initial silence for the first hold span.
     primed: bool,
+    /// Nothing else in this effect is sample-rate dependent; kept only to
+    /// re-time `mix`'s smoothing coefficient if the client's rate changes.
+    sample_rate: u32,
+    mix: Smoothed,
 }
 
 impl BitcrushEffect {
     pub fn new(params: BitcrushParams) -> Self {
+        // No sample rate is known yet; `process` re-times `mix` against the
+        // real rate on its first call, same guard the rate-aware effects use.
+        let sample_rate = 48_000;
         Self {
             params,
             held_l: 0.0,
             held_r: 0.0,
             phase: 0.0,
             primed: false,
+            sample_rate,
+            mix: Smoothed::new(params.mix.clamp(0.0, 1.0), MIX_SMOOTH_S, sample_rate),
         }
     }
 
@@ -39,25 +53,28 @@ impl BitcrushEffect {
         self.params
     }
 
-    /// Replace the parameter set wholesale (project load).
+    /// Replace the parameter set wholesale (project load) — jump straight to
+    /// the new value, there is nothing to click coming from a fresh load.
     pub fn set_params(&mut self, params: BitcrushParams) {
         self.params = params;
+        self.mix.reset_to(params.mix.clamp(0.0, 1.0));
     }
 
     fn apply_param(&mut self, id: u32, value: f32) {
         match id {
             BITCRUSH_PARAM_BITS => self.params.bits = value.clamp(1.0, 16.0),
             BITCRUSH_PARAM_DOWNSAMPLE => self.params.downsample = value.clamp(1.0, 64.0),
-            BITCRUSH_PARAM_MIX => self.params.mix = value.clamp(0.0, 1.0),
+            BITCRUSH_PARAM_MIX => {
+                self.params.mix = value.clamp(0.0, 1.0);
+                self.mix.set_target(self.params.mix);
+            }
             _ => {}
         }
     }
 
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let BitcrushParams {
-            bits,
-            downsample,
-            mix,
+            bits, downsample, ..
         } = self.params;
 
         // Continuous in `bits`, so the control can be swept without stepping
@@ -67,6 +84,7 @@ impl BitcrushEffect {
         let hold = downsample.max(1.0);
 
         for i in start..end {
+            let mix = self.mix.advance();
             let (dry_l, dry_r) = (bus.l[i], bus.r[i]);
 
             self.phase += 1.0;
@@ -102,6 +120,10 @@ impl AudioNode for BitcrushEffect {
         events_in: &EventList,
         _events_out: Option<&mut EventList>,
     ) {
+        if ctx.sample_rate != self.sample_rate {
+            self.sample_rate = ctx.sample_rate;
+            self.mix.set_time(MIX_SMOOTH_S, ctx.sample_rate);
+        }
         let frames = ctx.frames.min(bus.capacity());
         let mut pos = 0usize;
         for ev in events_in.iter() {
@@ -276,6 +298,33 @@ mod tests {
         assert!(
             after < 6 && before > 100,
             "bit depth drop did not take: {before} levels then {after}"
+        );
+    }
+
+    #[test]
+    fn mix_change_mid_block_does_not_click() {
+        let frames = 4_096;
+        let mut bus = ramp_bus(frames);
+        let mut effect = BitcrushEffect::new(BitcrushParams {
+            bits: 8.0,
+            downsample: 1.0,
+            mix: 0.0,
+        });
+        let mut events = EventList::empty();
+        assert!(events.push(TimedEvent {
+            offset: (frames / 2) as u32,
+            event: Event::ParamValue {
+                id: BITCRUSH_PARAM_MIX,
+                value: 1.0,
+            },
+        }));
+        effect.process(&context(frames), &mut bus, &events, None);
+        let step = |i: usize| (bus.l[i] - bus.l[i - 1]).abs();
+        let steady_state = (frames / 4..frames / 2 - 1).map(step).fold(0.0f32, f32::max);
+        let at_boundary = (frames / 2..frames / 2 + 32).map(step).fold(0.0f32, f32::max);
+        assert!(
+            at_boundary < steady_state * 3.0 + 0.02,
+            "mix change left a discontinuity of {at_boundary} vs steady-state {steady_state}"
         );
     }
 }

@@ -9,6 +9,14 @@
 //! partition spectra allocates and runs FFTs on the control side. The audio
 //! path only uses preallocated complex buffers and reports its one-partition
 //! latency to the effect host, which already aligns the generic dry path.
+//!
+//! `ReverbEffect::process` ignores `events_in` entirely: unlike the other
+//! effects, there is no per-effect wet-level parameter here to run through
+//! `crate::smooth`. Wet/dry is the *generic* per-slot blend every effect
+//! sits behind (`EffectChain::wet_dry` in `mooloop-engine`), and that blend
+//! is itself unsmoothed — a real gap, but outside this crate and this
+//! effect, and shared by every other node in the chain rather than specific
+//! to reverb. See `docs/plans/share-dsp-primitives/01-smooth-effect-parameters.md`.
 
 use mooloop_core::{ReverbMaterial, ReverbParams, ReverbShape};
 

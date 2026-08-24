@@ -3,6 +3,20 @@
 //! The filter bank is entirely fixed-size: coefficient changes are made only
 //! at sample-timed parameter boundaries, and processing itself performs no
 //! allocation or locking.
+//!
+//! Deliberately **not** running through `crate::smooth` like the other
+//! effects (see `docs/plans/share-dsp-primitives/01-smooth-effect-parameters.md`).
+//! `apply_param` already recomputes coefficients at the exact sample offset
+//! of the event, so a knob drag does not zipper the way an unsmoothed
+//! amplitude parameter does elsewhere. What's left is a different artifact:
+//! each `Biquad` carries state (`z1`, `z2`) across the coefficient swap, so a
+//! large jump can still produce a brief transient, and directly smoothing
+//! *coefficients* risks a momentarily-unstable filter rather than fixing the
+//! click. The real fix is crossfading old/new coefficient sets over a short
+//! window — for up to 19 biquad stages per channel, that is real per-sample
+//! cost for an artifact that in practice shows up on hard knob jumps, not
+//! typical band-gain automation. Deferred; revisit if it turns out to be
+//! audible in practice.
 
 use mooloop_core::{EqBand, EqBandKind, EqParams, EQ_MAX_BANDS};
 

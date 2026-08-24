@@ -15,6 +15,7 @@ use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, ReadHead, MIN_READ_OFFSET};
 use crate::event::{Event, EventList};
 use crate::node::{AudioNode, ProcessContext};
+use crate::smooth::Smoothed;
 
 /// Crossfade applied when the head jumps: a digital time change, or a reverse
 /// window wrapping. About 5 ms at 48 kHz — long enough to hide a jump between
@@ -30,6 +31,15 @@ const TAPE_GLIDE_PER_FRAME: f32 = 0.05;
 const TONE_MIN_HZ: f32 = 200.0;
 const TONE_MAX_HZ: f32 = 20_000.0;
 
+/// Time constant for feedback and wet level: both scale amplitude directly,
+/// so a block-boundary step there is an audible click, not just zipper.
+const GAIN_SMOOTH_S: f32 = 0.005;
+/// Time constant for the damping coefficient. Smoothing the coefficient
+/// itself, not the `tone` control that derives it, skips a `powf` per
+/// sample — the coefficient is already bounded in a stable range at both
+/// ends, so interpolating it directly cannot destabilize the one-pole.
+const DAMP_SMOOTH_S: f32 = 0.01;
+
 pub struct DelayEffect {
     params: DelayParams,
     sample_rate: u32,
@@ -40,6 +50,9 @@ pub struct DelayEffect {
     /// One-pole low-pass state on the feedback path, per channel.
     damp_l: f32,
     damp_r: f32,
+    feedback: Smoothed,
+    damp_coeff: Smoothed,
+    mix: Smoothed,
 }
 
 impl DelayEffect {
@@ -54,6 +67,13 @@ impl DelayEffect {
             target_offset: MIN_READ_OFFSET,
             damp_l: 0.0,
             damp_r: 0.0,
+            feedback: Smoothed::new(params.feedback.clamp(0.0, 0.98), GAIN_SMOOTH_S, sample_rate),
+            damp_coeff: Smoothed::new(
+                tone_coeff(params.tone, sample_rate),
+                DAMP_SMOOTH_S,
+                sample_rate,
+            ),
+            mix: Smoothed::new(params.mix.clamp(0.0, 1.0), GAIN_SMOOTH_S, sample_rate),
         };
         effect.target_offset = effect.resolve_offset();
         effect.head = ReadHead::new(effect.target_offset);
@@ -64,11 +84,16 @@ impl DelayEffect {
         self.params
     }
 
-    /// Replace the parameter set wholesale (project load).
+    /// Replace the parameter set wholesale (project load) — jump straight to
+    /// the new values, there is nothing to click coming from a fresh load.
     pub fn set_params(&mut self, params: DelayParams) {
         self.params = params;
         self.target_offset = self.resolve_offset();
         self.head = ReadHead::new(self.target_offset);
+        self.feedback.reset_to(params.feedback.clamp(0.0, 0.98));
+        self.damp_coeff
+            .reset_to(tone_coeff(params.tone, self.sample_rate));
+        self.mix.reset_to(params.mix.clamp(0.0, 1.0));
     }
 
     /// Delay time in frames, clamped to what the ring can actually serve.
@@ -83,11 +108,21 @@ impl DelayEffect {
                 self.params.time_ms = value.clamp(0.0, DELAY_MAX_TIME_MS);
                 self.target_offset = self.resolve_offset();
             }
-            DELAY_PARAM_FEEDBACK => self.params.feedback = value.clamp(0.0, 0.98),
+            DELAY_PARAM_FEEDBACK => {
+                self.params.feedback = value.clamp(0.0, 0.98);
+                self.feedback.set_target(self.params.feedback);
+            }
             DELAY_PARAM_MODE => self.params.mode = DelayMode::from_index(value.round() as i32),
             DELAY_PARAM_CROSS => self.params.cross = value.clamp(0.0, 1.0),
-            DELAY_PARAM_TONE => self.params.tone = value.clamp(0.0, 1.0),
-            DELAY_PARAM_MIX => self.params.mix = value.clamp(0.0, 1.0),
+            DELAY_PARAM_TONE => {
+                self.params.tone = value.clamp(0.0, 1.0);
+                self.damp_coeff
+                    .set_target(tone_coeff(self.params.tone, self.sample_rate));
+            }
+            DELAY_PARAM_MIX => {
+                self.params.mix = value.clamp(0.0, 1.0);
+                self.mix.set_target(self.params.mix);
+            }
             _ => {}
         }
     }
@@ -126,16 +161,12 @@ impl DelayEffect {
     }
 
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
-        let DelayParams {
-            feedback,
-            cross,
-            tone,
-            mix,
-            ..
-        } = self.params;
-        let damp_coeff = tone_coeff(tone, self.sample_rate);
+        let cross = self.params.cross;
 
         for i in start..end {
+            let feedback = self.feedback.advance();
+            let damp_coeff = self.damp_coeff.advance();
+            let mix = self.mix.advance();
             let (dry_l, dry_r) = (bus.l[i], bus.r[i]);
 
             let drift = self.step_head();
@@ -187,6 +218,9 @@ impl AudioNode for DelayEffect {
         if ctx.sample_rate != self.sample_rate {
             self.sample_rate = ctx.sample_rate;
             self.target_offset = self.resolve_offset();
+            self.feedback.set_time(GAIN_SMOOTH_S, ctx.sample_rate);
+            self.damp_coeff.set_time(DAMP_SMOOTH_S, ctx.sample_rate);
+            self.mix.set_time(GAIN_SMOOTH_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
         let mut pos = 0usize;
@@ -423,6 +457,43 @@ mod tests {
         assert!(
             max_step < 0.2,
             "time change left a discontinuity of {max_step}"
+        );
+    }
+
+    #[test]
+    fn feedback_change_mid_block_does_not_click() {
+        let frames = 32_768;
+        let mut bus = StereoBus::with_capacity(frames);
+        for i in 0..frames {
+            let s = (i as f32 / SR as f32 * 330.0 * core::f32::consts::TAU).sin() * 0.4;
+            bus.l[i] = s;
+            bus.r[i] = s;
+        }
+        let mut effect = DelayEffect::new(
+            DelayParams {
+                time_ms: 20.0,
+                feedback: 0.0,
+                mix: 1.0,
+                tone: 1.0,
+                ..DelayParams::default()
+            },
+            SR,
+        );
+        let mut events = EventList::empty();
+        assert!(events.push(TimedEvent {
+            offset: (frames / 2) as u32,
+            event: Event::ParamValue {
+                id: DELAY_PARAM_FEEDBACK,
+                value: 0.9,
+            },
+        }));
+        effect.process(&context(frames), &mut bus, &events, None);
+        let max_step = (1..frames)
+            .map(|i| (bus.l[i] - bus.l[i - 1]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_step < 0.2,
+            "feedback change left a discontinuity of {max_step}"
         );
     }
 

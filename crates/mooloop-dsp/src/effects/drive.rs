@@ -14,11 +14,15 @@ use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::node::{AudioNode, ProcessContext};
 use crate::shaper::{drive_compensation, shape, Oversampler2x, OVERSAMPLER_LATENCY_FRAMES};
+use crate::smooth::Smoothed;
 
 /// Corner frequency of the tilt filter's low/high split.
 const TONE_SPLIT_HZ: f32 = 1_500.0;
 /// How much the tilt can boost the high band at `tone == 1`.
 const TONE_MAX_BOOST: f32 = 3.0;
+/// Time constant for drive, tone, mix, and output: all scale amplitude or
+/// harmonic balance directly, so a step here is either a click or zipper.
+const PARAM_SMOOTH_S: f32 = 0.005;
 
 pub struct DriveEffect {
     params: DriveParams,
@@ -34,10 +38,15 @@ pub struct DriveEffect {
     tone_lp_l: f32,
     tone_lp_r: f32,
     tone_coeff: f32,
+    drive: Smoothed,
+    tone: Smoothed,
+    mix: Smoothed,
+    output: Smoothed,
 }
 
 impl DriveEffect {
     pub fn new(params: DriveParams, sample_rate: u32) -> Self {
+        let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, sample_rate);
         Self {
             params,
             sample_rate,
@@ -49,6 +58,10 @@ impl DriveEffect {
             tone_lp_l: 0.0,
             tone_lp_r: 0.0,
             tone_coeff: tone_coeff(sample_rate),
+            drive: smoothed(params.drive.clamp(1.0, 64.0)),
+            tone: smoothed(params.tone.clamp(-1.0, 1.0)),
+            mix: smoothed(params.mix.clamp(0.0, 1.0)),
+            output: smoothed(params.output.clamp(0.0, 2.0)),
         }
     }
 
@@ -56,18 +69,35 @@ impl DriveEffect {
         self.params
     }
 
-    /// Replace the parameter set wholesale (project load).
+    /// Replace the parameter set wholesale (project load) — jump straight to
+    /// the new values, there is nothing to click coming from a fresh load.
     pub fn set_params(&mut self, params: DriveParams) {
         self.params = params;
+        self.drive.reset_to(params.drive.clamp(1.0, 64.0));
+        self.tone.reset_to(params.tone.clamp(-1.0, 1.0));
+        self.mix.reset_to(params.mix.clamp(0.0, 1.0));
+        self.output.reset_to(params.output.clamp(0.0, 2.0));
     }
 
     fn apply_param(&mut self, id: u32, value: f32) {
         match id {
-            DRIVE_PARAM_DRIVE => self.params.drive = value.clamp(1.0, 64.0),
+            DRIVE_PARAM_DRIVE => {
+                self.params.drive = value.clamp(1.0, 64.0);
+                self.drive.set_target(self.params.drive);
+            }
             DRIVE_PARAM_CURVE => self.params.curve = DriveCurve::from_index(value.round() as i32),
-            DRIVE_PARAM_TONE => self.params.tone = value.clamp(-1.0, 1.0),
-            DRIVE_PARAM_MIX => self.params.mix = value.clamp(0.0, 1.0),
-            DRIVE_PARAM_OUTPUT => self.params.output = value.clamp(0.0, 2.0),
+            DRIVE_PARAM_TONE => {
+                self.params.tone = value.clamp(-1.0, 1.0);
+                self.tone.set_target(self.params.tone);
+            }
+            DRIVE_PARAM_MIX => {
+                self.params.mix = value.clamp(0.0, 1.0);
+                self.mix.set_target(self.params.mix);
+            }
+            DRIVE_PARAM_OUTPUT => {
+                self.params.output = value.clamp(0.0, 2.0);
+                self.output.set_target(self.params.output);
+            }
             _ => {}
         }
     }
@@ -87,16 +117,14 @@ impl DriveEffect {
     }
 
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
-        let DriveParams {
-            drive,
-            curve,
-            tone,
-            mix,
-            output,
-        } = self.params;
-        let compensation = drive_compensation(curve, drive);
+        let curve = self.params.curve;
 
         for i in start..end {
+            let drive = self.drive.advance();
+            let tone = self.tone.advance();
+            let mix = self.mix.advance();
+            let output = self.output.advance();
+            let compensation = drive_compensation(curve, drive);
             let (dry_l, dry_r) = (bus.l[i], bus.r[i]);
 
             let wet_l = self.left.process(dry_l, |x| shape(curve, x * drive)) * compensation;
@@ -141,6 +169,10 @@ impl AudioNode for DriveEffect {
         if ctx.sample_rate != self.sample_rate {
             self.sample_rate = ctx.sample_rate;
             self.tone_coeff = tone_coeff(ctx.sample_rate);
+            self.drive.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
+            self.tone.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
+            self.mix.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
+            self.output.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
         let mut pos = 0usize;
@@ -332,5 +364,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn mix_change_mid_block_does_not_click() {
+        // Soft-clipped, not hard: the waveform itself should have no sharp
+        // corners, so any spike at the event boundary is the mix step, not
+        // the shaper's own natural slope.
+        let frames = 8_192;
+        let mut bus = sine_bus(frames, 200.0, 0.5);
+        let mut effect = DriveEffect::new(
+            DriveParams {
+                drive: 4.0,
+                curve: DriveCurve::Soft,
+                mix: 0.0,
+                ..DriveParams::default()
+            },
+            48_000,
+        );
+        let mut events = EventList::empty();
+        assert!(events.push(TimedEvent {
+            offset: (frames / 2) as u32,
+            event: Event::ParamValue {
+                id: DRIVE_PARAM_MIX,
+                value: 1.0,
+            },
+        }));
+        effect.process(&context(frames), &mut bus, &events, None);
+        let step = |i: usize| (bus.l[i] - bus.l[i - 1]).abs();
+        let steady_state = (frames / 4..frames / 2 - 1).map(step).fold(0.0f32, f32::max);
+        let at_boundary = (frames / 2..frames / 2 + 32).map(step).fold(0.0f32, f32::max);
+        assert!(
+            at_boundary < steady_state * 3.0 + 0.02,
+            "mix change left a discontinuity of {at_boundary} vs steady-state {steady_state}"
+        );
     }
 }

@@ -8,6 +8,14 @@ use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::filter::Svf;
 use crate::node::{AudioNode, ProcessContext};
+use crate::smooth::Smoothed;
+
+/// Cutoff tracks the knob closely: `Svf` is built to stay well behaved with
+/// cutoff moving every sample, so there is no reason to lag a sweep.
+const CUTOFF_SMOOTH_S: f32 = 0.003;
+/// Resonance is a coarser control; a slightly longer lag still reads as
+/// instant while smoothing over any coefficient step.
+const RESONANCE_SMOOTH_S: f32 = 0.01;
 
 /// A stereo low-pass/high-pass filter built on two `Svf` instances, one per
 /// channel. Parameter changes arrive as sample-timed `ParamValue` events
@@ -17,6 +25,8 @@ pub struct FilterEffect {
     right: Svf,
     params: FilterParams,
     sample_rate: u32,
+    cutoff: Smoothed,
+    resonance: Smoothed,
 }
 
 impl FilterEffect {
@@ -26,6 +36,12 @@ impl FilterEffect {
             right: Svf::new(),
             params,
             sample_rate,
+            cutoff: Smoothed::new(params.cutoff_hz.max(0.0), CUTOFF_SMOOTH_S, sample_rate),
+            resonance: Smoothed::new(
+                params.resonance.clamp(0.0, 1.0),
+                RESONANCE_SMOOTH_S,
+                sample_rate,
+            ),
         }
     }
 
@@ -34,15 +50,24 @@ impl FilterEffect {
     }
 
     /// Replace the parameter set. Called from the engine's command path when
-    /// the whole set changes at once (e.g. project load).
+    /// the whole set changes at once (e.g. project load) — jump straight to
+    /// the new values, there is nothing to click coming from a fresh load.
     pub fn set_params(&mut self, params: FilterParams) {
         self.params = params;
+        self.cutoff.reset_to(params.cutoff_hz.max(0.0));
+        self.resonance.reset_to(params.resonance.clamp(0.0, 1.0));
     }
 
     fn apply_param(&mut self, id: u32, value: f32) {
         match id {
-            FILTER_PARAM_CUTOFF_HZ => self.params.cutoff_hz = value.max(0.0),
-            FILTER_PARAM_RESONANCE => self.params.resonance = value.clamp(0.0, 1.0),
+            FILTER_PARAM_CUTOFF_HZ => {
+                self.params.cutoff_hz = value.max(0.0);
+                self.cutoff.set_target(self.params.cutoff_hz);
+            }
+            FILTER_PARAM_RESONANCE => {
+                self.params.resonance = value.clamp(0.0, 1.0);
+                self.resonance.set_target(self.params.resonance);
+            }
             FILTER_PARAM_MODE => {
                 self.params.mode = if value >= 0.5 {
                     FilterMode::HighPass
@@ -55,10 +80,10 @@ impl FilterEffect {
     }
 
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
-        let cutoff = self.params.cutoff_hz;
-        let resonance = self.params.resonance;
         let sr = self.sample_rate;
         for i in start..end {
+            let cutoff = self.cutoff.advance();
+            let resonance = self.resonance.advance();
             let (in_l, in_r) = (bus.l[i], bus.r[i]);
             let (lp_l, hp_l) = self.left.next_sample_lp_hp(in_l, cutoff, resonance, sr);
             let (lp_r, hp_r) = self.right.next_sample_lp_hp(in_r, cutoff, resonance, sr);
@@ -206,6 +231,44 @@ mod tests {
         assert!(
             before > after * 4.0,
             "open half {before} should pass far more than closed half {after}"
+        );
+    }
+
+    #[test]
+    fn cutoff_change_mid_block_does_not_click() {
+        let sr = 48_000u32;
+        let frames = sr as usize / 2;
+        let mut bus = StereoBus::with_capacity(frames);
+        for i in 0..frames {
+            let t = i as f32 / sr as f32;
+            // A low, steady tone so the discontinuity under test isn't
+            // swamped by the input's own frame-to-frame slope.
+            let s = (t * 200.0 * core::f32::consts::TAU).sin();
+            bus.l[i] = s;
+            bus.r[i] = s;
+        }
+        let mut effect = FilterEffect::new(
+            FilterParams {
+                cutoff_hz: 20_000.0,
+                ..FilterParams::default()
+            },
+            sr,
+        );
+        let mut events = EventList::empty();
+        assert!(events.push(TimedEvent {
+            offset: (frames / 2) as u32,
+            event: Event::ParamValue {
+                id: FILTER_PARAM_CUTOFF_HZ,
+                value: 100.0,
+            },
+        }));
+        effect.process(&context(frames), &mut bus, &events, None);
+        let max_step = (1..frames)
+            .map(|i| (bus.l[i] - bus.l[i - 1]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_step < 0.1,
+            "cutoff change left a discontinuity of {max_step}"
         );
     }
 }
