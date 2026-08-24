@@ -43,6 +43,20 @@ impl Lfo {
     pub fn next_sample(&mut self, rate_hz: f32, wave: LfoWave, sample_rate: u32) -> f32 {
         let phase = self.phase;
         self.advance(1.0, rate_hz, sample_rate);
+        Self::shape_at(phase, wave, self.hold)
+    }
+
+    /// Sample the current cycle's shape at an additional phase offset
+    /// (fractional cycles), without advancing the accumulator. For a stereo
+    /// effect that wants a second tap of the same cycle — e.g. a
+    /// runtime-variable stereo spread — rather than a second, independently
+    /// drifting oscillator. Call before `next_sample`/`skip` for the same
+    /// sample so both reads see the same phase.
+    pub fn peek_offset(&self, offset: f32, wave: LfoWave) -> f32 {
+        Self::shape_at((self.phase + offset).rem_euclid(1.0), wave, self.hold)
+    }
+
+    fn shape_at(phase: f32, wave: LfoWave, hold: f32) -> f32 {
         match wave {
             LfoWave::Sine => (phase * TAU).sin(),
             // Shifted a quarter cycle so the shape leaves zero rising.
@@ -57,7 +71,7 @@ impl Lfo {
                     -1.0
                 }
             }
-            LfoWave::Random => self.hold,
+            LfoWave::Random => hold,
         }
     }
 
@@ -152,5 +166,23 @@ mod tests {
         }
         lfo.retrigger();
         assert_eq!(lfo.next_sample(5.0, LfoWave::Sine, sr), 0.0);
+    }
+
+    #[test]
+    fn peek_offset_matches_a_quarter_cycle_advance_without_moving_the_phase() {
+        let sr = 48_000;
+        let mut reference = Lfo::new();
+        for _ in 0..1234 {
+            reference.next_sample(5.0, LfoWave::Sine, sr);
+        }
+        let probe = reference;
+        // A quarter cycle at this rate/sample-rate, expressed in fractional
+        // cycles the same way the offset argument is.
+        let offset = 0.25;
+        let peeked = probe.peek_offset(offset, LfoWave::Sine);
+        let phase_before = probe.phase;
+        let direct = ((probe.phase + offset).rem_euclid(1.0) * TAU).sin();
+        assert_eq!(peeked, direct);
+        assert_eq!(probe.phase, phase_before, "peek must not advance the phase");
     }
 }

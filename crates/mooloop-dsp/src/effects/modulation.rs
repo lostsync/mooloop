@@ -7,7 +7,7 @@
 //! delay tap. The host owns dry/wet blending; this node returns wet signal.
 
 use mooloop_core::{
-    ModulationMode, ModulationParams, MODULATION_PARAM_COLOR, MODULATION_PARAM_DEPTH,
+    LfoWave, ModulationMode, ModulationParams, MODULATION_PARAM_COLOR, MODULATION_PARAM_DEPTH,
     MODULATION_PARAM_FEEDBACK, MODULATION_PARAM_MODE, MODULATION_PARAM_RATE_HZ,
     MODULATION_PARAM_SPREAD, MODULATION_PARAM_STAGES, MODULATION_PARAM_TONE,
 };
@@ -16,6 +16,7 @@ use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, MIN_READ_OFFSET};
 use crate::event::{Event, EventList};
 use crate::filter::AllPass;
+use crate::lfo::Lfo;
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
 
@@ -33,7 +34,7 @@ pub struct ModulationEffect {
     params: ModulationParams,
     sample_rate: u32,
     line: DelayLine,
-    phase: f32,
+    lfo: Lfo,
     feedback_l: f32,
     feedback_r: f32,
     tone_l: f32,
@@ -54,7 +55,7 @@ impl ModulationEffect {
             params,
             sample_rate,
             line: DelayLine::with_capacity_frames(ring_frames(sample_rate)),
-            phase: 0.0,
+            lfo: Lfo::new(),
             feedback_l: 0.0,
             feedback_r: 0.0,
             tone_l: 0.0,
@@ -122,19 +123,23 @@ impl ModulationEffect {
             let spread = self.spread.advance();
             let tone = self.tone.advance();
             let color = self.color.advance();
+            // Two taps of one LFO cycle rather than two independently
+            // drifting oscillators, so the stereo image stays locked even
+            // as `spread` moves. Peek both before advancing once.
+            let sweep_l = self.lfo.peek_offset(0.0, LfoWave::Sine);
+            let sweep_r = self.lfo.peek_offset(spread * 0.25, LfoWave::Sine);
+            self.lfo.skip(1, self.params.rate_hz, self.sample_rate);
             let (input_l, input_r) = (bus.l[i], bus.r[i]);
             let (wet_l, wet_r) = match self.params.mode {
-                ModulationMode::Phaser => {
-                    self.phaser_sample(input_l, input_r, feedback, spread, depth, color, tone)
-                }
-                mode => {
-                    self.delay_sample(input_l, input_r, mode, depth, feedback, spread, color, tone)
-                }
+                ModulationMode::Phaser => self.phaser_sample(
+                    input_l, input_r, feedback, sweep_l, sweep_r, depth, color, tone,
+                ),
+                mode => self.delay_sample(
+                    input_l, input_r, mode, depth, feedback, spread, sweep_l, sweep_r, color, tone,
+                ),
             };
             bus.l[i] = wet_l;
             bus.r[i] = wet_r;
-            self.phase =
-                (self.phase + self.params.rate_hz / self.sample_rate.max(1) as f32).fract();
         }
     }
 
@@ -147,11 +152,11 @@ impl ModulationEffect {
         depth: f32,
         feedback: f32,
         spread: f32,
+        lfo_l: f32,
+        lfo_r: f32,
         color: f32,
         tone: f32,
     ) -> (f32, f32) {
-        let lfo_l = (self.phase * core::f32::consts::TAU).sin();
-        let lfo_r = ((self.phase + spread * 0.25) * core::f32::consts::TAU).sin();
         let (base_ms, swing_ms) = match mode {
             ModulationMode::Chorus => (8.0 + 18.0 * color, 0.5 + 10.0 * depth),
             ModulationMode::Flange => (0.7 + 5.0 * color, 0.15 + 5.5 * depth),
@@ -197,14 +202,12 @@ impl ModulationEffect {
         input_l: f32,
         input_r: f32,
         feedback: f32,
-        spread: f32,
+        sweep_l: f32,
+        sweep_r: f32,
         depth: f32,
         color: f32,
         tone: f32,
     ) -> (f32, f32) {
-        let spread_phase = self.phase + spread * 0.25;
-        let sweep_l = (self.phase * core::f32::consts::TAU).sin();
-        let sweep_r = (spread_phase * core::f32::consts::TAU).sin();
         let stages = usize::from(self.params.stages).clamp(4, MAX_PHASER_STAGES);
         let mut left = input_l + self.feedback_l * feedback;
         let mut right = input_r + self.feedback_r * feedback;
@@ -212,11 +215,17 @@ impl ModulationEffect {
             let tilt = (stage as f32 / (stages - 1).max(1) as f32 - 0.5) * 1.1;
             left = self.phaser_l[stage].next(
                 left,
-                allpass_coefficient(self.phaser_hz(sweep_l + tilt, depth, color), self.sample_rate),
+                allpass_coefficient(
+                    self.phaser_hz(sweep_l + tilt, depth, color),
+                    self.sample_rate,
+                ),
             );
             right = self.phaser_r[stage].next(
                 right,
-                allpass_coefficient(self.phaser_hz(sweep_r + tilt, depth, color), self.sample_rate),
+                allpass_coefficient(
+                    self.phaser_hz(sweep_r + tilt, depth, color),
+                    self.sample_rate,
+                ),
             );
         }
         self.feedback_l = left;

@@ -297,6 +297,9 @@ mod tests {
             (energy_in - energy_out).abs() < energy_in * 0.05,
             "all-pass should preserve energy: in {energy_in}, out {energy_out}"
         );
-        assert!(differs, "all-pass should shift phase, not pass through unchanged");
+        assert!(
+            differs,
+            "all-pass should shift phase, not pass through unchanged"
+        );
     }
 }
