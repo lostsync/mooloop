@@ -15,6 +15,7 @@ use mooloop_core::{
 use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, MIN_READ_OFFSET};
 use crate::event::{Event, EventList};
+use crate::filter::AllPass;
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
 
@@ -44,19 +45,6 @@ pub struct ModulationEffect {
     spread: Smoothed,
     tone: Smoothed,
     color: Smoothed,
-}
-
-#[derive(Clone, Copy, Default)]
-struct AllPass {
-    z: f32,
-}
-
-impl AllPass {
-    fn next(&mut self, input: f32, coefficient: f32) -> f32 {
-        let output = -coefficient * input + self.z;
-        self.z = input + coefficient * output;
-        output
-    }
 }
 
 impl ModulationEffect {
