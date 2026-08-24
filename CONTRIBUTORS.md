@@ -46,13 +46,16 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-24
-- Sessions: 4
+- Sessions: 5
 - Notes: Set up this file at Adam's request. Refreshed the README
   screenshot. Sampler UI overhaul: waveform zoom/scroll, sample-accurate
   trim/loop fields, compact tuning knobs with a note/frequency readout, a
   per-voice playhead, and no more auto-loaded kick on a new channel. Audio
   preferences: driver/output-device/buffer-size/auto-reconnect controls for
   JACK, behind a per-driver control surface so ALSA can slot in later.
+  Diagnosed general CPU jankiness to unguarded denormal floats in recursive
+  DSP state; added an MXCSR FTZ/DAZ guard on the realtime thread plus
+  snap-to-zero epsilons in the parameter smoother and envelope follower.
 
 ### GLM (glm-5.3) — opencode
 - First seen: 2026-08-23

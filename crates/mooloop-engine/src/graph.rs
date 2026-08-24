@@ -51,8 +51,37 @@ impl Graph {
     }
 }
 
+/// Flush subnormal floats to zero on this thread. Recursive DSP state
+/// (filter feedback, envelope followers, parameter smoothers) decays
+/// asymptotically toward zero and spends time in subnormal range on the way;
+/// without this, the CPU can take an order of magnitude longer per
+/// arithmetic op on those values, which reads as constant background load
+/// with no single attributable cause. MXCSR is per-thread, so this must run
+/// on the realtime callback's own thread rather than at engine construction.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn enable_flush_to_zero() {
+    // `_mm_getcsr`/`_mm_setcsr` are deprecated for soundness reasons (their
+    // signature doesn't tell the optimizer they observe/change global FP
+    // state), so this reads and writes MXCSR directly instead.
+    use std::arch::asm;
+    const FLUSH_TO_ZERO: u32 = 1 << 15;
+    const DENORMALS_ARE_ZERO: u32 = 1 << 6;
+    unsafe {
+        let mut csr: u32 = 0;
+        asm!("stmxcsr [{0}]", in(reg) &mut csr, options(nostack, preserves_flags));
+        csr |= FLUSH_TO_ZERO | DENORMALS_ARE_ZERO;
+        asm!("ldmxcsr [{0}]", in(reg) &csr, options(nostack, preserves_flags));
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn enable_flush_to_zero() {}
+
 impl ProcessHandler for Graph {
     fn process(&mut self, _client: &Client, scope: &ProcessScope) -> Control {
+        enable_flush_to_zero();
         let frames = (scope.n_frames() as usize).min(MAX_BLOCK_SIZE);
         // Value edits, structural ownership transfers, and prepared projects
         // share one ordered stream. Only apply an ownership-changing command

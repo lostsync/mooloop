@@ -6,6 +6,11 @@
 //! a one-pole lag toward the incoming target so the audible value always
 //! moves continuously.
 
+/// Gap below which `Smoothed::advance` snaps to the target instead of
+/// continuing to decay toward it. Far below any audible or musically
+/// meaningful parameter step, and far above `f32`'s subnormal range.
+const SNAP_EPSILON: f32 = 1.0e-9;
+
 /// A one-pole smoothed scalar. `set_target` is cheap enough to call every
 /// block; `advance` moves it one sample.
 #[derive(Clone, Copy, Debug)]
@@ -46,7 +51,16 @@ impl Smoothed {
 
     /// Advance one sample and return the smoothed value.
     pub fn advance(&mut self) -> f32 {
-        self.current += (self.target - self.current) * self.coeff;
+        let delta = self.target - self.current;
+        // Snap once the remaining gap is inaudibly small rather than let it
+        // decay asymptotically forever: the tail would otherwise spend many
+        // samples as a subnormal float, which is far slower to compute than
+        // the snap it approximates.
+        if delta.abs() < SNAP_EPSILON {
+            self.current = self.target;
+        } else {
+            self.current += delta * self.coeff;
+        }
         self.current
     }
 

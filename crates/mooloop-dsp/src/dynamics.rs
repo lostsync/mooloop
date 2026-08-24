@@ -16,6 +16,11 @@
 /// producing negative infinity and poisoning the gain computers.
 const MIN_LEVEL: f32 = 1e-9;
 
+/// Gap below which `EnvelopeFollower::process` snaps to the rectified input
+/// instead of continuing to decay toward it. Far below any audible or
+/// musically meaningful level, and far above `f32`'s subnormal range.
+const SNAP_EPSILON: f32 = 1.0e-9;
+
 pub fn lin_to_db(level: f32) -> f32 {
     20.0 * level.abs().max(MIN_LEVEL).log10()
 }
@@ -76,7 +81,16 @@ impl EnvelopeFollower {
         } else {
             self.release
         };
-        self.envelope = rectified + coeff * (self.envelope - rectified);
+        let delta = self.envelope - rectified;
+        // Snap once the remaining gap is inaudibly small rather than let it
+        // decay asymptotically forever: the tail would otherwise spend many
+        // samples as a subnormal float, which is far slower to compute than
+        // the snap it approximates.
+        self.envelope = if delta.abs() < SNAP_EPSILON {
+            rectified
+        } else {
+            rectified + coeff * delta
+        };
         self.envelope
     }
 }
