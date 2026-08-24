@@ -1,0 +1,59 @@
+flowchart LR
+    subgraph App[Application process: mooloop-app]
+        Entry[main]
+        UI["mooloop-ui<br/>Slint views and edit state"]
+        Handle["EngineHandle<br/>non-realtime API"]
+        Entry --> UI
+        UI --> Handle
+    end
+
+    subgraph Shared[Shared model: mooloop-core]
+        Project["Project and Kit<br/>patterns, playlist, channels, routing"]
+        Messages["EngineCommand / EngineEvent<br/>timed control messages"]
+    end
+
+    subgraph Engine[Audio engine: mooloop-engine]
+        Queues["Bounded rtrb queues<br/>commands, events, reclaim"]
+        Prepare["Control thread<br/>validate, instantiate, preallocate"]
+        Render["RenderState<br/>realtime executor"]
+        Sequencer["Transport and sequencer<br/>PPQ to sample-timed events"]
+        Mixer["Channel strips and buses<br/>compiled routing, meters"]
+        Jack["JACK / PipeWire-JACK<br/>stereo output ports"]
+        Queues --> Prepare
+        Prepare -->|"prepared project swap<br/>at block boundary"| Render
+        Render --> Sequencer
+        Sequencer --> Mixer
+        Mixer --> Jack
+    end
+
+    subgraph DSP[DSP library: mooloop-dsp]
+        Sources["Sampler, drum synth,<br/>mono synth, poly synth"]
+        Effects["Insert effects<br/>and device host"]
+        AudioNode["AudioNode<br/>in-place stereo processing"]
+        Sources -. "implements" .-> AudioNode
+        Effects -. "implements" .-> AudioNode
+    end
+
+    subgraph Storage[Persistence: mooloop-project]
+        Documents["Versioned TOML documents"]
+        Assets["Referenced or copied WAV assets"]
+        Documents --- Assets
+    end
+
+    subgraph Offline[Offline export]
+        OfflineRender["OfflineRenderer<br/>same RenderState path"]
+        Files["WAV or MP3 file"]
+        OfflineRender --> Files
+    end
+
+    UI <-->|"editable snapshot"| Project
+    UI -->|"user command"| Handle
+    Handle -->|"EngineCommand"| Queues
+    Queues -->|"EngineEvent and meters"| Handle
+    Project -->|"install / update"| Prepare
+    Sequencer -->|"NoteOn, NoteOff,<br/>ParamValue"| Sources
+    Sources -->|"channel audio"| Effects
+    Effects -->|"processed audio"| Mixer
+    Project <-->|"load / save"| Documents
+    Assets -->|"decode off audio thread"| Prepare
+    Project -->|"render snapshot"| OfflineRender
