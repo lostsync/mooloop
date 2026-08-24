@@ -35,3 +35,13 @@ At this point, minimally, we just need to add the ability to configure some comm
 GUI focus issues:
 
 There seems to be something in slint where there's sort of an input caret. in the first few version of this app, every control had to be clicked once to select and again to use it. that's not really an issue now, thank god, but that select caret can still intercept e.g. spacebar for play/pause in some situations. i should probably note them when they occur. I do think keyboard navigation is important so i see the need for such a caret, but we'll have to be intentional and thoughtful about how we use that so that we aren't blocking key commands that should work wherever you are.
+
+General application design:
+
+GUI:
+
+we're ending up with a fair number of panes. currently the layout is totally static. we might want to allow the user to customize their layout.
+
+on a 1080p monitor, in a 16 step pattern there is plenty of room to the right of the seq steps for us to split the pane and have the playlist seq beside it. this is what made me think we might want to kinda ape REAPER's dockable dialogs thing.
+
+In appearance prefs, we should be able to set up different shading options. Like, right now i think every 4th step in the step seq is brighter. Let the user configure that by setting a pattern. Maybe I want to brighten every 3rd step, or 6th. Maybe I want 8 bright, 8 dark, 8 bright, 8 dark. Maybe this shading could extend to the piano roll's grid? It would help a lot with editing sequences.
