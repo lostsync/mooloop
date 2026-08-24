@@ -12,6 +12,7 @@ use mooloop_core::{
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
+use crate::filter::OnePoleLp;
 use crate::node::{AudioNode, ProcessContext};
 use crate::shaper::{drive_compensation, shape, Oversampler2x, OVERSAMPLER_LATENCY_FRAMES};
 use crate::smooth::Smoothed;
@@ -34,10 +35,9 @@ pub struct DriveEffect {
     dry_l: [f32; OVERSAMPLER_LATENCY_FRAMES],
     dry_r: [f32; OVERSAMPLER_LATENCY_FRAMES],
     dry_pos: usize,
-    /// One-pole low-pass state for the tone tilt, per channel.
-    tone_lp_l: f32,
-    tone_lp_r: f32,
-    tone_coeff: f32,
+    /// One-pole low-pass for the tone tilt, per channel.
+    tone_lp_l: OnePoleLp,
+    tone_lp_r: OnePoleLp,
     drive: Smoothed,
     tone: Smoothed,
     mix: Smoothed,
@@ -47,6 +47,10 @@ pub struct DriveEffect {
 impl DriveEffect {
     pub fn new(params: DriveParams, sample_rate: u32) -> Self {
         let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, sample_rate);
+        let mut tone_lp_l = OnePoleLp::new();
+        let mut tone_lp_r = OnePoleLp::new();
+        tone_lp_l.set_cutoff(TONE_SPLIT_HZ, sample_rate);
+        tone_lp_r.set_cutoff(TONE_SPLIT_HZ, sample_rate);
         Self {
             params,
             sample_rate,
@@ -55,9 +59,8 @@ impl DriveEffect {
             dry_l: [0.0; OVERSAMPLER_LATENCY_FRAMES],
             dry_r: [0.0; OVERSAMPLER_LATENCY_FRAMES],
             dry_pos: 0,
-            tone_lp_l: 0.0,
-            tone_lp_r: 0.0,
-            tone_coeff: tone_coeff(sample_rate),
+            tone_lp_l,
+            tone_lp_r,
             drive: smoothed(params.drive.clamp(1.0, 64.0)),
             tone: smoothed(params.tone.clamp(-1.0, 1.0)),
             mix: smoothed(params.mix.clamp(0.0, 1.0)),
@@ -104,9 +107,8 @@ impl DriveEffect {
 
     /// Split the low and high bands and re-weight the high one. At `tone == 0`
     /// the two bands sum back to the input exactly.
-    fn tilt(&self, sample: f32, state: &mut f32, tone: f32) -> f32 {
-        *state = *state + (sample - *state) * self.tone_coeff;
-        let low = *state;
+    fn tilt(state: &mut OnePoleLp, sample: f32, tone: f32) -> f32 {
+        let low = state.next_sample(sample);
         let high = sample - low;
         let gain = if tone >= 0.0 {
             1.0 + tone * TONE_MAX_BOOST
@@ -130,12 +132,8 @@ impl DriveEffect {
             let wet_l = self.left.process(dry_l, |x| shape(curve, x * drive)) * compensation;
             let wet_r = self.right.process(dry_r, |x| shape(curve, x * drive)) * compensation;
 
-            let mut tone_l = self.tone_lp_l;
-            let mut tone_r = self.tone_lp_r;
-            let wet_l = self.tilt(wet_l, &mut tone_l, tone);
-            let wet_r = self.tilt(wet_r, &mut tone_r, tone);
-            self.tone_lp_l = tone_l;
-            self.tone_lp_r = tone_r;
+            let wet_l = Self::tilt(&mut self.tone_lp_l, wet_l, tone);
+            let wet_r = Self::tilt(&mut self.tone_lp_r, wet_r, tone);
 
             let aligned_l = self.dry_l[self.dry_pos];
             let aligned_r = self.dry_r[self.dry_pos];
@@ -147,11 +145,6 @@ impl DriveEffect {
             bus.r[i] = (aligned_r + (wet_r - aligned_r) * mix) * output;
         }
     }
-}
-
-fn tone_coeff(sample_rate: u32) -> f32 {
-    let sr = sample_rate.max(1) as f32;
-    1.0 - (-core::f32::consts::TAU * TONE_SPLIT_HZ / sr).exp()
 }
 
 impl AudioNode for DriveEffect {
@@ -168,7 +161,8 @@ impl AudioNode for DriveEffect {
     ) {
         if ctx.sample_rate != self.sample_rate {
             self.sample_rate = ctx.sample_rate;
-            self.tone_coeff = tone_coeff(ctx.sample_rate);
+            self.tone_lp_l.set_cutoff(TONE_SPLIT_HZ, ctx.sample_rate);
+            self.tone_lp_r.set_cutoff(TONE_SPLIT_HZ, ctx.sample_rate);
             self.drive.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
             self.tone.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
             self.mix.set_time(PARAM_SMOOTH_S, ctx.sample_rate);

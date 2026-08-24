@@ -14,6 +14,7 @@ use mooloop_core::{
 use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, ReadHead, MIN_READ_OFFSET};
 use crate::event::{Event, EventList};
+use crate::filter::OnePoleLp;
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
 
@@ -47,9 +48,9 @@ pub struct DelayEffect {
     head: ReadHead,
     /// Delay time in frames, as last resolved from `params.time_ms`.
     target_offset: f32,
-    /// One-pole low-pass state on the feedback path, per channel.
-    damp_l: f32,
-    damp_r: f32,
+    /// One-pole low-pass on the feedback path, per channel.
+    damp_l: OnePoleLp,
+    damp_r: OnePoleLp,
     feedback: Smoothed,
     damp_coeff: Smoothed,
     mix: Smoothed,
@@ -65,8 +66,8 @@ impl DelayEffect {
             line: DelayLine::with_capacity_frames(frames),
             head: ReadHead::new(MIN_READ_OFFSET),
             target_offset: MIN_READ_OFFSET,
-            damp_l: 0.0,
-            damp_r: 0.0,
+            damp_l: OnePoleLp::new(),
+            damp_r: OnePoleLp::new(),
             feedback: Smoothed::new(params.feedback.clamp(0.0, 0.98), GAIN_SMOOTH_S, sample_rate),
             damp_coeff: Smoothed::new(
                 tone_coeff(params.tone, sample_rate),
@@ -174,11 +175,13 @@ impl DelayEffect {
 
             // Damp inside the feedback loop so each repeat is darker than the
             // last, rather than filtering the output once.
-            self.damp_l += (wet_l - self.damp_l) * damp_coeff;
-            self.damp_r += (wet_r - self.damp_r) * damp_coeff;
+            self.damp_l.set_coeff(damp_coeff);
+            self.damp_r.set_coeff(damp_coeff);
+            let damped_l = self.damp_l.next_sample(wet_l);
+            let damped_r = self.damp_r.next_sample(wet_r);
 
-            let fed_l = self.damp_l * (1.0 - cross) + self.damp_r * cross;
-            let fed_r = self.damp_r * (1.0 - cross) + self.damp_l * cross;
+            let fed_l = damped_l * (1.0 - cross) + damped_r * cross;
+            let fed_r = damped_r * (1.0 - cross) + damped_l * cross;
 
             self.line
                 .write(dry_l + fed_l * feedback, dry_r + fed_r * feedback);

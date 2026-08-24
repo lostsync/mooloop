@@ -15,7 +15,7 @@ use mooloop_core::{
 use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, MIN_READ_OFFSET};
 use crate::event::{Event, EventList};
-use crate::filter::AllPass;
+use crate::filter::{AllPass, OnePoleLp};
 use crate::lfo::Lfo;
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
@@ -37,8 +37,8 @@ pub struct ModulationEffect {
     lfo: Lfo,
     feedback_l: f32,
     feedback_r: f32,
-    tone_l: f32,
-    tone_r: f32,
+    tone_l: OnePoleLp,
+    tone_r: OnePoleLp,
     phaser_l: [AllPass; MAX_PHASER_STAGES],
     phaser_r: [AllPass; MAX_PHASER_STAGES],
     depth: Smoothed,
@@ -58,8 +58,8 @@ impl ModulationEffect {
             lfo: Lfo::new(),
             feedback_l: 0.0,
             feedback_r: 0.0,
-            tone_l: 0.0,
-            tone_r: 0.0,
+            tone_l: OnePoleLp::new(),
+            tone_r: OnePoleLp::new(),
             phaser_l: [AllPass::default(); MAX_PHASER_STAGES],
             phaser_r: [AllPass::default(); MAX_PHASER_STAGES],
             depth: smoothed(params.depth.clamp(0.0, 1.0)),
@@ -241,12 +241,9 @@ impl ModulationEffect {
 
     fn tone_filter(&mut self, left: f32, right: f32, tone: f32) -> (f32, f32) {
         let hz = TONE_MIN_HZ * (TONE_MAX_HZ / TONE_MIN_HZ).powf(tone);
-        let coefficient = (1.0
-            - (-core::f32::consts::TAU * hz / self.sample_rate.max(1) as f32).exp())
-        .clamp(0.0, 1.0);
-        self.tone_l += (left - self.tone_l) * coefficient;
-        self.tone_r += (right - self.tone_r) * coefficient;
-        (self.tone_l, self.tone_r)
+        self.tone_l.set_cutoff(hz, self.sample_rate.max(1));
+        self.tone_r.set_cutoff(hz, self.sample_rate.max(1));
+        (self.tone_l.next_sample(left), self.tone_r.next_sample(right))
     }
 }
 
