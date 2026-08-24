@@ -351,31 +351,28 @@ export component SamplerDeviceFace inherits Rectangle {
                     spacing: 2px;
                     HorizontalLayout {
                         spacing: 6px;
-                        VerticalLayout {
-                            alignment: center; spacing: 1px;
-                            MiniKnob {
-                                diameter: 28px; fill: Theme.accent;
-                                value <=> root.tune-semitones; minimum: -24; maximum: 24; default-value: 0; step: 1;
-                                value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
-                                changed(v) => { root.tune-semitones-changed(v); }
-                            }
-                            Text { text: "Coarse"; font-size: 7px; color: Theme.text-faint; horizontal-alignment: center; }
+                        alignment: center;
+                        MiniKnob {
+                            diameter: 28px; fill: Theme.accent;
+                            label: "Coarse tuning";
+                            value <=> root.tune-semitones; minimum: -24; maximum: 24; default-value: 0; step: 1;
+                            value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
+                            changed(v) => { root.tune-semitones-changed(v); }
                         }
-                        VerticalLayout {
-                            alignment: center; spacing: 1px;
-                            MiniKnob {
-                                diameter: 28px; fill: Theme.accent;
-                                value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
-                                value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
-                                changed(v) => { root.tune-cents-changed(v); }
-                            }
-                            Text { text: "Fine"; font-size: 7px; color: Theme.text-faint; horizontal-alignment: center; }
+                        MiniKnob {
+                            diameter: 28px; fill: Theme.accent;
+                            label: "Fine tuning";
+                            value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
+                            value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
+                            changed(v) => { root.tune-cents-changed(v); }
                         }
                     }
                     // Musically meaningful readout for the coarse/fine pair:
                     // the note name and frequency the tuned root note lands
                     // on, since "+3 st / +40 ct" alone doesn't say what pitch
-                    // that actually is.
+                    // that actually is. Doubles as the pair's label, now that
+                    // the individual "Coarse"/"Fine" captions are gone (the
+                    // tooltip still names each knob on hover).
                     Text { text: root.tune-label; font-size: 8px; color: Theme.text-muted; horizontal-alignment: center; }
                 }
                 Rectangle { width: 1px; background: Theme.border; }

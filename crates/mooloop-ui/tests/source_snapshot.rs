@@ -156,6 +156,9 @@ fn render_sampler_source_editor() {
     ui.set_waveform(ModelRc::from(Rc::new(VecModel::from(vec![
         0.2, 0.6, 0.9, 0.4, 0.3, 0.7, 0.5, 0.1,
     ]))));
+    ui.set_sample_frames(57600);
+    ui.set_tune_label(SharedString::from("C4 · 261.6 Hz"));
+    ui.set_playhead_positions(ModelRc::from(Rc::new(VecModel::from(vec![0.42, 0.58]))));
 
     let snapshot = ui.window().take_snapshot().unwrap();
     assert_eq!((snapshot.width(), snapshot.height()), (960, 760));
