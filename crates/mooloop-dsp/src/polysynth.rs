@@ -10,6 +10,7 @@ use crate::filter::{apply_drive, Svf};
 use crate::lfo::Lfo;
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::Osc;
+use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use mooloop_core::{PolySynthParams, MAX_POLY_VOICES};
 
@@ -327,7 +328,7 @@ impl PolySynth {
                 {
                     mix
                 } else {
-                    let base_hz = 20.0 * (max_hz / 20.0).powf(cutoff);
+                    let base_hz = hz_from_normalized(cutoff, max_hz);
                     let octaves = voice.env.level() * env_amount * 6.0 + lfo_value * to_filter;
                     let cutoff_hz = (base_hz * octaves.exp2()).clamp(20.0, max_hz);
                     voice

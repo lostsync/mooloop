@@ -5,6 +5,7 @@
 //! device host publishes its latest semantic display data through the engine.
 
 use crate::bus::StereoBus;
+use crate::scale::hz_from_normalized;
 
 /// Number of logarithmically spaced spectrum bands intended for a compact UI.
 pub const SPECTRUM_BINS: usize = 48;
@@ -52,7 +53,7 @@ impl SpectrumAnalyzer {
         let max_frequency = sample_rate as f32 * 0.45;
         for (index, coefficient) in self.coefficients.iter_mut().enumerate() {
             let position = index as f32 / (SPECTRUM_BINS - 1) as f32;
-            let frequency = 20.0 * (max_frequency / 20.0).powf(position);
+            let frequency = hz_from_normalized(position, max_frequency);
             *coefficient = 2.0 * (core::f32::consts::TAU * frequency / sample_rate as f32).cos();
         }
     }

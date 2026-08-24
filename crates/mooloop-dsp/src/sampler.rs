@@ -18,6 +18,7 @@ use std::sync::Arc;
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::node::{AudioNode, ProcessContext};
+use crate::scale::hz_from_normalized;
 use mooloop_core::{
     clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,
 };
@@ -454,7 +455,7 @@ impl Sampler {
             return frame;
         }
         let max_hz = sample_rate as f32 * 0.45;
-        let base_hz = 20.0 * (max_hz / 20.0).powf(cutoff);
+        let base_hz = hz_from_normalized(cutoff, max_hz);
         let cutoff_hz =
             (base_hz * 2.0_f32.powf(voice.env.level * env_amount * 6.0)).clamp(20.0, max_hz);
         // Topology-preserving state-variable low-pass. Unlike a biquad this
