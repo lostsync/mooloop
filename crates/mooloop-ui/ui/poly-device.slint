@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, SelectorBank, ToggleButton, ValueScale } from "controls.slint";
+import { NoteFormat, ParameterKnob, SelectorBank, ToggleButton, ValueScale } from "controls.slint";
 import { StepperField } from "toolbar.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { FilterResponseDisplay, OscillatorTrace } from "device-displays.slint";
@@ -174,7 +174,7 @@ export component PolyDeviceFace inherits Rectangle {
                     }
                     HorizontalLayout {
                         spacing: 0px;
-                        ParameterKnob { width: 52px; diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff"; value <=> root.filter-cutoff; default-value: 1; value-text: root.filter-cutoff >= 0.999 ? "Open" : round(20 * pow(1000, root.filter-cutoff)) + " Hz"; changed(v) => { root.filter-cutoff-changed(v); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff"; value <=> root.filter-cutoff; default-value: 1; value-text: NoteFormat.frequency-value(20 * pow(1000, root.filter-cutoff)); changed(v) => { root.filter-cutoff-changed(v); } }
                         ParameterKnob { width: 52px; diameter: 36px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; changed(v) => { root.filter-resonance-changed(v); } }
                         ParameterKnob { width: 52px; diameter: 36px; label: "Env"; tooltip: "Envelope depth"; value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true; fill: Theme.warning; value-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%"; changed(v) => { root.filter-env-changed(v); } }
                         ParameterKnob { width: 52px; diameter: 36px; label: "Drive"; tooltip: "Soft saturation"; value <=> root.drive; default-value: 0; fill: Theme.warning; value-text: round(root.drive * 100) + "%"; changed(v) => { root.drive-changed(v); } }

@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, SegmentedControl, ToggleButton } from "controls.slint";
+import { NoteFormat, ParameterKnob, SegmentedControl, ToggleButton } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // A deliberately bounded frequency plot. The spectrum layer receives compact
@@ -128,7 +128,7 @@ export component EqDeviceFace inherits EffectDeviceShell {
         }
         HorizontalLayout {
             spacing: 0px;
-            ParameterKnob { width: 86px; diameter: 40px; label: "Freq"; tooltip: "Selected band frequency"; value <=> root.frequency; default-value: 0.566; value-text: round(root.frequency-hz) + " Hz"; changed(v) => { root.frequency-changed(v); } }
+            ParameterKnob { width: 86px; diameter: 40px; label: "Freq"; tooltip: "Selected band frequency"; value <=> root.frequency; default-value: 0.566; value-text: NoteFormat.frequency-value(root.frequency-hz); changed(v) => { root.frequency-changed(v); } }
             ParameterKnob { width: 86px; diameter: 40px; label: "Gain"; tooltip: "Selected band boost or cut"; enabled: !root.pass-target; bipolar: true; value <=> root.gain; default-value: 0.5; value-text: round(root.gain-db * 10) / 10 + " dB"; changed(v) => { root.gain-changed(v); } }
             ParameterKnob { width: 86px; diameter: 40px; label: "Q"; tooltip: "Selected band width or pass resonance"; value <=> root.q; default-value: 0.32; value-text: round(root.q-value * 100) / 100; changed(v) => { root.q-changed(v); } }
             Rectangle { horizontal-stretch: 1; }

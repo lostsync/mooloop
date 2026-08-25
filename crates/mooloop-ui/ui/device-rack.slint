@@ -67,13 +67,13 @@ export component DeviceFrame inherits Rectangle {
             spacing: 2px;
             IconButton {
                 text: "+"; size: 24px; enabled: root.insertion-enabled;
-                tooltip: "Insert an effect before this device";
+                tooltip: "Insert effect";
                 clicked => { root.insert-requested(); }
             }
-            IconButton { text: "→"; size: 24px; enabled: false; tooltip: "Next device preset (coming soon)"; }
-            IconButton { text: "←"; size: 24px; enabled: false; tooltip: "Previous device preset (coming soon)"; }
-            IconButton { text: "⌑"; size: 24px; enabled: false; tooltip: "Save device preset (coming soon)"; }
-            IconButton { text: "▱"; size: 24px; enabled: false; tooltip: "Load device preset (coming soon)"; }
+            IconButton { text: "→"; size: 24px; enabled: false; tooltip: "Next preset"; }
+            IconButton { text: "←"; size: 24px; enabled: false; tooltip: "Previous preset"; }
+            IconButton { text: "⌑"; size: 24px; enabled: false; tooltip: "Save preset"; }
+            IconButton { text: "▱"; size: 24px; enabled: false; tooltip: "Load preset"; }
             Rectangle { vertical-stretch: 1; }
             Text { text: "IN"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
             ChannelMeter {
@@ -107,7 +107,7 @@ export component DeviceFrame inherits Rectangle {
             spacing: 3px;
             IconButton {
                 text: "✕"; size: 24px; enabled: root.removal-enabled;
-                tooltip: "Remove this device";
+                tooltip: "Remove device";
                 clicked => { root.remove-requested(); }
             }
             Rectangle { vertical-stretch: 1; }

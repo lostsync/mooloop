@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, SelectorBank } from "controls.slint";
+import { NoteFormat, ParameterKnob, SelectorBank } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { FilterResponseDisplay } from "device-displays.slint";
 
@@ -61,7 +61,7 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 tooltip: "Filter cutoff frequency";
                 value <=> root.cutoff;
                 default-value: 0.9;
-                value-text: root.cutoff >= 0.999 ? "Open" : round(20 * pow(1000, root.cutoff)) + " Hz";
+                value-text: NoteFormat.frequency-value(20 * pow(1000, root.cutoff));
                 changed(v) => { root.cutoff-changed(v); }
             }
             ParameterKnob {

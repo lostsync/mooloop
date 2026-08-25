@@ -364,6 +364,7 @@ export component PositionReadout inherits Rectangle {
     in property <int> bar: 1;
     in property <int> beat: 1;
     in property <int> tick;
+    out property <bool> hovered: readout-touch.has-hover;
 
     height: ToolbarMetrics.control-height;
     width: 92px;
@@ -385,7 +386,7 @@ export component PositionReadout inherits Rectangle {
         width: 100%;
         height: 100%;
     }
-    Tooltip { text: @markdown("Position as **bar:beat:tick**"); }
+    readout-touch := TouchArea {}
 }
 
 // Tempo. Drag to change, double-click to type.
@@ -393,6 +394,7 @@ export component TempoField inherits Rectangle {
     in-out property <int> bpm: 120;
     in property <int> minimum: 20;
     in property <int> maximum: 999;
+    out property <bool> hovered: tempo-touch.has-hover;
     callback changed(int);
 
     private property <int> pressed-bpm;
@@ -461,7 +463,6 @@ export component TempoField inherits Rectangle {
             accept
         }
     }
-    Tooltip { text: @markdown("**Tempo** Drag to change, double-click to type."); }
 }
 
 // Beat position lamps, one per beat in the bar.

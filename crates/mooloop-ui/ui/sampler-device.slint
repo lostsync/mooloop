@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { MiniKnob, ParameterKnob, SelectorBank, ToolButton, ValueScale, ZoomScrollBar } from "controls.slint";
+import { MiniKnob, NoteFormat, ParameterKnob, SelectorBank, ToolButton, ValueScale, ZoomScrollBar } from "controls.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
@@ -204,17 +204,17 @@ export component SamplerDeviceFace inherits Rectangle {
             HorizontalLayout {
                 spacing: 3px;
                 ToolButton {
-                    icon: SamplerDeviceIcons.previous; tooltip: "Previous WAV in this folder";
+                    icon: SamplerDeviceIcons.previous; tooltip: "Previous sample";
                     enabled: root.can-previous-sample; min-width: 28px; max-width: 28px;
                     clicked => { root.previous-sample-clicked(); }
                 }
                 ToolButton {
-                    icon: SamplerDeviceIcons.search; tooltip: "Choose a WAV file";
+                    icon: SamplerDeviceIcons.search; tooltip: "Load sample";
                     min-width: 28px; max-width: 28px;
                     clicked => { root.load-sample-clicked(); }
                 }
                 ToolButton {
-                    icon: SamplerDeviceIcons.next; tooltip: "Next WAV in this folder";
+                    icon: SamplerDeviceIcons.next; tooltip: "Next sample";
                     enabled: root.can-next-sample; min-width: 28px; max-width: 28px;
                     clicked => { root.next-sample-clicked(); }
                 }
@@ -233,7 +233,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     changed(v) => { root.root-note-changed(v); }
                 }
                 ToolButton {
-                    icon: SamplerDeviceIcons.reverse; tooltip: "Reverse playback";
+                    icon: SamplerDeviceIcons.reverse; tooltip: "Reverse";
                     active: root.reverse-playback; min-width: 28px; max-width: 28px;
                     clicked => { root.reverse-playback = !root.reverse-playback; root.reverse-playback-changed(root.reverse-playback); }
                 }
@@ -480,7 +480,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     }
                     HorizontalLayout {
                         spacing: 5px;
-                        ParameterKnob { diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff"; value <=> root.filter-cutoff; default-value: 1; value-text: root.filter-cutoff >= 0.999 ? "Open" : round(20 * pow(1000, root.filter-cutoff)) + " Hz"; changed(v) => { root.filter-cutoff-changed(v); } }
+                        ParameterKnob { diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff"; value <=> root.filter-cutoff; default-value: 1; value-text: NoteFormat.frequency-value(20 * pow(1000, root.filter-cutoff)); changed(v) => { root.filter-cutoff-changed(v); } }
                         ParameterKnob { diameter: 36px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; changed(v) => { root.filter-resonance-changed(v); } }
                         ParameterKnob { diameter: 36px; label: "Env"; tooltip: "Envelope modulation"; value <=> root.filter-env; default-value: 0.5; bipolar: true; fill: Theme.warning; value-text: (round((root.filter-env * 2 - 1) * 100) > 0 ? "+" : "") + round((root.filter-env * 2 - 1) * 100) + "%"; changed(v) => { root.filter-env-changed(v); } }
                         ParameterKnob { diameter: 36px; label: "Drive"; tooltip: "Pre-filter saturation"; value <=> root.drive; default-value: 0; fill: Theme.warning; value-text: round(root.drive * 100) + "%"; changed(v) => { root.drive-changed(v); } }

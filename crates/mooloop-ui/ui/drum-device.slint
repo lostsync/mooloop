@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterFader, ParameterKnob, SelectorBank, ValueScale } from "controls.slint";
+import { NoteFormat, ParameterFader, ParameterKnob, SelectorBank, ValueScale } from "controls.slint";
 import { SampleTrace } from "device-displays.slint";
 import { StepperField } from "toolbar.slint";
 
@@ -223,7 +223,7 @@ export component DrumDeviceFace inherits Rectangle {
             ParameterFader {
                 horizontal-stretch: 1; label: "High-pass"; tooltip: "Hat high-pass cutoff";
                 value <=> root.hat-hp-hz; minimum: 500; maximum: 16000; default-value: 7500; scale: ValueScale.logarithmic;
-                value-text: round(root.hat-hp-hz) + " Hz"; changed(v) => { root.hat-hp-hz-changed(v); }
+                value-text: NoteFormat.frequency-value(root.hat-hp-hz); changed(v) => { root.hat-hp-hz-changed(v); }
             }
             ParameterFader {
                 horizontal-stretch: 1; label: "Metallic"; tooltip: "Metallic square oscillator blend";

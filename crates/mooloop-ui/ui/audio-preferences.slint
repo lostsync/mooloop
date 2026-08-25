@@ -55,7 +55,6 @@ export component JackControlSurface inherits VerticalLayout {
         Rectangle { horizontal-stretch: 1; }
         ToolButton {
             text: "Refresh";
-            tooltip: "Rescan the JACK graph for connectable destinations";
             clicked => { root.refresh-targets(); }
         }
     }

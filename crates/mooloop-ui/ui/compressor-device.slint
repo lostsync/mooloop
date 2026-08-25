@@ -15,6 +15,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
     in-out property <float> release;   // normalized 0..1 (5..2000 ms)
     in-out property <float> knee;      // normalized 0..1 (0..24 dB)
     in-out property <float> makeup;    // normalized 0..1 (0..24 dB)
+    in-out property <string> hover-hint;
     callback threshold-changed(float);
     callback ratio-changed(float);
     callback attack-changed(float);
@@ -71,6 +72,10 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 default-value: 0.7;
                 value-text: round(root.threshold-db) + " dB";
                 changed(v) => { root.threshold-changed(v); }
+                changed hovered => {
+                    root.hover-hint = self.hovered ? "Level compression starts at"
+                        : root.hover-hint == "Level compression starts at" ? "" : root.hover-hint;
+                }
             }
             ParameterKnob {
                 width: 71px;
@@ -81,6 +86,10 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 default-value: 0.4627;
                 value-text: round(root.ratio-value * 10) / 10 + ":1";
                 changed(v) => { root.ratio-changed(v); }
+                changed hovered => {
+                    root.hover-hint = self.hovered ? "How hard the signal is held above the threshold"
+                        : root.hover-hint == "How hard the signal is held above the threshold" ? "" : root.hover-hint;
+                }
             }
             ParameterKnob {
                 width: 71px;
@@ -91,6 +100,10 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 default-value: 0.6388;
                 value-text: round(root.attack-ms * 100) / 100 + " ms";
                 changed(v) => { root.attack-changed(v); }
+                changed hovered => {
+                    root.hover-hint = self.hovered ? "How fast the compressor responds"
+                        : root.hover-hint == "How fast the compressor responds" ? "" : root.hover-hint;
+                }
             }
             ParameterKnob {
                 width: 71px;
@@ -101,6 +114,10 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 default-value: 0.5304;
                 value-text: round(root.release-ms) + " ms";
                 changed(v) => { root.release-changed(v); }
+                changed hovered => {
+                    root.hover-hint = self.hovered ? "How fast it lets go"
+                        : root.hover-hint == "How fast it lets go" ? "" : root.hover-hint;
+                }
             }
             ParameterKnob {
                 width: 71px;
@@ -111,6 +128,10 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 default-value: 0.25;
                 value-text: round(root.knee-db * 10) / 10 + " dB";
                 changed(v) => { root.knee-changed(v); }
+                changed hovered => {
+                    root.hover-hint = self.hovered ? "Width of the soft transition at the threshold"
+                        : root.hover-hint == "Width of the soft transition at the threshold" ? "" : root.hover-hint;
+                }
             }
             ParameterKnob {
                 width: 71px;
@@ -121,6 +142,10 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 default-value: 0.0;
                 value-text: round(root.makeup-db * 10) / 10 + " dB";
                 changed(v) => { root.makeup-changed(v); }
+                changed hovered => {
+                    root.hover-hint = self.hovered ? "Gain added after compression"
+                        : root.hover-hint == "Gain added after compression" ? "" : root.hover-hint;
+                }
             }
         }
     }

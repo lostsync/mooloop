@@ -151,9 +151,7 @@ component MixerStrip inherits Rectangle {
                 mouse-cursor: pointer;
                 clicked => { root.selected(); }
             }
-            Tooltip {
-                text: @markdown("Edit **\{root.strip.name}** in the device rack");
-            }
+            Tooltip { text: @markdown("\{root.strip.name}"); }
         }
 
         HorizontalLayout {

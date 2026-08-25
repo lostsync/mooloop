@@ -194,6 +194,11 @@ export component MainWindow inherits Window {
     in-out property <bool> embed-assets: true;
     in-out property <bool> document-busy;
     in-out property <string> status-message;
+    // Live hover hint: gesture/interaction explanations that used to live in
+    // a Tooltip now show here instead, so nothing hover-lingers over a
+    // large always-under-the-pointer area (the piano roll, in particular).
+    // Takes priority over status-message while non-empty.
+    in-out property <string> hover-hint;
     in-out property <bool> save-error-open;
     in-out property <string> save-error-title;
     in-out property <string> save-error-detail;
@@ -975,6 +980,10 @@ export component MainWindow inherits Window {
                             bar: root.position-bar;
                             beat: root.position-beat;
                             tick: root.position-tick;
+                            changed hovered => {
+                                root.hover-hint = self.hovered ? "Position as bar:beat:tick"
+                                    : root.hover-hint == "Position as bar:beat:tick" ? "" : root.hover-hint;
+                            }
                         }
                         BeatLamps {
                             current: root.beat-in-bar;
@@ -986,6 +995,12 @@ export component MainWindow inherits Window {
                         TempoField {
                             bpm <=> root.bpm;
                             changed(v) => { root.bpm-changed(v); }
+                            changed hovered => {
+                                root.hover-hint = self.hovered
+                                    ? "Drag to change, double-click to type."
+                                    : root.hover-hint == "Drag to change, double-click to type."
+                                        ? "" : root.hover-hint;
+                            }
                         }
 
                         StepperField {
@@ -1074,7 +1089,7 @@ export component MainWindow inherits Window {
                         }
                         IconButton {
                             text: "+";
-                            tooltip: "Create pattern";
+                            tooltip: "Add Pattern";
                             size: 24px;
                             enabled: root.pattern-count < 256;
                             clicked => { root.add-pattern-clicked(); }
@@ -1134,8 +1149,6 @@ export component MainWindow inherits Window {
                                 ? root.playlist-snap-index : root.piano-snap-index;
                             field-width: 46px;
                             menu-width: 120px;
-                            tooltip: root.editor-page == 2
-                                ? "Playlist placement grid" : "Piano-roll note grid";
                             selected(i) => {
                                 if (root.editor-page == 2) {
                                     root.playlist-snap-index = i;
@@ -1441,14 +1454,14 @@ export component MainWindow inherits Window {
                     alignment: start;
                     FlatButton {
                         text: "+";
-                        tooltip: "Add sound source";
+                        tooltip: "Add channel";
                         min-width: 28px; max-width: 28px;
                         min-height: 24px; max-height: 24px;
                         clicked => { add-source-menu.show(); }
                     }
                     FlatButton {
                         text: "−";
-                        tooltip: "Remove last channel";
+                        tooltip: "Remove channel";
                         min-width: 28px; max-width: 28px;
                         min-height: 24px; max-height: 24px;
                         clicked => { root.remove-channel-clicked(); }
@@ -1469,10 +1482,10 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding: 4px;
                             spacing: 1px;
-                            ToolButton { text: "Add Sampler"; tooltip: "Add a sampler channel"; clicked => { add-source-menu.close(); root.add-channel-clicked(0); } }
-                            ToolButton { text: "Add Drum Synth"; tooltip: "Add a drum synth channel"; clicked => { add-source-menu.close(); root.add-channel-clicked(1); } }
-                            ToolButton { text: "Add Mono Synth"; tooltip: "Add a mono synth channel"; clicked => { add-source-menu.close(); root.add-channel-clicked(2); } }
-                            ToolButton { text: "Add Poly Synth"; tooltip: "Add a poly synth channel"; clicked => { add-source-menu.close(); root.add-channel-clicked(3); } }
+                            ToolButton { text: "Add Sampler"; clicked => { add-source-menu.close(); root.add-channel-clicked(0); } }
+                            ToolButton { text: "Add Drum Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(1); } }
+                            ToolButton { text: "Add Mono Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(2); } }
+                            ToolButton { text: "Add Poly Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(3); } }
                         }
                     }
                 }
@@ -1500,19 +1513,16 @@ export component MainWindow inherits Window {
                         alignment: start;
                         FlatButton {
                             text: "Source";
-                            tooltip: "Sound source controls";
                             active: root.editor-page == 0;
                             clicked => { root.editor-page = 0; }
                         }
                         FlatButton {
                             text: "Notes";
-                            tooltip: "Piano roll and note parameters";
                             active: root.editor-page == 1;
                             clicked => { root.editor-page = 1; }
                         }
                         FlatButton {
                             text: "Playlist";
-                            tooltip: "Song arrangement";
                             active: root.editor-page == 2;
                             clicked => { root.editor-page = 2; }
                         }
@@ -1568,18 +1578,17 @@ export component MainWindow inherits Window {
                                     current-index <=> root.playlist-snap-index;
                                     width: 92px;
                                     height: 24px;
-                                    Tooltip { text: @markdown("Playlist placement grid"); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 Text { text: "↔"; color: Theme.text-faint; vertical-alignment: center; }
                                 FlatButton {
-                                    text: "−"; tooltip: "Zoom timeline out";
+                                    text: "−"; tooltip: "Zoom Out";
                                     min-width: 26px; max-width: 26px;
                                     enabled: root.playlist-bar-width > 12px;
                                     clicked => { root.playlist-bar-width = max(12px, root.playlist-bar-width - 4px); }
                                 }
                                 FlatButton {
-                                    text: "+"; tooltip: "Zoom timeline in";
+                                    text: "+"; tooltip: "Zoom In";
                                     min-width: 26px; max-width: 26px;
                                     enabled: root.playlist-bar-width < 96px;
                                     clicked => { root.playlist-bar-width = min(96px, root.playlist-bar-width + 4px); }
@@ -1772,8 +1781,15 @@ export component MainWindow inherits Window {
                                                     }
                                                 }
                                             }
-                                            Tooltip {
-                                                text: @markdown("Click to place on the playlist grid. Right-click removes a clip.");
+                                            // Same hover-linger problem as the piano roll's
+                                            // canvas: this one TouchArea spans the whole
+                                            // timeline row, so a Tooltip here would show for
+                                            // as long as the playlist is in use.
+                                            changed has-hover => {
+                                                root.hover-hint = self.has-hover
+                                                    ? "Click to place on the playlist grid. Right-click removes a clip."
+                                                    : root.hover-hint == "Click to place on the playlist grid. Right-click removes a clip."
+                                                        ? "" : root.hover-hint;
                                             }
                                         }
                                     }
@@ -2233,6 +2249,7 @@ export component MainWindow inherits Window {
                                                 release-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                 knee-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                 makeup-changed(v) => { root.effect-param-changed(index, 5, v); }
+                                                hover-hint <=> root.hover-hint;
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 6 : LimiterDeviceFace {
@@ -2357,16 +2374,16 @@ export component MainWindow inherits Window {
                                                 VerticalLayout {
                                                     padding: 4px;
                                                     spacing: 1px;
-                                                    ToolButton { text: "Filter"; tooltip: "Insert a low/high-pass filter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(0, root.insert-effect-before); } }
-                                                    ToolButton { text: "Drive"; tooltip: "Insert saturation or distortion"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(1, root.insert-effect-before); } }
-                                                    ToolButton { text: "Bitcrush"; tooltip: "Insert bit and rate reduction"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(2, root.insert-effect-before); } }
-                                                    ToolButton { text: "Delay"; tooltip: "Insert a delay"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(3, root.insert-effect-before); } }
-                                                    ToolButton { text: "Gate"; tooltip: "Insert a noise gate"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(4, root.insert-effect-before); } }
-                                                    ToolButton { text: "Comp"; tooltip: "Insert a compressor"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(5, root.insert-effect-before); } }
-                                                    ToolButton { text: "Limiter"; tooltip: "Insert a limiter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(6, root.insert-effect-before); } }
-                                                    ToolButton { text: "EQ"; tooltip: "Insert a parametric equalizer"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(7, root.insert-effect-before); } }
-                                                    ToolButton { text: "Reverb"; tooltip: "Insert a generated-room convolution reverb"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(8, root.insert-effect-before); } }
-                                                    ToolButton { text: "Mod"; tooltip: "Insert chorus, flange, phaser, ensemble, or ADT"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(9, root.insert-effect-before); } }
+                                                    ToolButton { text: "Filter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(0, root.insert-effect-before); } }
+                                                    ToolButton { text: "Drive"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(1, root.insert-effect-before); } }
+                                                    ToolButton { text: "Bitcrush"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(2, root.insert-effect-before); } }
+                                                    ToolButton { text: "Delay"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(3, root.insert-effect-before); } }
+                                                    ToolButton { text: "Gate"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(4, root.insert-effect-before); } }
+                                                    ToolButton { text: "Comp"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(5, root.insert-effect-before); } }
+                                                    ToolButton { text: "Limiter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(6, root.insert-effect-before); } }
+                                                    ToolButton { text: "EQ"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(7, root.insert-effect-before); } }
+                                                    ToolButton { text: "Reverb"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(8, root.insert-effect-before); } }
+                                                    ToolButton { text: "Mod"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(9, root.insert-effect-before); } }
                                                 }
                                             }
                                         }
@@ -2454,7 +2471,6 @@ export component MainWindow inherits Window {
                                     current-value: "Velocity";
                                     width: 120px;
                                     height: 24px;
-                                    Tooltip { text: @markdown("Parameter lane"); }
                                 }
                                 Text {
                                     text: "SNAP";
@@ -2467,7 +2483,6 @@ export component MainWindow inherits Window {
                                     current-index <=> root.piano-snap-index;
                                     width: 84px;
                                     height: 24px;
-                                    Tooltip { text: @markdown("Piano-roll note grid"); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                             }
@@ -2777,8 +2792,16 @@ export component MainWindow inherits Window {
                                                     accept
                                                 } else { reject }
                                             }
-                                            Tooltip {
-                                                text: @markdown("Ctrl+wheel zooms pitch. Ctrl+Shift+wheel zooms time.");
+                                            // A Tooltip here would hover-linger for as long as
+                                            // the piano roll is in use, since this one TouchArea
+                                            // covers the whole note canvas. Use the status bar
+                                            // instead, which clears the moment the pointer moves
+                                            // to something else.
+                                            changed has-hover => {
+                                                root.hover-hint = self.has-hover
+                                                    ? "Ctrl+wheel zooms pitch. Ctrl+Shift+wheel zooms time."
+                                                    : root.hover-hint == "Ctrl+wheel zooms pitch. Ctrl+Shift+wheel zooms time."
+                                                        ? "" : root.hover-hint;
                                             }
                                         }
                                     }
@@ -2805,7 +2828,12 @@ export component MainWindow inherits Window {
                                             piano-scroll.viewport-y = -o * max(0px,
                                                 root.piano-content-h - piano-scroll.visible-height);
                                         }
-                                        Tooltip { text: @markdown("Drag to scroll pitch. Drag an end grip to zoom."); }
+                                        changed hovered => {
+                                            root.hover-hint = self.hovered
+                                                ? "Drag to scroll pitch. Drag an end grip to zoom."
+                                                : root.hover-hint == "Drag to scroll pitch. Drag an end grip to zoom."
+                                                    ? "" : root.hover-hint;
+                                        }
                                     }
                                 }
 
@@ -2832,7 +2860,12 @@ export component MainWindow inherits Window {
                                             piano-scroll.viewport-x = -o * max(0px,
                                                 root.piano-content-w - piano-scroll.visible-width);
                                         }
-                                        Tooltip { text: @markdown("Drag to scroll time. Drag an end grip to zoom."); }
+                                        changed hovered => {
+                                            root.hover-hint = self.hovered
+                                                ? "Drag to scroll time. Drag an end grip to zoom."
+                                                : root.hover-hint == "Drag to scroll time. Drag an end grip to zoom."
+                                                    ? "" : root.hover-hint;
+                                        }
                                     }
                                     Rectangle { width: 12px; }
                                 }
@@ -2895,19 +2928,25 @@ export component MainWindow inherits Window {
             }
         }
 
-        if root.status-message != "" : Rectangle {
-            height: 24px;
-            background: Theme.surface-raised;
-            border-width: 1px;
-            border-color: Theme.border;
-            Text {
-                text: root.status-message;
-                color: Theme.text-muted;
-                font-size: 10px;
-                x: 8px;
-                vertical-alignment: center;
-                overflow: elide;
-            }
+    }
+
+    // Overlay rather than a VerticalLayout row: appearing on hover must not
+    // reflow the work surface beneath the pointer.
+    if root.hover-hint != "" || root.status-message != "" : Rectangle {
+        y: parent.height - self.height;
+        width: parent.width;
+        height: 24px;
+        z: 100;
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: Theme.border;
+        Text {
+            text: root.hover-hint != "" ? root.hover-hint : root.status-message;
+            color: Theme.text-muted;
+            font-size: 10px;
+            x: 8px;
+            vertical-alignment: center;
+            overflow: elide;
         }
     }
 
