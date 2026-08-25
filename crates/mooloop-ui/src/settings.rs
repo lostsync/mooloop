@@ -104,6 +104,8 @@ impl AppearancePreset {
 pub(crate) struct AppearanceSettings {
     pub preset: AppearancePreset,
     pub accent: String,
+    #[serde(default = "default_true")]
+    pub smooth_curves: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -185,6 +187,7 @@ impl Default for AppearanceSettings {
         Self {
             preset: AppearancePreset::Mooloop,
             accent: DEFAULT_ACCENT.to_owned(),
+            smooth_curves: true,
         }
     }
 }
@@ -193,6 +196,7 @@ impl AppearanceSettings {
     pub(crate) fn validated(
         preset: AppearancePreset,
         accent: &str,
+        smooth_curves: bool,
     ) -> Result<Self, ValidationError> {
         let accent_rgb = Rgb::parse(accent)?;
         let surface = preset.palette(accent_rgb).surface;
@@ -202,6 +206,7 @@ impl AppearanceSettings {
         Ok(Self {
             preset,
             accent: accent_rgb.to_hex(),
+            smooth_curves,
         })
     }
 
@@ -272,7 +277,7 @@ impl UiSettings {
             return Err(SettingsError::UnsupportedVersion(settings.schema_version));
         }
         let appearance =
-            AppearanceSettings::validated(settings.appearance.preset, &settings.appearance.accent)
+            AppearanceSettings::validated(settings.appearance.preset, &settings.appearance.accent, settings.appearance.smooth_curves)
                 .map_err(SettingsError::Validation)?;
         Ok(Self {
             appearance,
@@ -473,14 +478,14 @@ mod tests {
 
     #[test]
     fn validates_and_normalizes_accent() {
-        let settings = AppearanceSettings::validated(AppearancePreset::Mooloop, "#84cc16").unwrap();
+        let settings = AppearanceSettings::validated(AppearancePreset::Mooloop, "#84cc16", true).unwrap();
         assert_eq!(settings.accent, "#84CC16");
         assert!(matches!(
-            AppearanceSettings::validated(AppearancePreset::Mooloop, "lime"),
+            AppearanceSettings::validated(AppearancePreset::Mooloop, "lime", true),
             Err(ValidationError::InvalidHex)
         ));
         assert!(matches!(
-            AppearanceSettings::validated(AppearancePreset::Mooloop, "#232328"),
+            AppearanceSettings::validated(AppearancePreset::Mooloop, "#232328", true),
             Err(ValidationError::LowContrast)
         ));
     }
@@ -494,7 +499,7 @@ mod tests {
             general: GeneralSettings {
                 developer_mode: true,
             },
-            appearance: AppearanceSettings::validated(AppearancePreset::Graphite, "#F59E0B")
+            appearance: AppearanceSettings::validated(AppearancePreset::Graphite, "#F59E0B", true)
                 .unwrap(),
             audio: AudioSettings {
                 driver: AudioDriverKind::Jack,
@@ -524,7 +529,9 @@ mod tests {
             "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n",
         )
         .unwrap();
-        let audio = UiSettings::load_from(&path).unwrap().audio;
+        let settings = UiSettings::load_from(&path).unwrap();
+        assert!(settings.appearance.smooth_curves);
+        let audio = settings.audio;
         assert_eq!(audio, AudioSettings::default());
         assert!(audio.jack.auto_reconnect);
         assert_eq!(audio.jack.output_target(), None);

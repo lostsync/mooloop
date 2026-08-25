@@ -241,6 +241,7 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <int> appearance-preset;
     in-out property <string> appearance-accent;
     in-out property <bool> developer-mode;
+    in-out property <bool> smooth-curves;
     in property <string> validation-error;
     in property <[OutputTargetRow]> audio-output-targets;
     in property <int> audio-buffer-size-index;
@@ -250,7 +251,7 @@ export component PreferencesDialog inherits Rectangle {
     in property <[ShortcutRow]> shortcut-rows;
     in-out property <string> shortcut-capturing-id;
     callback appearance-preview(int, string);
-    callback save(int, string, bool) -> bool;
+    callback save(int, string, bool, bool) -> bool;
     callback cancelled;
     callback audio-refresh-targets();
     callback audio-select-output(string, string, string);
@@ -428,6 +429,18 @@ export component PreferencesDialog inherits Rectangle {
                                 Rectangle { horizontal-stretch: 1; }
                             }
                             Text { text: root.validation-error; color: Theme.destructive; font-size: 10px; height: 18px; }
+                            SectionLabel { text: "GRAPHICS"; }
+                            HorizontalBox {
+                                height: 36px;
+                                spacing: 8px;
+                                VerticalBox {
+                                    spacing: 0px;
+                                    Text { text: "Smooth curves"; color: Theme.text; font-size: 11px; }
+                                    Text { text: "Antialias device graphs and filter curves"; color: Theme.text-muted; font-size: 10px; }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                ToggleButton { text: root.smooth-curves ? "On" : "Off"; tooltip: "Draw smooth antialiased curves"; checked <=> root.smooth-curves; }
+                            }
                             Rectangle {
                                 height: 64px;
                                 background: Theme.background;
@@ -509,8 +522,8 @@ export component PreferencesDialog inherits Rectangle {
                     spacing: 6px;
                     Rectangle { horizontal-stretch: 1; }
                     ToolButton { text: "Cancel"; clicked => { root.cancelled(); root.open = false; } }
-                    ToolButton { text: "Apply"; clicked => { root.save(root.appearance-preset, root.appearance-accent, root.developer-mode); } }
-                    ToolButton { text: "OK"; active: true; clicked => { if (root.save(root.appearance-preset, root.appearance-accent, root.developer-mode)) { root.open = false; } } }
+                    ToolButton { text: "Apply"; clicked => { root.save(root.appearance-preset, root.appearance-accent, root.developer-mode, root.smooth-curves); } }
+                    ToolButton { text: "OK"; active: true; clicked => { if (root.save(root.appearance-preset, root.appearance-accent, root.developer-mode, root.smooth-curves)) { root.open = false; } } }
                 }
             }
         }

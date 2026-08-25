@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { DisplayPrefs, Theme } from "theme.slint";
 
 export component SampleTrace inherits Rectangle {
     in property <[float]> minimums;
@@ -120,7 +120,7 @@ export component FilterResponseDisplay inherits Rectangle {
         width: 100%; height: 1px;
         background: Theme.border.with-alpha(line == 1 ? 0.65 : 0.35);
     }
-    if abs(root.env-amount) > 0.01 : Rectangle {
+    if abs(root.env-amount) > 0.01 && !DisplayPrefs.smooth-curves : Rectangle {
         for index in root.sample-count : Rectangle {
             property <float> current: root.plot-y(index, root.modulated-cutoff);
             property <float> previous: root.plot-y(max(0, index - 1), root.modulated-cutoff);
@@ -131,14 +131,38 @@ export component FilterResponseDisplay inherits Rectangle {
             background: Theme.warning.with-alpha(0.62);
         }
     }
-    for index in root.sample-count : Rectangle {
-        property <float> current: root.plot-y(index, root.cutoff);
-        property <float> previous: root.plot-y(max(0, index - 1), root.cutoff);
-        x: index * parent.width / root.sample-count;
-        y: min(self.current, self.previous) * parent.height;
-        width: max(1px, parent.width / root.sample-count + 0.5px);
-        height: max(1px, abs(self.current - self.previous) * parent.height);
-        background: Theme.accent;
+    if abs(root.env-amount) > 0.01 && DisplayPrefs.smooth-curves : Rectangle {
+        for index in root.sample-count : Path {
+            width: 100%; height: 100%;
+            viewbox-width: 1; viewbox-height: 1;
+            commands: "M " + (max(0, index - 1) / root.sample-count) + " " + root.plot-y(max(0, index - 1), root.modulated-cutoff)
+                + " L " + (index / root.sample-count) + " " + root.plot-y(index, root.modulated-cutoff);
+            stroke: Theme.warning.with-alpha(0.62);
+            stroke-width: 1.4px;
+            fill: transparent;
+        }
+    }
+    if !DisplayPrefs.smooth-curves : Rectangle {
+        for index in root.sample-count : Rectangle {
+            property <float> current: root.plot-y(index, root.cutoff);
+            property <float> previous: root.plot-y(max(0, index - 1), root.cutoff);
+            x: index * parent.width / root.sample-count;
+            y: min(self.current, self.previous) * parent.height;
+            width: max(1px, parent.width / root.sample-count + 0.5px);
+            height: max(1px, abs(self.current - self.previous) * parent.height);
+            background: Theme.accent;
+        }
+    }
+    if DisplayPrefs.smooth-curves : Rectangle {
+        for index in root.sample-count : Path {
+            width: 100%; height: 100%;
+            viewbox-width: 1; viewbox-height: 1;
+            commands: "M " + (max(0, index - 1) / root.sample-count) + " " + root.plot-y(max(0, index - 1), root.cutoff)
+                + " L " + (index / root.sample-count) + " " + root.plot-y(index, root.cutoff);
+            stroke: Theme.accent;
+            stroke-width: 1.4px;
+            fill: transparent;
+        }
     }
 }
 
@@ -191,14 +215,27 @@ export component DriveTransferDisplay inherits Rectangle {
     // Unity axes: the diagonal a fully clean signal would follow.
     Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border.with-alpha(0.55); }
     Rectangle { x: parent.width / 2; width: 1px; height: 100%; background: Theme.border.with-alpha(0.55); }
-    for index in root.sample-count : Rectangle {
-        property <float> current: root.plot-y(index);
-        property <float> previous: root.plot-y(max(0, index - 1));
-        x: index * parent.width / root.sample-count;
-        y: min(self.current, self.previous) * parent.height;
-        width: max(1px, parent.width / root.sample-count + 0.5px);
-        height: max(1px, abs(self.current - self.previous) * parent.height);
-        background: Theme.warning;
+    if !DisplayPrefs.smooth-curves : Rectangle {
+        for index in root.sample-count : Rectangle {
+            property <float> current: root.plot-y(index);
+            property <float> previous: root.plot-y(max(0, index - 1));
+            x: index * parent.width / root.sample-count;
+            y: min(self.current, self.previous) * parent.height;
+            width: max(1px, parent.width / root.sample-count + 0.5px);
+            height: max(1px, abs(self.current - self.previous) * parent.height);
+            background: Theme.warning;
+        }
+    }
+    if DisplayPrefs.smooth-curves : Rectangle {
+        for index in root.sample-count : Path {
+            width: 100%; height: 100%;
+            viewbox-width: 1; viewbox-height: 1;
+            commands: "M " + (max(0, index - 1) / root.sample-count) + " " + root.plot-y(max(0, index - 1))
+                + " L " + (index / root.sample-count) + " " + root.plot-y(index);
+            stroke: Theme.warning;
+            stroke-width: 1.4px;
+            fill: transparent;
+        }
     }
 }
 
@@ -353,13 +390,26 @@ export component DynamicsCurveDisplay inherits Rectangle {
         height: 1px;
         background: Theme.border.with-alpha(0.8);
     }
-    for index in root.sample-count : Rectangle {
-        property <float> current: root.plot-y(index);
-        property <float> previous: root.plot-y(max(0, index - 1));
-        x: index * parent.width / root.sample-count;
-        y: min(self.current, self.previous) * parent.height;
-        width: max(1px, parent.width / root.sample-count + 0.5px);
-        height: max(1px, abs(self.current - self.previous) * parent.height);
-        background: Theme.warning;
+    if !DisplayPrefs.smooth-curves : Rectangle {
+        for index in root.sample-count : Rectangle {
+            property <float> current: root.plot-y(index);
+            property <float> previous: root.plot-y(max(0, index - 1));
+            x: index * parent.width / root.sample-count;
+            y: min(self.current, self.previous) * parent.height;
+            width: max(1px, parent.width / root.sample-count + 0.5px);
+            height: max(1px, abs(self.current - self.previous) * parent.height);
+            background: Theme.warning;
+        }
+    }
+    if DisplayPrefs.smooth-curves : Rectangle {
+        for index in root.sample-count : Path {
+            width: 100%; height: 100%;
+            viewbox-width: 1; viewbox-height: 1;
+            commands: "M " + (max(0, index - 1) / root.sample-count) + " " + root.plot-y(max(0, index - 1))
+                + " L " + (index / root.sample-count) + " " + root.plot-y(index);
+            stroke: Theme.warning;
+            stroke-width: 1.4px;
+            fill: transparent;
+        }
     }
 }

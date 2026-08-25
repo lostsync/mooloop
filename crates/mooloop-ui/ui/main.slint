@@ -1,5 +1,6 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+export { DisplayPrefs } from "theme.slint";
 import {
     AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
     SegmentedControl, SelectorBank, StereoPeakMeter, ZoomScrollBar,
@@ -170,6 +171,7 @@ export component MainWindow inherits Window {
     in-out property <int> preferences-appearance-preset;
     in-out property <string> preferences-appearance-accent: "#84CC16";
     in-out property <bool> preferences-developer-mode;
+    in-out property <bool> preferences-smooth-curves;
     in-out property <string> preferences-error;
     in property <[OutputTargetRow]> preferences-audio-output-targets;
     in property <int> preferences-audio-buffer-size-index;
@@ -180,7 +182,7 @@ export component MainWindow inherits Window {
     in-out property <string> preferences-shortcut-capturing-id;
     callback preferences-opened();
     callback preferences-appearance-preview(int, string);
-    callback preferences-save(int, string, bool) -> bool;
+    callback preferences-save(int, string, bool, bool) -> bool;
     callback preferences-cancelled();
     callback preferences-audio-refresh-targets();
     callback preferences-audio-select-output(string, string, string);
@@ -2958,6 +2960,7 @@ export component MainWindow inherits Window {
         appearance-preset <=> root.preferences-appearance-preset;
         appearance-accent <=> root.preferences-appearance-accent;
         developer-mode <=> root.preferences-developer-mode;
+        smooth-curves <=> root.preferences-smooth-curves;
         validation-error: root.preferences-error;
         audio-output-targets: root.preferences-audio-output-targets;
         audio-buffer-size-index: root.preferences-audio-buffer-size-index;
@@ -2967,7 +2970,7 @@ export component MainWindow inherits Window {
         shortcut-rows: root.preferences-shortcut-rows;
         shortcut-capturing-id <=> root.preferences-shortcut-capturing-id;
         appearance-preview(preset, accent) => { root.preferences-appearance-preview(preset, accent); }
-        save(preset, accent, developer-mode) => { root.preferences-save(preset, accent, developer-mode) }
+        save(preset, accent, developer-mode, smooth-curves) => { root.preferences-save(preset, accent, developer-mode, smooth-curves) }
         cancelled => { root.preferences-cancelled(); }
         audio-refresh-targets => { root.preferences-audio-refresh-targets(); }
         audio-select-output(client, port-l, port-r) => { root.preferences-audio-select-output(client, port-l, port-r); }

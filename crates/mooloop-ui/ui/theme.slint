@@ -19,3 +19,10 @@ export global Theme {
     in-out property <color> meter-warning: #eab308;
     in-out property <color> meter-clip: #ef4444;
 }
+
+// Rendering preferences set from Preferences > Appearance, alongside the
+// palette. Kept separate from Theme since these aren't colors, but they
+// apply the same way: set once from Rust, read by any component.
+export global DisplayPrefs {
+    in-out property <bool> smooth-curves: true;
+}

@@ -189,6 +189,8 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window.set_preferences_appearance_preset(settings.appearance.preset.index());
     window.set_preferences_appearance_accent(settings.appearance.accent.as_str().into());
     window.set_preferences_developer_mode(settings.general.developer_mode);
+    window.set_preferences_smooth_curves(settings.appearance.smooth_curves);
+    window.global::<DisplayPrefs>().set_smooth_curves(settings.appearance.smooth_curves);
     window.set_preferences_error("".into());
     let buffer_index = settings
         .audio
@@ -2953,12 +2955,15 @@ impl AppUi {
             });
         }
         {
+            let settings = ui_settings.clone();
             let weak = window.as_weak();
             window.on_preferences_appearance_preview(move |preset, accent| {
                 let Some(window) = weak.upgrade() else { return };
+                let smooth_curves = settings.borrow().appearance.smooth_curves;
                 match AppearanceSettings::validated(
                     AppearancePreset::from_index(preset),
                     accent.as_str(),
+                    smooth_curves,
                 ) {
                     Ok(appearance) => {
                         apply_theme(&window, appearance.palette());
@@ -2971,13 +2976,14 @@ impl AppUi {
         {
             let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_preferences_save(move |preset, accent, developer_mode| {
+            window.on_preferences_save(move |preset, accent, developer_mode, smooth_curves| {
                 let Some(window) = weak.upgrade() else {
                     return false;
                 };
                 let appearance = match AppearanceSettings::validated(
                     AppearancePreset::from_index(preset),
                     accent.as_str(),
+                    smooth_curves,
                 ) {
                     Ok(appearance) => appearance,
                     Err(error) => {
@@ -2986,6 +2992,7 @@ impl AppUi {
                     }
                 };
                 apply_theme(&window, appearance.palette());
+                window.global::<DisplayPrefs>().set_smooth_curves(smooth_curves);
                 let mut settings = settings.borrow_mut();
                 let previous = settings.appearance.clone();
                 settings.appearance = appearance;
