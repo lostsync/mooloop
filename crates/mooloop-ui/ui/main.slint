@@ -2384,7 +2384,6 @@ export component MainWindow inherits Window {
                                         width: 50px;
                                         height: DeviceRackMetrics.face-height;
                                         DeviceAddSlot {
-                                            enabled: root.effect-slots.length < 8;
                                             kind-selected(kind) => { root.add-effect-clicked(kind, root.effect-slots.length); }
                                         }
                                     }

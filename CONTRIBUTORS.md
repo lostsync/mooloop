@@ -46,7 +46,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-25
-- Sessions: 15
+- Sessions: 16
 - Notes: Set up this file at Adam's request. Refreshed the README
   screenshot. Sampler UI overhaul: waveform zoom/scroll, sample-accurate
   trim/loop fields, compact tuning knobs with a note/frequency readout, a
@@ -68,6 +68,10 @@ work session you can recall being part of, and don't stress over precision.
   mouse-move for the built-in Menu widget kind, not a hand-rolled
   PopupWindow); the add-effect type list is de-duplicated into one
   left-aligned, content-width component shared by every insert trigger.
+  Effects-feedback pass: removed a stale UI-side 8-effect cap so the rack
+  matches the backend's real 256-effect ceiling, and reworked ParameterKnob
+  to put the label above the knob and a bright monospace value readout below
+  it, sized to its own content and bounded to its knob's column.
 
 ### GLM (glm-5.3) — opencode
 - First seen: 2026-08-23
