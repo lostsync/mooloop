@@ -1,0 +1,12 @@
+#!/bin/sh
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+
+if [ "$branch" = "main" ]; then
+    cat >&2 <<'EOF'
+Refusing to commit on main.
+Create a task worktree and branch before editing:
+  git worktree add ../mooloop-worktrees/<branch-name> -b <type>/<slug> main
+EOF
+    exit 1
+fi

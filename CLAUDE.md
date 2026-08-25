@@ -1,10 +1,11 @@
 # mooloop
 
-Git/worktree workflow rules for this repo are in [AGENTS.md](./AGENTS.md) —
-read it and follow it exactly. It's shared with Codex and opencode, which
-also work in this repo, so it's written tool-agnostic; nothing here
-overrides it.
+Before editing a repository-tracked file, run `git status --short --branch`.
+`main` is read/merge-only: create a task worktree before every edit unless
+Adam explicitly directs otherwise.
 
-Claude Code specific note: when delegating isolated sub-tasks via the Agent
-tool, use `isolation: "worktree"` rather than hand-rolling `git worktree`
-commands yourself.
+Read and obey [AGENTS.md](./AGENTS.md) before starting work; it is the shared,
+authoritative workflow contract for Claude Code, Codex, and opencode.
+
+When delegating an isolated Claude Code subtask, use the Agent tool with
+`isolation: "worktree"`.
