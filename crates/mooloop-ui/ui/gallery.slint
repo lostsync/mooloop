@@ -28,6 +28,7 @@ import { CompressorDeviceFace } from "compressor-device.slint";
 import { LimiterDeviceFace } from "limiter-device.slint";
 import { EqDeviceFace } from "eq-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
+import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
 
 export component ControlGallery inherits Window {
@@ -628,9 +629,18 @@ export component ControlGallery inherits Window {
                         height: DeviceRackMetrics.face-height;
                         ModulationDeviceFace {
                             x: 0px; y: 0px; width: parent.width; height: parent.height;
-                            slot-index: 10; slot-count: 11;
+                            slot-index: 10; slot-count: 12;
                             mode: 2; rate: 0.45; depth: 0.58; character: 0.52;
                             feedback: 0.64; spread: 0.72; tone: 0.76; stages: 0.5;
+                        }
+                    }
+                    DeviceFrame {
+                        width: DeviceRackMetrics.unit-width;
+                        height: DeviceRackMetrics.face-height;
+                        PlateDeviceFace {
+                            x: 0px; y: 0px; width: parent.width; height: parent.height;
+                            slot-index: 11; slot-count: 12;
+                            size: 0.5; decay: 0.5886; damping: 0.4; width-value: 1.0;
                         }
                     }
                     DeviceAddSlot { }

@@ -18,6 +18,7 @@ pub enum EffectKind {
     Bitcrush,
     Delay,
     Reverb,
+    Plate,
     Gate,
     Compressor,
     Limiter,
@@ -25,7 +26,7 @@ pub enum EffectKind {
 
 impl EffectKind {
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 10] = [
+    pub const ALL: [EffectKind; 11] = [
         EffectKind::Eq,
         EffectKind::Modulation,
         EffectKind::Filter,
@@ -33,6 +34,7 @@ impl EffectKind {
         EffectKind::Bitcrush,
         EffectKind::Delay,
         EffectKind::Reverb,
+        EffectKind::Plate,
         EffectKind::Gate,
         EffectKind::Compressor,
         EffectKind::Limiter,
@@ -48,6 +50,7 @@ impl EffectKind {
             Self::Bitcrush => "Bitcrush",
             Self::Delay => "Delay",
             Self::Reverb => "Reverb",
+            Self::Plate => "Plate",
             Self::Gate => "Gate",
             Self::Compressor => "Comp",
             Self::Limiter => "Limiter",
@@ -65,6 +68,7 @@ impl EffectKind {
             Self::Bitcrush => &BITCRUSH_DESCRIPTORS,
             Self::Delay => &DELAY_DESCRIPTORS,
             Self::Reverb => &REVERB_DESCRIPTORS,
+            Self::Plate => &PLATE_DESCRIPTORS,
             Self::Gate => &GATE_DESCRIPTORS,
             Self::Compressor => &COMPRESSOR_DESCRIPTORS,
             Self::Limiter => &LIMITER_DESCRIPTORS,
@@ -86,6 +90,7 @@ impl EffectKind {
             Self::Bitcrush => EffectParams::Bitcrush(BitcrushParams::default()),
             Self::Delay => EffectParams::Delay(DelayParams::default()),
             Self::Reverb => EffectParams::Reverb(ReverbParams::default()),
+            Self::Plate => EffectParams::Plate(PlateParams::default()),
             Self::Gate => EffectParams::Gate(GateParams::default()),
             Self::Compressor => EffectParams::Compressor(CompressorParams::default()),
             Self::Limiter => EffectParams::Limiter(LimiterParams::default()),
@@ -1171,6 +1176,79 @@ impl ReverbParams {
     }
 }
 
+// --- Plate -------------------------------------------------------------
+
+/// `Event::ParamValue` ids for [`PlateParams`].
+///
+/// Unlike `ReverbParams`, these drive a feedback network directly: no
+/// impulse response is generated, so changes apply immediately on the
+/// realtime side rather than through a prepared-resource swap.
+pub const PLATE_PARAM_SIZE: u32 = 0;
+pub const PLATE_PARAM_DECAY_S: u32 = 1;
+pub const PLATE_PARAM_DAMPING: u32 = 2;
+pub const PLATE_PARAM_WIDTH: u32 = 3;
+
+static PLATE_DESCRIPTORS: [ParamDescriptor; 4] = [
+    ParamDescriptor {
+        id: PLATE_PARAM_SIZE,
+        name: "Size",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.5,
+    },
+    ParamDescriptor {
+        id: PLATE_PARAM_DECAY_S,
+        name: "Decay",
+        unit: "s",
+        min: 0.2,
+        max: 10.0,
+        curve: ParamCurve::Exponential,
+        default: 2.0,
+    },
+    ParamDescriptor {
+        id: PLATE_PARAM_DAMPING,
+        name: "Damp",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.4,
+    },
+    ParamDescriptor {
+        id: PLATE_PARAM_WIDTH,
+        name: "Width",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+];
+
+/// Parameters for the lightweight comb/allpass ("plate") reverb. A cheap
+/// alternative to [`ReverbParams`]'s convolution reverb: CPU cost is a fixed
+/// number of buffer taps per sample, independent of `decay_s`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PlateParams {
+    pub size: f32,
+    pub decay_s: f32,
+    pub damping: f32,
+    pub width: f32,
+}
+
+impl Default for PlateParams {
+    fn default() -> Self {
+        Self {
+            size: 0.5,
+            decay_s: 2.0,
+            damping: 0.4,
+            width: 1.0,
+        }
+    }
+}
+
 // --- Dynamics --------------------------------------------------------------
 //
 // Gate, compressor, and limiter share the detector and gain computers in
@@ -1416,6 +1494,7 @@ pub enum EffectParams {
     Bitcrush(BitcrushParams),
     Delay(DelayParams),
     Reverb(ReverbParams),
+    Plate(PlateParams),
     Gate(GateParams),
     Compressor(CompressorParams),
     Limiter(LimiterParams),
@@ -1431,6 +1510,7 @@ impl EffectParams {
             Self::Bitcrush(_) => EffectKind::Bitcrush,
             Self::Delay(_) => EffectKind::Delay,
             Self::Reverb(_) => EffectKind::Reverb,
+            Self::Plate(_) => EffectKind::Plate,
             Self::Gate(_) => EffectKind::Gate,
             Self::Compressor(_) => EffectKind::Compressor,
             Self::Limiter(_) => EffectKind::Limiter,
@@ -1482,6 +1562,13 @@ impl EffectParams {
     pub fn reverb(&self) -> Option<&ReverbParams> {
         match self {
             Self::Reverb(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn plate(&self) -> Option<&PlateParams> {
+        match self {
+            Self::Plate(p) => Some(p),
             _ => None,
         }
     }
@@ -1598,6 +1685,13 @@ impl EffectParams {
                 REVERB_PARAM_DECAY_S => Some(p.decay_s),
                 REVERB_PARAM_CAPTURE_X => Some(p.capture_x),
                 REVERB_PARAM_CAPTURE_Y => Some(p.capture_y),
+                _ => None,
+            },
+            Self::Plate(p) => match id {
+                PLATE_PARAM_SIZE => Some(p.size),
+                PLATE_PARAM_DECAY_S => Some(p.decay_s),
+                PLATE_PARAM_DAMPING => Some(p.damping),
+                PLATE_PARAM_WIDTH => Some(p.width),
                 _ => None,
             },
             Self::Gate(p) => match id {
@@ -1725,6 +1819,13 @@ impl EffectParams {
                 REVERB_PARAM_CAPTURE_Y => p.capture_y = value,
                 _ => return None,
             },
+            Self::Plate(p) => match id {
+                PLATE_PARAM_SIZE => p.size = value,
+                PLATE_PARAM_DECAY_S => p.decay_s = value,
+                PLATE_PARAM_DAMPING => p.damping = value,
+                PLATE_PARAM_WIDTH => p.width = value,
+                _ => return None,
+            },
             Self::Gate(p) => match id {
                 GATE_PARAM_THRESHOLD_DB => p.threshold_db = value,
                 GATE_PARAM_ATTACK_MS => p.attack_ms = value,
@@ -1814,7 +1915,7 @@ impl EffectSlotState {
         // Return-only processors need an intentional blend when added: an IR
         // should begin send-like, while a chorus needs enough dry signal to
         // preserve its combing and stereo movement.
-        if kind == EffectKind::Reverb {
+        if kind == EffectKind::Reverb || kind == EffectKind::Plate {
             slot.wet_dry = 0.35;
         } else if kind == EffectKind::Modulation {
             slot.wet_dry = 0.5;

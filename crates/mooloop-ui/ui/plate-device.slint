@@ -1,0 +1,101 @@
+import { Theme } from "theme.slint";
+import { ParameterKnob } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+
+// One "Plate" reverb in a channel's device rack: a lightweight comb/allpass
+// feedback network, the cheap alternative to ReverbDeviceFace's generated-
+// room convolution. Four continuous knobs fit a 1U face like the other
+// simple effects; header, drag, and host actions come from the shared shell.
+export component PlateDeviceFace inherits EffectDeviceShell {
+    name: "Plate";
+    kind: "FX / 1U";
+    in-out property <float> size;     // normalized 0..1 (0.5x .. 1.5x tap length)
+    in-out property <float> decay;    // normalized 0..1 (0.2 .. 10 s)
+    in-out property <float> damping;  // normalized 0..1
+    // Named width-value, not width: `width` is the element's own geometry
+    // property (see ReverbDeviceFace's width-value for the same reason).
+    in-out property <float> width-value; // normalized 0..1
+    callback size-changed(float);
+    callback decay-changed(float);
+    callback damping-changed(float);
+    callback width-changed(float);
+
+    // Normalized -> natural, matching PLATE_DESCRIPTORS in mooloop-core:
+    // decay is exponential over [0.2, 10]; the rest are linear.
+    private property <float> decay-natural: 0.2 * pow(50, root.decay);
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text {
+                text: "PLATE";
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle {
+            height: 104px;
+            background: Theme.panel;
+            border-radius: 2px;
+            Text {
+                text: "comb / allpass";
+                color: Theme.text-faint;
+                font-size: 9px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: parent.width;
+                height: parent.height;
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Size";
+                tooltip: "Room size: shorter or longer taps between echoes";
+                value <=> root.size;
+                default-value: 0.5;
+                value-text: round(root.size * 100) + "%";
+                changed(v) => { root.size-changed(v); }
+            }
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Decay";
+                tooltip: "How long the tail takes to fade";
+                value <=> root.decay;
+                default-value: 0.5886;
+                value-text: root.decay-natural >= 10
+                    ? round(root.decay-natural) + " s"
+                    : round(root.decay-natural * 10) / 10 + " s";
+                changed(v) => { root.decay-changed(v); }
+            }
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Damp";
+                tooltip: "High-frequency loss per bounce: dark to open";
+                value <=> root.damping;
+                default-value: 0.4;
+                value-text: round(root.damping * 100) + "%";
+                changed(v) => { root.damping-changed(v); }
+            }
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Width";
+                tooltip: "Stereo spread of the tail";
+                value <=> root.width-value;
+                default-value: 1.0;
+                value-text: round(root.width-value * 100) + "%";
+                changed(v) => { root.width-changed(v); }
+            }
+        }
+    }
+}

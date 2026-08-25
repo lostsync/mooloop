@@ -1528,6 +1528,11 @@ mod tests {
                     // partition, so any generated response differs clearly
                     // from the dry reference inside this render window.
                 }
+                mooloop_core::EffectKind::Plate => {
+                    // Also entirely wet, and its shortest comb tap is longer
+                    // than this render window, so the output is silence here
+                    // — clearly different from the nonzero dry reference.
+                }
             }
 
             let wet = rendered_energy(&project, |render| {

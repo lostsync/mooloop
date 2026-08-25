@@ -30,6 +30,7 @@ import { CompressorDeviceFace } from "compressor-device.slint";
 import { LimiterDeviceFace } from "limiter-device.slint";
 import { EqDeviceFace } from "eq-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
+import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
 import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
@@ -2329,6 +2330,24 @@ export component MainWindow inherits Window {
                                                 stages-changed(v) => { root.effect-param-changed(index, 7, v); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
+                                            if slot.kind == 10 : PlateDeviceFace {
+                                                x: DeviceRackMetrics.rail-width;
+                                                y: 0px;
+                                                width: parent.content-width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                size: slot.p0;
+                                                decay: slot.p1;
+                                                damping: slot.p2;
+                                                width-value: slot.p3;
+                                                size-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                decay-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                damping-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                width-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
                                         }
                                         DeviceJoin { x: parent.face-width + DeviceRackMetrics.rail-width * 2; y: 0px; }
                                     }
@@ -2347,7 +2366,7 @@ export component MainWindow inherits Window {
                                             x: 0px;
                                             y: 44px;
                                             width: 148px;
-                                            height: 248px;
+                                            height: 272px;
                                             close-policy: close-on-click;
                                             Rectangle {
                                                 background: Theme.surface;
@@ -2366,6 +2385,7 @@ export component MainWindow inherits Window {
                                                     ToolButton { text: "Limiter"; tooltip: "Insert a limiter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(6, root.insert-effect-before); } }
                                                     ToolButton { text: "EQ"; tooltip: "Insert a parametric equalizer"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(7, root.insert-effect-before); } }
                                                     ToolButton { text: "Reverb"; tooltip: "Insert a generated-room convolution reverb"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(8, root.insert-effect-before); } }
+                                                    ToolButton { text: "Plate"; tooltip: "Insert a lightweight comb/allpass reverb"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(10, root.insert-effect-before); } }
                                                     ToolButton { text: "Mod"; tooltip: "Insert chorus, flange, phaser, ensemble, or ADT"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(9, root.insert-effect-before); } }
                                                 }
                                             }
