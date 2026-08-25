@@ -80,6 +80,11 @@ export component MenuBarItem inherits Rectangle {
     in property <bool> enabled: true;
     in property <int> menu-id;
     in-out property <int> open-menu: -1;
+    // All title strings in bar order, index == menu-id. Used only to
+    // rebuild an invisible copy of the title row inside this item's own
+    // popup -- see the hover-chain catcher below.
+    in property <[string]> titles;
+    in property <length> bar-width;
     // Watching the popup's `is-open` directly with a `changed` handler
     // trips a Slint 1.17 compiler bug, so mirror it here instead.
     property <bool> popup-open: menu.is-open;
@@ -119,7 +124,11 @@ export component MenuBarItem inherits Rectangle {
     }
 
     changed open-menu => {
-        if (root.open-menu != root.menu-id && menu.is-open) {
+        if (root.open-menu == root.menu-id) {
+            if (!menu.is-open) {
+                menu.show();
+            }
+        } else if (menu.is-open) {
             menu.close();
         }
     }
@@ -133,19 +142,65 @@ export component MenuBarItem inherits Rectangle {
     }
 
     menu := PopupWindow {
-        x: 0;
-        y: root.height + 2px;
-        width: 216px;
-        height: menu-frame.preferred-height;
+        // The popup's hit-box is widened to cover the whole title strip
+        // above the dropdown (not just this item's own title). Slint only
+        // chains mouse-move across siblings for its built-in Menu widget
+        // kind; a hand-rolled PopupWindow like this one otherwise blocks
+        // all hover events to anything outside itself while open, so
+        // hovering from "File" to "Edit" would never switch menus. The
+        // invisible strip below reproduces the real title row pixel-for
+        // -pixel (same padding/spacing/font) so hovering across it can
+        // reassign `open-menu` directly.
+        x: -root.x;
+        y: 0;
+        width: max(root.bar-width, 216px);
+        height: root.height + 2px + menu-frame-content.preferred-height;
         close-policy: close-on-click;
 
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: root.height;
+
+            HorizontalLayout {
+                padding-left: 4px;
+                spacing: 2px;
+                alignment: start;
+
+                for t[idx] in root.titles: Rectangle {
+                    width: catcher-text.preferred-width + 16px;
+                    catcher-text := Text {
+                        text: t;
+                        font-size: 11px;
+                        color: transparent;
+                    }
+                    TouchArea {
+                        clicked => { root.open-menu = idx; }
+                        changed has-hover => {
+                            if (self.has-hover && root.open-menu != idx) {
+                                root.open-menu = idx;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         menu-frame := Rectangle {
+            // Popup-local x=0 is the bar's left edge (see the -root.x
+            // shift above), so shift back by root.x to land under this
+            // item's own title instead of always under the first one.
+            x: root.x;
+            y: root.height + 2px;
+            width: 216px;
+            height: menu-frame-content.preferred-height;
             background: Theme.surface;
             border-width: 1px;
             border-color: Theme.border;
             border-radius: 3px;
 
-            VerticalLayout {
+            menu-frame-content := VerticalLayout {
                 padding: 4px;
                 @children
             }
@@ -158,6 +213,9 @@ export component MenuBarItem inherits Rectangle {
 // declared on it are MenuBarItem instances.
 export component MenuBar inherits Rectangle {
     in-out property <int> open-menu: -1;
+    // Single source of truth for the hover-chain catcher in MenuBarItem;
+    // order must match each item's `menu-id`.
+    out property <[string]> titles: ["File", "Edit", "Pattern", "Channel", "View", "Help"];
 
     height: 26px;
     background: Theme.panel;

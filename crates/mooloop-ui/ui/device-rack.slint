@@ -14,10 +14,59 @@ export global DeviceRackMetrics {
     out property <length> rail-width: 30px;
 }
 
+// One row in the effect-type picker (see EffectTypeMenu). Left-aligned,
+// sized to its own label rather than a fixed column, since the menu itself
+// grows to fit whichever entry is widest.
+component EffectTypeRow inherits Rectangle {
+    in property <string> text;
+    in property <string> tooltip: root.text;
+    callback selected;
+
+    preferred-width: label.preferred-width + 20px;
+    height: 22px;
+    border-radius: 3px;
+    background: touch.has-hover ? Theme.surface-active : transparent;
+
+    label := Text {
+        x: 10px;
+        text: root.text;
+        color: Theme.text;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.selected(); }
+    }
+
+    Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
+// The effect-type list shared by every "insert effect" trigger (the rail
+// `+` on each device, and the end-of-chain add slot). Kept as one
+// component so the catalog is edited in a single place.
+component EffectTypeMenu inherits VerticalLayout {
+    callback kind-selected(int);
+    padding: 4px;
+    spacing: 1px;
+    EffectTypeRow { text: "Filter"; tooltip: "Insert a low/high-pass filter"; selected => { root.kind-selected(0); } }
+    EffectTypeRow { text: "Drive"; tooltip: "Insert saturation or distortion"; selected => { root.kind-selected(1); } }
+    EffectTypeRow { text: "Bitcrush"; tooltip: "Insert bit and rate reduction"; selected => { root.kind-selected(2); } }
+    EffectTypeRow { text: "Delay"; tooltip: "Insert a delay"; selected => { root.kind-selected(3); } }
+    EffectTypeRow { text: "Gate"; tooltip: "Insert a noise gate"; selected => { root.kind-selected(4); } }
+    EffectTypeRow { text: "Comp"; tooltip: "Insert a compressor"; selected => { root.kind-selected(5); } }
+    EffectTypeRow { text: "Limiter"; tooltip: "Insert a limiter"; selected => { root.kind-selected(6); } }
+    EffectTypeRow { text: "EQ"; tooltip: "Insert a parametric equalizer"; selected => { root.kind-selected(7); } }
+    EffectTypeRow { text: "Reverb"; tooltip: "Insert a generated-room convolution reverb"; selected => { root.kind-selected(8); } }
+    EffectTypeRow { text: "Plate"; tooltip: "Insert a lightweight comb/allpass reverb"; selected => { root.kind-selected(10); } }
+    EffectTypeRow { text: "Mod"; tooltip: "Insert chorus, flange, phaser, ensemble, or ADT"; selected => { root.kind-selected(9); } }
+}
+
 export component DeviceFrame inherits Rectangle {
     in property <bool> insertion-enabled: true;
     in property <bool> removal-enabled: false;
-    callback insert-requested();
+    callback effect-kind-selected(int);
     callback remove-requested();
     in property <bool> bypassed: false;
     in property <bool> bypass-enabled: false;
@@ -68,7 +117,27 @@ export component DeviceFrame inherits Rectangle {
             IconButton {
                 text: "+"; size: 24px; enabled: root.insertion-enabled;
                 tooltip: "Insert effect";
-                clicked => { root.insert-requested(); }
+                clicked => { insert-menu.show(); }
+
+                insert-menu := PopupWindow {
+                    x: 0px;
+                    y: parent.height + 2px;
+                    width: menu-content.preferred-width;
+                    height: menu-content.preferred-height;
+                    close-policy: close-on-click;
+                    Rectangle {
+                        background: Theme.surface;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        border-radius: 3px;
+                        menu-content := EffectTypeMenu {
+                            kind-selected(kind) => {
+                                insert-menu.close();
+                                root.effect-kind-selected(kind);
+                            }
+                        }
+                    }
+                }
             }
             IconButton { text: "→"; size: 24px; enabled: false; tooltip: "Next preset"; }
             IconButton { text: "←"; size: 24px; enabled: false; tooltip: "Previous preset"; }
@@ -274,7 +343,7 @@ export component DeviceJoin inherits Rectangle {
 }
 
 export component DeviceAddSlot inherits Rectangle {
-    callback clicked;
+    callback kind-selected(int);
     in property <bool> enabled: true;
     width: 50px;
     height: DeviceRackMetrics.face-height;
@@ -292,9 +361,29 @@ export component DeviceAddSlot inherits Rectangle {
     add-touch := TouchArea {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
-        clicked => { root.clicked(); }
+        clicked => { insert-menu.show(); }
     }
     Tooltip { text: @markdown("Add a device"); }
+
+    insert-menu := PopupWindow {
+        x: 0px;
+        y: parent.height + 2px;
+        width: menu-content.preferred-width;
+        height: menu-content.preferred-height;
+        close-policy: close-on-click;
+        Rectangle {
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 3px;
+            menu-content := EffectTypeMenu {
+                kind-selected(kind) => {
+                    insert-menu.close();
+                    root.kind-selected(kind);
+                }
+            }
+        }
+    }
 }
 
 export component DevicePageButton inherits ToolButton {

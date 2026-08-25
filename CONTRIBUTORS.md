@@ -45,8 +45,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-24
-- Sessions: 14
+- Last seen: 2026-08-25
+- Sessions: 15
 - Notes: Set up this file at Adam's request. Refreshed the README
   screenshot. Sampler UI overhaul: waveform zoom/scroll, sample-accurate
   trim/loop fields, compact tuning knobs with a note/frequency readout, a
@@ -62,6 +62,12 @@ work session you can recall being part of, and don't stress over precision.
   clone/remove, and the Preferences > Shortcuts page. Closed out FOCUS.md's
   command-layer step: piano-roll multi-select (Shift/Ctrl-click, Select
   All, bulk delete), Clear Pattern, and a pattern right-click context menu.
+  Menu-popup positioning pass: add-channel and add-effect popups now open
+  next to the button that triggered them instead of a fixed spot; File/Edit
+  menu-bar titles switch on hover (worked around Slint 1.17 only chaining
+  mouse-move for the built-in Menu widget kind, not a hand-rolled
+  PopupWindow); the add-effect type list is de-duplicated into one
+  left-aligned, content-width component shared by every insert trigger.
 
 ### GLM (glm-5.3) — opencode
 - First seen: 2026-08-23

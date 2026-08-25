@@ -358,7 +358,6 @@ export component MainWindow inherits Window {
     // EffectKind index, then the slot it must precede. `effect-slots.length`
     // means append; every device shell can therefore insert into the chain.
     callback add-effect-clicked(int, int);
-    in-out property <int> insert-effect-before: 0;
     callback remove-effect-clicked(int);            // slot
     callback effect-bypass-toggled(int);            // slot
     callback effect-wet-dry-changed(int, float);
@@ -780,6 +779,8 @@ export component MainWindow inherits Window {
                 title: "File";
                 menu-id: 0;
                 open-menu <=> menu-bar.open-menu;
+                titles: menu-bar.titles;
+                bar-width: menu-bar.width;
                 enabled: !root.document-busy;
 
                 // Target: start a fresh song from scratch.
@@ -828,6 +829,8 @@ export component MainWindow inherits Window {
                 title: "Edit";
                 menu-id: 1;
                 open-menu <=> menu-bar.open-menu;
+                titles: menu-bar.titles;
+                bar-width: menu-bar.width;
                 // Undo is still pending, but channel clipboard actions are
                 // concrete project edits and therefore live here too.
                 MenuRow { text: "Undo"; shortcut: "Ctrl+Z"; enabled: root.can-undo; selected => { root.edit-command-requested(0, root.selected-channel); } }
@@ -845,6 +848,8 @@ export component MainWindow inherits Window {
                 title: "Pattern";
                 menu-id: 2;
                 open-menu <=> menu-bar.open-menu;
+                titles: menu-bar.titles;
+                bar-width: menu-bar.width;
                 MenuRow {
                     text: "New Pattern";
                     shortcut: "Ctrl+Shift+P";
@@ -871,6 +876,8 @@ export component MainWindow inherits Window {
                 title: "Channel";
                 menu-id: 3;
                 open-menu <=> menu-bar.open-menu;
+                titles: menu-bar.titles;
+                bar-width: menu-bar.width;
                 MenuRow {
                     text: "Add Channel";
                     selected => { root.add-channel-clicked(0); }
@@ -890,6 +897,8 @@ export component MainWindow inherits Window {
                 title: "View";
                 menu-id: 4;
                 open-menu <=> menu-bar.open-menu;
+                titles: menu-bar.titles;
+                bar-width: menu-bar.width;
                 MenuRow {
                     text: "Sampler";
                     checked: root.editor-page == 0;
@@ -919,6 +928,8 @@ export component MainWindow inherits Window {
                 title: "Help";
                 menu-id: 5;
                 open-menu <=> menu-bar.open-menu;
+                titles: menu-bar.titles;
+                bar-width: menu-bar.width;
                 MenuRow { text: "About mooloop"; selected => { root.about-open = true; } }
             }
         }
@@ -1459,6 +1470,28 @@ export component MainWindow inherits Window {
                         min-width: 28px; max-width: 28px;
                         min-height: 24px; max-height: 24px;
                         clicked => { add-source-menu.show(); }
+
+                        add-source-menu := PopupWindow {
+                            x: 0px;
+                            y: parent.height + 2px;
+                            width: 156px;
+                            height: 108px;
+                            close-policy: close-on-click;
+                            Rectangle {
+                                background: Theme.surface;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                border-radius: 3px;
+                                VerticalLayout {
+                                    padding: 4px;
+                                    spacing: 1px;
+                                    ToolButton { text: "Add Sampler"; clicked => { add-source-menu.close(); root.add-channel-clicked(0); } }
+                                    ToolButton { text: "Add Drum Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(1); } }
+                                    ToolButton { text: "Add Mono Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(2); } }
+                                    ToolButton { text: "Add Poly Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(3); } }
+                                }
+                            }
+                        }
                     }
                     FlatButton {
                         text: "−";
@@ -1466,28 +1499,6 @@ export component MainWindow inherits Window {
                         min-width: 28px; max-width: 28px;
                         min-height: 24px; max-height: 24px;
                         clicked => { root.remove-channel-clicked(); }
-                    }
-                }
-
-                add-source-menu := PopupWindow {
-                    x: 8px;
-                    y: 8px;
-                    width: 156px;
-                    height: 82px;
-                    close-policy: close-on-click;
-                    Rectangle {
-                        background: Theme.surface;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        border-radius: 3px;
-                        VerticalLayout {
-                            padding: 4px;
-                            spacing: 1px;
-                            ToolButton { text: "Add Sampler"; clicked => { add-source-menu.close(); root.add-channel-clicked(0); } }
-                            ToolButton { text: "Add Drum Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(1); } }
-                            ToolButton { text: "Add Mono Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(2); } }
-                            ToolButton { text: "Add Poly Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(3); } }
-                        }
                     }
                 }
 
@@ -1903,7 +1914,7 @@ export component MainWindow inherits Window {
                                         output-trim-changed(v) => {
                                             root.channel-volume-changed(root.selected-channel, v <= -59.9 ? 0.0 : pow(10, v / 20));
                                         }
-                                        insert-requested => { root.insert-effect-before = 0; insert-effect-menu.show(); }
+                                        effect-kind-selected(kind) => { root.add-effect-clicked(kind, 0); }
 
                                         if root.editing-bus : BusDeviceFace {
                                             x: DeviceRackMetrics.rail-width;
@@ -2134,7 +2145,7 @@ export component MainWindow inherits Window {
                                             wet-dry-text: round(slot.wet-dry * 100) + "% wet";
                                             wet-dry-changed(v) => { root.effect-wet-dry-changed(index, v); }
                                             removal-enabled: true;
-                                            insert-requested => { root.insert-effect-before = index; insert-effect-menu.show(); }
+                                            effect-kind-selected(kind) => { root.add-effect-clicked(kind, index); }
                                             remove-requested => { root.remove-effect-clicked(index); }
                                             if slot.kind == 0 : FilterDeviceFace {
                                                 x: DeviceRackMetrics.rail-width;
@@ -2374,38 +2385,7 @@ export component MainWindow inherits Window {
                                         height: DeviceRackMetrics.face-height;
                                         DeviceAddSlot {
                                             enabled: root.effect-slots.length < 8;
-                                            clicked => { root.insert-effect-before = root.effect-slots.length; insert-effect-menu.show(); }
-                                        }
-                                        // Effect kinds are a growing set, so the
-                                        // add action opens a menu rather than
-                                        // spending rack width on a selector bank.
-                                        insert-effect-menu := PopupWindow {
-                                            x: 0px;
-                                            y: 44px;
-                                            width: 148px;
-                                            height: 272px;
-                                            close-policy: close-on-click;
-                                            Rectangle {
-                                                background: Theme.surface;
-                                                border-width: 1px;
-                                                border-color: Theme.border;
-                                                border-radius: 3px;
-                                                VerticalLayout {
-                                                    padding: 4px;
-                                                    spacing: 1px;
-                                                    ToolButton { text: "Filter"; tooltip: "Insert a low/high-pass filter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(0, root.insert-effect-before); } }
-                                                    ToolButton { text: "Drive"; tooltip: "Insert saturation or distortion"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(1, root.insert-effect-before); } }
-                                                    ToolButton { text: "Bitcrush"; tooltip: "Insert bit and rate reduction"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(2, root.insert-effect-before); } }
-                                                    ToolButton { text: "Delay"; tooltip: "Insert a delay"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(3, root.insert-effect-before); } }
-                                                    ToolButton { text: "Gate"; tooltip: "Insert a noise gate"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(4, root.insert-effect-before); } }
-                                                    ToolButton { text: "Comp"; tooltip: "Insert a compressor"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(5, root.insert-effect-before); } }
-                                                    ToolButton { text: "Limiter"; tooltip: "Insert a limiter"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(6, root.insert-effect-before); } }
-                                                    ToolButton { text: "EQ"; tooltip: "Insert a parametric equalizer"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(7, root.insert-effect-before); } }
-                                                    ToolButton { text: "Reverb"; tooltip: "Insert a generated-room convolution reverb"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(8, root.insert-effect-before); } }
-                                                    ToolButton { text: "Plate"; tooltip: "Insert a lightweight comb/allpass reverb"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(10, root.insert-effect-before); } }
-                                                    ToolButton { text: "Mod"; tooltip: "Insert chorus, flange, phaser, ensemble, or ADT"; clicked => { insert-effect-menu.close(); root.add-effect-clicked(9, root.insert-effect-before); } }
-                                                }
-                                            }
+                                            kind-selected(kind) => { root.add-effect-clicked(kind, root.effect-slots.length); }
                                         }
                                     }
                                     Rectangle { horizontal-stretch: 1; }
