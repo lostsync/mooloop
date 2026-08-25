@@ -10,7 +10,7 @@ it. If step 01 concluded the abstraction isn't there, skip this file.
 
 1. Implement the block from step 01's definition, with its own tests, and
    land it *unused*. Same discipline as
-   `docs/plans/share-dsp-primitives/02-add-the-missing-primitives.md`:
+   `docs/plans/archive/share-dsp-primitives/02-add-the-missing-primitives.md`:
    additive first, adoption second.
 2. Rebuild `ModulationEffect` on it. This one first — it's the smaller
    device (299 lines) and its `Ensemble` mode already hand-rolls the

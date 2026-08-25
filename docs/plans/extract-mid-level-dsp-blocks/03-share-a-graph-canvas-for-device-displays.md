@@ -30,7 +30,7 @@ between doesn't exist. Compare `controls.slint`, which does have that rung —
    convert the visualizers onto it one at a time. Same bar as elsewhere:
    each converted file gets shorter.
 3. While in here, check the log-frequency mapping question raised in
-   `docs/plans/share-dsp-primitives/02-add-the-missing-primitives.md`:
+   `docs/plans/archive/share-dsp-primitives/02-add-the-missing-primitives.md`:
    `filter-device.slint` computes `round(20 * pow(1000, root.cutoff))`
    inline for its readout, and the DSP side computes
    `20.0 * (max_hz / 20.0).powf(x)` in four places. If a display and its

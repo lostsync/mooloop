@@ -95,7 +95,8 @@ unchanged.
   compare exact sample output against a fixed expectation, confirm the
   new call-spread schedule doesn't change output at window boundaries.
 - Manual: load a 2s decay room reverb on a channel, set JACK buffer to
-  64 frames (now easy after `docs/plans/reduce-audio-jack-buffer-size/`),
+  64 frames (now easy after
+  `docs/plans/archive/reduce-audio-jack-buffer-size/`),
   play a busy pattern, and confirm no xruns (`jack_cpu_load`, or watch
   `EngineEvent::Xrun` / the eprintln in `crates/mooloop-engine/src/graph.rs`
   for "JACK reported an xrun").
