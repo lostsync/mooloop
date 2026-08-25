@@ -163,6 +163,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 - [Current system](docs/CURRENT.md): what the code does today.
 - [Product definition](docs/PRODUCT.md): what Mooloop is trying to become.
 - [Roadmap](docs/ROADMAP.md): dependency-ordered future work.
+- [Version targets](docs/VERSIONS.md): release milestones and their intended
+  outcomes.
 - [Audio core architecture](docs/AUDIO_ARCHITECTURE.md): the target boundary
   between editable projects, compiled render plans, and realtime execution.
 - [Application structure and flow](docs/ARCHITECTURE.md): a Mermaid map of
