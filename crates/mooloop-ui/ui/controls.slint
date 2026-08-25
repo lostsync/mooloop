@@ -202,17 +202,32 @@ export component InstrumentModule inherits Rectangle {
     }
 }
 
+// Emulates a small readout display: a recessed dark box sized to its own
+// text, holding the value in a bright accent tone. Monospace keeps digits
+// from jittering the box width as a knob is dragged. Slint's font-family
+// takes a single name rather than a fallback list, so this relies on the
+// same "monospace" alias the codebase already uses elsewhere (toolbar.slint,
+// sampler-device.slint) to resolve to whatever the host has, rather than
+// bundling a font — a deliberate fallback, not an oversight.
 export component ValueReadout inherits Rectangle {
     in property <string> value-text;
     in property <string> unit;
-    min-width: 54px;
-    min-height: 18px;
+    // Bounds the readout to whatever column it sits in (a knob is usually
+    // narrower than a long value string, e.g. a note+Hz readout), so packed
+    // rows of knobs never collide. Text still elides past that bound.
+    in property <length> readout-max-width: 10000px;
+    min-height: 16px;
+    width: min(readout-text.preferred-width + 10px, root.readout-max-width);
     border-radius: 2px;
-    background: Theme.surface;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
 
-    Text {
+    readout-text := Text {
+        width: 100%;
         text: root.value-text + (root.unit == "" ? "" : " " + root.unit);
-        color: Theme.text;
+        color: Theme.accent;
+        font-family: "monospace";
         font-size: 10px;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -371,6 +386,15 @@ export component ParameterKnob inherits Rectangle {
         spacing: 3px;
         alignment: center;
 
+        Text {
+            text: root.label;
+            color: root.enabled ? Theme.text-muted : Theme.text-faint;
+            font-size: 9px;
+            height: 12px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
         // VerticalLayout aligns its children along the vertical axis only.
         // Without this full-width cell, a narrow knob face starts at the left
         // of a wider ParameterKnob, visibly skewing every device control row.
@@ -389,15 +413,15 @@ export component ParameterKnob inherits Rectangle {
             }
         }
 
-        Text {
-            text: root.label;
-            color: root.enabled ? Theme.text-muted : Theme.text-faint;
-            font-size: 9px;
-            height: 12px;
-            horizontal-alignment: center;
-            overflow: elide;
+        Rectangle {
+            width: root.width;
+            height: 16px;
+            ValueReadout {
+                x: (parent.width - self.width) / 2;
+                value-text: root.value-text;
+                readout-max-width: root.width;
+            }
         }
-        ValueReadout { value-text: root.value-text; width: parent.width; }
     }
 
     // The label and value are part of the parameter, so they share the knob's

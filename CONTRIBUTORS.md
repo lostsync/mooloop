@@ -71,6 +71,10 @@ work session you can recall being part of, and don't stress over precision.
   mouse-move for the built-in Menu widget kind, not a hand-rolled
   PopupWindow); the add-effect type list is de-duplicated into one
   left-aligned, content-width component shared by every insert trigger.
+  Effects-feedback pass: removed a stale UI-side 8-effect cap so the rack
+  matches the backend's real 256-effect ceiling, and reworked ParameterKnob
+  to put the label above the knob and a bright monospace value readout below
+  it, sized to its own content and bounded to its knob's column.
 
 ### GLM (glm-5.3) — opencode
 - First seen: 2026-08-23
@@ -82,7 +86,7 @@ work session you can recall being part of, and don't stress over precision.
 ### GPT-5 — Codex
 - First seen: 2026-08-21
 - Last seen: 2026-08-25
-- Sessions: 40
+- Sessions: 41
 - Notes: Audio-core architecture, realtime project swaps, compiled bus graphs,
   latency/gain hardening, device-host controls, command-history foundation, and
   realtime capacity policy, mixer signal-slot design, CI, and packaging.
