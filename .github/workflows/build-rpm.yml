@@ -1,0 +1,59 @@
+name: Build RPM
+
+# Produces an optimized RPM on demand without creating a tag or GitHub Release.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The committed local config pins maintainer-specific flags and a target dir.
+  RUSTFLAGS: ""
+  CARGO_TARGET_DIR: target
+
+jobs:
+  package-rpm:
+    name: Build optimized RPM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libjack-jackd2-dev \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libxkbcommon-dev \
+            libxcb1-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libwayland-dev \
+            libfontconfig1-dev \
+            rpm
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rpm
+
+      - name: Install cargo-generate-rpm
+        run: cargo install cargo-generate-rpm --locked
+
+      - name: Build release binary
+        run: cargo build --release -p mooloop-app
+
+      - name: Package RPM
+        run: cargo generate-rpm -p crates/mooloop-app
+
+      - name: Upload RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: mooloop-rpm
+          path: target/generate-rpm/*.rpm
+          if-no-files-found: error
+          retention-days: 14
