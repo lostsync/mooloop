@@ -12,7 +12,7 @@
 //! callbacks directly would not catch this, since the bug is entirely in how
 //! the `TouchArea`'s own coordinate system interacts with hit-testing.
 
-use mooloop_ui::{EqDeviceDragHarness, ReverbDeviceDragHarness};
+use mooloop_ui::{EqDeviceDragHarness, FilterDeviceDragHarness, ReverbDeviceDragHarness};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -23,6 +23,32 @@ use std::rc::Rc;
 const FACE_WIDTH: f32 = 220.0 * 3.0 + 4.0 * 2.0;
 const FACE_HEIGHT: f32 = 268.0;
 const HEADER_HEIGHT: f32 = 28.0;
+
+/// Initialize the testing backend with the software renderer, the only one
+/// that implements `take_snapshot`, so the drag tests can also compare
+/// rendered pixels before and after a drag.
+fn init_software_backend() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(slint::SharedString::from("software")),
+        },
+    )))
+    .ok();
+}
+
+/// Write the snapshot to a PPM file when `variable` names a path, for
+/// before/after visual inspection of a drag.
+fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variable: &str) {
+    if let Ok(path) = std::env::var(variable) {
+        let mut ppm = format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
+        for rgba in snapshot.as_bytes().chunks_exact(4) {
+            ppm.extend_from_slice(&rgba[..3]);
+        }
+        std::fs::write(path, ppm).unwrap();
+    }
+}
 
 /// Press at `from`, travel to `to` in small increments the way a real
 /// pointer would, then release.
@@ -66,7 +92,7 @@ fn assert_monotonic(values: &[f32], increasing: bool, what: &str) {
 
 #[test]
 fn eq_point_drag_tracks_the_pointer() {
-    i_slint_backend_testing::init_no_event_loop();
+    init_software_backend();
     let ui = EqDeviceDragHarness::new().unwrap();
     ui.window()
         .set_size(LogicalSize::new(FACE_WIDTH, FACE_HEIGHT));
@@ -122,8 +148,97 @@ fn eq_point_drag_tracks_the_pointer() {
 }
 
 #[test]
+fn filter_point_drag_and_wheel_update_only_the_bound_parameters() {
+    init_software_backend();
+    let ui = FilterDeviceDragHarness::new().unwrap();
+    ui.window().set_size(LogicalSize::new(220.0, FACE_HEIGHT));
+    ui.set_cutoff(0.5);
+    ui.set_resonance(0.0);
+
+    let before = ui.window().take_snapshot().unwrap();
+    write_snapshot(&before, "MOOLOOP_FILTER_BEFORE_DRAG_SNAPSHOT");
+
+    let cutoffs = Rc::new(RefCell::new(Vec::new()));
+    let resonances = Rc::new(RefCell::new(Vec::new()));
+    ui.on_cutoff_changed({
+        let cutoffs = cutoffs.clone();
+        move |v| cutoffs.borrow_mut().push(v)
+    });
+    ui.on_resonance_changed({
+        let resonances = resonances.clone();
+        move |v| resonances.borrow_mut().push(v)
+    });
+
+    // The Filter face's response display starts beneath the 28px device
+    // header, 6px layout padding, 26px mode selector, 4px spacing, and 4px
+    // inset, and spans 208x96px. At cutoff 0.5 the point sits where the
+    // curve crosses its own cutoff: magnitude 1/sqrt(1 + damping^2) = 0.5
+    // for damping 2, i.e. plot-y 0.6 of the height (see plot-y-at in
+    // device-displays.slint).
+    let start = (110.0, HEADER_HEIGHT + 6.0 + 26.0 + 4.0 + 4.0 + 0.6 * 96.0);
+    let end = (140.0, start.1 - 20.0);
+    drag(ui.window(), start, end, 12);
+
+    assert_monotonic(&cutoffs.borrow(), true, "filter cutoff");
+    assert_monotonic(&resonances.borrow(), true, "filter resonance");
+    let cutoff = *cutoffs.borrow().last().unwrap();
+    let resonance = *resonances.borrow().last().unwrap();
+    assert!(
+        (cutoff - 0.65).abs() < 0.02,
+        "cutoff should track horizontal drag: got {cutoff}"
+    );
+    assert!(
+        (resonance - 20.0 / 96.0).abs() < 0.03,
+        "resonance should track vertical drag: got {resonance}"
+    );
+
+    // Write the dragged values back into the harness the way the real
+    // application does via the DSP parameter, so the handle follows the
+    // values and the wheel acts on the post-drag resonance.
+    ui.set_cutoff(cutoff);
+    ui.set_resonance(resonance);
+    let cutoff_updates = cutoffs.borrow().len();
+    // Hover the handle's post-drag position: centered on the cutoff's x;
+    // the curve crosses its own cutoff at magnitude 1/sqrt(1 + damping^2)
+    // (damping now 2 - resonance * 1.9), so plot-y is just under 0.6.
+    let damping = 2.0 - resonance * 1.9;
+    let magnitude = 1.0 / (1.0 + damping * damping).sqrt();
+    let hover = LogicalPosition::new(
+        10.0 + cutoff * 208.0,
+        HEADER_HEIGHT + 40.0 + (0.25 + 0.7 * (1.0 - magnitude)) * 96.0,
+    );
+    ui.window().dispatch_event(WindowEvent::PointerMoved { position: hover });
+    ui.window().dispatch_event(WindowEvent::PointerScrolled {
+        position: hover,
+        delta_x: 0.0,
+        // In Slint's convention this backend hands wheel-down a negative
+        // delta-y; the handler subtracts it, so this raises resonance.
+        delta_y: -120.0,
+    });
+    assert_eq!(
+        cutoffs.borrow().len(),
+        cutoff_updates,
+        "wheel input must not change cutoff"
+    );
+    assert!(
+        *resonances.borrow().last().unwrap() > resonance,
+        "wheel input should increase resonance"
+    );
+
+    ui.set_cutoff(cutoff);
+    ui.set_resonance(*resonances.borrow().last().unwrap());
+    let after = ui.window().take_snapshot().unwrap();
+    write_snapshot(&after, "MOOLOOP_FILTER_AFTER_DRAG_SNAPSHOT");
+    assert_ne!(
+        before.as_bytes(),
+        after.as_bytes(),
+        "the filter point and curve should move together after a drag"
+    );
+}
+
+#[test]
 fn reverb_capture_drag_tracks_the_pointer() {
-    i_slint_backend_testing::init_no_event_loop();
+    init_software_backend();
     let ui = ReverbDeviceDragHarness::new().unwrap();
     ui.window()
         .set_size(LogicalSize::new(FACE_WIDTH, FACE_HEIGHT));

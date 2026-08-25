@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { NoteFormat, ParameterKnob, SegmentedControl, ToggleButton } from "controls.slint";
+import { DraggablePoint, NoteFormat, ParameterKnob, SegmentedControl, ToggleButton } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // A deliberately bounded frequency plot. The spectrum layer receives compact
@@ -9,6 +9,7 @@ component EqResponseDisplay inherits Rectangle {
     in property <[float]> spectrum-data;
     in property <int> selected-target;
     in property <bool> spectrum-visible;
+    callback point-grabbed(int);
     callback point-dragged(int, float, float);
     private property <int> sample-count: 140;
 
@@ -59,21 +60,16 @@ component EqResponseDisplay inherits Rectangle {
         width: max(1px, parent.width / root.sample-count + 0.5px); height: max(1px, abs(y1 - y0) * parent.height);
         background: Theme.accent;
     }
-    for index in 7 : TouchArea {
+    for index in 7 : DraggablePoint {
         private property <float> frequency: root.band-value(index, 0);
         private property <float> gain: root.band-value(index, 1);
         x: frequency * parent.width - 7px; y: (1 - gain) * parent.height - 7px; width: 14px; height: 14px;
         enabled: root.band-value(index, 3) > 0.5;
-        mouse-cursor: MouseCursor.crosshair;
-        // The handle re-centers under the pointer as it's dragged (its x/y
-        // are bound to frequency/gain above), so mouse-x/mouse-y are not a
-        // stable coordinate system - see the drag feedback-loop pitfall
-        // documented on controls.slint's MixerFader. Move relative to the
-        // press point instead of mapping mouse position directly.
-        moved => {
+        grabbed => { root.point-grabbed(index); }
+        dragged(dx, dy) => {
             root.point-dragged(index,
-                clamp(self.frequency + (self.mouse-x - self.pressed-x) / parent.width, 0, 1),
-                clamp(self.gain - (self.mouse-y - self.pressed-y) / parent.height, 0, 1));
+                clamp(self.frequency + dx * 1px / parent.width, 0, 1),
+                clamp(self.gain - dy * 1px / parent.height, 0, 1));
         }
         Rectangle { width: 14px; height: 14px; border-radius: 7px; background: root.point-color(index); border-width: root.selected-target == index ? 2px : 1px; border-color: root.selected-target == index ? Theme.text : Theme.panel; }
     }
@@ -115,6 +111,7 @@ export component EqDeviceFace inherits EffectDeviceShell {
         }
         EqResponseDisplay {
             height: 126px; width: 100%; band-data: root.band-data; spectrum-data: root.spectrum-data; selected-target: root.target-index; spectrum-visible: root.analyzer-enabled;
+            point-grabbed(index) => { root.target-changed(index / 8); }
             point-dragged(index, freq, gain) => { root.target-changed(index / 8); root.frequency-changed(freq); root.gain-changed(gain); }
         }
         HorizontalLayout {

@@ -1,4 +1,5 @@
 import { DisplayPrefs, Theme } from "theme.slint";
+import { DraggablePoint } from "controls.slint";
 
 export component SampleTrace inherits Rectangle {
     in property <[float]> minimums;
@@ -92,11 +93,13 @@ export component FilterResponseDisplay inherits Rectangle {
     in property <float> cutoff;
     in property <float> resonance;
     in property <float> env-amount;
+    callback point-dragged(float, float);
+    callback point-scrolled(float);
     private property <int> sample-count: 160;
     private property <float> modulated-cutoff: clamp(root.cutoff + root.env-amount * 0.602, 0, 1);
 
-    pure function response(index: int, normalized-cutoff: float) -> float {
-        let frequency = 20 * pow(1000, index / (root.sample-count - 1));
+    pure function response-at(x: float, normalized-cutoff: float) -> float {
+        let frequency = 20 * pow(1000, clamp(x, 0, 1));
         let cutoff-hz = 20 * pow(1000, clamp(normalized-cutoff, 0, 1));
         // The production TPT SVF uses g = tan(pi * f / sample-rate).
         let frequency-angle = frequency / 48000 * 180deg;
@@ -108,11 +111,19 @@ export component FilterResponseDisplay inherits Rectangle {
         return root.mode == 0 ? 1 / denominator : root.mode == 1 ? ratio / denominator : ratio * ratio / denominator;
     }
 
-    pure function plot-y(index: int, normalized-cutoff: float) -> float {
-        let magnitude = root.response(index, normalized-cutoff);
+    pure function response(index: int, normalized-cutoff: float) -> float {
+        return root.response-at(index / (root.sample-count - 1), normalized-cutoff);
+    }
+
+    pure function plot-y-at(x: float, normalized-cutoff: float) -> float {
+        let magnitude = root.response-at(x, normalized-cutoff);
         return magnitude >= 1
             ? clamp(0.25 - 0.2 * (1 - 1 / magnitude), 0.04, 0.25)
             : clamp(0.25 + 0.7 * (1 - magnitude), 0.25, 0.95);
+    }
+
+    pure function plot-y(index: int, normalized-cutoff: float) -> float {
+        return root.plot-y-at(index / (root.sample-count - 1), normalized-cutoff);
     }
 
     for line in 5 : Rectangle {
@@ -168,6 +179,28 @@ export component FilterResponseDisplay inherits Rectangle {
             stroke: Theme.accent;
             stroke-width: 1.4px;
             fill: transparent;
+        }
+    }
+    DraggablePoint {
+        x: root.cutoff * parent.width - 7px;
+        y: root.plot-y-at(root.cutoff, root.cutoff) * parent.height - 7px;
+        width: 14px;
+        height: 14px;
+        dragged(dx, dy) => {
+            root.point-dragged(
+                clamp(root.cutoff + dx * 1px / parent.width, 0, 1),
+                clamp(root.resonance - dy * 1px / parent.height, 0, 1));
+        }
+        scrolled(delta) => {
+            root.point-scrolled(clamp(root.resonance - delta / 600, 0, 1));
+        }
+        Rectangle {
+            width: 14px;
+            height: 14px;
+            border-radius: 7px;
+            background: Theme.accent;
+            border-width: 1px;
+            border-color: Theme.panel;
         }
     }
 }

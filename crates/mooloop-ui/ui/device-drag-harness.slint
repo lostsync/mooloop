@@ -1,4 +1,5 @@
 import { EqDeviceFace } from "eq-device.slint";
+import { FilterDeviceFace } from "filter-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
 
 // Slint only generates Rust bindings for exported components that inherit
@@ -47,6 +48,28 @@ export component EqDeviceDragHarness inherits Window {
         q-changed(v) => { root.q-changed(v); }
         character-changed(v) => { root.character-changed(v); }
         analyzer-toggled(v) => { root.analyzer-toggled(v); }
+    }
+}
+
+export component FilterDeviceDragHarness inherits Window {
+    in-out property <int> mode;
+    in-out property <float> cutoff;
+    in-out property <float> resonance;
+    callback cutoff-changed(float);
+    callback resonance-changed(float);
+    callback mode-changed(int);
+
+    width: 220px;
+    height: 268px;
+    FilterDeviceFace {
+        width: 100%;
+        height: 100%;
+        mode <=> root.mode;
+        cutoff <=> root.cutoff;
+        resonance <=> root.resonance;
+        cutoff-changed(v) => { root.cutoff-changed(v); }
+        resonance-changed(v) => { root.resonance-changed(v); }
+        mode-changed(v) => { root.mode-changed(v); }
     }
 }
 

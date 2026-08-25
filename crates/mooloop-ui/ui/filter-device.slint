@@ -45,6 +45,11 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 cutoff: root.cutoff;
                 resonance: root.resonance;
                 env-amount: 0;
+                point-dragged(cutoff, resonance) => {
+                    root.cutoff-changed(cutoff);
+                    root.resonance-changed(resonance);
+                }
+                point-scrolled(resonance) => { root.resonance-changed(resonance); }
             }
         }
         HorizontalLayout {

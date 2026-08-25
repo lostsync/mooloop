@@ -3,6 +3,33 @@ import { Theme } from "theme.slint";
 export enum ValueScale { linear, logarithmic }
 export enum AudioOrientation { horizontal, vertical }
 
+// Interaction-only graph handle. Consumers bind its position to their plotted
+// transfer function and map the relative pixel deltas into their parameters.
+export component DraggablePoint inherits TouchArea {
+    callback grabbed();
+    callback dragged(float, float);
+    callback scrolled(float);
+
+    mouse-cursor: MouseCursor.crosshair;
+    pointer-event(e) => {
+        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+            root.grabbed();
+        }
+    }
+    // The point moves with the bound parameter during a drag. Relative-to-
+    // press coordinates avoid treating that moving hit target as a stable
+    // parent coordinate system.
+    moved => {
+        root.dragged((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
+    }
+    scroll-event(e) => {
+        root.scrolled(e.delta-y / 1px);
+        accept
+    }
+
+    @children
+}
+
 // Frequency controls use the same nearest-note convention as the sampler's
 // tuned-root readout: A4 is MIDI 69 at 440 Hz.
 export global NoteFormat {
