@@ -74,6 +74,21 @@ const PALETTE_SIZES: &[(f32, f32)] = &[
     (120.0, 10.0),  // Peak meter
     (120.0, 18.0),  // Stereo meter
     (180.0, 120.0), // Sticky note
+    (18.0, 18.0),   // Mute button
+    (18.0, 18.0),   // Solo button
+    (22.0, 22.0),   // Trim knob
+    (120.0, 14.0),  // Zoom scrollbar
+    (22.0, 120.0),  // Meter scale
+    (60.0, 120.0),  // Segmented meter
+    (9.0, 9.0),     // Clip indicator
+    (22.0, 90.0),   // Channel meter
+    (150.0, 26.0),  // Master meter
+    (80.0, 10.0),   // Gain reduction meter
+    (90.0, 16.0),   // Correlation meter
+    (30.0, 22.0),   // Bus picker
+    (200.0, 28.0),  // Device header
+    (220.0, 268.0), // Effect shell
+    (280.0, 268.0), // Device frame
 ];
 
 fn main() -> Result<(), slint::PlatformError> {

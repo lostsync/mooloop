@@ -2,10 +2,17 @@ import { HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
     AudioOrientation, IconButton, InstrumentModule, LedIndicator, MiniKnob, MixerFader,
-    ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl, SelectorBank,
-    StereoPeakMeter, ToggleButton, ToolButton, TransportButton, ValueReadout, ValueScale
+    MuteButton, ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl,
+    SelectorBank, SoloButton, StereoPeakMeter, ToggleButton, ToolButton, TransportButton,
+    TrimKnob, ValueReadout, ValueScale, ZoomScrollBar
 } from "controls.slint";
 import { EnvelopeEditor } from "envelope.slint";
+import {
+    ChannelMeter, ClipIndicator, CorrelationMeter, GainReductionMeter, MasterMeter, MeterScale,
+    SegmentedMeter
+} from "meters.slint";
+import { BusPicker } from "mixer.slint";
+import { DeviceFrame, DeviceHeader, DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // One placed instance on the mockup canvas. Every kind reuses the same
 // struct - a design mockup does not need each control's full parameter set,
@@ -30,6 +37,10 @@ export global MockupKinds {
         "Fader (v)", "Mixer fader", "Toggle", "Button", "Icon button",
         "Transport button", "Segmented", "Selector", "LED", "Value readout",
         "Envelope", "Peak meter", "Stereo meter", "Sticky note",
+        "Mute button", "Solo button", "Trim knob", "Zoom scrollbar", "Meter scale",
+        "Segmented meter", "Clip indicator", "Channel meter", "Master meter",
+        "Gain reduction meter", "Correlation meter", "Bus picker", "Device header",
+        "Effect shell", "Device frame",
     ];
 }
 
@@ -50,9 +61,12 @@ component PaletteEntry inherits Rectangle {
     touch := TouchArea { clicked => { root.clicked(); } }
 }
 
-// One placed widget: a drag handle / label strip, the live control body, and
-// a resize grip. Dragging the strip moves the item; dragging the grip
-// resizes it. Clicking either selects it for the property panel.
+// One placed widget: a drag handle / label tab, the live control body, and
+// a resize grip. Dragging the tab (once selected) or the body (always)
+// moves the item; dragging the grip resizes it. Clicking the body selects
+// it for the property panel; the body otherwise ignores plain clicks so a
+// button, toggle, or LED never fires from an idle click in the layout -
+// hold control to reach the real widget underneath.
 component PlacedItem inherits Rectangle {
     in property <MockupItem> item;
     in property <bool> selected;
@@ -67,16 +81,32 @@ component PlacedItem inherits Rectangle {
     private property <length> press-y;
     private property <bool> overlay-ctrl;
     private property <float> overlay-start-value;
-    // Knob, mini knob, both faders, and the mixer fader all read plain drags
-    // as value changes internally, so a body drag can never reach `moved`
-    // through them - the overlay below claims the gesture first and decides
-    // move vs. value-adjust from the modifier at press time instead.
-    private property <bool> drag-kind: root.item.kind >= 2 && root.item.kind <= 6;
+    private property <bool> overlay-moved;
+    // Knob, mini knob, both faders, the mixer fader, and the trim knob all
+    // read plain drags as value changes internally, so a body drag can never
+    // reach `moved` through them - the overlay below claims the gesture
+    // first and decides move vs. value-adjust from the modifier at press
+    // time instead.
+    private property <bool> drag-kind:
+        (root.item.kind >= 2 && root.item.kind <= 6) || root.item.kind == 21;
+    // Discrete on/off controls: a held-control click (not a drag) flips them
+    // instead of a plain click doing it, so clicking through a layout can
+    // never accidentally fire a button.
+    private property <bool> toggle-kind:
+        root.item.kind == 7 || root.item.kind == 8 || root.item.kind == 9
+        || root.item.kind == 10 || root.item.kind == 13 || root.item.kind == 19
+        || root.item.kind == 20;
+    // Discrete multi-option controls: a held-control click picks the option
+    // under the pointer.
+    private property <bool> index-kind: root.item.kind == 11 || root.item.kind == 12;
+    // The sticky note's text is mockup metadata, not a widget under test, so
+    // it keeps taking plain clicks to place the caret - no overlay needed.
+    private property <bool> note-kind: root.item.kind == 18;
 
     x: item.x;
     y: item.y;
     width: item.width;
-    height: item.height + 14px;
+    height: item.height;
 
     if root.selected: Rectangle {
         x: -2px;
@@ -88,9 +118,14 @@ component PlacedItem inherits Rectangle {
         border-radius: 3px;
     }
 
+    // File-folder tab: sits flush above the item's top edge and only
+    // renders once selected, so an unselected layout reads as clean widgets
+    // rather than a field of label chrome.
     strip := Rectangle {
+        y: -14px;
         height: 14px;
-        background: root.selected ? Theme.focus.with-alpha(0.3) : Theme.surface-raised.with-alpha(0.9);
+        visible: root.selected;
+        background: Theme.focus.with-alpha(0.3);
         border-radius: 2px;
         HorizontalLayout {
             padding-left: 4px;
@@ -126,9 +161,8 @@ component PlacedItem inherits Rectangle {
     }
 
     body := Rectangle {
-        y: 14px;
         width: parent.width;
-        height: parent.height - 14px;
+        height: parent.height;
         clip: true;
 
         if root.item.kind == 0: InstrumentModule {
@@ -145,72 +179,60 @@ component PlacedItem inherits Rectangle {
             value-text: round(root.item.value * 100) + "%";
             width: 100%;
             height: 100%;
-            changed(v) => { root.value-changed(v); }
         }
         if root.item.kind == 3: MiniKnob {
             label: root.item.label;
             value: root.item.value;
             value-text: round(root.item.value * 100) + "%";
-            changed(v) => { root.value-changed(v); }
         }
         if root.item.kind == 4: ParameterFader {
             label: root.item.label == "" ? "LEVEL" : root.item.label;
             value: root.item.value;
             width: 100%;
-            changed(v) => { root.value-changed(v); }
         }
         if root.item.kind == 5: ParameterFader {
             label: root.item.label == "" ? "LVL" : root.item.label;
             value: root.item.value;
             orientation: AudioOrientation.vertical;
             height: 100%;
-            changed(v) => { root.value-changed(v); }
         }
         if root.item.kind == 6: MixerFader {
             value: root.item.value;
             value-text: round(root.item.value * 100) + "%";
             height: 100%;
-            changed(v) => { root.value-changed(v); }
         }
         if root.item.kind == 7: ToggleButton {
             text: root.item.label == "" ? "Toggle" : root.item.label;
             checked: root.item.value > 0.5;
             width: 100%;
             height: 100%;
-            toggled(v) => { root.value-changed(v ? 1 : 0); }
         }
         if root.item.kind == 8: ToolButton {
             text: root.item.label == "" ? "Button" : root.item.label;
             active: root.item.value > 0.5;
             width: 100%;
             height: 100%;
-            clicked => { root.value-changed(root.item.value > 0.5 ? 0 : 1); }
         }
         if root.item.kind == 9: IconButton {
             text: root.item.label == "" ? "+" : root.item.label;
             active: root.item.value > 0.5;
-            clicked => { root.value-changed(root.item.value > 0.5 ? 0 : 1); }
         }
         if root.item.kind == 10: TransportButton {
             text: root.item.label == "" ? "\u{25b6}" : root.item.label;
             active: root.item.value > 0.5;
-            clicked => { root.value-changed(root.item.value > 0.5 ? 0 : 1); }
         }
         if root.item.kind == 11: SegmentedControl {
             options: root.item.label == "" ? ["Mono", "Stereo", "M/S"] : [root.item.label, "B", "C"];
             selected-index: round(root.item.value * 2);
             width: 100%;
-            selected(i) => { root.value-changed(i / 2.0); }
         }
         if root.item.kind == 12: SelectorBank {
             options: root.item.label == "" ? ["Sine", "Saw", "Square"] : [root.item.label, "B", "C"];
             selected-index: round(root.item.value * 2);
-            selected(i) => { root.value-changed(i / 2.0); }
         }
         if root.item.kind == 13: LedIndicator {
             on: root.item.value > 0.5;
             tooltip: root.item.label;
-            TouchArea { clicked => { root.value-changed(root.item.value > 0.5 ? 0 : 1); } }
         }
         if root.item.kind == 14: ValueReadout {
             value-text: root.item.label == "" ? "0%" : root.item.label;
@@ -245,6 +267,10 @@ component PlacedItem inherits Rectangle {
             border-width: 1px;
             border-color: Theme.warning.with-alpha(0.5);
             border-radius: 3px;
+            // Sits under the text input so a click on the note's own border
+            // still selects it - the input itself covers most of the area
+            // and needs plain clicks for caret placement.
+            TouchArea { clicked => { root.select(); } }
             note-input := TextInput {
                 x: 4px;
                 y: 4px;
@@ -258,11 +284,94 @@ component PlacedItem inherits Rectangle {
                 edited => { root.label-changed(self.text); }
             }
         }
+        if root.item.kind == 19: MuteButton {
+            muted: root.item.value > 0.5;
+        }
+        if root.item.kind == 20: SoloButton {
+            soloed: root.item.value > 0.5;
+        }
+        if root.item.kind == 21: TrimKnob {
+            label: root.item.label == "" ? "TRIM" : root.item.label;
+            value: root.item.value * 72 - 60;
+        }
+        if root.item.kind == 22: ZoomScrollBar {
+            width: 100%;
+            height: 100%;
+            offset: 0.2;
+            visible-fraction: 0.4;
+        }
+        if root.item.kind == 23: MeterScale {
+            width: 100%;
+            height: 100%;
+        }
+        if root.item.kind == 24: SegmentedMeter {
+            level-db: root.item.value * 60 - 60;
+            held-db: root.item.value * 60 - 60;
+            width: 100%;
+            height: 100%;
+        }
+        if root.item.kind == 25: ClipIndicator {
+            clipping: root.item.value > 0.5;
+        }
+        if root.item.kind == 26: ChannelMeter {
+            left-db: root.item.value * 60 - 60;
+            right-db: root.item.value * 60 - 60;
+            held-left-db: root.item.value * 60 - 60;
+            held-right-db: root.item.value * 60 - 60;
+            width: 100%;
+            height: 100%;
+        }
+        if root.item.kind == 27: MasterMeter {
+            left-db: root.item.value * 60 - 60;
+            right-db: root.item.value * 60 - 60;
+            held-left-db: root.item.value * 60 - 60;
+            held-right-db: root.item.value * 60 - 60;
+            width: 100%;
+        }
+        if root.item.kind == 28: GainReductionMeter {
+            reduction-db: root.item.value * 24;
+            width: 100%;
+            height: 100%;
+        }
+        if root.item.kind == 29: CorrelationMeter {
+            correlation: root.item.value * 2 - 1;
+            width: 100%;
+        }
+        if root.item.kind == 30: BusPicker {
+            bus-names: ["Master", "Bus A", "Bus B"];
+            value: round(root.item.value * 2);
+        }
+        if root.item.kind == 31: DeviceHeader {
+            name: root.item.label == "" ? "DEVICE" : root.item.label;
+            kind: "Type";
+            width: 100%;
+        }
+        if root.item.kind == 32: EffectDeviceShell {
+            name: root.item.label == "" ? "DEVICE" : root.item.label;
+            kind: "Type";
+            slot-index: 0;
+            slot-count: 1;
+            width: 100%;
+            height: 100%;
+            Rectangle {
+                y: DeviceRackMetrics.header-height;
+                width: 100%;
+                height: parent.height - DeviceRackMetrics.header-height;
+                background: Theme.surface;
+            }
+        }
+        if root.item.kind == 33: DeviceFrame {
+            width: 100%;
+            height: 100%;
+        }
 
-        // Sits above the live control so a plain drag always moves the item;
-        // holding control reaches through to adjust the value instead, since
-        // the control's own drag handler would otherwise claim every gesture.
-        if root.drag-kind: TouchArea {
+        // Sits above the live control so a plain drag always moves the
+        // item; holding control reaches through to the real widget instead -
+        // adjusting its value on a knob or fader, or firing its click on a
+        // button, toggle, or LED (only once release lands without much
+        // movement, so a control ctrl-dragged out of the way doesn't also
+        // fire).
+        if !root.note-kind: TouchArea {
             mouse-cursor: move;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) {
@@ -271,8 +380,13 @@ component PlacedItem inherits Rectangle {
                     root.press-y = self.mouse-y;
                     root.overlay-ctrl = e.modifiers.control;
                     root.overlay-start-value = root.item.value;
+                    root.overlay-moved = false;
                 } else if (e.kind == PointerEventKind.move && self.pressed) {
-                    if (root.overlay-ctrl) {
+                    if (abs((self.mouse-x - root.press-x) / 1px) > 2
+                            || abs((self.mouse-y - root.press-y) / 1px) > 2) {
+                        root.overlay-moved = true;
+                    }
+                    if (root.drag-kind && root.overlay-ctrl) {
                         root.value-changed(clamp(root.overlay-start-value
                             + (root.item.kind == 4
                                 ? (self.mouse-x - root.press-x) / 150px
@@ -280,12 +394,24 @@ component PlacedItem inherits Rectangle {
                     } else {
                         root.moved(self.mouse-x - root.press-x, self.mouse-y - root.press-y);
                     }
+                } else if (e.kind == PointerEventKind.up) {
+                    if (root.overlay-ctrl && !root.overlay-moved) {
+                        if (root.toggle-kind) {
+                            root.value-changed(root.item.value > 0.5 ? 0 : 1);
+                        } else if (root.index-kind) {
+                            root.value-changed(clamp(floor(self.mouse-x / root.width * 3), 0, 2) / 2.0);
+                        }
+                    }
                 }
             }
-            double-clicked => { root.value-changed(0.5); }
+            double-clicked => { if (root.drag-kind) { root.value-changed(0.5); } }
             scroll-event(e) => {
-                root.value-changed(clamp(root.item.value - e.delta-y / 600px, 0, 1));
-                accept
+                if (root.drag-kind) {
+                    root.value-changed(clamp(root.item.value - e.delta-y / 600px, 0, 1));
+                    accept
+                } else {
+                    reject
+                }
             }
         }
     }
@@ -470,7 +596,7 @@ export component MockupCanvas inherits Window {
                 if root.selected-index < 0: VerticalBox {
                     padding: 8px;
                     Text {
-                        text: "Click a palette item to place it. Drag it (or the strip) to move, the corner dot to resize, the \u{2715} to delete. Ctrl+drag a knob or fader to change its value instead of moving it.";
+                        text: "Click a palette item to place it. Drag it to move, the corner dot to resize. Selecting it reveals a tab above with its name and a \u{2715} to delete. Hold Ctrl and drag a knob or fader to change its value, or Ctrl-click a button, toggle, or LED to fire it, instead of moving it.";
                         color: Theme.text-faint;
                         font-size: 10px;
                         wrap: word-wrap;

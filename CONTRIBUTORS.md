@@ -46,8 +46,11 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-25
-- Sessions: 15
-- Notes: Set up this file at Adam's request. Refreshed the README
+- Sessions: 16
+- Notes: Rounded out the UI mockup tool's palette with the remaining real
+  controls (meters, mute/solo, trim knob, device chassis), fixed its
+  selection tab and click-vs-drag handling, and wired a launcher into
+  Preferences > Developer. Set up this file at Adam's request. Refreshed the README
   screenshot. Sampler UI overhaul: waveform zoom/scroll, sample-accurate
   trim/loop fields, compact tuning knobs with a note/frequency readout, a
   per-voice playhead, and no more auto-loaded kick on a new channel. Audio

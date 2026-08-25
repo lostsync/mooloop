@@ -259,6 +259,7 @@ export component PreferencesDialog inherits Rectangle {
     callback shortcut-rebind-key(string, string, bool, bool, bool, bool);
     callback shortcut-reset(string);
     callback shortcut-reset-all();
+    callback open-mockup-tool();
 
     private property <int> page: 0;
     visible: root.open;
@@ -483,6 +484,17 @@ export component PreferencesDialog inherits Rectangle {
                             spacing: 8px;
                             Text { text: "Developer"; color: Theme.text; font-size: 14px; height: 20px; }
                             SectionLabel { text: "DEVELOPER TOOLS"; }
+                            HorizontalBox {
+                                height: 36px;
+                                spacing: 8px;
+                                VerticalBox {
+                                    spacing: 0px;
+                                    Text { text: "UI mockup"; color: Theme.text; font-size: 11px; }
+                                    Text { text: "Compose layouts from the real controls"; color: Theme.text-muted; font-size: 10px; }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                ToolButton { text: "Open"; clicked => { root.open-mockup-tool(); } }
+                            }
                         }
                         Rectangle { vertical-stretch: 1; }
                     }

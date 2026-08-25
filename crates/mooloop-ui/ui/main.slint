@@ -189,6 +189,7 @@ export component MainWindow inherits Window {
     callback preferences-shortcut-rebind-key(string, string, bool, bool, bool, bool);
     callback preferences-shortcut-reset(string);
     callback preferences-shortcut-reset-all();
+    callback preferences-open-mockup-tool();
 
     // ---- document lifecycle ----
     in-out property <string> document-title: "Untitled - mooloop";
@@ -2975,6 +2976,7 @@ export component MainWindow inherits Window {
         shortcut-rebind-key(id, key, ctrl, shift, alt, meta) => { root.preferences-shortcut-rebind-key(id, key, ctrl, shift, alt, meta); }
         shortcut-reset(id) => { root.preferences-shortcut-reset(id); }
         shortcut-reset-all => { root.preferences-shortcut-reset-all(); }
+        open-mockup-tool => { root.preferences-open-mockup-tool(); }
     }
     SavePresetDialog {
         width: parent.width;
