@@ -134,9 +134,13 @@ export component FilterResponseDisplay inherits Rectangle {
     if abs(root.env-amount) > 0.01 && DisplayPrefs.smooth-curves : Rectangle {
         for index in root.sample-count : Path {
             width: 100%; height: 100%;
-            viewbox-width: 1; viewbox-height: 1;
-            commands: "M " + (max(0, index - 1) / root.sample-count) + " " + root.plot-y(max(0, index - 1), root.modulated-cutoff)
-                + " L " + (index / root.sample-count) + " " + root.plot-y(index, root.modulated-cutoff);
+            // Path viewboxes retain their aspect ratio. Match this scope's
+            // dimensions so every segment uses the full rectangular plot.
+            property <float> plot-w: self.width / 1px;
+            property <float> plot-h: self.height / 1px;
+            viewbox-width: self.plot-w; viewbox-height: self.plot-h;
+            commands: "M " + (max(0, index - 1) / root.sample-count * self.plot-w) + " " + (root.plot-y(max(0, index - 1), root.modulated-cutoff) * self.plot-h)
+                + " L " + (index / root.sample-count * self.plot-w) + " " + (root.plot-y(index, root.modulated-cutoff) * self.plot-h);
             stroke: Theme.warning.with-alpha(0.62);
             stroke-width: 1.4px;
             fill: transparent;
@@ -156,9 +160,11 @@ export component FilterResponseDisplay inherits Rectangle {
     if DisplayPrefs.smooth-curves : Rectangle {
         for index in root.sample-count : Path {
             width: 100%; height: 100%;
-            viewbox-width: 1; viewbox-height: 1;
-            commands: "M " + (max(0, index - 1) / root.sample-count) + " " + root.plot-y(max(0, index - 1), root.cutoff)
-                + " L " + (index / root.sample-count) + " " + root.plot-y(index, root.cutoff);
+            property <float> plot-w: self.width / 1px;
+            property <float> plot-h: self.height / 1px;
+            viewbox-width: self.plot-w; viewbox-height: self.plot-h;
+            commands: "M " + (max(0, index - 1) / root.sample-count * self.plot-w) + " " + (root.plot-y(max(0, index - 1), root.cutoff) * self.plot-h)
+                + " L " + (index / root.sample-count * self.plot-w) + " " + (root.plot-y(index, root.cutoff) * self.plot-h);
             stroke: Theme.accent;
             stroke-width: 1.4px;
             fill: transparent;
@@ -229,9 +235,11 @@ export component DriveTransferDisplay inherits Rectangle {
     if DisplayPrefs.smooth-curves : Rectangle {
         for index in root.sample-count : Path {
             width: 100%; height: 100%;
-            viewbox-width: 1; viewbox-height: 1;
-            commands: "M " + (max(0, index - 1) / root.sample-count) + " " + root.plot-y(max(0, index - 1))
-                + " L " + (index / root.sample-count) + " " + root.plot-y(index);
+            property <float> plot-w: self.width / 1px;
+            property <float> plot-h: self.height / 1px;
+            viewbox-width: self.plot-w; viewbox-height: self.plot-h;
+            commands: "M " + (max(0, index - 1) / root.sample-count * self.plot-w) + " " + (root.plot-y(max(0, index - 1)) * self.plot-h)
+                + " L " + (index / root.sample-count * self.plot-w) + " " + (root.plot-y(index) * self.plot-h);
             stroke: Theme.warning;
             stroke-width: 1.4px;
             fill: transparent;
@@ -404,9 +412,11 @@ export component DynamicsCurveDisplay inherits Rectangle {
     if DisplayPrefs.smooth-curves : Rectangle {
         for index in root.sample-count : Path {
             width: 100%; height: 100%;
-            viewbox-width: 1; viewbox-height: 1;
-            commands: "M " + (max(0, index - 1) / root.sample-count) + " " + root.plot-y(max(0, index - 1))
-                + " L " + (index / root.sample-count) + " " + root.plot-y(index);
+            property <float> plot-w: self.width / 1px;
+            property <float> plot-h: self.height / 1px;
+            viewbox-width: self.plot-w; viewbox-height: self.plot-h;
+            commands: "M " + (max(0, index - 1) / root.sample-count * self.plot-w) + " " + (root.plot-y(max(0, index - 1)) * self.plot-h)
+                + " L " + (index / root.sample-count * self.plot-w) + " " + (root.plot-y(index) * self.plot-h);
             stroke: Theme.warning;
             stroke-width: 1.4px;
             fill: transparent;
