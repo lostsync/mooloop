@@ -29,6 +29,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            binutils \
             pkg-config \
             libjack-jackd2-dev \
             libasound2-dev \
@@ -54,6 +55,9 @@ jobs:
       - name: Build release binary
         run: cargo build --release -p mooloop-app
 
+      - name: Strip debug information from distributable binary
+        run: strip --strip-debug target/release/mooloop
+
       - name: Package .deb
         run: cargo deb -p mooloop-app --no-build
 
@@ -72,6 +76,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            binutils \
             pkg-config \
             libjack-jackd2-dev \
             libasound2-dev \
@@ -98,6 +103,9 @@ jobs:
       - name: Build release binary
         run: cargo build --release -p mooloop-app
 
+      - name: Strip debug information from distributable binary
+        run: strip --strip-debug target/release/mooloop
+
       - name: Package .rpm
         run: cargo generate-rpm -p crates/mooloop-app
 
@@ -116,6 +124,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            binutils \
             pkg-config \
             libjack-jackd2-dev \
             libasound2-dev \
@@ -137,6 +146,9 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release -p mooloop-app
+
+      - name: Strip debug information from distributable binary
+        run: strip --strip-debug target/release/mooloop
 
       - name: Fetch linuxdeploy
         run: |
