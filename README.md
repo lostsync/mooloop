@@ -19,6 +19,37 @@ or dependable production tool.
 
 ![Mooloop interface showing the channel rack and mono synth](mooloop-screenshot.png)
 
+## What's New In 0.1.1
+
+0.1.1 is the first release after the public 0.1.0 baseline. It makes the
+prototype substantially nicer to edit, shape, and configure while keeping the
+experiment's limits honest.
+
+- **A fuller effect rack.** Add a seven-band parametric EQ, modulation, a
+  generated-room reverb, or the lighter Plate reverb alongside the filter,
+  drive, bitcrush, delay, gate, compressor, and limiter. Effect hosts now
+  provide bypass, dry/wet blend, input/output trims, reordering, and live
+  input/output metering; those same hosts work on channels and mixer buses.
+- **Editing that shares one command path.** Reassignable keyboard shortcuts,
+  menu actions, and channel/pattern context menus reach the same
+  undo-recorded commands. Piano-roll multi-select, Select All, Clear Pattern,
+  and pattern clone/delete are now usable instead of placeholder rows.
+- **Preferences for the actual instrument.** Audio buffer-size selection,
+  appearance settings, and shortcut recording persist; new installs request a
+  256-frame JACK buffer by default.
+- **A less fussy sampler and piano roll.** The sampler gained waveform
+  zoom/scroll, exact trim and loop entry, compact tuning with a note/frequency
+  readout, and live voice playheads. Piano-roll zoom moved onto the scrollbars
+  for direct pan-and-zoom control.
+- **More dependable realtime behavior.** Continuous effect changes are
+  smoothed to avoid zipper noise; the realtime thread guards against
+  denormal-float CPU stalls; idle effect work and unnecessary UI updates are
+  skipped.
+
+0.1.1 still has no general parameter automation, retained-audio buffer,
+parallel sends, recording, or metronome. See [Version targets](docs/VERSIONS.md)
+for the next outcomes rather than treating those absences as hidden promises.
+
 ## What Works
 
 - Up to 256 channels using a sampler, drum synth, mono synth, or poly synth.
@@ -33,9 +64,10 @@ or dependable production tool.
 - A horizontal device rack per channel: one source device followed by an
   insert chain of up to eight effects, added by kind, bypassed, removed, and
   reordered by dragging their headers.
-- Seven effects: low-pass/high-pass filter, drive/saturation with four curves,
-  bitcrush, stereo delay with digital, tape, and reverse behavior, and a
-  gate, compressor, and limiter. Effect chains save with the song.
+- Eleven effects: seven-band parametric EQ, modulation, low-pass/high-pass
+  filter, drive/saturation with four curves, bitcrush, stereo delay with
+  digital/tape/reverse behavior, generated-room reverb, Plate reverb, gate,
+  compressor, and limiter. Effect chains save with the song.
 - A mixer of one master plus sixteen insert buses, toggled into the same pane
   as the step grid. Every channel names a bus; buses carry their own effect
   chain, fader, pan, mute, and live meter, and can feed any other bus in any
