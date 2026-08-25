@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, SegmentedControl } from "controls.slint";
+import { ParameterKnob, SelectorBank } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // The plan is a parameter display, not decoration: dimensions set the room
@@ -45,6 +45,17 @@ component RoomPlan inherits Rectangle {
             Rectangle { width: 14px; height: 14px; border-radius: 7px; background: Theme.focus; border-width: 2px; border-color: Theme.panel; }
         }
     }
+    Text {
+        x: 4px;
+        y: parent.height - 14px;
+        width: parent.width - 8px;
+        height: 10px;
+        text: "GENERATED ROOM";
+        color: Theme.text-faint;
+        font-size: 8px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
 }
 
 export component ReverbDeviceFace inherits EffectDeviceShell {
@@ -77,21 +88,23 @@ export component ReverbDeviceFace inherits EffectDeviceShell {
         padding-top: DeviceRackMetrics.header-height + 6px;
         spacing: 4px;
         HorizontalLayout {
+            alignment: start;
             spacing: 4px;
-            Text { text: "GENERATED ROOM"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
-            Rectangle { horizontal-stretch: 1; }
-            SegmentedControl {
-                width: 162px; height: 22px;
+            SelectorBank {
                 options: ["STUDIO", "CHAMBER", "HALL"];
                 selected-index <=> root.shape;
+                segment-width: 64px;
+                tooltip: "Room shape";
                 selected(i) => { root.shape-changed(i); }
             }
-            SegmentedControl {
-                width: 172px; height: 22px;
+            SelectorBank {
                 options: ["PLASTER", "WOOD", "BRICK", "CURTAIN"];
                 selected-index <=> root.material;
+                segment-width: 64px;
+                tooltip: "Room surface";
                 selected(i) => { root.material-changed(i); }
             }
+            Rectangle { horizontal-stretch: 1; }
         }
         HorizontalLayout {
             height: 116px;

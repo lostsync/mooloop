@@ -208,6 +208,42 @@ fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
     }
 }
 
+#[test]
+fn render_effect_header_comparison() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .expect("initialize headless renderer");
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(3200.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_pattern_length(16);
+    ui.set_selected_channel_name(SharedString::from("Kick"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(1);
+    set_drum_preview(&ui, DrumSynthParams::default());
+
+    let mut reverb = effect_slot(8, 3);
+    reverb.p1 = 1.0;
+    ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
+        effect_slot(0, 1),
+        effect_slot(1, 1),
+        effect_slot(2, 1),
+        effect_slot(5, 2),
+        reverb,
+    ]))));
+
+    let snapshot = ui.window().take_snapshot().unwrap();
+    assert_eq!((snapshot.width(), snapshot.height()), (3200, 760));
+    assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&snapshot, "MOOLOOP_EFFECT_HEADERS_SNAPSHOT");
+}
+
 /// The rack is wider than the window once a few devices are in the chain, so
 /// it has to scroll horizontally to reach them.
 ///

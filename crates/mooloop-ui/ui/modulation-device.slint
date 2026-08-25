@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, SegmentedControl } from "controls.slint";
+import { ParameterKnob, SelectorBank } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // Parameter-derived LFO traces. This is a compact working display rather
@@ -8,6 +8,7 @@ component ModulationDisplay inherits Rectangle {
     in property <int> mode;
     in property <float> depth;
     in property <float> spread;
+    in property <string> mode-detail;
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.border;
@@ -28,6 +29,17 @@ component ModulationDisplay inherits Rectangle {
         y: parent.height * (0.5 - sin(self.trace_phase * 1deg) * (0.12 + root.depth * 0.31));
         width: max(1px, parent.width / 50); height: 2px;
         background: Theme.focus.with-alpha(0.7);
+    }
+    Text {
+        x: 4px;
+        y: parent.height - 14px;
+        width: parent.width - 8px;
+        height: 10px;
+        text: root.mode-detail;
+        color: Theme.text-faint;
+        font-size: 8px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
     }
 }
 
@@ -64,20 +76,21 @@ export component ModulationDeviceFace inherits EffectDeviceShell {
         padding-top: DeviceRackMetrics.header-height + 6px;
         spacing: 4px;
         HorizontalLayout {
+            alignment: start;
             spacing: 4px;
-            Text { text: root.mode-detail; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
-            Rectangle { horizontal-stretch: 1; }
-            SegmentedControl {
-                width: 286px; height: 22px;
+            SelectorBank {
                 options: ["CHORUS", "FLANGE", "PHASER", "ENS", "ADT"];
                 selected-index <=> root.mode;
+                segment-width: 60px;
+                tooltip: "Modulation mode";
                 selected(i) => { root.mode-changed(i); }
             }
+            Rectangle { horizontal-stretch: 1; }
         }
         HorizontalLayout {
             height: 108px;
             spacing: 8px;
-            ModulationDisplay { width: 330px; height: 108px; mode: root.mode; depth: root.depth; spread: root.spread; }
+            ModulationDisplay { width: 330px; height: 108px; mode: root.mode; depth: root.depth; spread: root.spread; mode-detail: root.mode-detail; }
             VerticalLayout {
                 spacing: 2px;
                 Text { text: root.mode == 2 ? root.stage-count + " STAGES / STEREO PHASE" : root.mode == 3 ? "3 VOICES / STEREO PHASE" : "STEREO VARIABLE DELAY"; color: Theme.text-muted; font-size: 9px; horizontal-alignment: center; }

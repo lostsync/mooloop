@@ -21,14 +21,8 @@ export component FilterDeviceFace inherits EffectDeviceShell {
         padding-top: DeviceRackMetrics.header-height + 6px;
         spacing: 4px;
         HorizontalLayout {
+            alignment: start;
             spacing: 4px;
-            Text {
-                text: "FILTER";
-                color: Theme.text-faint;
-                font-size: 8px;
-                vertical-alignment: center;
-            }
-            Rectangle { horizontal-stretch: 1; }
             SelectorBank {
                 options: ["LP", "HP"];
                 selected-index <=> root.mode;
@@ -36,6 +30,7 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 tooltip: "Filter mode";
                 selected(i) => { root.mode-changed(i); }
             }
+            Rectangle { horizontal-stretch: 1; }
         }
         Rectangle {
             height: 104px;
