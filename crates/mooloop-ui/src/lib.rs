@@ -833,6 +833,7 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Eq => 7,
         EffectKind::Reverb => 8,
         EffectKind::Modulation => 9,
+        EffectKind::Plate => 10,
     }
 }
 
@@ -841,7 +842,11 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
 /// "Device Rack Layout").
 fn effect_kind_units(kind: EffectKind) -> i32 {
     match kind {
-        EffectKind::Filter | EffectKind::Drive | EffectKind::Bitcrush | EffectKind::Limiter => 1,
+        EffectKind::Filter
+        | EffectKind::Drive
+        | EffectKind::Bitcrush
+        | EffectKind::Limiter
+        | EffectKind::Plate => 1,
         EffectKind::Delay | EffectKind::Gate | EffectKind::Compressor => 2,
         EffectKind::Eq | EffectKind::Reverb | EffectKind::Modulation => 3,
     }

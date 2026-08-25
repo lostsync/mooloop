@@ -16,6 +16,7 @@ mod dynamics;
 mod eq;
 mod filter;
 mod modulation;
+mod plate;
 mod reverb;
 
 pub use bitcrush::BitcrushEffect;
@@ -25,6 +26,7 @@ pub use dynamics::{CompressorEffect, GateEffect, LimiterEffect};
 pub use eq::EqEffect;
 pub use filter::FilterEffect;
 pub use modulation::ModulationEffect;
+pub use plate::PlateEffect;
 pub use reverb::{generate_room_ir, PreparedIr, ReverbEffect, StereoIr, CONVOLUTION_BLOCK_FRAMES};
 
 use mooloop_core::EffectParams;
@@ -46,6 +48,7 @@ pub fn build_effect(params: EffectParams, sample_rate: u32) -> Box<dyn AudioNode
         EffectParams::Bitcrush(p) => Box::new(BitcrushEffect::new(p)),
         EffectParams::Delay(p) => Box::new(DelayEffect::new(p, sample_rate)),
         EffectParams::Reverb(p) => Box::new(ReverbEffect::new(p, sample_rate)),
+        EffectParams::Plate(p) => Box::new(PlateEffect::new(p, sample_rate)),
         EffectParams::Gate(p) => Box::new(GateEffect::new(p, sample_rate)),
         EffectParams::Compressor(p) => Box::new(CompressorEffect::new(p, sample_rate)),
         EffectParams::Limiter(p) => Box::new(LimiterEffect::new(p, sample_rate)),
