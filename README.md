@@ -182,6 +182,14 @@ Run the audio control gallery:
 cargo run -p mooloop-ui --example control-gallery
 ```
 
+Build an optimized RPM on GitHub and download it locally. This requires an
+authenticated [`gh`](https://cli.github.com/) CLI, a clean worktree, and a
+pushed branch; the package is saved beneath the Git-ignored `.tmp/rpm/`:
+
+```sh
+./scripts/build-rpm
+```
+
 Run the full integration checks for cross-crate or release work. For routine
 changes, follow the targeted verification guidance in `AGENTS.md` instead:
 
