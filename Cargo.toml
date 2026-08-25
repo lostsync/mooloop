@@ -45,5 +45,10 @@ debug = true
 # inspection under a debugger. `unpacked` then leaves that debug info in the
 # object files instead of copying it into every linked binary.
 [profile.dev]
+# The ordinary `cargo run` path is used to play the instrument. Leaving its
+# per-sample audio code completely unoptimized makes even small songs miss
+# JACK deadlines, so keep a modest optimization level without turning every
+# edit into a release build.
+opt-level = 1
 debug = "line-tables-only"
 split-debuginfo = "unpacked"

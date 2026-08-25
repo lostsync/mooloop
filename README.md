@@ -173,8 +173,12 @@ export CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/mooloop/cargo-target"
 Run the application:
 
 ```sh
-cargo run -p mooloop-app --bin mooloop
+cargo run --release -p mooloop-app --bin mooloop
 ```
+
+Audio playback should always use the release build. The development profile
+also applies a small optimization level so ordinary `cargo run` remains
+usable while iterating, but it is not the performance baseline.
 
 Run the audio control gallery:
 

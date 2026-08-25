@@ -9,6 +9,10 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "mooloop: running a development build; use `cargo run --release -p mooloop-app --bin mooloop` for reliable realtime audio"
+    );
     let (engine, handle) = mooloop_engine::Engine::new(mooloop_engine::AudioConfig::default())?;
     let app = mooloop_ui::AppUi::new(handle)?;
     // `engine` stays alive on the stack for the duration of the event loop and
