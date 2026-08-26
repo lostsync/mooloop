@@ -52,5 +52,6 @@ pub fn build_effect(params: EffectParams, sample_rate: u32) -> Box<dyn AudioNode
         EffectParams::Gate(p) => Box::new(GateEffect::new(p, sample_rate)),
         EffectParams::Compressor(p) => Box::new(CompressorEffect::new(p, sample_rate)),
         EffectParams::Limiter(p) => Box::new(LimiterEffect::new(p, sample_rate)),
+        EffectParams::Buffer(p) => Box::new(crate::BufferDevice::new(p, sample_rate, 120.0)),
     }
 }

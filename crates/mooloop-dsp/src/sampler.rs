@@ -653,7 +653,7 @@ impl AudioNode for Sampler {
                 Event::NoteOn { id, note, velocity } => self.trigger(id, note, velocity),
                 Event::NoteOff { id, .. } => self.release_note(id),
                 Event::Choke => self.choke(),
-                Event::ParamValue { .. } => {}
+                Event::ParamValue { .. } | Event::Buffer(_) => {}
             }
             pos = off;
         }

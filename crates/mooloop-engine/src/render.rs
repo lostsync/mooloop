@@ -68,6 +68,9 @@ impl PendingEffectParams {
 
     fn queue(&mut self, event: TimedEvent) {
         let Event::ParamValue { id, .. } = event.event else {
+            if let Some(empty) = self.events.iter_mut().find(|entry| entry.is_none()) {
+                *empty = Some(event);
+            }
             return;
         };
         if let Some(existing) = self.events.iter_mut().find(|existing| {
@@ -308,6 +311,15 @@ impl EffectChain {
             events.queue(TimedEvent {
                 offset: 0,
                 event: Event::ParamValue { id, value },
+            });
+        }
+    }
+
+    fn queue_buffer(&mut self, slot: usize, event: mooloop_core::BufferEvent) {
+        if let Some(events) = self.events.get_mut(slot) {
+            events.queue(TimedEvent {
+                offset: 0,
+                event: Event::Buffer(event),
             });
         }
     }
@@ -1045,6 +1057,15 @@ impl RenderState {
                     chain.queue_param(slot as usize, id, value);
                 }
             }
+            EngineCommand::TriggerBuffer {
+                target,
+                slot,
+                event,
+            } => {
+                if let Some(chain) = self.chain_mut(target) {
+                    chain.queue_buffer(slot as usize, event);
+                }
+            }
         }
     }
 
@@ -1533,6 +1554,10 @@ mod tests {
                     // than this render window, so the output is silence here
                     // — clearly different from the nonzero dry reference.
                 }
+                mooloop_core::EffectKind::Buffer => {
+                    // Follow is deliberately transparent until an atomic
+                    // buffer event arrives.
+                }
             }
 
             let wet = rendered_energy(&project, |render| {
@@ -1542,11 +1567,15 @@ mod tests {
                     build_effect(params, 48_000),
                 ));
             });
-            assert!(
-                (wet - dry).abs() > dry * 0.01,
-                "{} left the signal unchanged: dry {dry}, wet {wet}",
-                kind.label()
-            );
+            if kind == mooloop_core::EffectKind::Buffer {
+                assert_eq!(wet, dry, "buffer Follow must be transparent");
+            } else {
+                assert!(
+                    (wet - dry).abs() > dry * 0.01,
+                    "{} left the signal unchanged: dry {dry}, wet {wet}",
+                    kind.label()
+                );
+            }
         }
     }
 

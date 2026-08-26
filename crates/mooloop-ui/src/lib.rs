@@ -836,6 +836,7 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Reverb => 8,
         EffectKind::Modulation => 9,
         EffectKind::Plate => 10,
+        EffectKind::Buffer => 11,
     }
 }
 
@@ -849,6 +850,7 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
         | EffectKind::Bitcrush
         | EffectKind::Limiter
         | EffectKind::Plate => 1,
+        EffectKind::Buffer => 1,
         EffectKind::Delay | EffectKind::Gate | EffectKind::Compressor => 2,
         EffectKind::Eq | EffectKind::Reverb | EffectKind::Modulation => 3,
     }

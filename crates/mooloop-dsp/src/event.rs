@@ -11,6 +11,8 @@
 //! to fill on the realtime thread. The sequencer emits events in time order;
 //! nodes may rely on that (documented contract, not enforced).
 
+use mooloop_core::BufferEvent;
+
 /// Events a node may receive or emit. Extendable without changing the list
 /// mechanics (automation params, MPE, etc. slot in here).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,6 +34,8 @@ pub enum Event {
         id: u32,
         value: f32,
     },
+    /// Atomic retained-audio edit for a buffer insert.
+    Buffer(BufferEvent),
 }
 
 /// One event and its position inside the current block.
@@ -112,7 +116,7 @@ impl EventList {
 fn event_sort_key(event: &TimedEvent) -> (u32, u8) {
     let priority = match event.event {
         Event::NoteOff { .. } | Event::Choke => 0,
-        Event::ParamValue { .. } => 1,
+        Event::ParamValue { .. } | Event::Buffer(_) => 1,
         Event::NoteOn { .. } => 2,
     };
     (event.offset, priority)

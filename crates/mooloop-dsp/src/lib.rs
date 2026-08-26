@@ -43,7 +43,7 @@ pub mod smooth;
 
 pub use align::DryAlign;
 pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};
-pub use buffer_device::{BufferDevice, BufferDuration, BufferEvent, TimedBufferEvent};
+pub use buffer_device::{BufferDevice, TimedBufferEvent};
 pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;
@@ -54,6 +54,7 @@ pub use effects::{
 };
 pub use event::{Event, EventList, TimedEvent};
 pub use monosynth::MonoSynth;
+pub use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 pub use node::{AudioNode, ProcessContext};
 pub use polysynth::PolySynth;
 pub use sampler::{SampleData, Sampler};

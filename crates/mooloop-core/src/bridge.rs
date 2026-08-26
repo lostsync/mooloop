@@ -10,8 +10,8 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::{
-    CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget, MonoSynthParams, NoteEvent,
-    NoteId, PlaybackMode, PolySynthParams, SamplerParams,
+    BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget, MonoSynthParams,
+    NoteEvent, NoteId, PlaybackMode, PolySynthParams, SamplerParams,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
@@ -123,11 +123,23 @@ pub enum EngineCommand {
         bypassed: bool,
     },
     /// Generic device-host wet/dry blend, applied around every insert.
-    SetEffectWetDry { target: EffectTarget, slot: u8, wet_dry: f32 },
+    SetEffectWetDry {
+        target: EffectTarget,
+        slot: u8,
+        wet_dry: f32,
+    },
     /// Generic device-host input trim, applied before the effect DSP.
-    SetEffectInputTrim { target: EffectTarget, slot: u8, input_trim: f32 },
+    SetEffectInputTrim {
+        target: EffectTarget,
+        slot: u8,
+        input_trim: f32,
+    },
     /// Generic device-host output trim, applied after the wet/dry blend.
-    SetEffectOutputTrim { target: EffectTarget, slot: u8, output_trim: f32 },
+    SetEffectOutputTrim {
+        target: EffectTarget,
+        slot: u8,
+        output_trim: f32,
+    },
     /// Queue one sample-timed parameter change for one effect slot. Delivered
     /// to the node as `Event::ParamValue` at the next block, so effect kinds
     /// need no bespoke command per parameter.
@@ -136,6 +148,14 @@ pub enum EngineCommand {
         slot: u8,
         id: u32,
         value: f32,
+    },
+    /// Fire one complete retained-audio edit at the start of the next block.
+    /// The tuple is never split into parameter updates, so the read head sees
+    /// one sample-accurate change.
+    TriggerBuffer {
+        target: EffectTarget,
+        slot: u8,
+        event: BufferEvent,
     },
 }
 

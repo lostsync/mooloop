@@ -22,11 +22,12 @@ pub enum EffectKind {
     Gate,
     Compressor,
     Limiter,
+    Buffer,
 }
 
 impl EffectKind {
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 11] = [
+    pub const ALL: [EffectKind; 12] = [
         EffectKind::Eq,
         EffectKind::Modulation,
         EffectKind::Filter,
@@ -38,6 +39,7 @@ impl EffectKind {
         EffectKind::Gate,
         EffectKind::Compressor,
         EffectKind::Limiter,
+        EffectKind::Buffer,
     ];
 
     /// Display name for device headers and the add-effect picker.
@@ -54,6 +56,7 @@ impl EffectKind {
             Self::Gate => "Gate",
             Self::Compressor => "Comp",
             Self::Limiter => "Limiter",
+            Self::Buffer => "Buffer",
         }
     }
 
@@ -72,6 +75,7 @@ impl EffectKind {
             Self::Gate => &GATE_DESCRIPTORS,
             Self::Compressor => &COMPRESSOR_DESCRIPTORS,
             Self::Limiter => &LIMITER_DESCRIPTORS,
+            Self::Buffer => &[],
         }
     }
 
@@ -94,6 +98,7 @@ impl EffectKind {
             Self::Gate => EffectParams::Gate(GateParams::default()),
             Self::Compressor => EffectParams::Compressor(CompressorParams::default()),
             Self::Limiter => EffectParams::Limiter(LimiterParams::default()),
+            Self::Buffer => EffectParams::Buffer(BufferParams::default()),
         }
     }
 }
@@ -892,14 +897,78 @@ pub const MODULATION_PARAM_TONE: u32 = 6;
 pub const MODULATION_PARAM_STAGES: u32 = 7;
 
 static MODULATION_DESCRIPTORS: [ParamDescriptor; 8] = [
-    ParamDescriptor { id: MODULATION_PARAM_MODE, name: "Mode", unit: "", min: 0.0, max: 4.0, curve: ParamCurve::Stepped(5), default: 0.0 },
-    ParamDescriptor { id: MODULATION_PARAM_RATE_HZ, name: "Rate", unit: "Hz", min: 0.02, max: 12.0, curve: ParamCurve::Exponential, default: 0.35 },
-    ParamDescriptor { id: MODULATION_PARAM_DEPTH, name: "Depth", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Linear, default: 0.45 },
-    ParamDescriptor { id: MODULATION_PARAM_COLOR, name: "Color", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Linear, default: 0.45 },
-    ParamDescriptor { id: MODULATION_PARAM_FEEDBACK, name: "Feedback", unit: "", min: -0.92, max: 0.92, curve: ParamCurve::Linear, default: 0.0 },
-    ParamDescriptor { id: MODULATION_PARAM_SPREAD, name: "Spread", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Linear, default: 0.65 },
-    ParamDescriptor { id: MODULATION_PARAM_TONE, name: "Tone", unit: "", min: 0.0, max: 1.0, curve: ParamCurve::Linear, default: 0.75 },
-    ParamDescriptor { id: MODULATION_PARAM_STAGES, name: "Stages", unit: "", min: 4.0, max: 12.0, curve: ParamCurve::Stepped(5), default: 8.0 },
+    ParamDescriptor {
+        id: MODULATION_PARAM_MODE,
+        name: "Mode",
+        unit: "",
+        min: 0.0,
+        max: 4.0,
+        curve: ParamCurve::Stepped(5),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: MODULATION_PARAM_RATE_HZ,
+        name: "Rate",
+        unit: "Hz",
+        min: 0.02,
+        max: 12.0,
+        curve: ParamCurve::Exponential,
+        default: 0.35,
+    },
+    ParamDescriptor {
+        id: MODULATION_PARAM_DEPTH,
+        name: "Depth",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.45,
+    },
+    ParamDescriptor {
+        id: MODULATION_PARAM_COLOR,
+        name: "Color",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.45,
+    },
+    ParamDescriptor {
+        id: MODULATION_PARAM_FEEDBACK,
+        name: "Feedback",
+        unit: "",
+        min: -0.92,
+        max: 0.92,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: MODULATION_PARAM_SPREAD,
+        name: "Spread",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.65,
+    },
+    ParamDescriptor {
+        id: MODULATION_PARAM_TONE,
+        name: "Tone",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.75,
+    },
+    ParamDescriptor {
+        id: MODULATION_PARAM_STAGES,
+        name: "Stages",
+        unit: "",
+        min: 4.0,
+        max: 12.0,
+        curve: ParamCurve::Stepped(5),
+        default: 8.0,
+    },
 ];
 
 /// Algorithms exposed by the unified modulation processor. The first four
@@ -1470,6 +1539,28 @@ pub struct LimiterParams {
     pub gain_db: f32,
 }
 
+/// Persistent allocation configuration for the retained-audio insert.
+///
+/// Changing this requires constructing and structurally replacing the node
+/// off the audio thread; Stage 1 exposes it as saved device state only.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BufferParams {
+    #[serde(default = "default_buffer_bars")]
+    pub bars: u8,
+}
+
+const fn default_buffer_bars() -> u8 {
+    8
+}
+
+impl Default for BufferParams {
+    fn default() -> Self {
+        Self {
+            bars: default_buffer_bars(),
+        }
+    }
+}
+
 impl Default for LimiterParams {
     fn default() -> Self {
         Self {
@@ -1498,6 +1589,7 @@ pub enum EffectParams {
     Gate(GateParams),
     Compressor(CompressorParams),
     Limiter(LimiterParams),
+    Buffer(BufferParams),
 }
 
 impl EffectParams {
@@ -1514,6 +1606,7 @@ impl EffectParams {
             Self::Gate(_) => EffectKind::Gate,
             Self::Compressor(_) => EffectKind::Compressor,
             Self::Limiter(_) => EffectKind::Limiter,
+            Self::Buffer(_) => EffectKind::Buffer,
         }
     }
 
@@ -1590,6 +1683,13 @@ impl EffectParams {
     pub fn limiter(&self) -> Option<&LimiterParams> {
         match self {
             Self::Limiter(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn buffer(&self) -> Option<&BufferParams> {
+        match self {
+            Self::Buffer(p) => Some(p),
             _ => None,
         }
     }
@@ -1717,6 +1817,7 @@ impl EffectParams {
                 LIMITER_PARAM_GAIN_DB => Some(p.gain_db),
                 _ => None,
             },
+            Self::Buffer(_) => None,
         }
     }
 
@@ -1849,6 +1950,7 @@ impl EffectParams {
                 LIMITER_PARAM_GAIN_DB => p.gain_db = value,
                 _ => return None,
             },
+            Self::Buffer(_) => return None,
         }
         Some(value)
     }

@@ -5,49 +5,9 @@
 //! debug triggers will share. Construction allocates the ring; [`process`] is
 //! allocation-free and operates in place on an existing [`StereoBus`].
 
-use crate::{ProcessContext, StereoBus};
+use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 
-/// How long a detached read head remains active.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferDuration {
-    /// A sequencer step is a sixteenth note in the current engine grid.
-    Steps(u16),
-    /// Remain detached until another event supersedes this one.
-    UntilNextEvent,
-    /// Reserved for the future note-off plumbing. Stage 1 treats it as a
-    /// latch, because there is no note identity in this standalone core yet.
-    Gate,
-}
-
-/// One atomic read-head edit. Beat-relative values are converted when the
-/// event fires, never stored as sample counts in the public API.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BufferEvent {
-    /// Negative values address history behind the writer.
-    pub offset_beats: f32,
-    /// Signed playback ratio: negative is reverse and zero is hold.
-    pub rate: f32,
-    /// Optional loop region length. `None` means freely advancing playback.
-    pub window_beats: Option<f32>,
-    /// Number of complete window plays before returning live.
-    pub repeat: Option<u32>,
-    pub duration: BufferDuration,
-    /// Equal-power discontinuity fade. Zero deliberately leaves a hard edit.
-    pub crossfade_ms: f32,
-}
-
-impl BufferEvent {
-    pub const fn live() -> Self {
-        Self {
-            offset_beats: 0.0,
-            rate: 1.0,
-            window_beats: None,
-            repeat: None,
-            duration: BufferDuration::UntilNextEvent,
-            crossfade_ms: 2.5,
-        }
-    }
-}
+use crate::{AudioNode, Event, EventList, ProcessContext, StereoBus};
 
 /// A [`BufferEvent`] placed at a sample offset within a process block.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -96,6 +56,9 @@ pub struct BufferDevice {
 }
 
 impl BufferDevice {
+    pub fn new(params: BufferParams, sample_rate: u32, bpm: f64) -> Self {
+        Self::with_bars(sample_rate, bpm, u32::from(params.bars.max(1)))
+    }
     /// Allocate a ring for `bars` 4/4 bars at the supplied tempo.
     pub fn with_bars(sample_rate: u32, bpm: f64, bars: u32) -> Self {
         let frames_per_bar = (sample_rate as f64 * 240.0 / bpm.max(1.0)).ceil() as usize;
@@ -319,6 +282,33 @@ impl BufferDevice {
 
 fn ms_to_frames(ms: f32, sample_rate: u32) -> u32 {
     (ms.max(0.0) * sample_rate as f32 / 1_000.0).round() as u32
+}
+
+impl AudioNode for BufferDevice {
+    fn process(
+        &mut self,
+        context: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        _events_out: Option<&mut EventList>,
+    ) {
+        const EMPTY: TimedBufferEvent = TimedBufferEvent {
+            offset: 0,
+            event: BufferEvent::live(),
+        };
+        let mut buffer_events = [EMPTY; 256];
+        let mut len = 0;
+        for timed in events_in.iter() {
+            if let Event::Buffer(event) = timed.event {
+                buffer_events[len] = TimedBufferEvent {
+                    offset: timed.offset,
+                    event,
+                };
+                len += 1;
+            }
+        }
+        self.process(context, bus, &buffer_events[..len]);
+    }
 }
 
 #[cfg(test)]
