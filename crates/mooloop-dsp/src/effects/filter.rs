@@ -307,8 +307,9 @@ mod tests {
         }));
         let mut bus = make_bus();
         effect.process(&context(frames), &mut bus, &events, None);
-        let rms =
-            |range: &[f32]| (range.iter().map(|s| s * s).sum::<f32>() / range.len() as f32).sqrt();
+        let rms = |range: &[f32]| {
+            (range.iter().map(|s| s * s).sum::<f32>() / range.len() as f32).sqrt()
+        };
         let before = rms(&bus.l[frames / 4..frames / 2]);
         let after = rms(&bus.l[3 * frames / 4..]);
         assert!(
