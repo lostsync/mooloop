@@ -16,14 +16,17 @@ slint::include_modules!();
 use history::{Entry as HistoryEntry, History};
 use meter::{db_to_linear, linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BufferDuration,
+    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, AutomationLane,
+    AutomationPoint, BufferDuration,
     BufferEvent, BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode,
     DrumSynthParams, DrumSynthState, EffectKind, EffectParams, EffectSlotState, EffectTarget,
     EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit, LfoWave, LoopMode, ModRack,
-    MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, PatternPlacement, PlaybackMode,
+    MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, ParamAddr, ParamDescriptor,
+    ParamOwner, PatternPlacement, PlaybackMode, PointId,
     PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, ReverbParams,
     SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
-    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
+    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS,
+    MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS,
     MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES,
     MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -41,7 +44,7 @@ use mooloop_project::{
 };
 use settings::{AppearancePreset, AppearanceSettings, ThemePalette, UiSettings};
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -327,6 +330,10 @@ struct ChannelState {
     can_previous_sample: bool,
     can_next_sample: bool,
     notes: Vec<Vec<NoteEvent>>,
+    /// Pattern-indexed automation lanes, parallel to `notes`. A lane is kept
+    /// even when the editor is not showing it, so switching the visible lane
+    /// never destroys what is behind it.
+    automation: Vec<Vec<AutomationLane>>,
     next_note_id: NoteId,
     effects: Vec<EffectSlotState>,
     modulation: ModRack,
@@ -358,6 +365,7 @@ impl ChannelState {
             can_previous_sample: false,
             can_next_sample: false,
             notes: vec![Vec::new()],
+            automation: vec![Vec::new()],
             next_note_id: 1,
             effects: Vec::new(),
             modulation: ModRack::default(),
@@ -1207,6 +1215,28 @@ fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
     }
 }
 
+/// A normalized lane value rendered in the destination's own units. Value
+/// only: what the number means is already on the lane header, and the status
+/// bar carries the explanation.
+fn format_param_value(descriptor: &ParamDescriptor, normalized: f32) -> String {
+    let natural = descriptor.from_normalized(normalized);
+    let magnitude = natural.abs();
+    let text = if magnitude >= 10_000.0 {
+        format!("{:.2}k", natural / 1_000.0)
+    } else if magnitude >= 100.0 {
+        format!("{natural:.0}")
+    } else if magnitude >= 10.0 {
+        format!("{natural:.1}")
+    } else {
+        format!("{natural:.2}")
+    };
+    if descriptor.unit.is_empty() {
+        text
+    } else {
+        format!("{text} {}", descriptor.unit)
+    }
+}
+
 fn note_cell(note: NoteEvent, selected_ids: &HashSet<NoteId>) -> NoteCell {
     NoteCell {
         id: note.id as i32,
@@ -1224,6 +1254,19 @@ struct UiState {
     rows: Rc<VecModel<ChannelRow>>,
     step_models: Vec<Rc<VecModel<StepCell>>>,
     note_model: Rc<VecModel<NoteCell>>,
+    automation_point_model: Rc<VecModel<AutomationPointCell>>,
+    automation_target_model: Rc<VecModel<AutomationTargetRow>>,
+    /// Destination shown in the piano roll's variable lane. `None` means the
+    /// lane is open but empty-handed, which is the state a fresh project is
+    /// in; it is not the same as the lane being hidden.
+    /// A `Cell` so `refresh_automation` can run from the shared `&self`
+    /// editor refresh: reconciling a destination whose device was removed is
+    /// part of drawing the lane, not a separate edit.
+    automation_target: Cell<Option<ParamAddr>>,
+    /// Point last created or dragged. Drives the highlight and the header
+    /// readout; a drag re-reads it by id, so reordering the model underneath
+    /// an in-flight drag is harmless.
+    automation_selected_point: Cell<Option<PointId>>,
     playlist_model: Rc<VecModel<PlaylistClip>>,
     waveform_model: Rc<VecModel<f32>>,
     /// Normalized position of every currently active sampler voice on the
@@ -1380,6 +1423,7 @@ impl UiState {
                         modulation: channel.modulation,
                     },
                     notes: channel.notes.clone(),
+                    automation: channel.automation.clone(),
                     next_note_id: channel.next_note_id,
                 }
             })
@@ -1559,6 +1603,7 @@ impl UiState {
                     can_previous_sample: can_previous,
                     can_next_sample: can_next,
                     notes: project_channel.notes.clone(),
+                    automation: project_channel.automation.clone(),
                     next_note_id: project_channel.next_note_id,
                     effects: setup.effects.clone(),
                     modulation: setup.modulation,
@@ -1772,6 +1817,172 @@ impl UiState {
             .collect();
         self.note_model.set_vec(cells);
         self.refresh_selected_note_controls(window);
+    }
+
+    /// Every destination the selected clip can address: the channel's own
+    /// effect chain plus every bus's, because a clip's automation is allowed
+    /// to reach the buses its channel feeds into.
+    ///
+    /// Generators are deliberately absent. They ship whole parameter structs
+    /// rather than descriptor-addressed params, so there is nothing to name
+    /// yet (`docs/plans/buffer-implementation/02-control-and-modulation.md`,
+    /// build order step 2).
+    fn automation_destinations(&self) -> Vec<(ParamAddr, String, &'static ParamDescriptor)> {
+        let mut rows = Vec::new();
+        let channel = EffectTarget::Channel(self.selected as u8);
+        if let Some(state) = self.channels.get(self.selected) {
+            for (slot, effect) in state.effects.iter().enumerate() {
+                let kind = effect.kind();
+                let device = format!("{} {}", kind.label(), slot + 1);
+                for descriptor in kind.descriptors() {
+                    rows.push((
+                        ParamAddr::effect(channel, slot as u8, descriptor.id),
+                        device.clone(),
+                        descriptor,
+                    ));
+                }
+            }
+        }
+        for (index, bus) in self.buses.iter().enumerate() {
+            for (slot, effect) in bus.effects.iter().enumerate() {
+                let kind = effect.kind();
+                let device = format!("{} · {} {}", bus.bus.name, kind.label(), slot + 1);
+                for descriptor in kind.descriptors() {
+                    rows.push((
+                        ParamAddr::effect(EffectTarget::Bus(index as u8), slot as u8, descriptor.id),
+                        device.clone(),
+                        descriptor,
+                    ));
+                }
+            }
+        }
+        rows
+    }
+
+    fn automation_lanes(&self) -> Option<&Vec<AutomationLane>> {
+        self.channels
+            .get(self.selected)?
+            .automation
+            .get(self.current_pattern)
+    }
+
+    fn automation_lane(&self) -> Option<&AutomationLane> {
+        let target = self.automation_target.get()?;
+        self.automation_lanes()?
+            .iter()
+            .find(|lane| lane.target == target)
+    }
+
+    fn automation_lane_mut(&mut self) -> Option<&mut AutomationLane> {
+        let target = self.automation_target.get()?;
+        let pattern = self.current_pattern;
+        self.channels
+            .get_mut(self.selected)?
+            .automation
+            .get_mut(pattern)?
+            .iter_mut()
+            .find(|lane| lane.target == target)
+    }
+
+    /// Descriptor for the currently shown lane, used to turn normalized
+    /// breakpoints back into the natural units the readout displays.
+    fn automation_descriptor(&self) -> Option<&'static ParamDescriptor> {
+        let target = self.automation_target.get()?;
+        let ParamOwner::Effect { slot } = target.owner else {
+            return None;
+        };
+        let effects = match target.scope {
+            EffectTarget::Channel(channel) => &self.channels.get(channel as usize)?.effects,
+            EffectTarget::Bus(bus) => &self.buses.get(bus as usize)?.effects,
+        };
+        effects
+            .get(slot as usize)?
+            .kind()
+            .descriptor(target.param)
+    }
+
+    /// Rebuilds the lane picker, the drawn curve, and the header label.
+    ///
+    /// A destination whose device has since been removed leaves its lane in
+    /// storage but drops it from the picker, and clears the visible lane. The
+    /// alternative -- silently deleting the automation -- loses work when a
+    /// device is removed and re-added.
+    fn refresh_automation(&self, window: &MainWindow) {
+        let destinations = self.automation_destinations();
+        if self
+            .automation_target
+            .get()
+            .is_some_and(|target| !destinations.iter().any(|(addr, _, _)| *addr == target))
+        {
+            self.automation_target.set(None);
+        }
+        let open: HashSet<ParamAddr> = self
+            .automation_lanes()
+            .map(|lanes| lanes.iter().map(|lane| lane.target).collect())
+            .unwrap_or_default();
+
+        let mut previous_device: Option<&str> = None;
+        let rows: Vec<AutomationTargetRow> = destinations
+            .iter()
+            .map(|(address, device, descriptor)| {
+                let starts_group = previous_device != Some(device.as_str());
+                previous_device = Some(device.as_str());
+                AutomationTargetRow {
+                    param_name: descriptor.name.into(),
+                    device: device.as_str().into(),
+                    starts_group,
+                    open: open.contains(address),
+                    current: self.automation_target.get() == Some(*address),
+                }
+            })
+            .collect();
+        self.automation_target_model.set_vec(rows);
+
+        let label = self
+            .automation_target
+            .get()
+            .and_then(|target| {
+                destinations
+                    .iter()
+                    .find(|(address, _, _)| *address == target)
+                    .map(|(_, device, descriptor)| format!("{device} · {}", descriptor.name))
+            })
+            .unwrap_or_default();
+        window.set_automation_lane_name(label.as_str().into());
+        self.refresh_automation_points(window);
+    }
+
+    fn refresh_automation_points(&self, window: &MainWindow) {
+        let length_ticks = self.pattern_lengths[self.current_pattern] as u32 * TICKS_PER_STEP;
+        let selected = self.automation_selected_point.get();
+        let cells: Vec<AutomationPointCell> = self
+            .automation_lane()
+            .map(|lane| {
+                lane.points()
+                    .iter()
+                    .filter(|point| point.tick <= length_ticks)
+                    .map(|point| AutomationPointCell {
+                        id: point.id as i32,
+                        tick: point.tick as i32,
+                        value: point.value,
+                        selected: selected == Some(point.id),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.automation_point_model.set_vec(cells);
+
+        let readout = self
+            .automation_selected_point
+            .get()
+            .and_then(|id| {
+                let lane = self.automation_lane()?;
+                let point = lane.points().iter().find(|point| point.id == id)?;
+                let descriptor = self.automation_descriptor()?;
+                Some(format_param_value(descriptor, point.value))
+            })
+            .unwrap_or_default();
+        window.set_automation_value_text(readout.as_str().into());
     }
 
     fn refresh_selected_note_controls(&self, window: &MainWindow) {
@@ -2005,6 +2216,10 @@ impl UiState {
         window.set_selected_channel_volume_db(linear_to_db(ch.volume));
         window.set_source_kind(device_kind_to_int(ch.kind));
         self.sync_effects();
+        // The lane's destination catalogue is built from the effect chains, so
+        // it has to be rebuilt wherever the chains or the selection can have
+        // moved -- which is exactly this function's job.
+        self.refresh_automation(window);
         window.set_drum_mode(drum_mode_to_int(drum.mode));
         window.set_drum_kick_character(kick_character_to_int(drum.kick_character));
         window.set_drum_snare_character(snare_character_to_int(drum.snare_character));
@@ -2201,6 +2416,8 @@ impl AppUi {
             .collect();
         let step_model = Rc::new(VecModel::from(first_steps));
         let note_model = Rc::new(VecModel::from(Vec::<NoteCell>::new()));
+        let automation_point_model = Rc::new(VecModel::from(Vec::<AutomationPointCell>::new()));
+        let automation_target_model = Rc::new(VecModel::from(Vec::<AutomationTargetRow>::new()));
         let playlist_model = Rc::new(VecModel::from(Vec::<PlaylistClip>::new()));
         let row = ChannelRow {
             name: first.name.as_str().into(),
@@ -2218,6 +2435,8 @@ impl AppUi {
         let mixer_strip_model = Rc::new(VecModel::from(Vec::<MixerStripRow>::new()));
         window.set_channels(ModelRc::from(rows_model.clone()));
         window.set_notes(ModelRc::from(note_model.clone()));
+        window.set_automation_points(ModelRc::from(automation_point_model.clone()));
+        window.set_automation_targets(ModelRc::from(automation_target_model.clone()));
         window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
         window.set_waveform(ModelRc::from(waveform_model.clone()));
         window.set_playhead_positions(ModelRc::from(playhead_model.clone()));
@@ -2248,6 +2467,10 @@ impl AppUi {
             effect_target: EffectTarget::Channel(0),
             selected_note_id: None,
             selected_note_ids: HashSet::new(),
+            automation_point_model,
+            automation_target_model,
+            automation_target: Cell::new(None),
+            automation_selected_point: Cell::new(None),
             bundle_path: None,
             dirty: false,
             revision: 0,
@@ -3251,6 +3474,7 @@ impl AppUi {
                 st.pattern_names.push(String::new());
                 for channel in &mut st.channels {
                     channel.notes.push(Vec::new());
+                    channel.automation.push(Vec::new());
                 }
                 st.current_pattern = pattern;
                 st.select_note(None);
@@ -3815,36 +4039,151 @@ impl AppUi {
                 let pattern = st.current_pattern;
                 let channel = st.selected;
                 let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let Some(index) = st.channels[channel].notes[pattern]
+                let Some(anchor) = st.channels[channel].notes[pattern]
                     .iter()
-                    .position(|note| note.id == id as NoteId)
+                    .copied()
+                    .find(|note| note.id == id as NoteId)
                 else {
                     return;
                 };
-                let old_step =
-                    st.channels[channel].notes[pattern][index].start_tick / TICKS_PER_STEP;
-                let edited = {
-                    let note = &mut st.channels[channel].notes[pattern][index];
-                    note.start_tick =
-                        (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
+                // The gesture reports where the grabbed note should land; every
+                // other selected note moves by the same delta, so a chord keeps
+                // its shape. A single selection is just the one-note case of
+                // this, which is why there is no separate single-note path.
+                let mut moving: Vec<NoteId> = st
+                    .selected_note_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        st.channels[channel].notes[pattern]
+                            .iter()
+                            .any(|note| note.id == *id)
+                    })
+                    .collect();
+                if !moving.contains(&anchor.id) {
+                    moving.push(anchor.id);
+                }
+                let wanted_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
+                let wanted_note = midi_note.clamp(36, 84) as u8;
+                let tick_delta = wanted_tick as i64 - anchor.start_tick as i64;
+                let note_delta = wanted_note as i32 - anchor.note as i32;
+                // Clamp the delta by the group, not per note: letting notes
+                // clip individually would silently collapse a chord onto one
+                // pitch at the edge of the range.
+                let (mut min_tick, mut max_tick) = (i64::MAX, i64::MIN);
+                let (mut min_note, mut max_note) = (i32::MAX, i32::MIN);
+                for note in st.channels[channel].notes[pattern]
+                    .iter()
+                    .filter(|note| moving.contains(&note.id))
+                {
+                    min_tick = min_tick.min(note.start_tick as i64);
+                    max_tick = max_tick.max(note.start_tick as i64 + note.duration_ticks as i64);
+                    min_note = min_note.min(note.note as i32);
+                    max_note = max_note.max(note.note as i32);
+                }
+                if min_tick == i64::MAX {
+                    return;
+                }
+                let tick_delta = tick_delta
+                    .max(-min_tick)
+                    .min(length_ticks as i64 - max_tick)
+                    .max(-min_tick);
+                let note_delta = note_delta.max(36 - min_note).min(84 - max_note);
+
+                let mut edited = Vec::with_capacity(moving.len());
+                let mut touched_steps = Vec::with_capacity(moving.len() * 2);
+                for note in st.channels[channel].notes[pattern]
+                    .iter_mut()
+                    .filter(|note| moving.contains(&note.id))
+                {
+                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
+                    note.start_tick = (note.start_tick as i64 + tick_delta).max(0) as u32;
+                    note.start_tick = note.start_tick.min(length_ticks.saturating_sub(1));
                     note.duration_ticks = note
                         .duration_ticks
                         .min(length_ticks.saturating_sub(note.start_tick).max(1));
-                    note.note = midi_note.clamp(36, 84) as u8;
-                    *note
-                };
+                    note.note = (note.note as i32 + note_delta).clamp(0, 127) as u8;
+                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
+                    edited.push(*note);
+                }
                 st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                st.select_note(Some(edited.id));
-                st.refresh_rack_cell(channel, old_step as usize);
-                st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
+                if edited.len() == 1 {
+                    st.select_note(Some(edited[0].id));
+                }
+                for step in touched_steps {
+                    st.refresh_rack_cell(channel, step as usize);
+                }
                 st.refresh_note_editor(&window);
-                let _ = tx.send(EngineCommand::UpsertNote {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    note: edited,
-                });
+                for note in edited {
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Note moved");
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_piano_selection_duplicated(move |anchor_id| {
+                let Some(window) = weak.upgrade() else { return -1 };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let anchor_id = anchor_id.max(0) as NoteId;
+                let originals: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                    .iter()
+                    .copied()
+                    .filter(|note| {
+                        note.id == anchor_id || st.selected_note_ids.contains(&note.id)
+                    })
+                    .collect();
+                if originals.is_empty() {
+                    return -1;
+                }
+                // The copies land exactly on the originals and the selection
+                // moves to them, so the drag that triggered this continues on
+                // the duplicate with no visible jump.
+                let mut copies = Vec::with_capacity(originals.len());
+                let mut anchor_copy = -1;
+                for original in originals {
+                    let id = st.channels[channel].next_note_id;
+                    st.channels[channel].next_note_id = id.wrapping_add(1).max(1);
+                    let copy = NoteEvent { id, ..original };
+                    if original.id == anchor_id {
+                        anchor_copy = id as i32;
+                    }
+                    st.channels[channel].notes[pattern].push(copy);
+                    copies.push(copy);
+                }
+                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                st.selected_note_ids = copies.iter().map(|note| note.id).collect();
+                st.selected_note_id = (copies.len() == 1).then(|| copies[0].id);
+                st.refresh_rack_row(channel);
+                st.refresh_note_editor(&window);
+                for note in copies {
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                }
+                drop(st);
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Notes duplicated",
+                );
+                anchor_copy
             });
         }
         {
@@ -3947,6 +4286,277 @@ impl AppUi {
                     &history_state,
                     &window,
                     "Note velocity changed",
+                );
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_automation_lane_selected(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut st = st.borrow_mut();
+                let destinations = st.automation_destinations();
+                let Some(target) = destinations
+                    .get(index.max(0) as usize)
+                    .map(|(target, _, _)| *target)
+                else {
+                    return;
+                };
+                st.automation_target.set(Some(target));
+                st.automation_selected_point.set(None);
+                // Opening the lane in the project and in the engine keeps the
+                // picker's "already open" marks meaningful even before the
+                // first point is drawn.
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                if let Some(lanes) = st
+                    .channels
+                    .get_mut(channel)
+                    .and_then(|state| state.automation.get_mut(pattern))
+                {
+                    if !lanes.iter().any(|lane| lane.target == target)
+                        && lanes.len() < MAX_AUTOMATION_LANES_PER_CHANNEL
+                    {
+                        lanes.push(AutomationLane::new(target));
+                    }
+                }
+                let _ = tx.send(EngineCommand::OpenAutomationLane {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    target,
+                });
+                st.refresh_automation(&window);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_automation_lane_cleared(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let (pattern, channel) = (st.current_pattern, st.selected);
+                let Some(target) = st.automation_target.get() else {
+                    return;
+                };
+                let Some(lane) = st.automation_lane_mut() else {
+                    return;
+                };
+                lane.clear();
+                st.automation_selected_point.set(None);
+                let _ = tx.send(EngineCommand::ClearAutomationLane {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    target,
+                });
+                st.refresh_automation(&window);
+                drop(st);
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Automation cleared",
+                );
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_automation_lane_closed(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let (pattern, channel) = (st.current_pattern, st.selected);
+                let Some(target) = st.automation_target.get() else {
+                    return;
+                };
+                if let Some(lanes) = st
+                    .channels
+                    .get_mut(channel)
+                    .and_then(|state| state.automation.get_mut(pattern))
+                {
+                    lanes.retain(|lane| lane.target != target);
+                }
+                st.automation_target.set(None);
+                st.automation_selected_point.set(None);
+                let _ = tx.send(EngineCommand::RemoveAutomationLane {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    target,
+                });
+                st.refresh_automation(&window);
+                drop(st);
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Automation lane removed",
+                );
+            });
+        }
+        {
+            let st = state.clone();
+            window.on_automation_point_hit_test(move |tick, value, tolerance| {
+                let st = st.borrow();
+                let Some(lane) = st.automation_lane() else {
+                    return -1;
+                };
+                let tolerance = tolerance.max(1);
+                lane.points()
+                    .iter()
+                    .filter(|point| (point.tick as i32 - tick).abs() <= tolerance)
+                    .filter(|point| (point.value - value).abs() <= 0.12)
+                    .min_by(|a, b| {
+                        let key = |point: &AutomationPoint| {
+                            (point.tick as i32 - tick).abs() as f32 / tolerance as f32
+                                + (point.value - value).abs() / 0.12
+                        };
+                        key(a).total_cmp(&key(b))
+                    })
+                    .map(|point| point.id as i32)
+                    .unwrap_or(-1)
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_automation_point_created(move |tick, value| {
+                let Some(window) = weak.upgrade() else { return -1 };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let (pattern, channel) = (st.current_pattern, st.selected);
+                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let Some(target) = st.automation_target.get() else {
+                    return -1;
+                };
+                let Some(lane) = st.automation_lane_mut() else {
+                    return -1;
+                };
+                let id = lane.allocate_id();
+                let point = AutomationPoint::new(
+                    id,
+                    (tick.max(0) as u32).min(length_ticks),
+                    value.clamp(0.0, 1.0),
+                );
+                if !lane.upsert(point) {
+                    return -1;
+                }
+                st.automation_selected_point.set(Some(id));
+                let _ = tx.send(EngineCommand::UpsertAutomationPoint {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    target,
+                    point,
+                });
+                st.refresh_automation_points(&window);
+                drop(st);
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Automation point added",
+                );
+                id as i32
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_automation_point_moved(move |id, tick, value| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let (pattern, channel) = (st.current_pattern, st.selected);
+                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let Some(target) = st.automation_target.get() else {
+                    return;
+                };
+                let Some(lane) = st.automation_lane_mut() else {
+                    return;
+                };
+                let id = id.max(0) as PointId;
+                if !lane.points().iter().any(|point| point.id == id) {
+                    return;
+                }
+                let point = AutomationPoint::new(
+                    id,
+                    (tick.max(0) as u32).min(length_ticks),
+                    value.clamp(0.0, 1.0),
+                );
+                lane.upsert(point);
+                st.automation_selected_point.set(Some(id));
+                let _ = tx.send(EngineCommand::UpsertAutomationPoint {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    target,
+                    point,
+                });
+                st.refresh_automation_points(&window);
+                drop(st);
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Automation point moved",
+                );
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_automation_point_removed(move |id| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let (pattern, channel) = (st.current_pattern, st.selected);
+                let Some(target) = st.automation_target.get() else {
+                    return;
+                };
+                let id = id.max(0) as PointId;
+                let Some(lane) = st.automation_lane_mut() else {
+                    return;
+                };
+                if lane.remove(id).is_none() {
+                    return;
+                }
+                if st.automation_selected_point.get() == Some(id) {
+                    st.automation_selected_point.set(None);
+                }
+                let _ = tx.send(EngineCommand::RemoveAutomationPoint {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    target,
+                    id,
+                });
+                st.refresh_automation_points(&window);
+                drop(st);
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Automation point removed",
                 );
             });
         }
@@ -4192,6 +4802,7 @@ impl AppUi {
                 let index = st.channels.len();
                 let mut ch = ChannelState::new(index);
                 ch.notes.resize_with(st.pattern_lengths.len(), Vec::new);
+                ch.automation.resize_with(st.pattern_lengths.len(), Vec::new);
                 let cells: Vec<StepCell> = (0..st.pattern_lengths[st.current_pattern])
                     .map(|step| rack_cell(&ch.notes[st.current_pattern], step))
                     .collect();
@@ -5740,6 +6351,10 @@ impl AppUi {
                                                     ProjectChannel {
                                                         setup,
                                                         notes: vec![
+                                                            Vec::new();
+                                                            current.pattern_lengths.len()
+                                                        ],
+                                                        automation: vec![
                                                             Vec::new();
                                                             current.pattern_lengths.len()
                                                         ],

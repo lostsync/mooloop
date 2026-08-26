@@ -73,6 +73,34 @@ struct NoteCell {
     selected: bool,
 }
 
+// One breakpoint in the piano roll's automation lane. `value` is normalised
+// 0..1 against the destination's descriptor, matching how the lane is stored
+// and sent to the engine; the readout converts to natural units for display.
+struct AutomationPointCell {
+    id: int,
+    tick: int,
+    value: float,
+    selected: bool,
+}
+
+// One selectable automation destination in the lane picker. Rust builds the
+// whole catalogue — every param of every effect on the selected channel and on
+// every bus — because only Rust has the descriptor tables.
+struct AutomationTargetRow {
+    // "Cutoff". Displayed in the menu row and, with `device`, in the header.
+    param-name: string,
+    // "Filter 1" or "Bus 2 · Delay 1". Menu rows are grouped by this.
+    device: string,
+    // First row of a device's group draws the header above itself. Precomputed
+    // in Rust because Slint's `for` has no access to the previous element.
+    starts-group: bool,
+    // Already has a lane in this clip, so it sorts to the top level and offers
+    // clear/remove rather than just "open".
+    open: bool,
+    // True when this is the lane currently shown.
+    current: bool,
+}
+
 // Result of asking Rust which note (if any) covers a given tick/MIDI-note
 // cell. The search itself lives in Rust because Slint's imperative language
 // has no loop or recursion construct that survives its binding-loop checker
@@ -144,6 +172,82 @@ struct EffectSlotRow {
     output-right-db: float,
     // Buffer-only: forced returns to live counted by the inserted device.
     buffer-collisions: int,
+}
+
+// One selectable destination inside the automation lane picker.
+component AutomationMenuRow inherits Rectangle {
+    in property <string> text;
+    in property <bool> current: false;
+    callback selected();
+    height: 20px;
+    min-width: 150px;
+    background: touch.has-hover ? Theme.surface-raised : transparent;
+    Text {
+        x: 8px;
+        text: root.text;
+        color: root.current ? Theme.accent : Theme.text;
+        font-size: 10px;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.selected(); }
+    }
+}
+
+// The lane picker. Every parameter of every device the selected clip can
+// reach, grouped by device, with the lane-level actions on top when one is
+// already open.
+component AutomationLaneMenu inherits VerticalLayout {
+    in property <[AutomationTargetRow]> targets;
+    in property <bool> has-lane: false;
+    callback picked(int);
+    callback cleared();
+    callback closed();
+    padding: 4px;
+    spacing: 1px;
+    if root.has-lane : AutomationMenuRow {
+        text: "Clear points";
+        selected => { root.cleared(); }
+    }
+    if root.has-lane : AutomationMenuRow {
+        text: "Remove lane";
+        selected => { root.closed(); }
+    }
+    if root.has-lane : Rectangle {
+        height: 5px;
+        Rectangle {
+            y: 2px;
+            height: 1px;
+            width: parent.width;
+            background: Theme.border;
+        }
+    }
+    ScrollView {
+        height: min(280px, list.preferred-height);
+        width: max(170px, list.preferred-width);
+        list := VerticalLayout {
+            spacing: 1px;
+            for row[index] in root.targets : VerticalLayout {
+                spacing: 1px;
+                // Rust marks the first row of each device so the header can be
+                // drawn here; Slint's `for` cannot see the previous element.
+                if row.starts-group : Text {
+                    height: 16px;
+                    text: row.device;
+                    color: Theme.text-faint;
+                    font-size: 8px;
+                    vertical-alignment: bottom;
+                    x: 6px;
+                }
+                AutomationMenuRow {
+                    text: row.open ? "● " + row.param-name : row.param-name;
+                    current: row.current;
+                    selected => { root.picked(index); }
+                }
+            }
+        }
+    }
 }
 
 component FlatButton inherits ToolButton { }
@@ -402,13 +506,48 @@ export component MainWindow inherits Window {
 
     callback piano-note-created(int, int, int) -> int;  // start tick, MIDI note, duration ticks -> stable note ID
     callback piano-note-selected(int, bool, bool); // stable note ID, shift held, ctrl held
-    callback piano-note-moved(int, int, int); // ID, start tick, MIDI note
+    // ID, start tick, MIDI note. The ID names the note under the pointer; the
+    // whole selection moves with it, by the delta this note implies.
+    callback piano-note-moved(int, int, int);
+    // Copy the current selection in place and return the copy of the note the
+    // caller names, so a Ctrl-drag can continue on the duplicate. -1 when
+    // nothing was duplicated.
+    callback piano-selection-duplicated(int) -> int;
     callback piano-note-resized(int, int);  // ID, duration ticks
     callback piano-note-removed(int);       // stable note ID
     // Pure so it can be read from the cursor-shape binding below. Rust owns the
     // note list, so the scan lives there.
     pure callback piano-note-hit-test(int, int) -> NoteHit; // tick, MIDI note -> note under it, if any
     callback velocity-edited(int, float);   // stable note ID, normalised value
+
+    // ---- editor lanes below the piano roll ----
+    // Velocity and automation toggle independently: the roll alone, the roll
+    // plus either, or all three are all reasonable working layouts.
+    in-out property <bool> velocity-lane-visible: true;
+    in-out property <bool> automation-lane-visible: false;
+    in property <[AutomationTargetRow]> automation-targets;
+    in property <[AutomationPointCell]> automation-points;
+    // Empty when no lane is open, which is what makes the lane draw its
+    // "pick a destination" prompt instead of a curve.
+    in property <string> automation-lane-name;
+    // Natural-units readout of the point under the pointer, e.g. "1.2 kHz".
+    in property <string> automation-value-text;
+    // Index into `automation-targets`.
+    callback automation-lane-selected(int);
+    callback automation-lane-cleared();
+    callback automation-lane-closed();
+    // tick, normalised value -> stable point ID (-1 when the lane is full or
+    // no destination is open).
+    callback automation-point-created(int, float) -> int;
+    callback automation-point-moved(int, int, float);  // ID, tick, value
+    callback automation-point-removed(int);
+    // Point under a tick/value cell, if any. Same reason as the note hit test:
+    // the scan needs a loop, which Slint's expression language cannot express.
+    // tick, normalised value, and the grab radius in ticks -> point ID, or -1.
+    // The radius comes from the view because only the view knows the current
+    // time zoom; Rust would otherwise guess at what "near" means on screen.
+    pure callback automation-point-hit-test(int, float, int) -> int;
+
     callback selected-note-changed(int);
     callback selected-velocity-changed(int);
     callback selected-duration-changed(int);
@@ -2490,12 +2629,21 @@ export component MainWindow inherits Window {
                                     Tooltip { text: @markdown("Selected note length in PPQ ticks. **6** ticks = 1/64 note."); }
                                 }
                                 Rectangle { width: 8px; }
-                                ComboBox {
-                                    model: ["Velocity"];
-                                    current-index: 0;
-                                    current-value: "Velocity";
-                                    width: 120px;
+                                ToggleButton {
+                                    text: "VEL";
+                                    checked: root.velocity-lane-visible;
+                                    width: 46px;
                                     height: 24px;
+                                    toggled => { root.velocity-lane-visible = !root.velocity-lane-visible; }
+                                    Tooltip { text: @markdown("Velocity lane"); }
+                                }
+                                ToggleButton {
+                                    text: "AUTO";
+                                    checked: root.automation-lane-visible;
+                                    width: 52px;
+                                    height: 24px;
+                                    toggled => { root.automation-lane-visible = !root.automation-lane-visible; }
+                                    Tooltip { text: @markdown("Automation lane"); }
                                 }
                                 Text {
                                     text: "SNAP";
@@ -2551,23 +2699,32 @@ export component MainWindow inherits Window {
                                     }
                                     // Matches the time scrollbar below the grid
                                     // so the keyboard's parameter labels stay
-                                    // aligned with the lanes on the right.
+                                    // aligned with the lanes on the right. Each
+                                    // label spans its lane's header and body
+                                    // together, so the two columns cannot drift
+                                    // as lanes are toggled.
                                     Rectangle { height: 14px; background: Theme.panel; }
-                                    Text {
-                                        height: 17px;
-                                        text: "LANE";
-                                        color: Theme.text-faint;
-                                        font-size: 8px;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
+                                    if root.velocity-lane-visible : Rectangle {
+                                        height: 72px;
+                                        background: Theme.panel;
+                                        Text {
+                                            text: "VEL";
+                                            color: Theme.text-muted;
+                                            font-size: 8px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
                                     }
-                                    Text {
-                                        height: 55px;
-                                        text: "VEL";
-                                        color: Theme.text-muted;
-                                        font-size: 8px;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
+                                    if root.automation-lane-visible : Rectangle {
+                                        height: 89px;
+                                        background: Theme.panel;
+                                        Text {
+                                            text: "AUTO";
+                                            color: Theme.text-muted;
+                                            font-size: 8px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                 }
                             }
@@ -2689,6 +2846,11 @@ export component MainWindow inherits Window {
                                             property <int> original-start;
                                             property <int> original-note;
                                             property <int> original-duration;
+                                            // A Ctrl-drag duplicates once, at the
+                                            // first move rather than on press:
+                                            // Ctrl-click still has to be able to
+                                            // mean "toggle selection".
+                                            property <bool> copied;
                                             property <bool> create-click-armed;
                                             property <length> create-click-x;
                                             property <length> create-click-y;
@@ -2721,6 +2883,7 @@ export component MainWindow inherits Window {
                                                         create-click-timeout.running = false;
                                                         root.piano-note-selected(hit.id, e.modifiers.shift, e.modifiers.control);
                                                         self.grabbed-id = hit.id;
+                                                        self.copied = false;
                                                         self.grab-mode = parent.grab-mode-at(self.mouse-x, self.mouse-y);
                                                         self.origin-x = self.mouse-x;
                                                         self.origin-y = self.mouse-y;
@@ -2741,6 +2904,7 @@ export component MainWindow inherits Window {
                                                                 && self.create-click-note == note) {
                                                             let id = root.piano-note-created(start-tick, note, duration);
                                                             self.grabbed-id = id;
+                                                            self.copied = false;
                                                             self.grab-mode = 2;
                                                             self.origin-x = self.mouse-x;
                                                             self.origin-y = self.mouse-y;
@@ -2761,22 +2925,36 @@ export component MainWindow inherits Window {
                                                     }
                                                 } else if (e.kind == PointerEventKind.move
                                                         && self.pressed && self.grabbed-id >= 0) {
+                                                    // Shift frees the drag from the
+                                                    // grid on both axes' time
+                                                    // component, matching the
+                                                    // automation lane.
+                                                    let raw-ticks = (self.mouse-x - self.origin-x)
+                                                        * 24 / root.piano-step-width;
+                                                    let delta-ticks = e.modifiers.shift
+                                                        ? round(raw-ticks)
+                                                        : round(raw-ticks / root.piano-snap-ticks)
+                                                            * root.piano-snap-ticks;
                                                     if (self.grab-mode == 2) {
                                                         let max-duration = max(root.piano-snap-ticks,
                                                             root.pattern-length * 24 - self.original-start);
-                                                        let duration = clamp(self.original-duration
-                                                                + round((self.mouse-x - self.origin-x)
-                                                                    * 24 / root.piano-step-width
-                                                                    / root.piano-snap-ticks)
-                                                                    * root.piano-snap-ticks,
-                                                            min(root.piano-snap-ticks, max-duration), max-duration);
+                                                        let duration = clamp(
+                                                            self.original-duration + delta-ticks,
+                                                            e.modifiers.shift
+                                                                ? 1
+                                                                : min(root.piano-snap-ticks, max-duration),
+                                                            max-duration);
                                                         root.piano-note-resized(self.grabbed-id, duration);
                                                     } else {
-                                                        let tick = clamp(self.original-start
-                                                                + round((self.mouse-x - self.origin-x)
-                                                                    * 24 / root.piano-step-width
-                                                                    / root.piano-snap-ticks)
-                                                                    * root.piano-snap-ticks,
+                                                        if (e.modifiers.control && !self.copied) {
+                                                            self.copied = true;
+                                                            let copy = root.piano-selection-duplicated(
+                                                                self.grabbed-id);
+                                                            if (copy >= 0) {
+                                                                self.grabbed-id = copy;
+                                                            }
+                                                        }
+                                                        let tick = clamp(self.original-start + delta-ticks,
                                                             0, max(0, root.pattern-length * 24 - self.original-duration));
                                                         let note = clamp(self.original-note
                                                                 + round((self.origin-y - self.mouse-y)
@@ -2787,6 +2965,7 @@ export component MainWindow inherits Window {
                                                 } else if (e.kind == PointerEventKind.up) {
                                                     self.grabbed-id = -1;
                                                     self.grab-mode = 0;
+                                                    self.copied = false;
                                                 }
                                             }
                                             // Ctrl+wheel zooms pitch under the pointer.
@@ -2824,8 +3003,8 @@ export component MainWindow inherits Window {
                                             // to something else.
                                             changed has-hover => {
                                                 root.hover-hint = self.has-hover
-                                                    ? "Ctrl+wheel zooms pitch. Ctrl+Shift+wheel zooms time."
-                                                    : root.hover-hint == "Ctrl+wheel zooms pitch. Ctrl+Shift+wheel zooms time."
+                                                    ? "Drag moves the selection. Ctrl+drag copies, Shift+drag defeats snap. Ctrl+wheel zooms pitch, Ctrl+Shift+wheel zooms time."
+                                                    : root.hover-hint == "Drag moves the selection. Ctrl+drag copies, Shift+drag defeats snap. Ctrl+wheel zooms pitch, Ctrl+Shift+wheel zooms time."
                                                         ? "" : root.hover-hint;
                                             }
                                         }
@@ -2895,7 +3074,7 @@ export component MainWindow inherits Window {
                                     Rectangle { width: 12px; }
                                 }
 
-                                Rectangle {
+                                if root.velocity-lane-visible : Rectangle {
                                     height: 17px;
                                     background: Theme.panel;
                                     Text {
@@ -2907,7 +3086,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
-                                Rectangle {
+                                if root.velocity-lane-visible : Rectangle {
                                     height: 55px;
                                     background: Theme.surface;
                                     clip: true;
@@ -2916,22 +3095,41 @@ export component MainWindow inherits Window {
                                         width: root.pattern-length * root.piano-step-width;
                                         height: parent.height;
                                         background: transparent;
+                                        // A stem with a drag head rather than a
+                                        // filled box: a box's width encodes note
+                                        // length, which reads as though velocity
+                                        // had a duration, and long notes then
+                                        // hide short ones underneath them.
                                         for cell in root.notes : Rectangle {
+                                            property <length> head-size: 7px;
+                                            property <length> level:
+                                                (parent.height - self.head-size)
+                                                * (127 - cell.velocity) / 127;
                                             x: cell.start-tick * root.piano-step-width / 24;
-                                            width: max(6px, cell.duration-ticks * root.piano-step-width / 24);
+                                            width: max(root.piano-step-width / 4, 9px);
                                             height: parent.height;
-                                            border-width: cell.selected ? 1px : 0px;
-                                            border-color: Theme.text-muted;
                                             background: transparent;
                                             Rectangle {
-                                                x: 3px;
-                                                y: parent.height * (127 - cell.velocity) / 127;
-                                                width: parent.width - 6px;
-                                                height: max(2px, parent.height * cell.velocity / 127);
-                                                background: Theme.accent;
+                                                x: (parent.width - 2px) / 2;
+                                                y: parent.level + parent.head-size / 2;
+                                                width: 2px;
+                                                height: parent.height - self.y;
+                                                background: cell.selected ? Theme.focus : Theme.accent;
+                                                opacity: cell.selected ? 1.0 : 0.7;
                                             }
-                                            TouchArea {
-                                                mouse-cursor: crosshair;
+                                            Rectangle {
+                                                x: (parent.width - parent.head-size) / 2;
+                                                y: parent.level;
+                                                width: parent.head-size;
+                                                height: parent.head-size;
+                                                border-radius: parent.head-size / 2;
+                                                background: cell.selected ? Theme.focus : Theme.accent;
+                                                border-width: 1px;
+                                                border-color: velocity-touch.has-hover
+                                                    ? Theme.text : transparent;
+                                            }
+                                            velocity-touch := TouchArea {
+                                                mouse-cursor: ns-resize;
                                                 pointer-event(e) => {
                                                     if (e.button == PointerEventButton.left
                                                         && (e.kind == PointerEventKind.down
@@ -2942,6 +3140,226 @@ export component MainWindow inherits Window {
                                                         );
                                                     }
                                                 }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if root.automation-lane-visible : Rectangle {
+                                    height: 17px;
+                                    background: Theme.panel;
+                                    HorizontalLayout {
+                                        padding-left: 4px;
+                                        padding-right: 4px;
+                                        spacing: 6px;
+                                        alignment: start;
+                                        lane-picker := Rectangle {
+                                            width: 168px;
+                                            background: picker-touch.has-hover
+                                                ? Theme.surface-raised : transparent;
+                                            Text {
+                                                text: root.automation-lane-name == ""
+                                                    ? "Pick a parameter  ▾"
+                                                    : root.automation-lane-name + "  ▾";
+                                                color: root.automation-lane-name == ""
+                                                    ? Theme.text-faint : Theme.text;
+                                                font-size: 8px;
+                                                x: 2px;
+                                                vertical-alignment: center;
+                                            }
+                                            picker-touch := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => { lane-menu.show(); }
+                                            }
+                                            lane-menu := PopupWindow {
+                                                x: 0px;
+                                                // Opens upward: the lane sits at
+                                                // the bottom of the window, so a
+                                                // downward menu would be clipped.
+                                                y: -menu-content.preferred-height - 2px;
+                                                width: menu-content.preferred-width;
+                                                height: menu-content.preferred-height;
+                                                close-policy: close-on-click-outside;
+                                                Rectangle {
+                                                    background: Theme.surface;
+                                                    border-width: 1px;
+                                                    border-color: Theme.border;
+                                                    border-radius: 3px;
+                                                    menu-content := AutomationLaneMenu {
+                                                        targets: root.automation-targets;
+                                                        has-lane: root.automation-lane-name != "";
+                                                        picked(index) => {
+                                                            lane-menu.close();
+                                                            root.automation-lane-selected(index);
+                                                        }
+                                                        cleared => {
+                                                            lane-menu.close();
+                                                            root.automation-lane-cleared();
+                                                        }
+                                                        closed => {
+                                                            lane-menu.close();
+                                                            root.automation-lane-closed();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Text {
+                                            text: root.automation-value-text;
+                                            color: Theme.text-muted;
+                                            font-size: 8px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                if root.automation-lane-visible : Rectangle {
+                                    height: 72px;
+                                    background: Theme.surface;
+                                    clip: true;
+                                    automation-body := Rectangle {
+                                        x: -piano-scroll.viewport-x;
+                                        width: root.pattern-length * root.piano-step-width;
+                                        height: parent.height;
+                                        background: transparent;
+                                        // Points are drawn inset by half a head
+                                        // so a point at 0 or 1 is still fully
+                                        // visible and still grabbable.
+                                        property <length> inset: 5px;
+                                        pure function value-y(value: float) -> length {
+                                            return self.inset
+                                                + (self.height - self.inset * 2) * (1 - clamp(value, 0, 1));
+                                        }
+                                        pure function y-value(y: length) -> float {
+                                            return clamp(1 - (y - self.inset)
+                                                / max(1px, self.height - self.inset * 2), 0, 1);
+                                        }
+                                        pure function tick-x(tick: int) -> length {
+                                            return tick * root.piano-step-width / 24;
+                                        }
+                                        // Grid-snapped tick under `x`, unless
+                                        // `free` (Shift held), matching the note
+                                        // grid's modifier.
+                                        // Grab radius in ticks for a ~7px reach
+                                        // at the current time zoom.
+                                        pure function grab-ticks() -> int {
+                                            return max(1, round(7px * 24 / root.piano-step-width));
+                                        }
+                                        pure function snap(x: length, free: bool) -> int {
+                                            let tick = x * 24 / root.piano-step-width;
+                                            let limit = root.pattern-length * 24;
+                                            if (free) {
+                                                return clamp(round(tick), 0, limit);
+                                            }
+                                            return clamp(round(tick / root.piano-snap-ticks)
+                                                * root.piano-snap-ticks, 0, limit);
+                                        }
+
+                                        for division in root.pattern-length * 24 / root.piano-snap-ticks : Rectangle {
+                                            x: division * root.piano-snap-ticks
+                                                * root.piano-step-width / 24;
+                                            width: 1px;
+                                            height: parent.height;
+                                            background: mod(division * root.piano-snap-ticks, 24) == 0
+                                                ? Theme.text-faint : Theme.border;
+                                            opacity: mod(division * root.piano-snap-ticks, 24) == 0
+                                                ? 0.5 : 0.3;
+                                        }
+
+                                        // One straight segment per adjacent pair.
+                                        // A single Path over the whole lane is
+                                        // not expressible: Slint's path elements
+                                        // are static children, not a model.
+                                        for point[i] in root.automation-points : Path {
+                                            visible: i > 0;
+                                            width: parent.width;
+                                            height: parent.height;
+                                            // Without an explicit viewbox each
+                                            // Path scales its own commands to
+                                            // fill the element, so every segment
+                                            // would stretch across the whole
+                                            // lane and the curve would read as a
+                                            // sheaf of crossing lines.
+                                            viewbox-x: 0;
+                                            viewbox-y: 0;
+                                            viewbox-width: parent.width / 1px;
+                                            viewbox-height: parent.height / 1px;
+                                            stroke: Theme.accent;
+                                            stroke-width: 1.5px;
+                                            MoveTo {
+                                                x: automation-body.tick-x(root.automation-points[max(0, i - 1)].tick) / 1px;
+                                                y: automation-body.value-y(root.automation-points[max(0, i - 1)].value) / 1px;
+                                            }
+                                            LineTo {
+                                                x: automation-body.tick-x(point.tick) / 1px;
+                                                y: automation-body.value-y(point.value) / 1px;
+                                            }
+                                        }
+
+                                        for point in root.automation-points : Rectangle {
+                                            x: parent.tick-x(point.tick) - 4px;
+                                            y: parent.value-y(point.value) - 4px;
+                                            width: 8px;
+                                            height: 8px;
+                                            border-radius: 4px;
+                                            background: point.selected ? Theme.focus : Theme.accent;
+                                            border-width: 1px;
+                                            border-color: Theme.surface;
+                                        }
+
+                                        if root.automation-lane-name == "" : Text {
+                                            x: 6px;
+                                            text: "No parameter selected";
+                                            color: Theme.text-faint;
+                                            font-size: 9px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        // One hit area for the whole lane, for
+                                        // the same reason the note grid has one:
+                                        // a per-point TouchArea moves out from
+                                        // under the cursor on the first drag
+                                        // update and the drag collapses.
+                                        automation-touch := TouchArea {
+                                            property <int> grabbed-id: -1;
+                                            enabled: root.automation-lane-name != "";
+                                            mouse-cursor: root.automation-point-hit-test(
+                                                    parent.snap(self.mouse-x, true),
+                                                    parent.y-value(self.mouse-y),
+                                                    parent.grab-ticks()) >= 0
+                                                ? move : crosshair;
+                                            pointer-event(e) => {
+                                                if (e.kind == PointerEventKind.down) {
+                                                    let tick = parent.snap(self.mouse-x, e.modifiers.shift);
+                                                    let value = parent.y-value(self.mouse-y);
+                                                    let hit = root.automation-point-hit-test(
+                                                        parent.snap(self.mouse-x, true),
+                                                        value,
+                                                        parent.grab-ticks());
+                                                    if (e.button == PointerEventButton.right) {
+                                                        if (hit >= 0) {
+                                                            root.automation-point-removed(hit);
+                                                        }
+                                                    } else if (e.button == PointerEventButton.left) {
+                                                        self.grabbed-id = hit >= 0
+                                                            ? hit
+                                                            : root.automation-point-created(tick, value);
+                                                    }
+                                                } else if (e.kind == PointerEventKind.move
+                                                        && self.pressed && self.grabbed-id >= 0) {
+                                                    root.automation-point-moved(
+                                                        self.grabbed-id,
+                                                        parent.snap(self.mouse-x, e.modifiers.shift),
+                                                        parent.y-value(self.mouse-y));
+                                                } else if (e.kind == PointerEventKind.up) {
+                                                    self.grabbed-id = -1;
+                                                }
+                                            }
+                                            changed has-hover => {
+                                                root.hover-hint = self.has-hover
+                                                    ? "Click to add a point, drag to move it, right-click to remove. Shift defeats snap."
+                                                    : root.hover-hint == "Click to add a point, drag to move it, right-click to remove. Shift defeats snap."
+                                                        ? "" : root.hover-hint;
                                             }
                                         }
                                     }
