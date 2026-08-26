@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arc_swap::{ArcSwap, ArcSwapOption};
-use jack::{AudioOut, Client, ClientOptions};
+use jack::{AudioOut, Client, ClientOptions, MidiIn};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
 };
@@ -172,6 +172,11 @@ impl Engine {
         let out_r = client
             .register_port("out_r", AudioOut::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
+        // One input for now. Per-channel MIDI routing is a later concern;
+        // what the control layer needs first is any way in at all.
+        let midi_in = client
+            .register_port("midi_in", MidiIn::default())
+            .map_err(|e| Error::PortRegister(e.to_string()))?;
 
         // Every channel's slot starts empty; a channel is silent until the
         // user loads a sample or a project assigns one.
@@ -186,14 +191,18 @@ impl Engine {
         let device_meters = DeviceMeters::new();
         let device_telemetry = DeviceTelemetry::new();
         let playhead_meters = PlayheadMeters::new();
+        let buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>> =
+            Arc::new(ArcSwapOption::empty());
         let mut render = RenderState::new(sample_rate, sample_slots.clone());
         render.attach_meters(bus_meters.clone());
         render.attach_device_meters(device_meters.clone());
         render.attach_device_telemetry(device_telemetry.clone());
         render.attach_playhead_meters(playhead_meters.clone());
+        render.attach_buffer_midi_map(buffer_midi_map.clone());
         let io = graph::GraphIo {
             out_l,
             out_r,
+            midi_in,
             cmd_rx,
             evt_tx,
             reclaim_tx,
@@ -245,6 +254,7 @@ impl Engine {
                 bus_meters,
                 device_meters,
                 device_telemetry,
+                buffer_midi_map,
                 playhead_meters,
                 sample_slots,
                 sample_rate,
@@ -267,6 +277,7 @@ pub struct EngineHandle {
     bus_meters: Arc<BusMeters>,
     device_meters: Arc<DeviceMeters>,
     device_telemetry: Arc<DeviceTelemetry>,
+    buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
     playhead_meters: Arc<PlayheadMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     sample_rate: u32,
@@ -376,6 +387,7 @@ impl EngineHandle {
         // continues to read the startup arrays forever.
         render.attach_device_meters(self.device_meters.clone());
         render.attach_device_telemetry(self.device_telemetry.clone());
+        render.attach_buffer_midi_map(self.buffer_midi_map.clone());
         render.attach_playhead_meters(self.playhead_meters.clone());
         render.load_project(&project);
         let prepared = PreparedProject {
@@ -428,6 +440,12 @@ impl EngineHandle {
     pub fn effect_spectrum(&self, target: EffectTarget, slot: u8) -> [f32; SPECTRUM_BINS] {
         self.device_telemetry
             .read_spectrum(effect_target_index(target), usize::from(slot) + 1)
+    }
+
+    /// Install the MIDI mapping that drives a buffer insert, or clear it.
+    /// Built and dropped on this thread; the audio thread only loads it.
+    pub fn set_buffer_midi_map(&self, map: Option<mooloop_core::midi::BufferMidiMap>) {
+        self.buffer_midi_map.store(map.map(Arc::new));
     }
 
     /// How many times a retained-audio buffer insert has been overtaken by

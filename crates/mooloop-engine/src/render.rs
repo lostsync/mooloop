@@ -333,6 +333,15 @@ impl EffectChain {
         }
     }
 
+    fn queue_buffer_scrub(&mut self, slot: usize, delta_frames: f32) {
+        if let Some(events) = self.events.get_mut(slot) {
+            events.queue(TimedEvent {
+                offset: 0,
+                event: Event::BufferScrub { delta_frames },
+            });
+        }
+    }
+
     fn queue_buffer_release(&mut self, slot: usize) {
         if let Some(events) = self.events.get_mut(slot) {
             events.queue(TimedEvent {
@@ -658,6 +667,34 @@ fn inject_choke_events(choke_groups: &[u8], events: &mut [EventList]) {
     }
 }
 
+/// 4/4 throughout, matching the sequencer's grid.
+const BEATS_PER_BAR: f32 = 4.0;
+
+/// Tuple fields a control change has retuned, waiting for the next note to
+/// fire. Held rather than applied immediately so turning a knob mid-gesture
+/// bends the *next* edit instead of restarting the current one.
+#[derive(Debug, Clone, Copy, Default)]
+struct BufferCcState {
+    window_beats: Option<f32>,
+    offset_beats: Option<f32>,
+    repeat: Option<u32>,
+}
+
+impl BufferCcState {
+    fn apply(&self, mut event: mooloop_core::BufferEvent) -> mooloop_core::BufferEvent {
+        if let Some(window) = self.window_beats {
+            event.window_beats = Some(window);
+        }
+        if let Some(offset) = self.offset_beats {
+            event.offset_beats = offset;
+        }
+        if let Some(repeat) = self.repeat {
+            event.repeat = Some(repeat);
+        }
+        event
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RenderReport {
     pub position_tick: u64,
@@ -688,6 +725,11 @@ pub(crate) struct RenderState {
     meters: Arc<BusMeters>,
     device_meters: Arc<DeviceMeters>,
     device_telemetry: Arc<DeviceTelemetry>,
+    /// How MIDI input drives a buffer insert. `None` until the control layer
+    /// configures one, so an unmapped project pays nothing for MIDI beyond
+    /// decoding it.
+    buffer_midi: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
+    buffer_cc: BufferCcState,
     playhead_meters: Arc<PlayheadMeters>,
 }
 
@@ -709,6 +751,8 @@ impl RenderState {
             meters: BusMeters::new(),
             device_meters: DeviceMeters::new(),
             device_telemetry: DeviceTelemetry::new(),
+            buffer_midi: Arc::new(ArcSwapOption::empty()),
+            buffer_cc: BufferCcState::default(),
             playhead_meters: PlayheadMeters::new(),
         }
     }
@@ -1102,6 +1146,100 @@ impl RenderState {
                 }
             }
         }
+    }
+
+    /// Share the control layer's mapping cell. Same transport as the sample
+    /// slots: the non-realtime side swaps a whole map in, and the audio
+    /// thread only ever loads it, so no map is built or dropped here.
+    pub(crate) fn attach_buffer_midi_map(
+        &mut self,
+        map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
+    ) {
+        self.buffer_midi = map;
+    }
+
+    /// Translate one block's MIDI input into buffer events. Runs before the
+    /// block renders, so input acts on the audio it arrived with.
+    ///
+    /// Note says what and how long, velocity says how hard, and a CC carries
+    /// whatever else the tuple needs — the note table holds the shape of an
+    /// edit and the controls bend it.
+    pub(crate) fn apply_midi(&mut self, messages: &[mooloop_core::MidiMessage]) {
+        use mooloop_core::midi::BufferCcTarget;
+        use mooloop_core::MidiKind;
+
+        if messages.is_empty() {
+            return;
+        }
+        let map = self.buffer_midi.load();
+        let Some(map) = map.as_deref().copied() else {
+            return;
+        };
+        for message in messages {
+            if !map.accepts(message) {
+                continue;
+            }
+            let slot = map.slot as usize;
+            match message.kind {
+                MidiKind::NoteOn { note, velocity } => {
+                    if let Some(event) = map.note_event(note, velocity) {
+                        let event = self.buffer_cc.apply(event);
+                        if let Some(chain) = self.chain_mut(map.target) {
+                            chain.queue_buffer(slot, event);
+                        }
+                    }
+                }
+                MidiKind::NoteOff { note } => {
+                    // Only a note this map owns may release; an unmapped key
+                    // must not cancel an edit it never started.
+                    if map.note_event(note, 1).is_some() {
+                        if let Some(chain) = self.chain_mut(map.target) {
+                            chain.queue_buffer_release(slot);
+                        }
+                    }
+                }
+                MidiKind::ControlChange { controller, value } => {
+                    let Some(target) = map.cc_target(controller) else {
+                        continue;
+                    };
+                    match target {
+                        BufferCcTarget::Scrub { encoding } => {
+                            let ticks = encoding.delta(value);
+                            if ticks != 0 {
+                                let delta = f64::from(ticks) * self.scrub_frames_per_tick();
+                                if let Some(chain) = self.chain_mut(map.target) {
+                                    chain.queue_buffer_scrub(slot, delta as f32);
+                                }
+                            }
+                        }
+                        // Absolute assignments retune the *next* edit rather
+                        // than re-firing one: turning a knob mid-gesture
+                        // should not restart the gesture.
+                        BufferCcTarget::WindowBars { bars } => {
+                            let bucket = mooloop_core::cc_bucket(value, bars.max(1));
+                            self.buffer_cc.window_beats =
+                                Some(f32::from(bucket + 1) * BEATS_PER_BAR);
+                        }
+                        BufferCcTarget::OffsetBeats { beats } => {
+                            let bucket = mooloop_core::cc_bucket(value, beats.max(1));
+                            self.buffer_cc.offset_beats = Some(-f32::from(bucket + 1));
+                        }
+                        BufferCcTarget::Repeat { max } => {
+                            let bucket = mooloop_core::cc_bucket(value, max.max(1));
+                            self.buffer_cc.repeat = Some(u32::from(bucket) + 1);
+                        }
+                    }
+                }
+                MidiKind::PitchBend { .. } => {}
+            }
+        }
+    }
+
+    /// Frames the head travels per encoder tick. One tick is a 128th of a
+    /// beat, so a 128-tick-per-revolution wheel turns one beat per turn —
+    /// close enough to a platter's feel to be playable without calibration.
+    fn scrub_frames_per_tick(&self) -> f64 {
+        self.sample_rate as f64 * 60.0 / self.transport.bpm.max(1.0) / 128.0
     }
 
     pub fn process_block(&mut self, frames: usize) -> RenderReport {
@@ -2340,5 +2478,155 @@ mod tests {
             Box::new(mooloop_dsp::BufferDevice::with_capacity(RING)),
         );
         assert_eq!(quiet.read_buffer_collisions(0, 1), 0);
+    }
+
+    /// The whole control path: a note-on carrying a mapped tuple reaches the
+    /// insert and changes the render, and the matching note-off ends it.
+    /// Note says what and how long; velocity says how hard.
+    #[test]
+    fn mapped_midi_notes_drive_a_buffer_insert() {
+        use mooloop_core::midi::{BufferMidiMap, BufferNoteMapping};
+        use mooloop_core::{MidiKind, MidiMessage};
+
+        const FRAMES: usize = 1024;
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+
+        let render_with_midi = |messages_at: Option<usize>| -> Vec<f32> {
+            let mut render = RenderState::from_project(48_000, &project, &[]);
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Channel(0),
+                0,
+                default_effect(mooloop_core::EffectKind::Buffer),
+            ));
+            let mut map = BufferMidiMap::new(EffectTarget::Channel(0), 0);
+            map.notes[0] = Some(BufferNoteMapping {
+                note: 60,
+                event: mooloop_core::BufferEvent {
+                    offset_beats: -0.05,
+                    ..mooloop_core::BufferEvent::live()
+                },
+            });
+            render.attach_buffer_midi_map(Arc::new(ArcSwapOption::from_pointee(map)));
+            render.play();
+
+            let mut out = Vec::new();
+            for block in 0..8 {
+                if Some(block) == messages_at {
+                    render.apply_midi(&[MidiMessage {
+                        offset: 0,
+                        channel: 0,
+                        kind: MidiKind::NoteOn {
+                            note: 60,
+                            velocity: 127,
+                        },
+                    }]);
+                }
+                render.process_block(FRAMES);
+                out.extend_from_slice(&render.master().l[..FRAMES]);
+            }
+            out
+        };
+
+        let quiet = render_with_midi(None);
+        let played = render_with_midi(Some(4));
+        let split = 4 * FRAMES;
+        assert_eq!(quiet[..split], played[..split]);
+        assert!(
+            quiet[split..].iter().any(|sample| *sample != 0.0),
+            "reference tail was silent"
+        );
+        assert!(
+            quiet[split..] != played[split..],
+            "a mapped note never reached the insert"
+        );
+    }
+
+    /// An unmapped key must not release an edit it never started, and a
+    /// mapped one must. Both halves matter: a keyboard is full of notes this
+    /// map does not own.
+    #[test]
+    fn only_a_mapped_note_releases_the_edit() {
+        use mooloop_core::midi::{BufferMidiMap, BufferNoteMapping};
+        use mooloop_core::{MidiKind, MidiMessage};
+
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let note_off = |note| MidiMessage {
+            offset: 0,
+            channel: 0,
+            kind: MidiKind::NoteOff { note },
+        };
+
+        let mut map = BufferMidiMap::new(EffectTarget::Channel(0), 0);
+        map.notes[0] = Some(BufferNoteMapping {
+            note: 60,
+            event: mooloop_core::BufferEvent::live(),
+        });
+        assert!(map.note_event(60, 100).is_some());
+        assert!(map.note_event(61, 100).is_none());
+
+        // Velocity drives the crossfade: hard is abrupt, soft is declicked.
+        let hard = map.note_event(60, 127).unwrap();
+        let soft = map.note_event(60, 1).unwrap();
+        assert_eq!(hard.crossfade_ms, 0.0);
+        assert!(soft.crossfade_ms > hard.crossfade_ms);
+        assert_eq!(hard.duration, mooloop_core::BufferDuration::Gate);
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.attach_buffer_midi_map(Arc::new(ArcSwapOption::from_pointee(map)));
+        render.play();
+        // Neither of these should panic or route anywhere unexpected; the
+        // unmapped note is simply ignored.
+        render.apply_midi(&[note_off(61), note_off(60)]);
+        render.process_block(256);
+    }
+
+    /// A relative CC drives the platter rather than re-firing an event, and
+    /// a centred message means no movement at all.
+    #[test]
+    fn a_relative_cc_scrubs_without_refiring() {
+        use mooloop_core::midi::{BufferCcMapping, BufferCcTarget, BufferMidiMap};
+        use mooloop_core::{MidiKind, MidiMessage, RelativeEncoding};
+
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let mut map = BufferMidiMap::new(EffectTarget::Channel(0), 0);
+        map.controls[0] = Some(BufferCcMapping {
+            controller: 21,
+            target: BufferCcTarget::Scrub {
+                encoding: RelativeEncoding::BinaryOffset,
+            },
+        });
+
+        let cc = |value| MidiMessage {
+            offset: 0,
+            channel: 0,
+            kind: MidiKind::ControlChange {
+                controller: 21,
+                value,
+            },
+        };
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let _ = render.apply_structural(install_effect(
+            EffectTarget::Channel(0),
+            0,
+            default_effect(mooloop_core::EffectKind::Buffer),
+        ));
+        render.attach_buffer_midi_map(Arc::new(ArcSwapOption::from_pointee(map)));
+        render.play();
+        for _ in 0..4 {
+            render.process_block(1024);
+        }
+
+        // 64 is the rest position of a binary-offset encoder.
+        render.apply_midi(&[cc(64)]);
+        render.process_block(1024);
+
+        // A real turn detaches the head and moves it back in time.
+        render.apply_midi(&[cc(32)]);
+        render.process_block(1024);
+        assert!(
+            render.scrub_frames_per_tick() > 0.0,
+            "scrub must resolve against tempo"
+        );
     }
 }

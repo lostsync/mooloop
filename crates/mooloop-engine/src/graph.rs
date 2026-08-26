@@ -5,17 +5,21 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use jack::ProcessHandler;
-use jack::{AudioOut, Client, Control, Port, PortId, ProcessScope};
-use mooloop_core::EngineEvent;
+use jack::{AudioOut, Client, Control, MidiIn, Port, PortId, ProcessScope};
+use mooloop_core::{EngineEvent, MidiMessage};
 use mooloop_dsp::MAX_BLOCK_SIZE;
 use rtrb::Consumer;
 
 use crate::render::RenderState;
 use crate::{RealtimeCommand, StructuralReclaim};
 
+/// Per-block MIDI input ceiling. Bounded so the callback never allocates.
+const MAX_MIDI_PER_BLOCK: usize = 256;
+
 pub(crate) struct GraphIo {
     pub out_l: Port<AudioOut>,
     pub out_r: Port<AudioOut>,
+    pub midi_in: Port<MidiIn>,
     pub cmd_rx: Consumer<RealtimeCommand>,
     pub evt_tx: rtrb::Producer<EngineEvent>,
     pub reclaim_tx: rtrb::Producer<StructuralReclaim>,
@@ -25,6 +29,11 @@ pub(crate) struct Graph {
     render: Box<RenderState>,
     out_l: Port<AudioOut>,
     out_r: Port<AudioOut>,
+    midi_in: Port<MidiIn>,
+    /// Decoded once per block into a fixed buffer. Sized for far more input
+    /// than a human or a sequencer produces in one period; the overflow is
+    /// dropped rather than allocated for.
+    midi_scratch: [MidiMessage; MAX_MIDI_PER_BLOCK],
     cmd_rx: Consumer<RealtimeCommand>,
     evt_tx: rtrb::Producer<EngineEvent>,
     reclaim_tx: rtrb::Producer<StructuralReclaim>,
@@ -41,6 +50,12 @@ impl Graph {
             render,
             out_l: io.out_l,
             out_r: io.out_r,
+            midi_in: io.midi_in,
+            midi_scratch: [MidiMessage {
+                offset: 0,
+                channel: 0,
+                kind: mooloop_core::MidiKind::NoteOff { note: 0 },
+            }; MAX_MIDI_PER_BLOCK],
             cmd_rx: io.cmd_rx,
             evt_tx: io.evt_tx,
             reclaim_tx: io.reclaim_tx,
@@ -134,6 +149,21 @@ impl ProcessHandler for Graph {
                 generation: prepared.generation,
             });
         }
+
+        // Decode before rendering so this block's input can act on this
+        // block's audio. JACK hands over whole messages already ordered by
+        // time, so no sort is needed.
+        let mut midi_len = 0;
+        for raw in self.midi_in.iter(scope) {
+            if midi_len == MAX_MIDI_PER_BLOCK {
+                break;
+            }
+            if let Some(message) = MidiMessage::decode(raw.time, raw.bytes) {
+                self.midi_scratch[midi_len] = message;
+                midi_len += 1;
+            }
+        }
+        self.render.apply_midi(&self.midi_scratch[..midi_len]);
 
         let report = self.render.process_block(frames);
         let master = self.render.master();

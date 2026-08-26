@@ -36,6 +36,26 @@ enum FadeSource {
     Detached { position: f64, rate: f32 },
 }
 
+/// A platter under the hand. The read head chases `target`, and the speed it
+/// closes the gap at *is* the playback rate — so spinning fast plays fast,
+/// and letting go coasts to a stop. Position is the input; rate is derived.
+/// Driving rate directly instead would be a jog shuttle, not a turntable.
+#[derive(Clone, Copy)]
+struct Scrub {
+    target: f64,
+    /// Time constant of the chase, in frames. Roughly one control-message
+    /// interval: long enough that per-message steps read as continuous
+    /// motion, short enough that the head does not lag the hand.
+    chase_frames: f64,
+}
+
+/// A stopped platter must go silent. Holding at rate zero would repeat one
+/// sample forever, which is a DC step, not silence.
+const SCRUB_MUTE_RATE: f32 = 0.02;
+/// Ceiling on how fast a scrub may drive the head, so a wild spin cannot
+/// outrun the interpolator into noise.
+const MAX_SCRUB_RATE: f32 = 4.0;
+
 #[derive(Clone, Copy)]
 struct Fade {
     source: FadeSource,
@@ -52,6 +72,10 @@ pub struct BufferDevice {
     write_head: u64,
     head: Option<ReadHead>,
     fade: Option<Fade>,
+    scrub: Option<Scrub>,
+    /// Amplitude the scrub is currently entitled to, from its speed. Held
+    /// across frames so the mute fades rather than steps.
+    scrub_gain: f32,
     /// Incremented when the writer catches a detached head. This is a cheap
     /// observable diagnostic for the host/tests without logging on the RT
     /// thread.
@@ -78,6 +102,8 @@ impl BufferDevice {
             write_head: 0,
             head: None,
             fade: None,
+            scrub: None,
+            scrub_gain: 0.0,
             collision_count: 0,
         }
     }
@@ -128,7 +154,14 @@ impl BufferDevice {
             self.right[write_index] = input_r;
 
             let (mut output_l, mut output_r) = match self.head {
-                Some(head) => self.read_stereo(head.position),
+                Some(head) => {
+                    let (left, right) = self.read_stereo(head.position);
+                    if self.scrub.is_some() {
+                        (left * self.scrub_gain, right * self.scrub_gain)
+                    } else {
+                        (left, right)
+                    }
+                }
                 None => (input_l, input_r),
             };
 
@@ -197,6 +230,49 @@ impl BufferDevice {
         self.head = Some(head);
     }
 
+    /// Put the head on the platter, holding at the live position. Idempotent:
+    /// a scrub already under way keeps its target rather than snapping back
+    /// to live, since control messages arrive as a stream with no press.
+    pub fn scrub_begin(&mut self, context: &ProcessContext, crossfade_ms: f32) {
+        if self.scrub.is_some() {
+            return;
+        }
+        let position = self.write_head as f64;
+        let crossfade_frames = ms_to_frames(crossfade_ms, context.sample_rate);
+        self.fade = (crossfade_frames > 0).then_some(Fade {
+            source: FadeSource::Live,
+            frame: 0,
+            frames: crossfade_frames,
+        });
+        self.head = Some(ReadHead {
+            position,
+            rate: 0.0,
+            window_start: position,
+            window_end: None,
+            repeats_remaining: None,
+            expires_at: None,
+            crossfade_frames,
+            // Gated, so the same release that ends a held note ends a scrub.
+            gated: true,
+        });
+        self.scrub = Some(Scrub {
+            target: position,
+            chase_frames: (context.sample_rate as f64 / 200.0).max(1.0),
+        });
+        self.scrub_gain = 0.0;
+    }
+
+    /// Move the platter. `delta_frames` is signed; negative is back in time.
+    pub fn scrub_move(&mut self, delta_frames: f64) {
+        if let Some(scrub) = &mut self.scrub {
+            scrub.target += delta_frames;
+        }
+    }
+
+    pub fn is_scrubbing(&self) -> bool {
+        self.scrub.is_some()
+    }
+
     /// End a gated edit. A latching head is left alone: a held control sends
     /// this on release without knowing whether its own event is still the
     /// one running, and it must not cancel whatever superseded it.
@@ -208,6 +284,14 @@ impl BufferDevice {
 
     fn advance_head(&mut self) {
         let Some(mut head) = self.head else { return };
+        if let Some(scrub) = self.scrub {
+            // Speed is whatever it takes to close the remaining gap, so the
+            // hand's motion sets the pitch without ever being asked for a
+            // rate.
+            let rate = ((scrub.target - head.position) / scrub.chase_frames) as f32;
+            head.rate = rate.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
+            self.scrub_gain = (head.rate.abs() / SCRUB_MUTE_RATE).min(1.0);
+        }
         let old_position = head.position;
         head.position += f64::from(head.rate);
 
@@ -262,6 +346,8 @@ impl BufferDevice {
     }
 
     fn return_live(&mut self, head: ReadHead, position: f64) {
+        self.scrub = None;
+        self.scrub_gain = 0.0;
         if head.crossfade_frames > 0 {
             self.fade = Some(Fade {
                 source: FadeSource::Detached {
@@ -345,6 +431,10 @@ impl AudioNode for BufferDevice {
                 // applied at the block edge rather than threaded through the
                 // sample loop as a second timed stream.
                 Event::BufferRelease => self.release(),
+                Event::BufferScrub { delta_frames } => {
+                    self.scrub_begin(context, 2.5);
+                    self.scrub_move(f64::from(delta_frames));
+                }
                 _ => {}
             }
         }
@@ -706,5 +796,67 @@ mod tests {
                 .all(|sample| *sample >= 76_000.0 && *sample <= 100_000.0),
             "reverse window left its retained range"
         );
+    }
+
+    /// The defining property of position mode: the platter's speed sets the
+    /// pitch, and letting go goes silent rather than holding a sample as DC.
+    #[test]
+    fn a_stopped_scrub_goes_silent_rather_than_holding_dc() {
+        let mut device = BufferDevice::with_capacity(100_000);
+        let mut bus = StereoBus::with_capacity(1_000);
+        for block in 0..20 {
+            fill_ramp(&mut bus, block * 1_000, 1_000);
+            device.process(&context(1_000), &mut bus, &[]);
+        }
+
+        // Spin: a large target displacement, so the head has ground to cover.
+        device.scrub_begin(&context(1_000), 0.0);
+        device.scrub_move(-4_000.0);
+        assert!(device.is_scrubbing());
+        fill_ramp(&mut bus, 20_000, 1_000);
+        device.process(&context(1_000), &mut bus, &[]);
+        let moving = bus.l[..1_000].iter().map(|s| s.abs()).fold(0.0, f32::max);
+        assert!(moving > 0.0, "a moving platter must make sound");
+
+        // Let go: no further movement, so the head coasts to a stop and the
+        // gain follows it down.
+        for _ in 0..20 {
+            fill_ramp(&mut bus, 21_000, 1_000);
+            device.process(&context(1_000), &mut bus, &[]);
+        }
+        let resting = bus.l[..1_000].iter().map(|s| s.abs()).fold(0.0, f32::max);
+        assert!(
+            resting < 1e-3,
+            "a stopped platter must be silent, got {resting}"
+        );
+    }
+
+    /// Scrub is driven by a stream of deltas with no press, so the first one
+    /// has to detach the head and later ones must not snap it back to live.
+    #[test]
+    fn scrub_begin_is_idempotent_and_release_returns_live() {
+        let mut device = BufferDevice::with_capacity(100_000);
+        let mut bus = StereoBus::with_capacity(1_000);
+        for block in 0..20 {
+            fill_ramp(&mut bus, block * 1_000, 1_000);
+            device.process(&context(1_000), &mut bus, &[]);
+        }
+
+        device.scrub_begin(&context(1_000), 0.0);
+        device.scrub_move(-2_000.0);
+        fill_ramp(&mut bus, 20_000, 1_000);
+        device.process(&context(1_000), &mut bus, &[]);
+        let drifted = device.head.expect("scrub head").position;
+
+        // A second begin must be inert rather than re-detaching at live.
+        device.scrub_begin(&context(1_000), 0.0);
+        assert_eq!(device.head.expect("scrub head").position, drifted);
+
+        device.release();
+        assert!(device.is_following(), "release must end a scrub");
+        assert!(!device.is_scrubbing());
+        fill_ramp(&mut bus, 21_000, 1_000);
+        device.process(&context(1_000), &mut bus, &[]);
+        assert_eq!(bus.l[999], 21_999.0, "must land on genuinely live audio");
     }
 }

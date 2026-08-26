@@ -40,6 +40,12 @@ pub enum Event {
     /// whose duration is `Gate`. Latching edits ignore it, so a release can
     /// be sent unconditionally without cancelling an unrelated event.
     BufferRelease,
+    /// Move a retained-audio scrub platter by a signed distance in frames.
+    /// The first one detaches the head; position is the input and rate is
+    /// derived from it, so this is a platter rather than a rate control.
+    BufferScrub {
+        delta_frames: f32,
+    },
 }
 
 /// One event and its position inside the current block.
@@ -120,7 +126,10 @@ impl EventList {
 fn event_sort_key(event: &TimedEvent) -> (u32, u8) {
     let priority = match event.event {
         Event::NoteOff { .. } | Event::Choke => 0,
-        Event::ParamValue { .. } | Event::Buffer(_) | Event::BufferRelease => 1,
+        Event::ParamValue { .. }
+        | Event::Buffer(_)
+        | Event::BufferRelease
+        | Event::BufferScrub { .. } => 1,
         Event::NoteOn { .. } => 2,
     };
     (event.offset, priority)

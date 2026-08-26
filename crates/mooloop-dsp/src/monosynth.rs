@@ -296,7 +296,10 @@ impl AudioNode for MonoSynth {
                 Event::NoteOn { id, note, velocity } => self.note_on(id, note, velocity),
                 Event::NoteOff { id, .. } => self.note_off(id),
                 Event::Choke => self.release_all(),
-                Event::ParamValue { .. } | Event::Buffer(_) | Event::BufferRelease => {}
+                Event::ParamValue { .. }
+                | Event::Buffer(_)
+                | Event::BufferRelease
+                | Event::BufferScrub { .. } => {}
             }
             pos = off;
         }
