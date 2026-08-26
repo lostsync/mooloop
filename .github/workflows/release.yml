@@ -18,17 +18,30 @@ env:
   # Keep package artifacts in the runner workspace, not the maintainer's path.
   CARGO_TARGET_DIR: target
 
+# Build distributable Linux binaries against glibc 2.31 (Ubuntu 20.04), rather
+# than the moving glibc version on ubuntu-latest. This keeps them runnable on
+# Ubuntu 20.04+, Debian 11+, and Fedora 32+ (subject to their shared-library
+# package dependencies).
+defaults:
+  run:
+    shell: sh
+
 jobs:
   package-deb:
     name: Build .deb
     runs-on: ubuntu-latest
+    container: ubuntu:20.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            ca-certificates \
+            curl \
+            git \
             binutils \
             pkg-config \
             libjack-jackd2-dev \
@@ -58,6 +71,16 @@ jobs:
       - name: Strip debug information from distributable binary
         run: strip --strip-debug target/release/mooloop
 
+      - name: Verify glibc compatibility baseline
+        run: |
+          if readelf -W --version-info target/release/mooloop | \
+            awk '/Name: GLIBC_/ { split($3, version, "_"); split(version[2], parts, "."); if (parts[1] > 2 || (parts[1] == 2 && parts[2] > 31)) exit 1 }'; then
+            echo "Binary requires glibc 2.31 or older."
+          else
+            echo "Binary requires glibc newer than 2.31." >&2
+            exit 1
+          fi
+
       - name: Package .deb
         run: cargo deb -p mooloop-app --no-build
 
@@ -69,13 +92,18 @@ jobs:
   package-rpm:
     name: Build .rpm
     runs-on: ubuntu-latest
+    container: ubuntu:20.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            ca-certificates \
+            curl \
+            git \
             binutils \
             pkg-config \
             libjack-jackd2-dev \
@@ -106,6 +134,16 @@ jobs:
       - name: Strip debug information from distributable binary
         run: strip --strip-debug target/release/mooloop
 
+      - name: Verify glibc compatibility baseline
+        run: |
+          if readelf -W --version-info target/release/mooloop | \
+            awk '/Name: GLIBC_/ { split($3, version, "_"); split(version[2], parts, "."); if (parts[1] > 2 || (parts[1] == 2 && parts[2] > 31)) exit 1 }'; then
+            echo "Binary requires glibc 2.31 or older."
+          else
+            echo "Binary requires glibc newer than 2.31." >&2
+            exit 1
+          fi
+
       - name: Package .rpm
         run: cargo generate-rpm -p crates/mooloop-app
 
@@ -117,13 +155,18 @@ jobs:
   package-appimage:
     name: Build AppImage
     runs-on: ubuntu-latest
+    container: ubuntu:20.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            ca-certificates \
+            curl \
+            git \
             binutils \
             pkg-config \
             libjack-jackd2-dev \
@@ -149,6 +192,16 @@ jobs:
 
       - name: Strip debug information from distributable binary
         run: strip --strip-debug target/release/mooloop
+
+      - name: Verify glibc compatibility baseline
+        run: |
+          if readelf -W --version-info target/release/mooloop | \
+            awk '/Name: GLIBC_/ { split($3, version, "_"); split(version[2], parts, "."); if (parts[1] > 2 || (parts[1] == 2 && parts[2] > 31)) exit 1 }'; then
+            echo "Binary requires glibc 2.31 or older."
+          else
+            echo "Binary requires glibc newer than 2.31." >&2
+            exit 1
+          fi
 
       - name: Fetch linuxdeploy
         run: |
