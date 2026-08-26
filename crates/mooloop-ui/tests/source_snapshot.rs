@@ -198,6 +198,7 @@ fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
         eq_band_data: Vec::<f32>::new().as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: false,
+        buffer_collisions: 0,
         wet_dry: 1.0,
         input_trim_db: 0.0,
         output_trim_db: 0.0,
