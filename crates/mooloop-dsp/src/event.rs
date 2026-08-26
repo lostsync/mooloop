@@ -36,6 +36,10 @@ pub enum Event {
     },
     /// Atomic retained-audio edit for a buffer insert.
     Buffer(BufferEvent),
+    /// End of a gated retained-audio edit — the note-off half of an event
+    /// whose duration is `Gate`. Latching edits ignore it, so a release can
+    /// be sent unconditionally without cancelling an unrelated event.
+    BufferRelease,
 }
 
 /// One event and its position inside the current block.
@@ -116,7 +120,7 @@ impl EventList {
 fn event_sort_key(event: &TimedEvent) -> (u32, u8) {
     let priority = match event.event {
         Event::NoteOff { .. } | Event::Choke => 0,
-        Event::ParamValue { .. } | Event::Buffer(_) => 1,
+        Event::ParamValue { .. } | Event::Buffer(_) | Event::BufferRelease => 1,
         Event::NoteOn { .. } => 2,
     };
     (event.offset, priority)

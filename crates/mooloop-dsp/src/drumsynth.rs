@@ -384,7 +384,7 @@ impl AudioNode for DrumSynth {
                 // Drums are one-shot; note-offs end nothing.
                 Event::NoteOff { .. } => {}
                 Event::Choke => self.choke(),
-                Event::ParamValue { .. } | Event::Buffer(_) => {}
+                Event::ParamValue { .. } | Event::Buffer(_) | Event::BufferRelease => {}
             }
             pos = off;
         }

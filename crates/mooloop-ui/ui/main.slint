@@ -375,6 +375,9 @@ export component MainWindow inherits Window {
     callback effect-param-changed(int, int, float);
     // Slot index and an index into the buffer face's fixed debug event table.
     callback effect-buffer-triggered(int, int);
+    // Press/release of the buffer face's held reverse control.
+    callback effect-buffer-reverse-pressed(int);
+    callback effect-buffer-reverse-released(int);
     callback eq-analyzer-changed(int, bool);
     callback reorder-effect(int, int);              // from slot, to slot
     in-out property <int> selected-note-step;
@@ -2395,6 +2398,8 @@ export component MainWindow inherits Window {
                                                 bypassed: slot.bypassed;
                                                 collisions: slot.buffer-collisions;
                                                 trigger(id) => { root.effect-buffer-triggered(index, id); }
+                                                reverse-pressed() => { root.effect-buffer-reverse-pressed(index); }
+                                                reverse-released() => { root.effect-buffer-reverse-released(index); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                         }

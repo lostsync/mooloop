@@ -25,6 +25,9 @@ struct ReadHead {
     repeats_remaining: Option<u32>,
     expires_at: Option<u64>,
     crossfade_frames: u32,
+    /// Set when the event's duration is `Gate`: the head holds until an
+    /// explicit release rather than until it expires or collides.
+    gated: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -156,9 +159,19 @@ impl BufferDevice {
     fn fire(&mut self, event: BufferEvent, context: &ProcessContext) {
         let frames_per_beat = context.sample_rate as f64 * 60.0 / context.bpm.max(1.0);
         let position = self.write_head as f64 + f64::from(event.offset_beats) * frames_per_beat;
-        let window_end = event.window_beats.and_then(|beats| {
-            (beats > 0.0).then_some(position + f64::from(beats) * frames_per_beat)
-        });
+        // A window always covers material the head is about to play, so it
+        // extends backward from the entry point for a reverse head and
+        // forward for a forward one. Extending forward in both cases would
+        // point a reverse window at samples the writer has not reached.
+        let window = event
+            .window_beats
+            .filter(|beats| *beats > 0.0)
+            .map(|beats| f64::from(beats) * frames_per_beat);
+        let (window_start, window_end) = match window {
+            Some(length) if event.rate < 0.0 => (position - length, Some(position)),
+            Some(length) => (position, Some(position + length)),
+            None => (position, None),
+        };
         let duration_frames = match event.duration {
             // Current patterns are a sixteenth-note grid: four steps/beat.
             BufferDuration::Steps(steps) => {
@@ -169,11 +182,12 @@ impl BufferDevice {
         let head = ReadHead {
             position,
             rate: event.rate,
-            window_start: position,
+            window_start,
             window_end,
             repeats_remaining: event.repeat,
             expires_at: duration_frames.map(|frames| self.write_head + frames),
             crossfade_frames: ms_to_frames(event.crossfade_ms, context.sample_rate),
+            gated: matches!(event.duration, BufferDuration::Gate),
         };
         self.fade = (head.crossfade_frames > 0).then_some(Fade {
             source: FadeSource::Live,
@@ -181,6 +195,15 @@ impl BufferDevice {
             frames: head.crossfade_frames,
         });
         self.head = Some(head);
+    }
+
+    /// End a gated edit. A latching head is left alone: a held control sends
+    /// this on release without knowing whether its own event is still the
+    /// one running, and it must not cancel whatever superseded it.
+    pub fn release(&mut self) {
+        if let Some(head) = self.head.filter(|head| head.gated) {
+            self.return_live(head, head.position);
+        }
     }
 
     fn advance_head(&mut self) {
@@ -310,12 +333,19 @@ impl AudioNode for BufferDevice {
         let mut buffer_events = [EMPTY; 256];
         let mut len = 0;
         for timed in events_in.iter() {
-            if let Event::Buffer(event) = timed.event {
-                buffer_events[len] = TimedBufferEvent {
-                    offset: timed.offset,
-                    event,
-                };
-                len += 1;
+            match timed.event {
+                Event::Buffer(event) => {
+                    buffer_events[len] = TimedBufferEvent {
+                        offset: timed.offset,
+                        event,
+                    };
+                    len += 1;
+                }
+                // Releases are rare and land between blocks, so they are
+                // applied at the block edge rather than threaded through the
+                // sample loop as a second timed stream.
+                Event::BufferRelease => self.release(),
+                _ => {}
             }
         }
         self.process(context, bus, &buffer_events[..len]);
@@ -562,6 +592,119 @@ mod tests {
             max_step(&declicked) < 0.2,
             "2 ms crossfade must smooth the discontinuity: step {}",
             max_step(&declicked)
+        );
+    }
+
+    fn gated_reverse(window_beats: Option<f32>) -> BufferEvent {
+        BufferEvent {
+            offset_beats: 0.0,
+            rate: -1.0,
+            window_beats,
+            repeat: None,
+            duration: BufferDuration::Gate,
+            crossfade_ms: 0.0,
+        }
+    }
+
+    /// A held reverse is the gate case: it runs for exactly as long as the
+    /// control is down and returns to live the moment it comes up, rather
+    /// than latching until it runs out of retained history.
+    #[test]
+    fn a_gated_head_runs_until_released() {
+        let mut device = BufferDevice::with_capacity(100_000);
+        let mut bus = StereoBus::with_capacity(1_000);
+        for block in 0..10 {
+            fill_ramp(&mut bus, block * 1_000, 1_000);
+            device.process(&context(1_000), &mut bus, &[]);
+        }
+
+        fill_ramp(&mut bus, 10_000, 1_000);
+        let event = TimedBufferEvent {
+            offset: 0,
+            event: gated_reverse(None),
+        };
+        device.process(&context(1_000), &mut bus, &[event]);
+        assert!(!device.is_following(), "a gated head must hold while down");
+
+        fill_ramp(&mut bus, 11_000, 1_000);
+        device.process(&context(1_000), &mut bus, &[]);
+        assert!(!device.is_following(), "still down, so still detached");
+
+        device.release();
+        assert!(device.is_following(), "release must return to live");
+
+        fill_ramp(&mut bus, 12_000, 1_000);
+        device.process(&context(1_000), &mut bus, &[]);
+        // Genuinely live, not a delayed stream catching up.
+        assert_eq!(bus.l[999], 12_999.0);
+    }
+
+    /// Releasing is unconditional at the call site, so it must be inert
+    /// against a latching head: a held control coming up cannot be allowed to
+    /// cancel an unrelated event that superseded its own.
+    #[test]
+    fn release_leaves_a_latching_head_alone() {
+        let mut device = BufferDevice::with_capacity(100_000);
+        let mut bus = StereoBus::with_capacity(1_000);
+        for block in 0..10 {
+            fill_ramp(&mut bus, block * 1_000, 1_000);
+            device.process(&context(1_000), &mut bus, &[]);
+        }
+        fill_ramp(&mut bus, 10_000, 1_000);
+        let latching = TimedBufferEvent {
+            offset: 0,
+            event: BufferEvent {
+                offset_beats: -0.05,
+                ..BufferEvent::live()
+            },
+        };
+        device.process(&context(1_000), &mut bus, &[latching]);
+        assert!(!device.is_following());
+
+        device.release();
+        assert!(
+            !device.is_following(),
+            "a latching head must ignore a gate release"
+        );
+    }
+
+    /// A reverse window has to cover material behind the entry point. Pointed
+    /// forward it would loop over samples the writer has not reached yet, so
+    /// a held reverse would play silence instead of repeating the last bars.
+    #[test]
+    fn a_reverse_window_loops_backward_over_written_history() {
+        let mut device = BufferDevice::with_capacity(200_000);
+        let mut bus = StereoBus::with_capacity(1_000);
+        for block in 0..100 {
+            fill_ramp(&mut bus, block * 1_000, 1_000);
+            device.process(&context(1_000), &mut bus, &[]);
+        }
+
+        // One beat is 24_000 frames at 120 bpm, so the window covers
+        // [76_000, 100_000) — all of it long since written.
+        fill_ramp(&mut bus, 100_000, 1_000);
+        let event = TimedBufferEvent {
+            offset: 0,
+            event: gated_reverse(Some(1.0)),
+        };
+        device.process(&context(1_000), &mut bus, &[event]);
+        // Reverse from the entry point: the first frame reads the entry
+        // sample, and it walks backward from there.
+        assert_eq!(bus.l[0], 100_000.0);
+        assert_eq!(bus.l[500], 99_500.0);
+
+        // Run past the window's far edge and confirm it wrapped forward to
+        // the entry point rather than running off into unwritten samples.
+        for block in 101..126 {
+            fill_ramp(&mut bus, block * 1_000, 1_000);
+            device.process(&context(1_000), &mut bus, &[]);
+        }
+        assert!(!device.is_following(), "a gated window must keep looping");
+        assert!(
+            bus.l[..1_000]
+                .iter()
+                .all(|sample| *sample >= 76_000.0 && *sample <= 100_000.0),
+            "reverse window left its retained range"
         );
     }
 }

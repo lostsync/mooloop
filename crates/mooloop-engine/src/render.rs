@@ -333,6 +333,15 @@ impl EffectChain {
         }
     }
 
+    fn queue_buffer_release(&mut self, slot: usize) {
+        if let Some(events) = self.events.get_mut(slot) {
+            events.queue(TimedEvent {
+                offset: 0,
+                event: Event::BufferRelease,
+            });
+        }
+    }
+
     /// Load a project's saved chain. Construction allocates, so this is a
     /// load-time operation only, never a per-block one.
     fn load(
@@ -1085,6 +1094,11 @@ impl RenderState {
             } => {
                 if let Some(chain) = self.chain_mut(target) {
                     chain.queue_buffer(slot as usize, event);
+                }
+            }
+            EngineCommand::ReleaseBuffer { target, slot } => {
+                if let Some(chain) = self.chain_mut(target) {
+                    chain.queue_buffer_release(slot as usize);
                 }
             }
         }

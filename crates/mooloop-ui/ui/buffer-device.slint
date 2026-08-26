@@ -2,6 +2,47 @@ import { Theme } from "theme.slint";
 import { ToolButton } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
+// A momentary trigger: it reports press and release separately rather than
+// a click, so a gated event can hold for exactly as long as the control is
+// down. Modelled on ToolButton's look so it sits with the latching triggers.
+component HeldButton inherits Rectangle {
+    in property <string> text;
+    in property <string> tooltip: root.text;
+    callback pressed;
+    callback released;
+
+    min-width: 44px;
+    min-height: 24px;
+    border-radius: 3px;
+    border-width: tap.has-hover ? 1px : 0px;
+    border-color: Theme.border;
+    background: tap.pressed ? Theme.accent-active : Theme.surface-raised;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+
+    Text {
+        text: root.text;
+        color: Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-size: 11px;
+    }
+
+    tap := TouchArea {
+        mouse-cursor: pointer;
+        // A pointer leaving while down still releases: otherwise the head
+        // would latch on indefinitely after a drag off the control.
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) { root.pressed(); }
+            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) {
+                root.released();
+            }
+        }
+    }
+
+    Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
 // One retained-audio buffer insert. Stage 1 has no parameter surface — the
 // device is a wire until an event tuple fires at it — so the face is a debug
 // trigger surface: three fixed events that make the read head's behaviour
@@ -19,6 +60,9 @@ export component BufferDeviceFace inherits EffectDeviceShell {
     in property <int> collisions;
     // Index into the fixed debug event table, matching TRIGGERS below.
     callback trigger(int);
+    // Reverse is held rather than latched: it runs while the control is down.
+    callback reverse-pressed();
+    callback reverse-released();
 
     VerticalLayout {
         padding: 6px;
@@ -59,10 +103,11 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 tooltip: "−1 beat, 1.0x";
                 clicked => { root.trigger(0); }
             }
-            ToolButton {
+            HeldButton {
                 text: "REV";
-                tooltip: "−2 beats, −1.0x";
-                clicked => { root.trigger(1); }
+                tooltip: "hold: reverse, 2-bar loop";
+                pressed => { root.reverse-pressed(); }
+                released => { root.reverse-released(); }
             }
             ToolButton {
                 text: "STUT";

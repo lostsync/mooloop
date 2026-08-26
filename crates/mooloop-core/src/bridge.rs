@@ -157,6 +157,10 @@ pub enum EngineCommand {
         slot: u8,
         event: BufferEvent,
     },
+    /// Release a gated retained-audio edit. Only an event whose duration is
+    /// `Gate` responds, so a held control can send this on release without
+    /// having to know what has happened to the head since.
+    ReleaseBuffer { target: EffectTarget, slot: u8 },
 }
 
 /// audio -> GUI. Pushed sparingly (a few times per block at most) and drained

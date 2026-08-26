@@ -369,7 +369,7 @@ impl AudioNode for PolySynth {
                 Event::NoteOn { id, note, velocity } => self.note_on(id, note, velocity),
                 Event::NoteOff { id, .. } => self.note_off(id),
                 Event::Choke => self.release_all(),
-                Event::ParamValue { .. } | Event::Buffer(_) => {}
+                Event::ParamValue { .. } | Event::Buffer(_) | Event::BufferRelease => {}
             }
             pos = off;
         }

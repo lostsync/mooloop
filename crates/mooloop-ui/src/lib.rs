@@ -16,17 +16,17 @@ slint::include_modules!();
 use history::{Entry as HistoryEntry, History};
 use meter::{db_to_linear, linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BufferEvent, BusSetup,
-    Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState,
-    EffectKind, EffectParams, EffectSlotState, EffectTarget, EngineCommand, EngineEvent,
-    HatCharacter, KickCharacter, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState,
-    NoteEvent, NoteId, OscWave, PatternPlacement, PlaybackMode, PolySynthParams, PolySynthState,
-    Ppq, Project, ProjectChannel, RetriggerMode, ReverbParams, SampleReference, SamplerParams,
-    SamplerState, SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
-    DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
-    MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
-    MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH,
-    TICKS_PER_BAR, TICKS_PER_STEP,
+    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BufferDuration,
+    BufferEvent, BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode,
+    DrumSynthParams, DrumSynthState, EffectKind, EffectParams, EffectSlotState, EffectTarget,
+    EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit, LfoWave, LoopMode,
+    MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, PatternPlacement, PlaybackMode,
+    PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, ReverbParams,
+    SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
+    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
+    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS,
+    MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES,
+    MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect, build_effect_at_tempo, DrumSynth, DryAlign, SampleData,
@@ -948,17 +948,13 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
 /// The fixed debug events the buffer device face fires, in the order its
 /// buttons appear. These stand in for the note layer and per-step parameter
 /// locks that will eventually produce tuples, and deliberately go through the
-/// same `TriggerBuffer` command those will: jump back a beat, reverse two
-/// beats, and stutter the last sixteenth eight times.
+/// same `TriggerBuffer` command those will: jump back a beat, and stutter the
+/// last sixteenth eight times. Reverse is not here — it is held rather than
+/// latched, so it is built at the press site with a `Gate` duration.
 fn debug_buffer_event(index: i32) -> Option<BufferEvent> {
     let event = match index {
         0 => BufferEvent {
             offset_beats: -1.0,
-            ..BufferEvent::live()
-        },
-        1 => BufferEvent {
-            offset_beats: -2.0,
-            rate: -1.0,
             ..BufferEvent::live()
         },
         2 => BufferEvent {
@@ -970,6 +966,22 @@ fn debug_buffer_event(index: i32) -> Option<BufferEvent> {
         _ => return None,
     };
     Some(event)
+}
+
+/// The held reverse: runs backward from the moment of the press and loops
+/// over the two bars behind it, so a long hold repeats recent material
+/// instead of running until it exhausts the retained history. `Gate` is what
+/// makes the release meaningful — a latching event would ignore it.
+fn held_reverse_event() -> BufferEvent {
+    BufferEvent {
+        offset_beats: 0.0,
+        rate: -1.0,
+        // Four beats to the bar.
+        window_beats: Some(8.0),
+        repeat: None,
+        duration: BufferDuration::Gate,
+        crossfade_ms: BufferEvent::live().crossfade_ms,
+    }
 }
 
 fn loop_mode_from_int(i: i32) -> LoopMode {
@@ -4752,6 +4764,31 @@ impl AppUi {
             // The buffer device's debug triggers. Unlike a parameter change
             // this never touches project state: a fired event is a transient
             // performance gesture, not something the project remembers.
+            let rtx = cmd_tx.clone();
+            let rst = state.clone();
+            window.on_effect_buffer_reverse_pressed(move |slot| {
+                let Ok(slot) = u8::try_from(slot) else {
+                    return;
+                };
+                let _ = rtx.send(EngineCommand::TriggerBuffer {
+                    target: rst.borrow().effect_target,
+                    slot,
+                    event: held_reverse_event(),
+                });
+            });
+            let rtx = cmd_tx.clone();
+            let rst = state.clone();
+            window.on_effect_buffer_reverse_released(move |slot| {
+                let Ok(slot) = u8::try_from(slot) else {
+                    return;
+                };
+                // Inert unless the gated head is still the one running, so a
+                // release can never cancel an event that superseded it.
+                let _ = rtx.send(EngineCommand::ReleaseBuffer {
+                    target: rst.borrow().effect_target,
+                    slot,
+                });
+            });
             window.on_effect_buffer_triggered(move |slot, trigger| {
                 let Some(event) = debug_buffer_event(trigger) else {
                     return;
