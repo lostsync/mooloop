@@ -16,17 +16,17 @@ slint::include_modules!();
 use history::{Entry as HistoryEntry, History};
 use meter::{db_to_linear, linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BusSetup, Channel,
-    ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind,
-    EffectParams, EffectSlotState, EffectTarget, EngineCommand, EngineEvent, HatCharacter,
-    KickCharacter, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
-    OscWave, PatternPlacement, PlaybackMode, PolySynthParams, PolySynthState, Ppq, Project,
-    ProjectChannel, RetriggerMode, ReverbParams, SampleReference, SamplerParams, SamplerState,
-    SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT,
-    MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS,
-    MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
-    MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR,
-    TICKS_PER_STEP,
+    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BufferEvent, BusSetup,
+    Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState,
+    EffectKind, EffectParams, EffectSlotState, EffectTarget, EngineCommand, EngineEvent,
+    HatCharacter, KickCharacter, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState,
+    NoteEvent, NoteId, OscWave, PatternPlacement, PlaybackMode, PolySynthParams, PolySynthState,
+    Ppq, Project, ProjectChannel, RetriggerMode, ReverbParams, SampleReference, SamplerParams,
+    SamplerState, SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
+    DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
+    MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH,
+    TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect, build_effect_at_tempo, DrumSynth, DryAlign, SampleData,
@@ -941,7 +941,35 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         input_right_db: METER_FLOOR_DB,
         output_left_db: METER_FLOOR_DB,
         output_right_db: METER_FLOOR_DB,
+        buffer_collisions: 0,
     }
+}
+
+/// The fixed debug events the buffer device face fires, in the order its
+/// buttons appear. These stand in for the note layer and per-step parameter
+/// locks that will eventually produce tuples, and deliberately go through the
+/// same `TriggerBuffer` command those will: jump back a beat, reverse two
+/// beats, and stutter the last sixteenth eight times.
+fn debug_buffer_event(index: i32) -> Option<BufferEvent> {
+    let event = match index {
+        0 => BufferEvent {
+            offset_beats: -1.0,
+            ..BufferEvent::live()
+        },
+        1 => BufferEvent {
+            offset_beats: -2.0,
+            rate: -1.0,
+            ..BufferEvent::live()
+        },
+        2 => BufferEvent {
+            offset_beats: -0.0625,
+            window_beats: Some(0.0625),
+            repeat: Some(8),
+            ..BufferEvent::live()
+        },
+        _ => return None,
+    };
+    Some(event)
 }
 
 fn loop_mode_from_int(i: i32) -> LoopMode {
@@ -4720,6 +4748,28 @@ impl AppUi {
 
         {
             let tx = cmd_tx.clone();
+            let st = state.clone();
+            // The buffer device's debug triggers. Unlike a parameter change
+            // this never touches project state: a fired event is a transient
+            // performance gesture, not something the project remembers.
+            window.on_effect_buffer_triggered(move |slot, trigger| {
+                let Some(event) = debug_buffer_event(trigger) else {
+                    return;
+                };
+                let Ok(slot) = u8::try_from(slot) else {
+                    return;
+                };
+                // The tuple travels whole, never split into parameter
+                // updates, so the read head sees one sample-accurate change.
+                let _ = tx.send(EngineCommand::TriggerBuffer {
+                    target: st.borrow().effect_target,
+                    slot,
+                    event,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
             let reverb_tx = reverb_build_tx.clone();
             let st = state.clone();
             // One callback for every parameter of every effect kind: the
@@ -6123,11 +6173,22 @@ impl AppUi {
                                     let spectrum = handle.effect_spectrum(state.effect_target, slot as u8);
                                     row.eq_spectrum_data = spectrum.as_slice().into();
                                 }
-                                if meter_changed || row.eq_analyzer_enabled {
+                                // A forced return to live leaves no other
+                                // trace, so the buffer face reads the count
+                                // rather than waiting for an audible cue.
+                                let collisions = if row.kind == effect_kind_index(EffectKind::Buffer) {
+                                    handle.effect_buffer_collisions(state.effect_target, slot as u8)
+                                        as i32
+                                } else {
+                                    row.buffer_collisions
+                                };
+                                let collisions_changed = collisions != row.buffer_collisions;
+                                if meter_changed || collisions_changed || row.eq_analyzer_enabled {
                                     row.input_left_db = input_left_db;
                                     row.input_right_db = input_right_db;
                                     row.output_left_db = output_left_db;
                                     row.output_right_db = output_right_db;
+                                    row.buffer_collisions = collisions;
                                     state.effect_slot_model.set_row_data(slot, row);
                                 }
                             }

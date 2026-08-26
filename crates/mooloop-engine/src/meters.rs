@@ -134,8 +134,9 @@ impl DeviceTelemetry {
 
     /// Collisions counted by the device in this stage since it was installed.
     pub fn read_buffer_collisions(&self, target: usize, stage: usize) -> u32 {
-        Self::enabled_index(target, stage)
-            .map_or(0, |index| self.buffer_collisions[index].load(Ordering::Relaxed))
+        Self::enabled_index(target, stage).map_or(0, |index| {
+            self.buffer_collisions[index].load(Ordering::Relaxed)
+        })
     }
 
     /// Clear subscriptions and retained display data before a complete graph

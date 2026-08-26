@@ -1,0 +1,74 @@
+import { Theme } from "theme.slint";
+import { ToolButton } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+
+// One retained-audio buffer insert. Stage 1 has no parameter surface — the
+// device is a wire until an event tuple fires at it — so the face is a debug
+// trigger surface: three fixed events that make the read head's behaviour
+// immediately audible, plus the one diagnostic the audio thread can publish.
+//
+// The note-mapping and per-step parameter-lock layers that will eventually
+// produce these events are Stage 2; these buttons are what stands in until
+// then, and they go through the same `TriggerBuffer` command those will.
+export component BufferDeviceFace inherits EffectDeviceShell {
+    name: "Buffer";
+    kind: "BUFFER / 1U";
+    // Running count of forced returns to live: the writer overtaking a
+    // detached head. Monotonic, so a collision landing between two GUI
+    // frames still shows up.
+    in property <int> collisions;
+    // Index into the fixed debug event table, matching TRIGGERS below.
+    callback trigger(int);
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 6px;
+
+        Rectangle {
+            height: 34px;
+            background: Theme.panel;
+            border-radius: 2px;
+            HorizontalLayout {
+                padding: 6px;
+                spacing: 6px;
+                Text {
+                    text: "COLLISIONS";
+                    color: Theme.text-faint;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.collisions;
+                    // A nonzero count is not an error — a forced return is
+                    // the specified behaviour — so it reads as attention,
+                    // not as a fault.
+                    color: root.collisions > 0 ? Theme.warning : Theme.text-muted;
+                    font-size: 13px;
+                    font-family: "monospace";
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 4px;
+            ToolButton {
+                text: "JUMP";
+                tooltip: "−1 beat, 1.0x";
+                clicked => { root.trigger(0); }
+            }
+            ToolButton {
+                text: "REV";
+                tooltip: "−2 beats, −1.0x";
+                clicked => { root.trigger(1); }
+            }
+            ToolButton {
+                text: "STUT";
+                tooltip: "−1/16, window 1/16, 8x";
+                clicked => { root.trigger(2); }
+            }
+        }
+    }
+}

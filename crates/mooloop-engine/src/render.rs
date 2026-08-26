@@ -438,11 +438,7 @@ impl EffectChain {
                     // the device recovers silently and the only trace is this
                     // counter. Publishing it here keeps the audio thread free
                     // of logging.
-                    telemetry.publish_buffer_collisions(
-                        target,
-                        slot + 1,
-                        node.buffer_collisions(),
-                    );
+                    telemetry.publish_buffer_collisions(target, slot + 1, node.buffer_collisions());
                 }
             }
             self.events[slot].clear();

@@ -25,6 +25,7 @@ import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
 import { DriveDeviceFace } from "drive-device.slint";
 import { BitcrushDeviceFace } from "bitcrush-device.slint";
+import { BufferDeviceFace } from "buffer-device.slint";
 import { DelayDeviceFace } from "delay-device.slint";
 import { GateDeviceFace } from "gate-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
@@ -114,7 +115,8 @@ struct PlaylistClip {
 // kind costs a device face and nothing here.
 struct EffectSlotRow {
     // Matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay,
-    // 4=Gate, 5=Compressor, 6=Limiter, 7=EQ, 8=Reverb, 9=Mod.
+    // 4=Gate, 5=Compressor, 6=Limiter, 7=EQ, 8=Reverb, 9=Mod,
+    // 10=Plate, 11=Buffer.
     kind: int,
     // Rack units this device's face occupies. Devices with more working
     // controls get more width rather than compressing their controls.
@@ -140,6 +142,8 @@ struct EffectSlotRow {
     input-right-db: float,
     output-left-db: float,
     output-right-db: float,
+    // Buffer-only: forced returns to live counted by the inserted device.
+    buffer-collisions: int,
 }
 
 component FlatButton inherits ToolButton { }
@@ -369,6 +373,8 @@ export component MainWindow inherits Window {
     // slot, descriptor index within the kind, normalized 0..1. One callback
     // covers every parameter of every effect kind.
     callback effect-param-changed(int, int, float);
+    // Slot index and an index into the buffer face's fixed debug event table.
+    callback effect-buffer-triggered(int, int);
     callback eq-analyzer-changed(int, bool);
     callback reorder-effect(int, int);              // from slot, to slot
     in-out property <int> selected-note-step;
@@ -2377,6 +2383,18 @@ export component MainWindow inherits Window {
                                                 decay-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                 damping-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                 width-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                            }
+                                            if slot.kind == 11 : BufferDeviceFace {
+                                                x: DeviceRackMetrics.rail-width;
+                                                y: 0px;
+                                                width: parent.content-width;
+                                                height: parent.height;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                bypassed: slot.bypassed;
+                                                collisions: slot.buffer-collisions;
+                                                trigger(id) => { root.effect-buffer-triggered(index, id); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                         }

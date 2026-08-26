@@ -430,6 +430,14 @@ impl EngineHandle {
             .read_spectrum(effect_target_index(target), usize::from(slot) + 1)
     }
 
+    /// How many times a retained-audio buffer insert has been overtaken by
+    /// its writer and force-returned to live. Monotonic since the device was
+    /// installed, so a UI compares it against the value it last displayed.
+    pub fn effect_buffer_collisions(&self, target: EffectTarget, slot: u8) -> u32 {
+        self.device_telemetry
+            .read_buffer_collisions(effect_target_index(target), usize::from(slot) + 1)
+    }
+
     /// Every currently-active sampler voice's normalized playback position
     /// on `channel`, for a UI playhead. Wait-free; see `meters` for why this
     /// is a plain array read rather than another event.
