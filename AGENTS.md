@@ -20,6 +20,7 @@ Before every task, run `git status --short --branch`.
   Use `feat/`, `fix/`, `refactor/`, `chore/`, or `spike/` prefixes. Do all
   edits, builds, and tests in that worktree. One task uses one branch and one
   worktree.
+- Check CodeGraph and index or init as needed without asking. Adam wants you to use CodeGraph
 - Commit small, buildable changes. Do not use `--no-verify`, rewrite shared
   history, or commit generated output, `target/`, or secrets.
 - Before every commit, update your model+harness entry in `CONTRIBUTORS.md`.
