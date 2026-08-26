@@ -197,6 +197,49 @@ impl OscWave {
     }
 }
 
+
+impl OscWave {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Triangle,
+            2 => Self::Saw,
+            3 => Self::Pulse,
+            _ => Self::Sine,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Sine => 0,
+            Self::Triangle => 1,
+            Self::Saw => 2,
+            Self::Pulse => 3,
+        }
+    }
+}
+
+impl LfoWave {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Triangle,
+            2 => Self::Saw,
+            3 => Self::Square,
+            4 => Self::Random,
+            _ => Self::Sine,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Sine => 0,
+            Self::Triangle => 1,
+            Self::Saw => 2,
+            Self::Square => 3,
+            Self::Random => 4,
+        }
+    }
+}
+
 /// One mono synth oscillator's contribution.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OscParams {

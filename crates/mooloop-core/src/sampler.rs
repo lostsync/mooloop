@@ -54,6 +54,57 @@ pub enum RetriggerMode {
 }
 
 /// All sampler parameters, in the units the DSP and UI share. All points are
+
+impl LoopMode {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Forward,
+            2 => Self::Pingpong,
+            _ => Self::Off,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Off => 0,
+            Self::Forward => 1,
+            Self::Pingpong => 2,
+        }
+    }
+}
+
+impl VoiceMode {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Gate,
+            _ => Self::OneShot,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::OneShot => 0,
+            Self::Gate => 1,
+        }
+    }
+}
+
+impl RetriggerMode {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Layer,
+            _ => Self::Restart,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Restart => 0,
+            Self::Layer => 1,
+        }
+    }
+}
+
 /// fractions of the sample length in `[0, 1]`; times are seconds.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SamplerParams {
