@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { DraggablePoint, NoteFormat, ParameterKnob, SegmentedControl, ToggleButton } from "controls.slint";
+import { DraggablePoint, NoteFormat, ParameterKnob, SelectorBank, ToolButton } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // A deliberately bounded frequency plot. The spectrum layer receives compact
@@ -19,10 +19,37 @@ component EqResponseDisplay inherits Rectangle {
     pure function band-shape(index: int, x: float) -> float {
         let frequency = 20 * pow(1000, clamp(x, 0, 1));
         let center = 20 * pow(1000, clamp(root.band-value(index, 0), 0, 1));
-        let ratio = max(frequency / center, center / frequency);
-        let bell = 1 / (1 + pow(max(1, ratio) - 1, max(0.35, root.band-value(index, 2))));
+        // Q is the inverse of bandwidth: a larger Q must visibly narrow the
+        // bell. The old exponent approximation changed the curve's skirt but
+        // not its half-width, which made the display read backwards.
+        let bell = 1 / (1 + pow(abs(ln(frequency / center)) * max(0.15, root.band-value(index, 2)), 2));
         return root.band-value(index, 4) == 1 ? 1 / (1 + pow(frequency / center, 1.6))
             : root.band-value(index, 4) == 2 ? 1 / (1 + pow(center / frequency, 1.6)) : bell;
+    }
+    // Coincident points cannot be independently clicked when they occupy the
+    // same TouchArea. Spread only matching, enabled points horizontally; the
+    // callback still addresses the band at the curve position.
+    pure function overlaps(index: int, other: int) -> bool {
+        return index != other
+            && root.band-value(index, 3) > 0.5
+            && root.band-value(other, 3) > 0.5
+            && abs(root.band-value(index, 0) - root.band-value(other, 0)) < 0.002
+            && abs(root.band-value(index, 1) - root.band-value(other, 1)) < 0.002;
+    }
+    pure function overlap-count(index: int) -> int {
+        return 1
+            + (root.overlaps(index, 0) ? 1 : 0) + (root.overlaps(index, 1) ? 1 : 0)
+            + (root.overlaps(index, 2) ? 1 : 0) + (root.overlaps(index, 3) ? 1 : 0)
+            + (root.overlaps(index, 4) ? 1 : 0) + (root.overlaps(index, 5) ? 1 : 0)
+            + (root.overlaps(index, 6) ? 1 : 0);
+    }
+    pure function overlap-rank(index: int) -> int {
+        return (index > 0 && root.overlaps(index, 0) ? 1 : 0)
+            + (index > 1 && root.overlaps(index, 1) ? 1 : 0)
+            + (index > 2 && root.overlaps(index, 2) ? 1 : 0)
+            + (index > 3 && root.overlaps(index, 3) ? 1 : 0)
+            + (index > 4 && root.overlaps(index, 4) ? 1 : 0)
+            + (index > 5 && root.overlaps(index, 5) ? 1 : 0);
     }
     pure function response-db(x: float) -> float {
         let b0 = root.band-value(0, 3) > 0.5 ? (root.band-value(0, 1) * 36 - 18) * root.band-shape(0, x) : 0;
@@ -63,7 +90,11 @@ component EqResponseDisplay inherits Rectangle {
     for index in 7 : DraggablePoint {
         private property <float> frequency: root.band-value(index, 0);
         private property <float> gain: root.band-value(index, 1);
-        x: frequency * parent.width - 7px; y: (1 - gain) * parent.height - 7px; width: 14px; height: 14px;
+        private property <int> coincident-count: root.overlap-count(index);
+        private property <int> coincident-rank: root.overlap-rank(index);
+        x: frequency * parent.width - 7px + (coincident-rank - (coincident-count - 1) / 2) * 18px;
+        y: (1 - gain) * parent.height - 7px;
+        width: 14px; height: 14px;
         enabled: root.band-value(index, 3) > 0.5;
         grabbed => { root.point-grabbed(index); }
         dragged(dx, dy) => {
@@ -77,7 +108,7 @@ component EqResponseDisplay inherits Rectangle {
 
 export component EqDeviceFace inherits EffectDeviceShell {
     name: "EQ";
-    kind: "FX / 3U";
+    kind: "FX / 2U";
     in-out property <float> target;
     in-out property <float> enabled;
     in-out property <float> frequency;
@@ -100,36 +131,56 @@ export component EqDeviceFace inherits EffectDeviceShell {
     private property <float> gain-db: root.gain * 36 - 18;
     private property <float> q-value: 0.15 * pow(120, root.q);
     private property <bool> pass-target: root.target-index >= 7;
+    private property <bool> proportional-q: round(root.character * 4) >= 1;
 
     VerticalLayout {
         padding: 6px; padding-top: DeviceRackMetrics.header-height + 6px; spacing: 4px;
-        HorizontalLayout {
-            alignment: start;
-            spacing: 4px;
-            ToggleButton { width: 46px; height: 20px; text: "FFT"; tooltip: "Show spectrum analyzer"; checked: root.analyzer-enabled; toggled(v) => { root.analyzer-toggled(v); } }
-            Rectangle { horizontal-stretch: 1; }
-        }
         EqResponseDisplay {
             height: 126px; width: 100%; band-data: root.band-data; spectrum-data: root.spectrum-data; selected-target: root.target-index; spectrum-visible: root.analyzer-enabled;
             point-grabbed(index) => { root.target-changed(index / 8); }
             point-dragged(index, freq, gain) => { root.target-changed(index / 8); root.frequency-changed(freq); root.gain-changed(gain); }
         }
         HorizontalLayout {
-            spacing: 3px;
-            for label[index] in ["LOW", "1", "2", "3", "4", "5", "6", "HIGH", "LP"] : ToggleButton {
-                width: index == 0 || index >= 7 ? 40px : 25px; height: 22px; text: label; tooltip: "Select EQ band";
-                checked: root.target-index == index; toggled(_) => { root.target-changed(index / 8); }
+            spacing: 4px;
+            SelectorBank {
+                options: ["LOW", "1", "2", "3", "4", "5", "6", "HP", "LP"];
+                selected-index: root.target-index;
+                segment-width: 30px;
+                tooltip: "Select EQ band";
+                selected(index) => { root.target-changed(index / 8); }
             }
-            Rectangle { horizontal-stretch: 1; }
-            ToggleButton { width: 30px; height: 22px; text: "ON"; tooltip: "Enable selected EQ section"; checked: root.enabled >= 0.5; toggled(v) => { root.enabled-changed(v ? 1 : 0); } }
+            ToolButton {
+                min-width: 30px; max-width: 30px; min-height: 26px; max-height: 26px;
+                text: "ON"; tooltip: "Enable selected EQ section"; active: root.enabled >= 0.5;
+                clicked => { root.enabled-changed(root.enabled >= 0.5 ? 0 : 1); }
+            }
+            ToolButton {
+                min-width: 30px; max-width: 30px; min-height: 26px; max-height: 26px;
+                text: "FFT"; tooltip: "Show spectrum analyzer"; active: root.analyzer-enabled;
+                clicked => { root.analyzer-toggled(!root.analyzer-enabled); }
+            }
         }
         HorizontalLayout {
             spacing: 0px;
-            ParameterKnob { width: 86px; diameter: 40px; label: "Freq"; tooltip: "Selected band frequency"; value <=> root.frequency; default-value: 0.566; value-text: NoteFormat.frequency-value(root.frequency-hz); changed(v) => { root.frequency-changed(v); } }
-            ParameterKnob { width: 86px; diameter: 40px; label: "Gain"; tooltip: "Selected band boost or cut"; enabled: !root.pass-target; bipolar: true; value <=> root.gain; default-value: 0.5; value-text: round(root.gain-db * 10) / 10 + " dB"; changed(v) => { root.gain-changed(v); } }
-            ParameterKnob { width: 86px; diameter: 40px; label: "Q"; tooltip: "Selected band width or pass resonance"; value <=> root.q; default-value: 0.32; value-text: round(root.q-value * 100) / 100; changed(v) => { root.q-changed(v); } }
+            ParameterKnob { width: 80px; diameter: 40px; label: "Freq"; tooltip: "Selected band frequency"; value <=> root.frequency; default-value: 0.566; value-text: NoteFormat.frequency-value(root.frequency-hz); changed(v) => { root.frequency-changed(v); } }
+            ParameterKnob { width: 80px; diameter: 40px; label: "Gain"; tooltip: "Selected band boost or cut"; enabled: !root.pass-target; bipolar: true; value <=> root.gain; default-value: 0.5; value-text: round(root.gain-db * 10) / 10 + " dB"; changed(v) => { root.gain-changed(v); } }
+            ParameterKnob { width: 80px; diameter: 40px; label: "Q"; tooltip: "Selected band width or pass resonance"; value <=> root.q; default-value: 0.32; value-text: round(root.q-value * 100) / 100; changed(v) => { root.q-changed(v); } }
             Rectangle { horizontal-stretch: 1; }
-            SegmentedControl { width: root.pass-target ? 170px : 110px; height: 24px; options: root.pass-target ? ["6", "12", "18", "24", "36"] : ["CONST", "PROP"]; selected-index: round(root.character * 4); selected(i) => { root.character-changed(i / 4); } }
+            if root.pass-target : SelectorBank {
+                options: ["6", "12", "18", "24", "36"];
+                selected-index: round(root.character * 4);
+                segment-width: 26px;
+                tooltip: "Pass filter slope (dB per octave)";
+                selected(i) => { root.character-changed(i / 4); }
+            }
+            if !root.pass-target : ToolButton {
+                min-width: 26px; max-width: 26px; min-height: 26px; max-height: 26px;
+                text: "";
+                icon: "M 2 12 L 5 12 L 8 4 L 11 12 L 14 12";
+                tooltip: "Proportional Q";
+                active: root.proportional-q;
+                clicked => { root.character-changed(root.proportional-q ? 0 : 0.25); }
+            }
         }
     }
 }

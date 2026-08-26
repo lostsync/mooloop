@@ -18,9 +18,9 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Both faces are 3 rack units wide with 2 half-gaps between them, at the
-/// standard face height - the same fixed size gallery.slint gives them.
-const FACE_WIDTH: f32 = 220.0 * 3.0 + 4.0 * 2.0;
+/// The EQ fits two rack units; the reverb remains three units wide.
+const EQ_FACE_WIDTH: f32 = 220.0 * 2.0 + 4.0;
+const WIDE_FACE_WIDTH: f32 = 220.0 * 3.0 + 4.0 * 2.0;
 const FACE_HEIGHT: f32 = 268.0;
 const HEADER_HEIGHT: f32 = 28.0;
 
@@ -95,7 +95,7 @@ fn eq_point_drag_tracks_the_pointer() {
     init_software_backend();
     let ui = EqDeviceDragHarness::new().unwrap();
     ui.window()
-        .set_size(LogicalSize::new(FACE_WIDTH, FACE_HEIGHT));
+        .set_size(LogicalSize::new(EQ_FACE_WIDTH, FACE_HEIGHT));
 
     // Band 0 active at the plot centre; the other six disabled so their
     // (irrelevant) hit areas can't shadow band 0's.
@@ -118,13 +118,12 @@ fn eq_point_drag_tracks_the_pointer() {
         move |v| gains.borrow_mut().push(v)
     });
 
-    // Plot geometry from eq-device.slint's EqResponseDisplay: the face's
-    // VerticalLayout has 6px padding (34px on top, for the header strip), a
-    // 20px header row (FFT toggle), 4px spacing, then the 126px-tall display
-    // filling the remaining width minus the 6px side padding.
+    // Plot geometry from eq-device.slint's EqResponseDisplay: its face has
+    // 6px padding (34px on top, for the header strip) and begins immediately
+    // under that inset; FFT now lives in the selector strip below the plot.
     let plot_x = 6.0;
-    let plot_y = HEADER_HEIGHT + 6.0 + 20.0 + 4.0;
-    let plot_w = FACE_WIDTH - 12.0;
+    let plot_y = HEADER_HEIGHT + 6.0;
+    let plot_w = EQ_FACE_WIDTH - 12.0;
     let plot_h = 126.0;
     let start = (plot_x + 0.5 * plot_w, plot_y + 0.5 * plot_h);
     let dx = 100.0;
@@ -145,6 +144,50 @@ fn eq_point_drag_tracks_the_pointer() {
         (final_gain - (0.5 - dy / plot_h)).abs() < 0.02,
         "gain should track the pointer 1:1: got {final_gain}"
     );
+}
+
+#[test]
+fn coincident_eq_points_are_separately_selectable() {
+    init_software_backend();
+    let ui = EqDeviceDragHarness::new().unwrap();
+    ui.window()
+        .set_size(LogicalSize::new(EQ_FACE_WIDTH, FACE_HEIGHT));
+
+    let mut band_data = vec![0.0f32; 35];
+    for index in 0..2 {
+        let base = index * 5;
+        band_data[base] = 0.5;
+        band_data[base + 1] = 0.5;
+        band_data[base + 2] = 0.707;
+        band_data[base + 3] = 1.0;
+    }
+    ui.set_band_data(ModelRc::from(Rc::new(VecModel::from(band_data))));
+
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    ui.on_target_changed({
+        let selected = selected.clone();
+        move |v| selected.borrow_mut().push(v)
+    });
+
+    let center = (
+        6.0 + 0.5 * (EQ_FACE_WIDTH - 12.0),
+        HEADER_HEIGHT + 6.0 + 0.5 * 126.0,
+    );
+    // Coincident points are spread by 18px, so the two hit targets have
+    // distinct centres at ±9px rather than sharing a z-ordered area.
+    for x_offset in [-9.0, 9.0] {
+        let at = LogicalPosition::new(center.0 + x_offset, center.1);
+        ui.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+    }
+    assert_eq!(&*selected.borrow(), &[0.0, 0.125]);
 }
 
 #[test]
@@ -241,7 +284,7 @@ fn reverb_capture_drag_tracks_the_pointer() {
     init_software_backend();
     let ui = ReverbDeviceDragHarness::new().unwrap();
     ui.window()
-        .set_size(LogicalSize::new(FACE_WIDTH, FACE_HEIGHT));
+        .set_size(LogicalSize::new(WIDE_FACE_WIDTH, FACE_HEIGHT));
 
     let width_value = 0.4f32;
     let depth_value = 0.5f32;

@@ -2317,6 +2317,42 @@ mod tests {
     }
 
     #[test]
+    fn changing_eq_target_rederives_every_selected_band_value() {
+        let mut eq = EqParams::default();
+        eq.bands[1] = EqBand {
+            enabled: true,
+            kind: EqBandKind::Bell,
+            frequency_hz: 480.0,
+            gain_db: -8.0,
+            q: 0.4,
+            q_profile: EqQProfile::Constant,
+        };
+        eq.bands[2] = EqBand {
+            enabled: false,
+            kind: EqBandKind::Bell,
+            frequency_hz: 4_800.0,
+            gain_db: 9.0,
+            q: 6.0,
+            q_profile: EqQProfile::Proportional,
+        };
+        let mut params = EffectParams::Eq(eq);
+
+        params.set(EQ_PARAM_TARGET, 1.0);
+        assert_eq!(params.get(EQ_PARAM_ENABLED), Some(1.0));
+        assert_eq!(params.get(EQ_PARAM_FREQUENCY_HZ), Some(480.0));
+        assert_eq!(params.get(EQ_PARAM_GAIN_DB), Some(-8.0));
+        assert_eq!(params.get(EQ_PARAM_Q), Some(0.4));
+        assert_eq!(params.get(EQ_PARAM_CHARACTER), Some(0.0));
+
+        params.set(EQ_PARAM_TARGET, 2.0);
+        assert_eq!(params.get(EQ_PARAM_ENABLED), Some(0.0));
+        assert_eq!(params.get(EQ_PARAM_FREQUENCY_HZ), Some(4_800.0));
+        assert_eq!(params.get(EQ_PARAM_GAIN_DB), Some(9.0));
+        assert_eq!(params.get(EQ_PARAM_Q), Some(6.0));
+        assert_eq!(params.get(EQ_PARAM_CHARACTER), Some(1.0));
+    }
+
+    #[test]
     fn exponential_cutoff_matches_the_uis_perceptual_mapping() {
         // The filter face renders `20 * 1000^x`; the descriptor must agree or
         // the knob and the audio disagree.

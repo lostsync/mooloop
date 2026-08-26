@@ -889,7 +889,8 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
         EffectKind::Buffer => 1,
         EffectKind::Gate | EffectKind::Compressor => 2,
         EffectKind::Delay => 3,
-        EffectKind::Eq | EffectKind::Reverb | EffectKind::Modulation => 3,
+        EffectKind::Reverb | EffectKind::Modulation => 3,
+        EffectKind::Eq => 2,
     }
 }
 
