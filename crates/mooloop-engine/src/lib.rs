@@ -16,8 +16,13 @@ use std::sync::Arc;
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use jack::{AudioOut, Client, ClientOptions};
-use mooloop_core::{EffectKind, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS};
-use mooloop_dsp::{AudioNode, DryAlign, SampleData, SpectrumAnalyzer, SPECTRUM_BINS};
+use mooloop_core::{
+    BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
+};
+use mooloop_dsp::{
+    buffer_allocation_key, build_effect_at_tempo, AudioNode, DryAlign, SampleData,
+    SpectrumAnalyzer, SPECTRUM_BINS,
+};
 use rtrb::{Consumer, Producer};
 
 mod driver;
@@ -283,6 +288,36 @@ impl EngineHandle {
     /// for `InstallEffect` drops the node back on this (GUI) thread.
     pub fn send_structural(&mut self, cmd: StructuralCommand) {
         let _ = self.cmd_tx.push(RealtimeCommand::Structural(cmd));
+    }
+
+    /// Prepare and publish a replacement for a retained-audio buffer. The
+    /// ring is allocated here, on the control thread; the audio callback only
+    /// swaps the prepared box at a block boundary and returns the old one for
+    /// deferred destruction. `expected` keeps a stale config rebuild from
+    /// replacing a buffer whose bars setting has since changed.
+    pub fn replace_buffer(
+        &mut self,
+        target: EffectTarget,
+        slot: u8,
+        expected: BufferParams,
+        next: BufferParams,
+        bpm: f64,
+    ) -> bool {
+        let node = build_effect_at_tempo(EffectParams::Buffer(next), self.sample_rate, bpm);
+        let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
+        self.cmd_tx
+            .push(RealtimeCommand::Structural(
+                StructuralCommand::ReplaceEffect {
+                    target,
+                    slot,
+                    expected_kind: EffectKind::Buffer,
+                    expected_resource_key: buffer_allocation_key(expected),
+                    resource_key: buffer_allocation_key(next),
+                    node,
+                    align,
+                },
+            ))
+            .is_ok()
     }
 
     /// Pop one event if available.

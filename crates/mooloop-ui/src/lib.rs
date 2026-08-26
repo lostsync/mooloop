@@ -19,17 +19,19 @@ use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BusSetup, Channel,
     ChannelSetup, ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind,
     EffectParams, EffectSlotState, EffectTarget, EngineCommand, EngineEvent, HatCharacter,
-    KickCharacter, Kit,
-    LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave,
-    PatternPlacement, PlaybackMode, PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel,
-    RetriggerMode, ReverbParams, SampleReference, SamplerParams, SamplerState, SnareCharacter,
-    VoiceMode,
-    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
-    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS,
-    MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES,
-    MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
+    KickCharacter, Kit, LfoWave, LoopMode, MonoSynthParams, MonoSynthState, NoteEvent, NoteId,
+    OscWave, PatternPlacement, PlaybackMode, PolySynthParams, PolySynthState, Ppq, Project,
+    ProjectChannel, RetriggerMode, ReverbParams, SampleReference, SamplerParams, SamplerState,
+    SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT,
+    MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS,
+    MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
+    MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR,
+    TICKS_PER_STEP,
 };
-use mooloop_dsp::{build_effect, DrumSynth, DryAlign, SampleData, SpectrumAnalyzer};
+use mooloop_dsp::{
+    buffer_allocation_key, build_effect, build_effect_at_tempo, DrumSynth, DryAlign, SampleData,
+    SpectrumAnalyzer,
+};
 use mooloop_engine::{
     EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope,
     StructuralCommand, WavEncoding,
@@ -58,6 +60,7 @@ const MAX_TIME_S: f32 = 2.0;
 /// `.send(...)` call shape used by the callback wiring below.
 enum PendingEngineMessage {
     Command(EngineCommand),
+    ResizeBuffers { bpm: f64 },
     Structural(StructuralCommand),
     ProjectEdit(ProjectEdit),
     Audio(AudioAction),
@@ -110,6 +113,12 @@ struct EngineCommandSender(std::sync::mpsc::Sender<PendingEngineMessage>);
 impl EngineCommandSender {
     fn send(&self, command: EngineCommand) -> bool {
         self.0.send(PendingEngineMessage::Command(command)).is_ok()
+    }
+
+    fn resize_buffers(&self, bpm: f64) -> bool {
+        self.0
+            .send(PendingEngineMessage::ResizeBuffers { bpm })
+            .is_ok()
     }
 }
 
@@ -190,7 +199,9 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window.set_preferences_appearance_accent(settings.appearance.accent.as_str().into());
     window.set_preferences_developer_mode(settings.general.developer_mode);
     window.set_preferences_smooth_curves(settings.appearance.smooth_curves);
-    window.global::<DisplayPrefs>().set_smooth_curves(settings.appearance.smooth_curves);
+    window
+        .global::<DisplayPrefs>()
+        .set_smooth_curves(settings.appearance.smooth_curves);
     window.set_preferences_error("".into());
     let buffer_index = settings
         .audio
@@ -764,7 +775,9 @@ fn queue_pattern_remove(
     for channel in &mut project.channels {
         channel.notes.remove(index);
     }
-    project.playlist.retain(|placement| placement.pattern as usize != index);
+    project
+        .playlist
+        .retain(|placement| placement.pattern as usize != index);
     for placement in &mut project.playlist {
         if placement.pattern as usize > index {
             placement.pattern -= 1;
@@ -1778,7 +1791,10 @@ impl UiState {
     /// removal elsewhere in the rack or piano roll.
     fn prune_note_selection(&mut self, removed: &[NoteId]) {
         self.selected_note_ids.retain(|id| !removed.contains(id));
-        if self.selected_note_id.is_some_and(|id| removed.contains(&id)) {
+        if self
+            .selected_note_id
+            .is_some_and(|id| removed.contains(&id))
+        {
             self.selected_note_id = None;
         }
     }
@@ -2706,8 +2722,7 @@ impl AppUi {
         let telemetry_tx = TelemetryActionSender(pending_tx.clone());
         let structural_tx = StructuralCommandSender(pending_tx);
         let sample_rate = handle.sample_rate();
-        let (reverb_build_tx, reverb_build_rx) =
-            std::sync::mpsc::channel::<ReverbBuildRequest>();
+        let (reverb_build_tx, reverb_build_rx) = std::sync::mpsc::channel::<ReverbBuildRequest>();
         let reverb_structural_tx = structural_tx.clone();
         std::thread::spawn(move || {
             const REGEN_SETTLE: std::time::Duration = std::time::Duration::from_millis(80);
@@ -2853,47 +2868,53 @@ impl AppUi {
             let settings = ui_settings.clone();
             let table = shortcut_table.clone();
             let weak = window.as_weak();
-            window.on_preferences_shortcut_rebind_key(move |action_id, key, ctrl, shift, alt, meta| {
-                let Some(window) = weak.upgrade() else { return };
-                let chord = actions::KeyChord::new(ctrl, shift, alt, meta, key.as_str());
-                // Assigning a chord already owned by another action clears
-                // that action rather than leaving two actions pointing at
-                // the same chord: `ShortcutTable::resolve` would only ever
-                // reach one of them, so a silent second owner is worse than
-                // a visible unbind.
-                let owners: Vec<&'static str> = table.borrow().owners_of(&chord, action_id.as_str());
-                let mut settings = settings.borrow_mut();
-                for owner in &owners {
+            window.on_preferences_shortcut_rebind_key(
+                move |action_id, key, ctrl, shift, alt, meta| {
+                    let Some(window) = weak.upgrade() else { return };
+                    let chord = actions::KeyChord::new(ctrl, shift, alt, meta, key.as_str());
+                    // Assigning a chord already owned by another action clears
+                    // that action rather than leaving two actions pointing at
+                    // the same chord: `ShortcutTable::resolve` would only ever
+                    // reach one of them, so a silent second owner is worse than
+                    // a visible unbind.
+                    let owners: Vec<&'static str> =
+                        table.borrow().owners_of(&chord, action_id.as_str());
+                    let mut settings = settings.borrow_mut();
+                    for owner in &owners {
+                        settings
+                            .shortcuts
+                            .overrides
+                            .insert((*owner).to_string(), String::new());
+                    }
                     settings
                         .shortcuts
                         .overrides
-                        .insert((*owner).to_string(), String::new());
-                }
-                settings
-                    .shortcuts
-                    .overrides
-                    .insert(action_id.to_string(), chord.to_string());
-                let result = settings.save();
-                *table.borrow_mut() = actions::ShortcutTable::build(&settings.shortcuts.overrides);
-                drop(settings);
-                sync_shortcut_rows(&window, &table.borrow());
-                match result {
-                    Ok(()) => {
-                        if let Some(owner) = owners.first() {
-                            let label = actions::ACTIONS
-                                .iter()
-                                .find(|spec| spec.id == *owner)
-                                .map_or(*owner, |spec| spec.label);
-                            window.set_status_message(format!("{label} is now unbound").into());
-                        } else {
-                            window.set_status_message("Shortcut updated".into());
+                        .insert(action_id.to_string(), chord.to_string());
+                    let result = settings.save();
+                    *table.borrow_mut() =
+                        actions::ShortcutTable::build(&settings.shortcuts.overrides);
+                    drop(settings);
+                    sync_shortcut_rows(&window, &table.borrow());
+                    match result {
+                        Ok(()) => {
+                            if let Some(owner) = owners.first() {
+                                let label = actions::ACTIONS
+                                    .iter()
+                                    .find(|spec| spec.id == *owner)
+                                    .map_or(*owner, |spec| spec.label);
+                                window.set_status_message(format!("{label} is now unbound").into());
+                            } else {
+                                window.set_status_message("Shortcut updated".into());
+                            }
+                        }
+                        Err(error) => {
+                            window.set_status_message(
+                                format!("Could not save shortcut: {error}").into(),
+                            );
                         }
                     }
-                    Err(error) => {
-                        window.set_status_message(format!("Could not save shortcut: {error}").into());
-                    }
-                }
-            });
+                },
+            );
         }
         {
             let settings = ui_settings.clone();
@@ -2994,7 +3015,9 @@ impl AppUi {
                     }
                 };
                 apply_theme(&window, appearance.palette());
-                window.global::<DisplayPrefs>().set_smooth_curves(smooth_curves);
+                window
+                    .global::<DisplayPrefs>()
+                    .set_smooth_curves(smooth_curves);
                 let mut settings = settings.borrow_mut();
                 let previous = settings.appearance.clone();
                 settings.appearance = appearance;
@@ -3095,7 +3118,11 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             window.on_bpm_changed(move |bpm| {
-                let _ = tx.send(EngineCommand::SetTempo(bpm as f64));
+                let bpm = bpm as f64;
+                // Preserve stream order: the transport adopts the tempo
+                // first, then the pump allocates and publishes replacements.
+                let _ = tx.send(EngineCommand::SetTempo(bpm));
+                let _ = tx.resize_buffers(bpm);
             });
         }
         {
@@ -4505,6 +4532,7 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let stx = structural_tx.clone();
             let st = state.clone();
+            let weak = window.as_weak();
             window.on_add_effect_clicked(move |kind_index, insert_before| {
                 let Some(kind) = effect_kind_from_index(kind_index) else {
                     return;
@@ -4531,13 +4559,19 @@ impl AppUi {
                 // The dry-align ring is built here for the same reason as the
                 // node: construction allocates, so it happens off the audio
                 // thread and rides the same structural command.
-                let node = build_effect(params, sample_rate);
+                let bpm = weak
+                    .upgrade()
+                    .map_or(INITIAL_BPM as f64, |window| window.get_bpm() as f64);
+                let node = build_effect_at_tempo(params, sample_rate, bpm);
                 let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
                 let _ = stx.send(StructuralCommand::InstallEffect {
                     target,
                     slot: tail_slot as u8,
                     kind,
-                    resource_key: params.reverb().map(|params| params.fingerprint()),
+                    resource_key: params
+                        .reverb()
+                        .map(|params| params.fingerprint())
+                        .or_else(|| params.buffer().copied().map(buffer_allocation_key)),
                     node,
                     align,
                     analyzer: Box::new(SpectrumAnalyzer::new()),
@@ -4716,8 +4750,7 @@ impl AppUi {
                 else {
                     return;
                 };
-                let reverb_request = reverb_expected_key
-                    .zip(effect.params.reverb().copied());
+                let reverb_request = reverb_expected_key.zip(effect.params.reverb().copied());
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot, row);
                 if let Some((expected_resource_key, params)) = reverb_request {
@@ -5788,6 +5821,40 @@ impl AppUi {
                             handle.send(cmd);
                             forwarded += 1;
                         }
+                        PendingEngineMessage::ResizeBuffers { bpm } => {
+                            // Each replacement allocates its ring on this UI
+                            // pump thread. The ordered realtime queue then
+                            // swaps the ready node at a block boundary.
+                            let buffers: Vec<_> = {
+                                let state = st.borrow();
+                                state
+                                    .channels
+                                    .iter()
+                                    .enumerate()
+                                    .flat_map(|(channel, state)| {
+                                        state.effects.iter().enumerate().filter_map(
+                                            move |(slot, effect)| {
+                                                effect.params.buffer().copied().map(|params| {
+                                                    (EffectTarget::Channel(channel as u8), slot as u8, params)
+                                                })
+                                            },
+                                        )
+                                    })
+                                    .chain(state.buses.iter().enumerate().flat_map(|(bus, state)| {
+                                        state.effects.iter().enumerate().filter_map(
+                                            move |(slot, effect)| {
+                                                effect.params.buffer().copied().map(|params| {
+                                                    (EffectTarget::Bus(bus as u8), slot as u8, params)
+                                                })
+                                            },
+                                        )
+                                    }))
+                                    .collect()
+                            };
+                            for (target, slot, params) in buffers {
+                                let _ = handle.replace_buffer(target, slot, params, params, bpm);
+                            }
+                        }
                         PendingEngineMessage::Structural(cmd) => {
                             // Any structural change is an unsaved edit.
                             {
@@ -6366,7 +6433,10 @@ fn open_mockup_window() -> Result<MockupCanvas, slint::PlatformError> {
         let items = items.clone();
         canvas.on_save_requested(move |path| {
             let layout = MockupSavedLayout {
-                items: items.iter().map(|item| MockupSavedItem::from(&item)).collect(),
+                items: items
+                    .iter()
+                    .map(|item| MockupSavedItem::from(&item))
+                    .collect(),
             };
             let canvas = canvas_weak.unwrap();
             let result = toml::to_string_pretty(&layout)

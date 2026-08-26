@@ -88,11 +88,12 @@ work session you can recall being part of, and don't stress over precision.
 ### GPT-5 — Codex
 - First seen: 2026-08-21
 - Last seen: 2026-08-25
-- Sessions: 44
+- Sessions: 45
 - Notes: Audio-core architecture, realtime project swaps, compiled bus graphs,
   latency/gain hardening, device-host controls, command-history foundation, and
   realtime capacity policy, mixer signal-slot design, CI, packaging, and the
-  retained-audio buffer device/event path.
+  retained-audio buffer device/event path and off-realtime tempo/config ring
+  replacement.
 
 ### GPT-5.6 Terra — Zed
 - First seen: 2026-08-23

@@ -43,14 +43,14 @@ pub mod smooth;
 
 pub use align::DryAlign;
 pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};
-pub use buffer_device::{BufferDevice, TimedBufferEvent};
+pub use buffer_device::{buffer_allocation_key, BufferDevice, TimedBufferEvent};
 pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;
 pub use effects::{
-    build_effect, generate_room_ir, BitcrushEffect, CompressorEffect, DelayEffect, DriveEffect,
-    FilterEffect, GateEffect, LimiterEffect, ModulationEffect, PreparedIr, ReverbEffect, StereoIr,
-    CONVOLUTION_BLOCK_FRAMES,
+    build_effect, build_effect_at_tempo, generate_room_ir, BitcrushEffect, CompressorEffect,
+    DelayEffect, DriveEffect, FilterEffect, GateEffect, LimiterEffect, ModulationEffect,
+    PreparedIr, ReverbEffect, StereoIr, CONVOLUTION_BLOCK_FRAMES,
 };
 pub use event::{Event, EventList, TimedEvent};
 pub use monosynth::MonoSynth;

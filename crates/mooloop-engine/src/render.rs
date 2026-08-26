@@ -8,10 +8,12 @@ use mooloop_core::{
     EngineCommand, MonoSynthParams, PolySynthParams, Project, SamplerParams, DEFAULT_STEPS,
     MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
 };
+#[cfg(test)]
+use mooloop_dsp::build_effect;
 use mooloop_dsp::{
-    balance_gains, build_effect, pan_gains, AudioNode, DrumSynth, DryAlign, Event, EventList,
-    MonoSynth, PolySynth, ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus,
-    TimedEvent, MAX_BLOCK_SIZE,
+    balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, DrumSynth,
+    DryAlign, Event, EventList, MonoSynth, PolySynth, ProcessContext, SampleData, Sampler,
+    SpectrumAnalyzer, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
 };
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, PlayheadMeters};
@@ -49,6 +51,13 @@ const MAX_PENDING_EFFECT_PARAMS: usize = 8;
 /// works in dB and clamps there; this bounds what a hand-edited song file or
 /// a stale command can do.
 const MAX_TRIM_GAIN: f32 = 4.0;
+
+fn effect_resource_key(params: mooloop_core::EffectParams) -> Option<u64> {
+    params
+        .reverb()
+        .map(|params| params.fingerprint())
+        .or_else(|| params.buffer().copied().map(buffer_allocation_key))
+}
 
 #[derive(Clone, Copy)]
 struct PendingEffectParams {
@@ -330,16 +339,17 @@ impl EffectChain {
         &mut self,
         slots: &[mooloop_core::EffectSlotState],
         sample_rate: u32,
+        bpm: f64,
         reclaim: &mut Reclaim,
     ) {
         self.clear(reclaim);
         for (slot, effect) in slots.iter().take(MAX_EFFECTS_PER_CHANNEL).enumerate() {
-            let node = build_effect(effect.params, sample_rate);
+            let node = build_effect_at_tempo(effect.params, sample_rate, bpm);
             let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
             let displaced = self.install(
                 slot,
                 effect.kind(),
-                effect.params.reverb().map(|params| params.fingerprint()),
+                effect_resource_key(effect.params),
                 node,
                 align,
                 Box::new(SpectrumAnalyzer::new()),
@@ -756,9 +766,12 @@ impl RenderState {
                 // JACK callback, so constructing boxed nodes is acceptable.
                 // Displaced nodes still collect in `reclaim` for callers that
                 // deliberately reuse a state off-thread.
-                strip
-                    .effects
-                    .load(&channel.setup.effects, self.sample_rate, &mut self.reclaim);
+                strip.effects.load(
+                    &channel.setup.effects,
+                    self.sample_rate,
+                    self.transport.bpm,
+                    &mut self.reclaim,
+                );
             } else {
                 strip.reset_slot(DeviceKind::Sampler, &mut self.reclaim);
             }
@@ -769,9 +782,12 @@ impl RenderState {
                     strip.output.muted = setup.bus.muted;
                     strip.output.set_volume(setup.bus.volume);
                     strip.output.set_pan(setup.bus.pan);
-                    strip
-                        .effects
-                        .load(&setup.effects, self.sample_rate, &mut self.reclaim);
+                    strip.effects.load(
+                        &setup.effects,
+                        self.sample_rate,
+                        self.transport.bpm,
+                        &mut self.reclaim,
+                    );
                 }
                 None => strip.reset(&mut self.reclaim),
             }

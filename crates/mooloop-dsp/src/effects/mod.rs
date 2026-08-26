@@ -40,6 +40,17 @@ use crate::node::AudioNode;
 /// shipping the box through the ordered control stream. Keeping one
 /// constructor means a new effect kind is wired in exactly once.
 pub fn build_effect(params: EffectParams, sample_rate: u32) -> Box<dyn AudioNode + Send> {
+    build_effect_at_tempo(params, sample_rate, 120.0)
+}
+
+/// Construct an effect node using the current transport tempo for devices
+/// whose preallocated state is beat-relative. This remains a control-plane
+/// operation: callers must never invoke it from the audio callback.
+pub fn build_effect_at_tempo(
+    params: EffectParams,
+    sample_rate: u32,
+    bpm: f64,
+) -> Box<dyn AudioNode + Send> {
     match params {
         EffectParams::Eq(p) => Box::new(EqEffect::new(p, sample_rate)),
         EffectParams::Modulation(p) => Box::new(ModulationEffect::new(p, sample_rate)),
@@ -52,6 +63,6 @@ pub fn build_effect(params: EffectParams, sample_rate: u32) -> Box<dyn AudioNode
         EffectParams::Gate(p) => Box::new(GateEffect::new(p, sample_rate)),
         EffectParams::Compressor(p) => Box::new(CompressorEffect::new(p, sample_rate)),
         EffectParams::Limiter(p) => Box::new(LimiterEffect::new(p, sample_rate)),
-        EffectParams::Buffer(p) => Box::new(crate::BufferDevice::new(p, sample_rate, 120.0)),
+        EffectParams::Buffer(p) => Box::new(crate::BufferDevice::new(p, sample_rate, bpm)),
     }
 }

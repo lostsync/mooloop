@@ -280,6 +280,13 @@ impl BufferDevice {
     }
 }
 
+/// Stable identity for a buffer allocation configuration. The tempo is
+/// intentionally absent: a tempo resize replaces the same logical device;
+/// only a bars change makes an older prepared resize stale.
+pub fn buffer_allocation_key(params: BufferParams) -> u64 {
+    u64::from(params.bars.max(1))
+}
+
 fn ms_to_frames(ms: f32, sample_rate: u32) -> u32 {
     (ms.max(0.0) * sample_rate as f32 / 1_000.0).round() as u32
 }
