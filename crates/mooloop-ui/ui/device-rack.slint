@@ -61,6 +61,7 @@ component EffectTypeMenu inherits VerticalLayout {
     EffectTypeRow { text: "Reverb"; tooltip: "Insert a generated-room convolution reverb"; selected => { root.kind-selected(8); } }
     EffectTypeRow { text: "Plate"; tooltip: "Insert a lightweight comb/allpass reverb"; selected => { root.kind-selected(10); } }
     EffectTypeRow { text: "Mod"; tooltip: "Insert chorus, flange, phaser, ensemble, or ADT"; selected => { root.kind-selected(9); } }
+    EffectTypeRow { text: "Buffer"; tooltip: "Insert a retained-audio buffer"; selected => { root.kind-selected(11); } }
 }
 
 export component DeviceFrame inherits Rectangle {
