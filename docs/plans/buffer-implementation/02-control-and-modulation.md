@@ -39,6 +39,9 @@ it), STUT (latching, 1/16 window, eight repeats). Collisions show on the face.
 - **Modulation.** `ParamAddr`, `ModRack`, and `ModulatorRack` (LFO) exist and
   are tested. Nothing ticks them. This is the next step.
 
+*(Superseded: step 1 landed in `9323f7e`, and step 4's automation half landed
+after it. See the build order below.)*
+
 ## Amendment to MODULATION_PLAN.md: generator outlets
 
 The approved plan covers **effects** exposing outlet signals (a compressor's
@@ -111,12 +114,55 @@ assignment gesture, or the gesture will only work on half the project.
 
 Per the amendment above.
 
-### 4. UI
+### 4. UI — automation lanes first (**done**), modulator chips second
 
-The plan already specifies the gesture, and it matches what Adam described
-independently: **no patch cords**. A labeled source chip on each modulator —
-click it, assignable knobs light up, drag one to set depth. Inlets and
-outlets exist in the data model without being drawn as wires.
+Adam redirected this step: automation lanes in the piano roll come before the
+modulator assignment gesture, because *"once we can control Buffer via
+automation lanes, we can take the concept to modulators, where we could then
+use an LFO or audio sidechain to provide the mod signal instead of direct
+parameter automation."* Direct automation is the more direct expression of the
+original idea, and it exercises the same `ParamAddr` path a modulator will.
+
+What landed:
+
+- `AutomationLane` in `mooloop-core`: normalized `0..1` breakpoints against a
+  `ParamAddr`, preallocated, linearly interpolated, held flat outside the
+  outermost pair. Stored per `(pattern, channel)` in `ChannelPattern`, and
+  serialized per channel parallel to `notes`.
+- Five engine commands, mirroring the note commands' shape.
+- Resolution merged into what was `modulation_events_for_slot`, now
+  `control_events_for_slot`. **A lane supplies the base; the matrix still adds
+  offsets on top.** That ordering is the whole point: an LFO wobbles around a
+  drawn curve rather than one of them winning. Bus chains resolve automation
+  too, which is why the chain now knows its own `EffectTarget`.
+- Velocity lane plus one variable lane below the roll, toggling
+  independently, with a device-grouped picker.
+
+Still open here:
+
+- **The modulator source chip.** The plan's gesture is unchanged: no patch
+  cords, a labeled source chip on each modulator, click it and assignable
+  knobs light up, drag one to set depth.
+- **Drawing the modulation arc on a knob.** The engine keeps base and offset
+  separate precisely so the UI can draw both, and nothing draws it yet.
+- **Multiple lanes at once.** Storage holds up to eight per channel-pattern
+  and the picker marks which are open, but only one is visible. Adam called
+  the "every lane visible, scrolling under the roll" layout useful too; the
+  data model does not stand in its way.
+
+Gotchas found here:
+
+- **Slint's `Path` auto-fits its commands to the element** unless
+  `viewbox-width`/`viewbox-height` are set. A per-segment `Path` without a
+  viewbox stretches every segment across the whole lane, and the curve renders
+  as a sheaf of crossing lines rather than a polyline.
+- **A `for`-element's `parent` is not what it looks like inside `Path`
+  command children.** `MoveTo`/`LineTo` see the `Path`, not the lane body, so
+  helper functions have to be called through the named element.
+- **Automation applies whether or not the transport is running.** Making it
+  conditional on playback means the knob jumps the moment you press play.
+  Removing or clearing a lane re-queues the base value, which is the only
+  thing that returns the destination to the knob.
 
 ### 5. Refactor `BufferMidiMap` onto `ParamAddr`
 

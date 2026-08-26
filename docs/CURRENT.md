@@ -35,13 +35,23 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   velocity. Starts snap to 64ths in the piano roll while retaining PPQ tick
   precision internally.
 - A horizontally and vertically zoomable piano roll with note creation,
-  movement, length resizing, right-click removal, exact pitch/velocity/length
-  fields, and a pinned velocity lane. Both axes use the zoom scrollbar —
+  movement, length resizing, right-click removal, and exact
+  pitch/velocity/length fields. Dragging a note moves the whole selection by
+  the same delta, clamped as a group so a chord keeps its shape; Ctrl+drag
+  duplicates the selection in place and continues on the copy, and Shift+drag
+  defeats grid snap on both move and resize. Both axes use the zoom scrollbar —
   drag the thumb to pan, drag an end grip to zoom around the fixed end — in
   place of zoom-in/zoom-out buttons. The default pitch zoom starts three
   steps above minimum because that is where editing comfortably begins.
   It shares selectable straight/triplet
   musical snap values from one bar through 1/64 with the playlist.
+- Two lanes sit under the roll and toggle independently: a velocity lane
+  drawn as stems with drag heads, and one variable automation lane. The
+  automation lane's picker lists every parameter of every effect on the
+  selected channel and on every bus, grouped by device, with already-open
+  lanes marked and clear/remove actions. Points are drawn by clicking,
+  dragged to move, right-clicked to remove, and interpolate linearly. Lanes
+  a clip is not currently showing are retained, not discarded.
 - Sixteenth-note rack cells summarize their four 64th-note substeps without
   discarding rests between hits. Each substep is drawn solid where a note is
   struck and dim where one is merely held, so a ratcheted step is
@@ -327,8 +337,20 @@ boundary.
   ring primitive with cubic-Hermite fractional reads and crossfaded head
   jumps. The delay effect is its first consumer; the retained-audio buffer
   device is meant to be the second rather than growing its own ring.
-- Modulation, automation, and a general parameter address type do not exist
-  yet. `docs/MODULATION_PLAN.md` records the approved design for them.
+- `ParamAddr` addresses any effect parameter, and both the modulator rack
+  and clip automation resolve through it. They compose rather than compete:
+  a lane supplies the base a knob would otherwise supply, and the matrix adds
+  its offsets on top, so an LFO wobbles around a drawn curve. Both resolve at
+  the 32-frame control rate into the destination slot's existing event list,
+  and no effect needed a change to receive them.
+- Generators are still not addressable. They ship whole parameter structs
+  rather than descriptor-addressed params, so no generator parameter can be
+  automated or modulated yet, and the automation picker lists effects only.
+  `docs/MODULATION_PLAN.md` records the approved design; build order is in
+  `docs/plans/buffer-implementation/02-control-and-modulation.md`.
+- Clip automation is per (pattern, channel), lives in the clip that drew it,
+  and may address a bus. Two clips automating one destination is not
+  prevented; the lowest channel wins at render time.
 - Buses are insert points, not sends: a channel feeds exactly one, with no
   parallel send, return, or wet/dry split. There are no sidechains, external
   inputs, solo, or per-bus stem export, and buses cannot be renamed from the
