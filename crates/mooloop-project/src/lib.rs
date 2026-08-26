@@ -1903,6 +1903,7 @@ id = "default_kick"
                     cutoff_hz: 1_250.0,
                     resonance: 0.6,
                     mode: mooloop_core::FilterMode::HighPass,
+                    ..mooloop_core::FilterParams::default()
                 },
             ));
 
@@ -1953,6 +1954,7 @@ id = "default_kick"
                     cutoff_hz: 1_250.0,
                     resonance: 0.6,
                     mode: mooloop_core::FilterMode::HighPass,
+                    ..mooloop_core::FilterParams::default()
                 },
             ));
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();

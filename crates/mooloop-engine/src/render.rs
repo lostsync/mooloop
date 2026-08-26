@@ -2072,6 +2072,7 @@ mod tests {
                     cutoff_hz: 1_000.0,
                     resonance: 0.0,
                     mode: mooloop_core::FilterMode::LowPass,
+                    ..mooloop_core::FilterParams::default()
                 },
             ));
         channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
@@ -2175,6 +2176,7 @@ mod tests {
                     cutoff_hz,
                     resonance: 0.0,
                     mode: mooloop_core::FilterMode::LowPass,
+                    ..mooloop_core::FilterParams::default()
                 },
             ));
         channel
@@ -2534,6 +2536,7 @@ mod tests {
                 cutoff_hz: 100.0,
                 resonance: 0.0,
                 mode: mooloop_core::FilterMode::LowPass,
+                ..mooloop_core::FilterParams::default()
             }),
             48_000,
         )

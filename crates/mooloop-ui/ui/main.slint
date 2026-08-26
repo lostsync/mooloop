@@ -2308,10 +2308,14 @@ export component MainWindow inherits Window {
                                                 bypassed: slot.bypassed;
                                                 cutoff: slot.p0;
                                                 resonance: slot.p1;
-                                                mode: slot.p2 >= 0.5 ? 1 : 0;
+                                                mode: round(slot.p2 * 2);
+                                                slope: round(slot.p3);
+                                                drive: slot.p4;
                                                 cutoff-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                 resonance-changed(v) => { root.effect-param-changed(index, 1, v); }
-                                                mode-changed(v) => { root.effect-param-changed(index, 2, v * 1.0); }
+                                                mode-changed(v) => { root.effect-param-changed(index, 2, v * 1.0 / 2.0); }
+                                                slope-changed(v) => { root.effect-param-changed(index, 3, v * 1.0); }
+                                                drive-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                 reorder-requested(target) => { root.reorder-effect(index, target); }
                                             }
                                             if slot.kind == 1 : DriveDeviceFace {

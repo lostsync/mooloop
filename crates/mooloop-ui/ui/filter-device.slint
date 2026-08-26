@@ -9,12 +9,16 @@ import { FilterResponseDisplay } from "device-displays.slint";
 export component FilterDeviceFace inherits EffectDeviceShell {
     name: "Filter";
     kind: "FX / 1U";
-    in-out property <int> mode;         // 0 = low-pass, 1 = high-pass
+    in-out property <int> mode;         // 0 = low-pass, 1 = band-pass, 2 = high-pass
     in-out property <float> cutoff;     // perceptual 0..1 (20 Hz .. 20 kHz)
     in-out property <float> resonance;  // 0..1
+    in-out property <int> slope;        // 0 = 12 dB/oct, 1 = 24 dB/oct
+    in-out property <float> drive;      // 0..1 compensated soft saturation
     callback cutoff-changed(float);
     callback resonance-changed(float);
     callback mode-changed(int);
+    callback slope-changed(int);
+    callback drive-changed(float);
 
     VerticalLayout {
         padding: 6px;
@@ -24,11 +28,18 @@ export component FilterDeviceFace inherits EffectDeviceShell {
             alignment: start;
             spacing: 4px;
             SelectorBank {
-                options: ["LP", "HP"];
+                options: ["LP", "BP", "HP"];
                 selected-index <=> root.mode;
                 segment-width: 30px;
                 tooltip: "Filter mode";
                 selected(i) => { root.mode-changed(i); }
+            }
+            SelectorBank {
+                options: ["12", "24"];
+                selected-index <=> root.slope;
+                segment-width: 30px;
+                tooltip: "Filter slope (dB per octave)";
+                selected(i) => { root.slope-changed(i); }
             }
             Rectangle { horizontal-stretch: 1; }
         }
@@ -41,9 +52,10 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 y: 4px;
                 width: parent.width - 8px;
                 height: parent.height - 8px;
-                mode: root.mode == 0 ? 0 : 2;
+                mode: root.mode;
                 cutoff: root.cutoff;
                 resonance: root.resonance;
+                slope: root.slope;
                 env-amount: 0;
                 point-dragged(cutoff, resonance) => {
                     root.cutoff-changed(cutoff);
@@ -58,10 +70,10 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 width: 52px;
                 diameter: 36px;
                 label: "Cutoff";
-                tooltip: "Filter cutoff frequency";
+                tooltip: "Filter cutoff frequency: " + NoteFormat.name(20 * pow(1000, root.cutoff));
                 value <=> root.cutoff;
                 default-value: 0.9;
-                value-text: NoteFormat.frequency-value(20 * pow(1000, root.cutoff));
+                value-text: round(20 * pow(1000, root.cutoff)) + " Hz";
                 changed(v) => { root.cutoff-changed(v); }
             }
             ParameterKnob {
@@ -73,6 +85,16 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 default-value: 0;
                 value-text: round(root.resonance * 100) + "%";
                 changed(v) => { root.resonance-changed(v); }
+            }
+            ParameterKnob {
+                width: 52px;
+                diameter: 36px;
+                label: "Drive";
+                tooltip: "Soft saturation before the filter";
+                value <=> root.drive;
+                default-value: 0;
+                value-text: round(root.drive * 100) + "%";
+                changed(v) => { root.drive-changed(v); }
             }
         }
     }

@@ -1,12 +1,13 @@
-//! Stereo low-pass/high-pass filter effect, built on two `Svf` instances.
+//! Stereo state-variable filter effect with low-, band-, and high-pass modes.
 
 use mooloop_core::{
-    FilterMode, FilterParams, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_MODE, FILTER_PARAM_RESONANCE,
+    FilterMode, FilterParams, FilterSlope, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_DRIVE,
+    FILTER_PARAM_MODE, FILTER_PARAM_RESONANCE, FILTER_PARAM_SLOPE,
 };
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
-use crate::filter::Svf;
+use crate::filter::{apply_drive, Svf};
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
 
@@ -16,24 +17,27 @@ const CUTOFF_SMOOTH_S: f32 = 0.003;
 /// Resonance is a coarser control; a slightly longer lag still reads as
 /// instant while smoothing over any coefficient step.
 const RESONANCE_SMOOTH_S: f32 = 0.01;
+/// Saturation changes harmonic content directly, so avoid a coefficient step
+/// when it is automated.
+const DRIVE_SMOOTH_S: f32 = 0.005;
 
-/// A stereo low-pass/high-pass filter built on two `Svf` instances, one per
-/// channel. Parameter changes arrive as sample-timed `ParamValue` events
-/// mixed into the channel's regular event list.
+/// A stereo state-variable filter. Each channel keeps a two-stage SVF cascade:
+/// 12 dB/oct uses the first stage and 24 dB/oct uses both.
 pub struct FilterEffect {
-    left: Svf,
-    right: Svf,
+    left: [Svf; 2],
+    right: [Svf; 2],
     params: FilterParams,
     sample_rate: u32,
     cutoff: Smoothed,
     resonance: Smoothed,
+    drive: Smoothed,
 }
 
 impl FilterEffect {
     pub fn new(params: FilterParams, sample_rate: u32) -> Self {
         Self {
-            left: Svf::new(),
-            right: Svf::new(),
+            left: [Svf::new(), Svf::new()],
+            right: [Svf::new(), Svf::new()],
             params,
             sample_rate,
             cutoff: Smoothed::new(params.cutoff_hz.max(0.0), CUTOFF_SMOOTH_S, sample_rate),
@@ -42,6 +46,7 @@ impl FilterEffect {
                 RESONANCE_SMOOTH_S,
                 sample_rate,
             ),
+            drive: Smoothed::new(params.drive.clamp(0.0, 1.0), DRIVE_SMOOTH_S, sample_rate),
         }
     }
 
@@ -56,6 +61,7 @@ impl FilterEffect {
         self.params = params;
         self.cutoff.reset_to(params.cutoff_hz.max(0.0));
         self.resonance.reset_to(params.resonance.clamp(0.0, 1.0));
+        self.drive.reset_to(params.drive.clamp(0.0, 1.0));
     }
 
     fn apply_param(&mut self, id: u32, value: f32) {
@@ -69,13 +75,46 @@ impl FilterEffect {
                 self.resonance.set_target(self.params.resonance);
             }
             FILTER_PARAM_MODE => {
-                self.params.mode = if value >= 0.5 {
-                    FilterMode::HighPass
-                } else {
-                    FilterMode::LowPass
-                };
+                self.params.mode = FilterMode::from_index(value.round() as i32);
+            }
+            FILTER_PARAM_SLOPE => self.params.slope = FilterSlope::from_index(value.round() as i32),
+            FILTER_PARAM_DRIVE => {
+                self.params.drive = value.clamp(0.0, 1.0);
+                self.drive.set_target(self.params.drive);
             }
             _ => {}
+        }
+    }
+
+    fn select_output(mode: FilterMode, output: (f32, f32, f32)) -> f32 {
+        match mode {
+            FilterMode::LowPass => output.0,
+            FilterMode::BandPass => output.1,
+            FilterMode::HighPass => output.2,
+        }
+    }
+
+    fn process_channel(
+        stages: &mut [Svf; 2],
+        input: f32,
+        cutoff: f32,
+        resonance: f32,
+        sample_rate: u32,
+        mode: FilterMode,
+        slope: FilterSlope,
+    ) -> f32 {
+        let first = Self::select_output(
+            mode,
+            stages[0].next_sample_lp_bp_hp(input, cutoff, resonance, sample_rate),
+        );
+        let second = Self::select_output(
+            mode,
+            stages[1].next_sample_lp_bp_hp(first, cutoff, resonance, sample_rate),
+        );
+        if slope == FilterSlope::Db24 {
+            second
+        } else {
+            first
         }
     }
 
@@ -84,19 +123,27 @@ impl FilterEffect {
         for i in start..end {
             let cutoff = self.cutoff.advance();
             let resonance = self.resonance.advance();
-            let (in_l, in_r) = (bus.l[i], bus.r[i]);
-            let (lp_l, hp_l) = self.left.next_sample_lp_hp(in_l, cutoff, resonance, sr);
-            let (lp_r, hp_r) = self.right.next_sample_lp_hp(in_r, cutoff, resonance, sr);
-            match self.params.mode {
-                FilterMode::LowPass => {
-                    bus.l[i] = lp_l;
-                    bus.r[i] = lp_r;
-                }
-                FilterMode::HighPass => {
-                    bus.l[i] = hp_l;
-                    bus.r[i] = hp_r;
-                }
-            }
+            let drive = self.drive.advance();
+            let mode = self.params.mode;
+            let slope = self.params.slope;
+            bus.l[i] = Self::process_channel(
+                &mut self.left,
+                apply_drive(bus.l[i], drive),
+                cutoff,
+                resonance,
+                sr,
+                mode,
+                slope,
+            );
+            bus.r[i] = Self::process_channel(
+                &mut self.right,
+                apply_drive(bus.r[i], drive),
+                cutoff,
+                resonance,
+                sr,
+                mode,
+                slope,
+            );
         }
     }
 }
@@ -192,6 +239,43 @@ mod tests {
     }
 
     #[test]
+    fn band_pass_attenuates_both_sides_of_the_cutoff() {
+        let params = FilterParams {
+            cutoff_hz: 1_000.0,
+            mode: FilterMode::BandPass,
+            ..FilterParams::default()
+        };
+        let low = filtered_sine_rms(100.0, params);
+        let center = filtered_sine_rms(1_000.0, params);
+        let high = filtered_sine_rms(8_000.0, params);
+
+        assert!(low < center * 0.2, "low {low}, center {center}");
+        assert!(high < center * 0.25, "high {high}, center {center}");
+    }
+
+    #[test]
+    fn twenty_four_db_slope_attenuates_more_than_twelve_db() {
+        let shallow = filtered_sine_rms(
+            8_000.0,
+            FilterParams {
+                cutoff_hz: 1_000.0,
+                slope: FilterSlope::Db12,
+                ..FilterParams::default()
+            },
+        );
+        let steep = filtered_sine_rms(
+            8_000.0,
+            FilterParams {
+                cutoff_hz: 1_000.0,
+                slope: FilterSlope::Db24,
+                ..FilterParams::default()
+            },
+        );
+
+        assert!(steep < shallow * 0.2, "12 dB {shallow}, 24 dB {steep}");
+    }
+
+    #[test]
     fn param_value_events_change_cutoff_mid_block() {
         let sr = 48_000u32;
         let frames = sr as usize / 2;
@@ -223,9 +307,8 @@ mod tests {
         }));
         let mut bus = make_bus();
         effect.process(&context(frames), &mut bus, &events, None);
-        let rms = |range: &[f32]| {
-            (range.iter().map(|s| s * s).sum::<f32>() / range.len() as f32).sqrt()
-        };
+        let rms =
+            |range: &[f32]| (range.iter().map(|s| s * s).sum::<f32>() / range.len() as f32).sqrt();
         let before = rms(&bus.l[frames / 4..frames / 2]);
         let after = rms(&bus.l[3 * frames / 4..]);
         assert!(

@@ -88,10 +88,12 @@ export component BitcrusherTrace inherits Rectangle {
 }
 
 export component FilterResponseDisplay inherits Rectangle {
-    // 0 = low-pass, 1 = band-pass, 2 = high-pass. Audio currently uses LPF.
+    // 0 = low-pass, 1 = band-pass, 2 = high-pass.
     in property <int> mode;
     in property <float> cutoff;
     in property <float> resonance;
+    // 0 = one 12 dB/oct SVF stage, 1 = two cascaded stages.
+    in property <int> slope;
     in property <float> env-amount;
     callback point-dragged(float, float);
     callback point-scrolled(float);
@@ -108,7 +110,8 @@ export component FilterResponseDisplay inherits Rectangle {
             / max(0.0001, sin(cutoff-angle) / cos(cutoff-angle));
         let damping = clamp(2 - clamp(root.resonance, 0, 1) * 1.9, 0.1, 2);
         let denominator = max(0.0001, pow(pow(1 - ratio * ratio, 2) + pow(damping * ratio, 2), 0.5));
-        return root.mode == 0 ? 1 / denominator : root.mode == 1 ? ratio / denominator : ratio * ratio / denominator;
+        let stage = root.mode == 0 ? 1 / denominator : root.mode == 1 ? ratio / denominator : ratio * ratio / denominator;
+        return root.slope >= 1 ? stage * stage : stage;
     }
 
     pure function response(index: int, normalized-cutoff: float) -> float {

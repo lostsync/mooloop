@@ -495,8 +495,10 @@ impl EqParams {
 pub const FILTER_PARAM_CUTOFF_HZ: u32 = 0;
 pub const FILTER_PARAM_RESONANCE: u32 = 1;
 pub const FILTER_PARAM_MODE: u32 = 2;
+pub const FILTER_PARAM_SLOPE: u32 = 3;
+pub const FILTER_PARAM_DRIVE: u32 = 4;
 
-static FILTER_DESCRIPTORS: [ParamDescriptor; 3] = [
+static FILTER_DESCRIPTORS: [ParamDescriptor; 5] = [
     ParamDescriptor {
         id: FILTER_PARAM_CUTOFF_HZ,
         name: "Cutoff",
@@ -520,19 +522,83 @@ static FILTER_DESCRIPTORS: [ParamDescriptor; 3] = [
         name: "Mode",
         unit: "",
         min: 0.0,
+        max: 2.0,
+        curve: ParamCurve::Stepped(3),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: FILTER_PARAM_SLOPE,
+        name: "Slope",
+        unit: "dB/oct",
+        min: 0.0,
         max: 1.0,
         curve: ParamCurve::Stepped(2),
         default: 0.0,
     },
+    ParamDescriptor {
+        id: FILTER_PARAM_DRIVE,
+        name: "Drive",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
 ];
 
-/// Filter mode: low-pass attenuates above the cutoff, high-pass below it.
+/// Filter mode: low-pass attenuates above the cutoff, high-pass below it,
+/// and band-pass isolates the region around it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterMode {
     #[default]
     LowPass,
+    BandPass,
     HighPass,
+}
+
+impl FilterMode {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::BandPass,
+            2 => Self::HighPass,
+            _ => Self::LowPass,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::LowPass => 0,
+            Self::BandPass => 1,
+            Self::HighPass => 2,
+        }
+    }
+}
+
+/// Available state-variable filter cascades. Each SVF is a 12 dB/oct stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterSlope {
+    #[default]
+    Db12,
+    Db24,
+}
+
+impl FilterSlope {
+    pub fn from_index(index: i32) -> Self {
+        if index >= 1 {
+            Self::Db24
+        } else {
+            Self::Db12
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Db12 => 0,
+            Self::Db24 => 1,
+        }
+    }
 }
 
 /// Parameters for the filter effect (`FilterEffect` in `mooloop-dsp`).
@@ -543,6 +609,11 @@ pub struct FilterParams {
     /// Resonance in `[0, 1]`, approaching self-oscillation at the top.
     pub resonance: f32,
     pub mode: FilterMode,
+    #[serde(default)]
+    pub slope: FilterSlope,
+    /// Compensated soft-saturation amount applied before the filter cascade.
+    #[serde(default)]
+    pub drive: f32,
 }
 
 impl Default for FilterParams {
@@ -551,6 +622,8 @@ impl Default for FilterParams {
             cutoff_hz: 8_000.0,
             resonance: 0.0,
             mode: FilterMode::default(),
+            slope: FilterSlope::default(),
+            drive: 0.0,
         }
     }
 }
@@ -1791,10 +1864,9 @@ impl EffectParams {
             Self::Filter(p) => match id {
                 FILTER_PARAM_CUTOFF_HZ => Some(p.cutoff_hz),
                 FILTER_PARAM_RESONANCE => Some(p.resonance),
-                FILTER_PARAM_MODE => Some(match p.mode {
-                    FilterMode::LowPass => 0.0,
-                    FilterMode::HighPass => 1.0,
-                }),
+                FILTER_PARAM_MODE => Some(p.mode.to_index() as f32),
+                FILTER_PARAM_SLOPE => Some(p.slope.to_index() as f32),
+                FILTER_PARAM_DRIVE => Some(p.drive),
                 _ => None,
             },
             Self::Drive(p) => match id {
@@ -1923,13 +1995,9 @@ impl EffectParams {
             Self::Filter(p) => match id {
                 FILTER_PARAM_CUTOFF_HZ => p.cutoff_hz = value,
                 FILTER_PARAM_RESONANCE => p.resonance = value,
-                FILTER_PARAM_MODE => {
-                    p.mode = if value >= 0.5 {
-                        FilterMode::HighPass
-                    } else {
-                        FilterMode::LowPass
-                    }
-                }
+                FILTER_PARAM_MODE => p.mode = FilterMode::from_index(value.round() as i32),
+                FILTER_PARAM_SLOPE => p.slope = FilterSlope::from_index(value.round() as i32),
+                FILTER_PARAM_DRIVE => p.drive = value,
                 _ => return None,
             },
             Self::Drive(p) => match id {
@@ -2211,6 +2279,12 @@ mod tests {
             Some(20_000.0)
         );
         assert_eq!(params.set(FILTER_PARAM_RESONANCE, -5.0), Some(0.0));
+        assert_eq!(params.set(FILTER_PARAM_MODE, 1.0), Some(1.0));
+        assert_eq!(params.filter().unwrap().mode, FilterMode::BandPass);
+        assert_eq!(params.set(FILTER_PARAM_SLOPE, 1.0), Some(1.0));
+        assert_eq!(params.filter().unwrap().slope, FilterSlope::Db24);
+        assert_eq!(params.set(FILTER_PARAM_DRIVE, 2.0), Some(1.0));
+        assert_eq!(params.filter().unwrap().drive, 1.0);
         assert_eq!(params.set(99, 1.0), None);
 
         let mut drive = EffectParams::Drive(DriveParams::default());
@@ -2235,6 +2309,8 @@ mode = \"high_pass\"
         let filter = slot.params.filter().unwrap();
         assert_eq!(filter.cutoff_hz, 1_250.0);
         assert_eq!(filter.mode, FilterMode::HighPass);
+        assert_eq!(filter.slope, FilterSlope::Db12);
+        assert_eq!(filter.drive, 0.0);
         assert!(!slot.bypassed);
     }
 

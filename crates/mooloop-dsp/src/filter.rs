@@ -60,10 +60,29 @@ impl Svf {
         resonance: f32,
         sample_rate: u32,
     ) -> (f32, f32) {
+        let (low, _, high) = self.tick(input, cutoff_hz, resonance, sample_rate);
+        (low, high)
+    }
+
+    /// Process one sample and return the low-pass, band-pass, and high-pass
+    /// outputs from the same state-variable stage.
+    pub fn next_sample_lp_bp_hp(
+        &mut self,
+        input: f32,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> (f32, f32, f32) {
         self.tick(input, cutoff_hz, resonance, sample_rate)
     }
 
-    fn tick(&mut self, input: f32, cutoff_hz: f32, resonance: f32, sample_rate: u32) -> (f32, f32) {
+    fn tick(
+        &mut self,
+        input: f32,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> (f32, f32, f32) {
         let sr = sample_rate as f32;
         let cutoff = cutoff_hz.clamp(20.0, sr * 0.45);
         let g = (core::f32::consts::PI * cutoff / sr).tan();
@@ -77,7 +96,7 @@ impl Svf {
         let high = input - damping * v1 - v2;
         self.band = 2.0 * v1 - self.band;
         self.low = 2.0 * v2 - self.low;
-        (v2, high)
+        (v2, v1, high)
     }
 }
 
