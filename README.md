@@ -200,6 +200,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Project Documentation
 
+- [Building Mooloop](docs/OPERATIONS.md): the Cargo, Git, release, and
+  worktree commands we use day to day.
 - [Current system](docs/CURRENT.md): what the code does today.
 - [Product definition](docs/PRODUCT.md): what Mooloop is trying to become.
 - [Roadmap](docs/ROADMAP.md): dependency-ordered future work.
