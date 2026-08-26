@@ -4,6 +4,8 @@
 //! channel stores independent note events at PPQ tick precision. This keeps
 //! the compact rack useful without making it the authoritative note model.
 
+use crate::{AutomationLane, ParamAddr, MAX_AUTOMATION_LANES_PER_CHANNEL};
+
 /// Default number of sixteenth-note cells per pattern (one 4/4 bar).
 pub const DEFAULT_STEPS: u16 = 16;
 
@@ -76,10 +78,13 @@ impl NoteEvent {
     }
 }
 
-/// One channel's notes inside a pattern.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One channel's notes and automation inside a pattern.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChannelPattern {
     notes: Vec<NoteEvent>,
+    /// Open automation lanes, at most one per destination. Order is the order
+    /// they were opened, which is the order the lane picker lists them in.
+    lanes: Vec<AutomationLane>,
     capacity_ticks: u32,
 }
 
@@ -90,6 +95,7 @@ impl ChannelPattern {
             .min(MAX_NOTES_PER_CHANNEL_PATTERN);
         Self {
             notes: Vec::with_capacity(note_capacity),
+            lanes: Vec::with_capacity(MAX_AUTOMATION_LANES_PER_CHANNEL),
             capacity_ticks: (num_steps as u32).saturating_mul(TICKS_PER_STEP),
         }
     }
@@ -136,6 +142,47 @@ impl ChannelPattern {
 
     pub fn clear(&mut self) {
         self.notes.clear();
+        self.lanes.clear();
+    }
+
+    pub fn lanes(&self) -> &[AutomationLane] {
+        &self.lanes
+    }
+
+    pub fn lane(&self, target: ParamAddr) -> Option<&AutomationLane> {
+        self.lanes.iter().find(|lane| lane.target == target)
+    }
+
+    pub fn lane_mut(&mut self, target: ParamAddr) -> Option<&mut AutomationLane> {
+        self.lanes.iter_mut().find(|lane| lane.target == target)
+    }
+
+    /// Open the lane for `target`, or return the existing one. `None` when the
+    /// preallocated lane storage is full, which never reallocates on the audio
+    /// thread.
+    pub fn open_lane(&mut self, target: ParamAddr) -> Option<&mut AutomationLane> {
+        if let Some(index) = self.lanes.iter().position(|lane| lane.target == target) {
+            return self.lanes.get_mut(index);
+        }
+        if self.lanes.len() == self.lanes.capacity() {
+            return None;
+        }
+        self.lanes.push(AutomationLane::new(target));
+        self.lanes.last_mut()
+    }
+
+    pub fn remove_lane(&mut self, target: ParamAddr) -> Option<AutomationLane> {
+        let index = self.lanes.iter().position(|lane| lane.target == target)?;
+        Some(self.lanes.remove(index))
+    }
+
+    /// Replace the whole lane set. Used by project load, which is the only
+    /// caller allowed to allocate.
+    pub fn set_lanes(&mut self, lanes: Vec<AutomationLane>) {
+        self.lanes.clear();
+        for lane in lanes.into_iter().take(MAX_AUTOMATION_LANES_PER_CHANNEL) {
+            self.lanes.push(lane);
+        }
     }
 
     pub fn notes_in_step(&self, step: usize) -> impl Iterator<Item = &NoteEvent> {
@@ -147,12 +194,12 @@ impl ChannelPattern {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.notes.is_empty()
+        self.notes.is_empty() && self.lanes.iter().all(AutomationLane::is_empty)
     }
 }
 
 /// A pattern whose channels are indexed in registration order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Pattern {
     pub length_steps: u16,
     pub channels: Vec<ChannelPattern>,

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    compile_bus_graph, ChannelSource, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
+    compile_bus_graph, AutomationLane, ChannelSource, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
     EngineCommand, ModRack, MonoSynthParams, ParamAddr, ParamOwner, PolySynthParams, Project,
     SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
     MAX_MODULATORS_PER_CHANNEL,
@@ -76,10 +76,55 @@ struct PendingEffectParams {
 /// deliberately a read-only view: only `RenderState` advances modulators, so
 /// graph order cannot accidentally change their phase.
 struct ModulationBlock<'a> {
-    channel: u8,
     rack: &'a ModRack,
     outputs: &'a ControlOutputs,
     ticks: usize,
+}
+
+/// The clip automation covering this block. Unlike modulation this is not
+/// pre-ticked: a lane is a sorted breakpoint list, so resolving it per control
+/// tick is a binary search rather than state that must advance exactly once.
+struct AutomationBlock<'a> {
+    sequencer: &'a Sequencer,
+    /// Transport position at frame 0, in song ticks.
+    start_tick: f64,
+    ticks_per_sample: f64,
+    ticks: usize,
+}
+
+/// One destination's lane, already resolved to the pattern driving it.
+struct AutomationCurve<'a> {
+    lane: &'a AutomationLane,
+    /// Pattern-local tick at frame 0.
+    start_tick: f64,
+    length_ticks: u32,
+}
+
+impl<'a> AutomationBlock<'a> {
+    fn curve_for(&self, destination: ParamAddr) -> Option<AutomationCurve<'a>> {
+        let (lane, start_tick, length_ticks) = self
+            .sequencer
+            .automation_lane_at(destination, self.start_tick)?;
+        Some(AutomationCurve {
+            lane,
+            start_tick,
+            length_ticks,
+        })
+    }
+
+    /// Normalized value at control tick `tick`. The pattern wraps underneath a
+    /// block that straddles the loop point, which is why the position is
+    /// recomputed per tick instead of advanced.
+    fn value_at(&self, curve: &AutomationCurve<'_>, tick: usize) -> Option<f32> {
+        let elapsed = (tick * CONTROL_RATE_FRAMES) as f64 * self.ticks_per_sample;
+        let position = curve.start_tick + elapsed;
+        let wrapped = if curve.length_ticks == 0 {
+            position
+        } else {
+            position.rem_euclid(curve.length_ticks as f64)
+        };
+        curve.lane.value_at(wrapped)
+    }
 }
 
 impl PendingEffectParams {
@@ -364,36 +409,62 @@ impl EffectChain {
         self.base_params.get(slot)?.as_ref()?.get(id)
     }
 
-    fn modulation_events_for_slot(&mut self, slot: usize, modulation: &ModulationBlock<'_>) {
+    /// Resolve every control signal aimed at this slot into `ParamValue`
+    /// events on the shared scratch list.
+    ///
+    /// Automation and modulation compose rather than compete: a lane supplies
+    /// the **base** the knob would otherwise supply, and the matrix adds its
+    /// offsets on top. That ordering is what lets an LFO wobble around a drawn
+    /// curve instead of one of them winning.
+    fn control_events_for_slot(
+        &mut self,
+        slot: usize,
+        scope: EffectTarget,
+        modulation: Option<&ModulationBlock<'_>>,
+        automation: Option<&AutomationBlock<'_>>,
+    ) {
         let Some(kind) = self.kinds.get(slot).copied().flatten() else {
             return;
         };
         let Some(params) = self.base_params.get(slot).copied().flatten() else {
             return;
         };
+        let ticks = modulation
+            .map(|modulation| modulation.ticks)
+            .into_iter()
+            .chain(automation.map(|automation| automation.ticks))
+            .max()
+            .unwrap_or(0);
 
         for descriptor in kind.descriptors() {
-            let destination = ParamAddr::effect(
-                EffectTarget::Channel(modulation.channel),
-                slot as u8,
-                descriptor.id,
-            );
-            if !modulation
-                .rack
-                .destinations()
-                .any(|address| address == destination)
-            {
+            let destination = ParamAddr::effect(scope, slot as u8, descriptor.id);
+            let modulated = modulation.is_some_and(|modulation| {
+                modulation
+                    .rack
+                    .destinations()
+                    .any(|address| address == destination)
+            });
+            let curve = automation.and_then(|automation| automation.curve_for(destination));
+            if !modulated && curve.is_none() {
                 continue;
             }
             let Some(base) = params.get(descriptor.id) else {
                 continue;
             };
-            let base_normalized = descriptor.to_normalized(base);
-            for tick in 0..modulation.ticks {
+            let knob_normalized = descriptor.to_normalized(base);
+            for tick in 0..ticks {
                 let offset = (tick * CONTROL_RATE_FRAMES) as u32;
-                let offset_normalized = modulation
-                    .rack
-                    .offset_for(destination, &modulation.outputs[tick]);
+                let base_normalized = curve
+                    .as_ref()
+                    .zip(automation)
+                    .and_then(|(curve, automation)| automation.value_at(curve, tick))
+                    .unwrap_or(knob_normalized);
+                let offset_normalized = match (modulated, modulation) {
+                    (true, Some(modulation)) => modulation
+                        .rack
+                        .offset_for(destination, &modulation.outputs[tick]),
+                    _ => 0.0,
+                };
                 let value = descriptor
                     .from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
                 let _ = self.event_scratch.push_ordered(TimedEvent {
@@ -466,12 +537,15 @@ impl EffectChain {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process(
         &mut self,
         context: &ProcessContext,
         bus: &mut StereoBus,
+        scope: EffectTarget,
         device_display: Option<(&DeviceMeters, &DeviceTelemetry, usize)>,
         modulation: Option<&ModulationBlock<'_>>,
+        automation: Option<&AutomationBlock<'_>>,
     ) {
         for slot in 0..self.bound {
             if let Some((_, telemetry, target)) = device_display {
@@ -526,10 +600,8 @@ impl EffectChain {
                 }
                 self.event_scratch.clear();
                 self.events[slot].copy_to(&mut self.event_scratch);
-                if let Some(modulation) = modulation {
-                    self.modulation_events_for_slot(slot, modulation);
-                }
-                // `modulation_events_for_slot` mutates the shared scratch
+                self.control_events_for_slot(slot, scope, modulation, automation);
+                // `control_events_for_slot` mutates the shared scratch
                 // list, so take the node borrow only after that work.
                 let node = self.nodes[slot].as_mut().expect("checked above");
                 node.process(context, bus, &self.event_scratch, None);
@@ -1029,6 +1101,26 @@ impl RenderState {
         }
     }
 
+    /// Return one destination to its knob value at the next block. Removing a
+    /// lane or a matrix route otherwise leaves the device holding whatever the
+    /// control signal last resolved, until someone happens to touch that knob.
+    fn restore_base_param(&mut self, destination: ParamAddr) {
+        let ParamAddr {
+            scope,
+            owner: ParamOwner::Effect { slot },
+            param,
+        } = destination
+        else {
+            return;
+        };
+        let Some(chain) = self.chain_mut(scope) else {
+            return;
+        };
+        if let Some(base) = chain.base_param(slot as usize, param) {
+            chain.queue_param(slot as usize, param, base);
+        }
+    }
+
     fn effect_is_modulated(&self, target: EffectTarget, slot: u8, id: u32) -> bool {
         let EffectTarget::Channel(channel) = target else {
             return false;
@@ -1247,6 +1339,64 @@ impl RenderState {
             } => {
                 self.sequencer
                     .remove_note(pattern as usize, channel as usize, id);
+            }
+            EngineCommand::OpenAutomationLane {
+                pattern,
+                channel,
+                target,
+            } => {
+                self.sequencer
+                    .open_automation_lane(pattern as usize, channel as usize, target);
+            }
+            EngineCommand::RemoveAutomationLane {
+                pattern,
+                channel,
+                target,
+            } => {
+                if self
+                    .sequencer
+                    .remove_automation_lane(pattern as usize, channel as usize, target)
+                {
+                    self.restore_base_param(target);
+                }
+            }
+            EngineCommand::ClearAutomationLane {
+                pattern,
+                channel,
+                target,
+            } => {
+                if self
+                    .sequencer
+                    .clear_automation_lane(pattern as usize, channel as usize, target)
+                {
+                    self.restore_base_param(target);
+                }
+            }
+            EngineCommand::UpsertAutomationPoint {
+                pattern,
+                channel,
+                target,
+                point,
+            } => {
+                self.sequencer.upsert_automation_point(
+                    pattern as usize,
+                    channel as usize,
+                    target,
+                    point,
+                );
+            }
+            EngineCommand::RemoveAutomationPoint {
+                pattern,
+                channel,
+                target,
+                id,
+            } => {
+                self.sequencer.remove_automation_point(
+                    pattern as usize,
+                    channel as usize,
+                    target,
+                    id,
+                );
             }
             EngineCommand::SetChannelSamplerParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
@@ -1505,18 +1655,36 @@ impl RenderState {
             position_ticks: start_tick,
             position_frames,
         };
+        // Modulators must all advance before anything borrows the sequencer for
+        // automation, and every channel's rack advances even while muted so
+        // unmuting does not restart its phase.
+        let active_channels = self.sequencer.active_channels();
+        let mut modulator_ticks = [0usize; MAX_CHANNELS];
+        // Not an iterator loop: the body takes `&mut self`, which cannot
+        // coexist with a mutable borrow of the array being filled.
+        #[allow(clippy::needless_range_loop)]
+        for index in 0..active_channels {
+            modulator_ticks[index] = self.tick_channel_modulators(index, frames);
+        }
+        // Lanes resolve whether or not the transport is running: stopped, the
+        // playhead simply holds still and the destination sits at the value
+        // drawn under it. Making automation conditional on playback would mean
+        // a knob that jumps the moment you press play.
+        let automation = (frames > 0).then(|| AutomationBlock {
+            sequencer: &self.sequencer,
+            start_tick,
+            ticks_per_sample,
+            ticks: frames.div_ceil(CONTROL_RATE_FRAMES),
+        });
         for strip in &mut self.buses {
             strip.bus.clear(frames);
         }
-        for index in 0..self.sequencer.active_channels() {
-            // A muted channel's effects do not process, but its free-running
-            // sources still advance so unmuting does not restart its LFO.
-            let ticks = self.tick_channel_modulators(index, frames);
+        for index in 0..active_channels {
+            let ticks = modulator_ticks[index];
             if self.strips[index].output.muted {
                 continue;
             }
             let modulation = ModulationBlock {
-                channel: index as u8,
                 rack: &self.modulation[index],
                 outputs: &self.control_outputs[index],
                 ticks,
@@ -1532,8 +1700,10 @@ impl RenderState {
             strip.effects.process(
                 &context,
                 &mut strip.bus,
+                EffectTarget::Channel(index as u8),
                 Some((&self.device_meters, &self.device_telemetry, index)),
                 Some(&modulation),
+                automation.as_ref(),
             );
             strip.output.apply_pan(&mut strip.bus, frames);
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
@@ -1559,12 +1729,14 @@ impl RenderState {
             strip.effects.process(
                 &context,
                 &mut strip.bus,
+                EffectTarget::Bus(index as u8),
                 Some((
                     &self.device_meters,
                     &self.device_telemetry,
                     MAX_CHANNELS + index,
                 )),
                 None,
+                automation.as_ref(),
             );
             strip.output.apply_balance(&mut strip.bus, frames);
             // A muted bus still processes, so a delay or reverb tail on it
@@ -1890,6 +2062,190 @@ mod tests {
         assert!(
             audible_difference > 0.01,
             "LFO modulation did not change the rendered signal"
+        );
+    }
+
+    fn filter_channel(cutoff_hz: f32) -> ProjectChannel {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        channel
+            .setup
+            .effects
+            .push(mooloop_core::EffectSlotState::filter(
+                mooloop_core::FilterParams {
+                    cutoff_hz,
+                    resonance: 0.0,
+                    mode: mooloop_core::FilterMode::LowPass,
+                },
+            ));
+        channel
+    }
+
+    const CUTOFF: ParamAddr = ParamAddr::effect(
+        EffectTarget::Channel(0),
+        0,
+        mooloop_core::FILTER_PARAM_CUTOFF_HZ,
+    );
+
+    fn cutoff_events(render: &RenderState) -> Vec<(u32, f32)> {
+        render.strips[0]
+            .effects
+            .event_scratch
+            .iter()
+            .filter_map(|event| match event.event {
+                Event::ParamValue {
+                    id: mooloop_core::FILTER_PARAM_CUTOFF_HZ,
+                    value,
+                } => Some((event.offset, value)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_automation_lane_resolves_a_param_at_the_control_rate() {
+        let project = synth_project(filter_channel(1_000.0));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let descriptor = mooloop_core::EffectKind::Filter
+            .descriptor(mooloop_core::FILTER_PARAM_CUTOFF_HZ)
+            .expect("cutoff is a described parameter");
+
+        // A ramp across the first sixteenth, so a 128-frame block at 120 BPM
+        // sits entirely inside the rising segment.
+        for (id, tick, value) in [(1u32, 0u32, 0.0f32), (2, 24, 1.0)] {
+            render.apply_command(EngineCommand::UpsertAutomationPoint {
+                pattern: 0,
+                channel: 0,
+                target: CUTOFF,
+                point: mooloop_core::AutomationPoint::new(id, tick, value),
+            });
+        }
+        render.play();
+        render.process_block(128);
+
+        let events = cutoff_events(&render);
+        assert_eq!(
+            events.iter().map(|(offset, _)| *offset).collect::<Vec<_>>(),
+            vec![0, 32, 64, 96],
+        );
+        let values: Vec<_> = events.iter().map(|(_, value)| *value).collect();
+        assert!(
+            (values[0] - descriptor.min).abs() < 1.0,
+            "the lane did not start at its first point: {values:?}"
+        );
+        assert!(
+            values.windows(2).all(|pair| pair[1] > pair[0]),
+            "the ramp did not rise across the block: {values:?}"
+        );
+        // The knob is untouched: a lane supplies the base, it does not
+        // overwrite what the user set.
+        assert_eq!(
+            render.strips[0].effects.base_params[0]
+                .unwrap()
+                .get(mooloop_core::FILTER_PARAM_CUTOFF_HZ),
+            Some(1_000.0),
+        );
+    }
+
+    #[test]
+    fn a_lane_supplies_the_base_that_modulation_then_offsets() {
+        let mut channel = filter_channel(1_000.0);
+        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+            mooloop_core::ModLfoParams {
+                rate_hz: 375.0,
+                ..mooloop_core::ModLfoParams::default()
+            },
+        ));
+        assert!(channel
+            .setup
+            .modulation
+            .add_route(mooloop_core::ModRoute {
+                source_slot: 0,
+                destination: CUTOFF,
+                depth: 0.25,
+                polarity: mooloop_core::ModPolarity::Bipolar,
+            })
+            .is_some());
+        let project = synth_project(channel);
+
+        // A flat lane at half scale. With no modulation every control tick
+        // would read the same value; the LFO is the only thing that can make
+        // them differ, and it must differ *around the lane*, not the knob.
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.apply_command(EngineCommand::UpsertAutomationPoint {
+            pattern: 0,
+            channel: 0,
+            target: CUTOFF,
+            point: mooloop_core::AutomationPoint::new(1, 0, 0.5),
+        });
+        render.play();
+        render.process_block(128);
+        let values: Vec<_> = cutoff_events(&render)
+            .iter()
+            .map(|(_, value)| *value)
+            .collect();
+
+        let flat = mooloop_core::EffectKind::Filter
+            .descriptor(mooloop_core::FILTER_PARAM_CUTOFF_HZ)
+            .expect("cutoff is a described parameter")
+            .from_normalized(0.5);
+        assert!(
+            (values[0] - flat).abs() < flat * 0.02,
+            "the first tick should sit on the lane, not the 1 kHz knob: {values:?}"
+        );
+        assert!(
+            values[1] > values[0] * 1.5 && values[3] < values[0] * 0.7,
+            "the LFO did not swing around the lane value: {values:?}"
+        );
+    }
+
+    #[test]
+    fn clearing_a_lane_returns_the_destination_to_its_knob() {
+        let project = synth_project(filter_channel(1_000.0));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.apply_command(EngineCommand::UpsertAutomationPoint {
+            pattern: 0,
+            channel: 0,
+            target: CUTOFF,
+            point: mooloop_core::AutomationPoint::new(1, 0, 0.1),
+        });
+        render.play();
+        render.process_block(128);
+        let automated = cutoff_events(&render)[0].1;
+        assert!(automated < 900.0, "lane did not take the base: {automated}");
+
+        render.apply_command(EngineCommand::ClearAutomationLane {
+            pattern: 0,
+            channel: 0,
+            target: CUTOFF,
+        });
+        render.process_block(128);
+        let restored = cutoff_events(&render);
+        assert_eq!(
+            restored.len(),
+            1,
+            "an empty lane should stop resolving per control tick: {restored:?}"
+        );
+        assert_eq!(restored[0], (0, 1_000.0));
+    }
+
+    #[test]
+    fn a_lane_survives_a_project_round_trip_through_the_sequencer() {
+        let mut project = synth_project(filter_channel(1_000.0));
+        let mut lane = mooloop_core::AutomationLane::new(CUTOFF);
+        lane.upsert(mooloop_core::AutomationPoint::new(1, 0, 0.25));
+        project.channels[0].automation[0].push(lane);
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        render.process_block(128);
+        let loaded = cutoff_events(&render)[0].1;
+        let expected = mooloop_core::EffectKind::Filter
+            .descriptor(mooloop_core::FILTER_PARAM_CUTOFF_HZ)
+            .expect("cutoff is a described parameter")
+            .from_normalized(0.25);
+        assert!(
+            (loaded - expected).abs() < expected * 0.02,
+            "a loaded lane did not drive the destination: {loaded} vs {expected}"
         );
     }
 
@@ -2423,7 +2779,7 @@ mod tests {
         let mut bus = StereoBus::with_capacity(MAX_BLOCK_SIZE);
         bus.l[0] = 1.0;
         bus.r[0] = 1.0;
-        chain.process(&context, &mut bus, None, None);
+        chain.process(&context, &mut bus, EffectTarget::Channel(0), None, None, None);
 
         assert!(
             bus.l[..LATENCY].iter().all(|s| *s == 0.0),

@@ -10,8 +10,9 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::{
-    BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget, ModRack,
-    MonoSynthParams, NoteEvent, NoteId, PlaybackMode, PolySynthParams, SamplerParams,
+    AutomationPoint, BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
+    ModRack, MonoSynthParams, NoteEvent, NoteId, ParamAddr, PlaybackMode, PointId,
+    PolySynthParams, SamplerParams,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
@@ -86,6 +87,43 @@ pub enum EngineCommand {
         pattern: u8,
         channel: u8,
         id: NoteId,
+    },
+    /// Open an automation lane on `target`, or do nothing if it is already
+    /// open. Lane storage is preallocated, so this only ever fails by being
+    /// ignored when a channel's pattern already holds the maximum.
+    OpenAutomationLane {
+        pattern: u8,
+        channel: u8,
+        target: ParamAddr,
+    },
+    /// Drop a lane and its points. The destination returns to its knob value
+    /// on the next block.
+    RemoveAutomationLane {
+        pattern: u8,
+        channel: u8,
+        target: ParamAddr,
+    },
+    /// Empty a lane without closing it. An empty lane has no opinion, so the
+    /// destination also returns to its knob value.
+    ClearAutomationLane {
+        pattern: u8,
+        channel: u8,
+        target: ParamAddr,
+    },
+    /// Insert or replace one breakpoint by stable ID. `point.value` is
+    /// normalized against the destination's descriptor, never natural units.
+    UpsertAutomationPoint {
+        pattern: u8,
+        channel: u8,
+        target: ParamAddr,
+        point: AutomationPoint,
+    },
+    /// Remove one breakpoint by stable ID.
+    RemoveAutomationPoint {
+        pattern: u8,
+        channel: u8,
+        target: ParamAddr,
+        id: PointId,
     },
     /// Replace a channel's sampler parameter set.
     SetChannelSamplerParams { channel: u8, params: SamplerParams },

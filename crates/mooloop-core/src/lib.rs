@@ -3,6 +3,7 @@
 //! No dependency on audio or UI code so this can be linked freely from both the
 //! realtime and GUI threads.
 
+pub mod automation;
 pub mod bridge;
 pub mod buffer;
 pub mod channel;
@@ -17,6 +18,10 @@ pub mod sampler;
 pub mod synth;
 pub mod time;
 
+pub use automation::{
+    AutomationLane, AutomationPoint, PointId, MAX_AUTOMATION_LANES_PER_CHANNEL,
+    MAX_AUTOMATION_POINTS_PER_LANE,
+};
 pub use bridge::{EngineCommand, EngineEvent};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};

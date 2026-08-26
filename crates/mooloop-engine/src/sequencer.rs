@@ -5,7 +5,8 @@
 //! scheduling and edits never allocate on the audio thread.
 
 use mooloop_core::{
-    NoteEvent, NoteId, Pattern, PatternPlacement, PlaybackMode, Ppq, Project,
+    AutomationLane, AutomationPoint, NoteEvent, NoteId, ParamAddr, Pattern, PatternPlacement,
+    PlaybackMode, PointId, Ppq, Project,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
     MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT,
     MIN_SWING_PERCENT, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -179,6 +180,14 @@ impl Sequencer {
                     let _ = lane.upsert_note(note);
                 }
             }
+            for (pattern_index, lanes) in channel
+                .automation
+                .iter()
+                .enumerate()
+                .take(self.active_patterns)
+            {
+                self.patterns[pattern_index].channels[channel_index].set_lanes(lanes.clone());
+            }
         }
     }
 
@@ -199,6 +208,144 @@ impl Sequencer {
             .and_then(|pattern| pattern.channel_mut(channel))
             .and_then(|channel| channel.remove_note(id))
             .is_some()
+    }
+
+    fn channel_pattern_mut(
+        &mut self,
+        pattern: usize,
+        channel: usize,
+    ) -> Option<&mut mooloop_core::pattern::ChannelPattern> {
+        (pattern < self.active_patterns)
+            .then(|| &mut self.patterns[pattern])
+            .and_then(|pattern| pattern.channel_mut(channel))
+    }
+
+    pub fn open_automation_lane(
+        &mut self,
+        pattern: usize,
+        channel: usize,
+        target: ParamAddr,
+    ) -> bool {
+        self.channel_pattern_mut(pattern, channel)
+            .and_then(|channel| channel.open_lane(target))
+            .is_some()
+    }
+
+    pub fn remove_automation_lane(
+        &mut self,
+        pattern: usize,
+        channel: usize,
+        target: ParamAddr,
+    ) -> bool {
+        self.channel_pattern_mut(pattern, channel)
+            .and_then(|channel| channel.remove_lane(target))
+            .is_some()
+    }
+
+    pub fn clear_automation_lane(
+        &mut self,
+        pattern: usize,
+        channel: usize,
+        target: ParamAddr,
+    ) -> bool {
+        let Some(lane) = self
+            .channel_pattern_mut(pattern, channel)
+            .and_then(|channel| channel.lane_mut(target))
+        else {
+            return false;
+        };
+        lane.clear();
+        true
+    }
+
+    /// Insert or replace a breakpoint, opening the lane if the editor has not
+    /// already asked for it.
+    pub fn upsert_automation_point(
+        &mut self,
+        pattern: usize,
+        channel: usize,
+        target: ParamAddr,
+        point: AutomationPoint,
+    ) -> bool {
+        self.channel_pattern_mut(pattern, channel)
+            .and_then(|channel| channel.open_lane(target))
+            .is_some_and(|lane| lane.upsert(point))
+    }
+
+    pub fn remove_automation_point(
+        &mut self,
+        pattern: usize,
+        channel: usize,
+        target: ParamAddr,
+        id: PointId,
+    ) -> bool {
+        self.channel_pattern_mut(pattern, channel)
+            .and_then(|channel| channel.lane_mut(target))
+            .and_then(|lane| lane.remove(id))
+            .is_some()
+    }
+
+    /// Resolve `target` to the lane driving it at `song_tick`, together with
+    /// that lane's pattern-local tick and its pattern's length.
+    ///
+    /// The engine calls this once per automated destination per block and then
+    /// walks the lane itself at the control rate, so the per-tick cost is one
+    /// binary search rather than one lane search.
+    ///
+    /// A lane lives in the clip that drew it but may address a bus, so this
+    /// searches every active channel rather than taking one. Two clips
+    /// automating one destination is a UI-level mistake; the lowest channel
+    /// wins here rather than the two summing into something neither drew.
+    /// In song mode, layered placements resolve the same way notes do, except
+    /// that only one can supply a value: the latest-starting cover wins.
+    pub fn automation_lane_at(
+        &self,
+        target: ParamAddr,
+        song_tick: f64,
+    ) -> Option<(&AutomationLane, f64, u32)> {
+        match self.playback_mode {
+            PlaybackMode::Pattern => {
+                let pattern = self.patterns.get(self.current)?;
+                let length = pattern.length_ticks();
+                let lane = (0..self.active_channels)
+                    .filter_map(|channel| pattern.channel(channel))
+                    .find_map(|channel| channel.lane(target))
+                    .filter(|lane| !lane.is_empty())?;
+                Some((lane, wrap_tick(song_tick, length), length))
+            }
+            PlaybackMode::Song => {
+                let position = wrap_tick(song_tick, self.song_length_ticks());
+                let mut best: Option<(&AutomationLane, f64, u32)> = None;
+                let mut best_start = 0u32;
+                for placement in &self.playlist {
+                    let pattern_index = placement.pattern as usize;
+                    if pattern_index >= self.active_patterns {
+                        continue;
+                    }
+                    let pattern = &self.patterns[pattern_index];
+                    let length = pattern.length_ticks();
+                    let start = placement.start_tick;
+                    if position < start as f64
+                        || position >= start.saturating_add(length) as f64
+                    {
+                        continue;
+                    }
+                    let Some(lane) = (0..self.active_channels)
+                        .filter_map(|channel| pattern.channel(channel))
+                        .find_map(|channel| channel.lane(target))
+                        .filter(|lane| !lane.is_empty())
+                    else {
+                        continue;
+                    };
+                    if best.is_some() && start < best_start {
+                        continue;
+                    }
+                    best = Some((lane, position - start as f64, length));
+                    best_start = start;
+                }
+                best
+            }
+        }
     }
 
     /// Compatibility edit for the rack while it still addresses one anchor
@@ -582,6 +729,21 @@ impl Sequencer {
             cycle += 1;
             absolute_tick += period;
         }
+    }
+}
+
+/// Fold a transport position into `[0, period)`. The transport is monotonic
+/// across loops, so every pattern-local read needs this.
+fn wrap_tick(tick: f64, period_ticks: u32) -> f64 {
+    if period_ticks == 0 {
+        return 0.0;
+    }
+    let period = period_ticks as f64;
+    let wrapped = tick % period;
+    if wrapped < 0.0 {
+        wrapped + period
+    } else {
+        wrapped
     }
 }
 

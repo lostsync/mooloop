@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use crate::{
     default_buses, BusSetup, Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter,
-    ModRack, MonoSynthParams, NoteEvent, NoteId, PatternPlacement, PlaybackMode, PolySynthParams,
+    AutomationLane, ModRack, MonoSynthParams, NoteEvent, NoteId, PatternPlacement, PlaybackMode,
+    PolySynthParams,
     SamplerParams, SnareCharacter, DEFAULT_STEPS,
 };
 
@@ -243,6 +244,10 @@ pub struct ProjectChannel {
     pub setup: ChannelSetup,
     /// Pattern-indexed note lanes. Notes beyond a pattern's logical length are retained.
     pub notes: Vec<Vec<NoteEvent>>,
+    /// Pattern-indexed automation lanes, parallel to `notes`. Absent in songs
+    /// written before clip automation existed, which load with none.
+    #[serde(default)]
+    pub automation: Vec<Vec<AutomationLane>>,
     pub next_note_id: NoteId,
 }
 
@@ -251,6 +256,7 @@ impl ProjectChannel {
         Self {
             setup: ChannelSetup::sampler(format!("Sampler {}", index + 1)),
             notes: vec![Vec::new(); pattern_count.max(1)],
+            automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
         }
     }
@@ -270,6 +276,7 @@ impl ProjectChannel {
                 params,
             ),
             notes: vec![Vec::new(); pattern_count.max(1)],
+            automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
         }
     }
@@ -289,6 +296,7 @@ impl ProjectChannel {
                 params,
             ),
             notes: vec![Vec::new(); pattern_count.max(1)],
+            automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
         }
     }
@@ -308,8 +316,16 @@ impl ProjectChannel {
                 params,
             ),
             notes: vec![Vec::new(); pattern_count.max(1)],
+            automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
         }
+    }
+
+    /// Pad `automation` out to match `notes`. A song saved before clip
+    /// automation has none at all, and one saved before a pattern was added
+    /// has fewer; both must end up addressable by pattern index.
+    pub fn normalize_automation(&mut self) {
+        self.automation.resize_with(self.notes.len(), Vec::new);
     }
 
     pub fn recompute_next_note_id(&mut self) {
@@ -411,6 +427,7 @@ impl Project {
             .map(|(name, params)| ProjectChannel {
                 setup: ChannelSetup::drum_synth_with_params(name, params),
                 notes: vec![Vec::new()],
+                automation: vec![Vec::new()],
                 next_note_id: 1,
             })
             .collect(),

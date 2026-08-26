@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooloop_core::{
     ChannelSetup, ChannelSource, DeviceKind, DrumSynthParams, Kit, MonoSynthParams,
-    PolySynthParams, Project, SampleReference, SamplerParams, MAX_CHANNELS, MAX_CHOKE_GROUP,
+    PolySynthParams, Project, SampleReference, SamplerParams, MAX_AUTOMATION_LANES_PER_CHANNEL,
+    MAX_AUTOMATION_POINTS_PER_LANE, MAX_CHANNELS, MAX_CHOKE_GROUP,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS,
     MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SAMPLER_VOICES, TICKS_PER_STEP,
 };
@@ -663,6 +664,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         LoadedDocument::Song(project) => {
             for (index, channel) in project.channels.iter_mut().enumerate() {
                 resolve_setup_asset(path, index, &mut channel.setup.source, &mut warnings)?;
+                channel.normalize_automation();
                 channel.recompute_next_note_id();
             }
         }
@@ -885,6 +887,49 @@ pub fn validate_project(project: &Project) -> Result<(), Error> {
                     return Err(Error::Invalid(format!(
                         "channel {channel_index} pattern {pattern_index} has an invalid note"
                     )));
+                }
+            }
+        }
+        // A song written before clip automation carries none, and one written
+        // before a pattern was added carries fewer banks than it has patterns.
+        // Both are normalized on load, so only a surplus is a real error.
+        if channel.automation.len() > channel.notes.len() {
+            return Err(Error::Invalid(format!(
+                "channel {channel_index} automation bank does not match pattern count"
+            )));
+        }
+        for (pattern_index, lanes) in channel.automation.iter().enumerate() {
+            if lanes.len() > MAX_AUTOMATION_LANES_PER_CHANNEL {
+                return Err(Error::Invalid(format!(
+                    "channel {channel_index} pattern {pattern_index} has too many automation lanes"
+                )));
+            }
+            let mut targets = HashSet::with_capacity(lanes.len());
+            for lane in lanes {
+                if !targets.insert(lane.target) {
+                    return Err(Error::Invalid(format!(
+                        "channel {channel_index} pattern {pattern_index} \
+                         has two automation lanes on one destination"
+                    )));
+                }
+                if lane.points().len() > MAX_AUTOMATION_POINTS_PER_LANE {
+                    return Err(Error::Invalid(format!(
+                        "channel {channel_index} pattern {pattern_index} \
+                         automation lane has too many points"
+                    )));
+                }
+                let mut point_ids = HashSet::with_capacity(lane.points().len());
+                for point in lane.points() {
+                    if point.id == 0
+                        || !point_ids.insert(point.id)
+                        || point.tick >= capacity_ticks
+                        || !(0.0..=1.0).contains(&point.value)
+                    {
+                        return Err(Error::Invalid(format!(
+                            "channel {channel_index} pattern {pattern_index} \
+                             has an invalid automation point"
+                        )));
+                    }
                 }
             }
         }
@@ -1172,7 +1217,7 @@ fn validate_sampler(channel: usize, params: SamplerParams) -> Result<(), Error> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{NoteEvent, PatternPlacement};
+    use mooloop_core::{AutomationLane, AutomationPoint, NoteEvent, ParamAddr, PatternPlacement};
     use tempfile::tempdir;
 
     #[test]
@@ -1188,6 +1233,7 @@ mod tests {
             .notes
             .push(vec![NoteEvent::new(7, 200, 24, 64, 91)]);
         project.channels[0].recompute_next_note_id();
+        project.channels[0].normalize_automation();
         project.playlist.push(PatternPlacement::new(1, 384));
         project.current_pattern = 1;
 
@@ -1196,6 +1242,45 @@ mod tests {
         let loaded = load_bundle(&bundle).unwrap();
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
+
+    #[test]
+    fn automation_lanes_round_trip_and_older_songs_load_without_them() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        let mut lane = AutomationLane::new(ParamAddr::effect(
+            mooloop_core::EffectTarget::Channel(0),
+            2,
+            7,
+        ));
+        assert!(lane.upsert(AutomationPoint::new(1, 0, 0.0)));
+        assert!(lane.upsert(AutomationPoint::new(2, 96, 0.75)));
+        project.channels[0].automation[0].push(lane);
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let loaded = load_bundle(&bundle).unwrap();
+        assert_eq!(loaded.document, LoadedDocument::Song(project.clone()));
+
+        // A song written before clip automation has no `automation` key at
+        // all. It must load, and load with one empty bank per pattern.
+        let mut legacy = project.clone();
+        legacy.channels[0].automation.clear();
+        validate_project(&legacy).expect("a missing automation bank is not an error");
+        legacy.channels[0].normalize_automation();
+        assert_eq!(
+            legacy.channels[0].automation.len(),
+            legacy.channels[0].notes.len()
+        );
+    }
+
+    #[test]
+    fn two_lanes_on_one_destination_are_rejected() {
+        let mut project = Project::default();
+        let target = ParamAddr::effect(mooloop_core::EffectTarget::Channel(0), 0, 1);
+        project.channels[0].automation[0].push(AutomationLane::new(target));
+        project.channels[0].automation[0].push(AutomationLane::new(target));
+        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
     }
 
     #[test]
