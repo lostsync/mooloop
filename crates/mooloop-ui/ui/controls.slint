@@ -491,6 +491,98 @@ export component ParameterKnob inherits Rectangle {
     Tooltip { text: @markdown("\{root.value-text}"); }
 }
 
+// Delay time can be a free-running millisecond value or one of a short,
+// visible set of musical divisions. The audio-facing value remains the same
+// normalized millisecond parameter in both cases; selecting a division simply
+// recalculates it against the current BPM.
+export component TimeDivisionKnob inherits Rectangle {
+    in property <string> label: "TIME";
+    in property <string> tooltip: "Delay time";
+    in-out property <float> value;
+    in property <int> bpm: 120;
+    in-out property <bool> tempo-sync;
+    // 0=1/2, 1=1/4, 2=1/8., 3=1/8T, 4=1/16.
+    in-out property <int> division: 1;
+    in property <float> default-value: 0.7815;
+    callback changed(float);
+    callback tempo-sync-changed(bool);
+    callback division-changed(int);
+
+    private property <float> division-beats: root.division == 0 ? 0.5
+        : root.division == 1 ? 1.0 : root.division == 2 ? 0.75
+        : root.division == 3 ? 1.0 / 3.0 : 0.25;
+    private property <float> effective-ms: root.tempo-sync
+        ? root.division-beats * 60000 / max(root.bpm, 1)
+        : pow(2000, root.value);
+    private property <int> selected-mode: root.tempo-sync ? root.division + 1 : 0;
+
+    width: 230px;
+    height: 80px;
+
+    pure function normalized-for-ms(ms: float) -> float {
+        return clamp(ln(clamp(ms, 1, 2000)) / ln(2000), 0, 1);
+    }
+
+    function set-division(next: int) {
+        let clamped = clamp(next, 0, 4);
+        if (clamped != root.division) {
+            root.division = clamped;
+            root.division-changed(clamped);
+        }
+        root.value = root.normalized-for-ms(root.effective-ms);
+        root.changed(root.value);
+    }
+
+    function select-mode(index: int) {
+        if (index == 0) {
+            if (root.tempo-sync) {
+                root.tempo-sync = false;
+                root.tempo-sync-changed(false);
+            }
+        } else {
+            if (!root.tempo-sync) {
+                root.tempo-sync = true;
+                root.tempo-sync-changed(true);
+            }
+            root.set-division(index - 1);
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+        ParameterKnob {
+            width: 64px;
+            diameter: 40px;
+            label: root.label;
+            tooltip: root.tooltip;
+            value: root.tempo-sync ? root.division * 1.0 : root.value;
+            minimum: 0;
+            maximum: root.tempo-sync ? 4 : 1;
+            default-value: root.tempo-sync ? 1 : root.default-value;
+            step: root.tempo-sync ? 1 : 0;
+            value-text: root.effective-ms >= 100
+                ? round(root.effective-ms) + " ms"
+                : round(root.effective-ms * 10) / 10 + " ms";
+            changed(v) => {
+                if (root.tempo-sync) {
+                    root.set-division(round(v));
+                } else {
+                    root.value = v;
+                    root.changed(v);
+                }
+            }
+        }
+        SelectorBank {
+            options: ["MS", "1/2", "1/4", "1/8.", "1/8T", "1/16"];
+            selected-index: root.selected-mode;
+            segment-width: 26px;
+            tooltip: "Delay time mode";
+            selected(i) => { root.select-mode(i); }
+        }
+    }
+}
+
 export component ParameterFader inherits Rectangle {
     in property <string> label;
     in property <string> tooltip: root.label;

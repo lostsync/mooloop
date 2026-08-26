@@ -313,7 +313,11 @@ boundary.
 - Ten effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
   oversampled, a stereo delay with damped cross-feedable feedback and
-  digital/tape/reverse responses to a moving delay time, and a gate,
+  digital/tape/reverse responses to a moving delay time. Its Time control
+  switches visibly between free ms and half/quarter/dotted-eighth/triplet/
+  sixteenth divisions; while synced, every project BPM change immediately
+  recalculates and sends the ordinary ms parameter to the audio engine. It
+  persists the division, not just its current ms result. It is joined by a gate,
   compressor, and limiter sharing one detector and gain-computer module; a
   seven-band parametric EQ with optional bounded spectrum telemetry; a
   generated-room convolution reverb; and one five-mode modulation processor
@@ -322,8 +326,8 @@ boundary.
   generic host supplies their dry/wet blend, so the DSP returns the processed
   signal only. The reverb prepares a stereo room IR off
   the audio thread, then runs fixed-partition convolution with a host-aligned
-  512-frame latency. Device faces are width-quantized in rack units; delay,
-  gate, and compressor take 2U, while EQ, reverb, and Mod take 3U.
+  512-frame latency. Device faces are width-quantized in rack units; gate and
+  compressor take 2U, while delay, EQ, reverb, and Mod take 3U.
 - The dynamics effects detect on the louder of the two channels and apply one
   gain to both, so compression cannot walk the stereo image around. The
   limiter has no lookahead on purpose: the engine has no plugin-delay

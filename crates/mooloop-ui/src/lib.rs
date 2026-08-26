@@ -887,7 +887,8 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
         | EffectKind::Limiter
         | EffectKind::Plate => 1,
         EffectKind::Buffer => 1,
-        EffectKind::Delay | EffectKind::Gate | EffectKind::Compressor => 2,
+        EffectKind::Gate | EffectKind::Compressor => 2,
+        EffectKind::Delay => 3,
         EffectKind::Eq | EffectKind::Reverb | EffectKind::Modulation => 3,
     }
 }
@@ -920,6 +921,10 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         "{} has more parameters than EffectSlotRow can carry",
         kind.label()
     );
+    if let Some(delay) = slot.params.delay() {
+        p[6] = if delay.tempo_sync { 1.0 } else { 0.0 };
+        p[7] = delay.time_division.to_index() as f32;
+    }
     let mut eq_band_data = Vec::new();
     if let Some(eq) = slot.params.eq() {
         for band in eq.bands {
@@ -2124,6 +2129,38 @@ impl UiState {
                 .map(|c| &mut c.effects),
             EffectTarget::Bus(index) => self.buses.get_mut(index as usize).map(|b| &mut b.effects),
         }
+    }
+
+    /// Resolve every tempo-synced delay to the new transport BPM. The engine
+    /// remains millisecond-only: the resulting values take its normal
+    /// sample-timed parameter path, so all delays move at the next block
+    /// without allocating or rebuilding their rings.
+    fn update_tempo_synced_delay_times(&mut self, bpm: f64) -> Vec<(EffectTarget, u8, f32)> {
+        let mut changes = Vec::new();
+        for (channel, state) in self.channels.iter_mut().enumerate() {
+            for (slot, effect) in state.effects.iter_mut().enumerate() {
+                let EffectParams::Delay(params) = &mut effect.params else {
+                    continue;
+                };
+                if params.tempo_sync {
+                    params.time_ms = params.time_division.time_ms(bpm);
+                    changes.push((EffectTarget::Channel(channel as u8), slot as u8, params.time_ms));
+                }
+            }
+        }
+        for (bus, state) in self.buses.iter_mut().enumerate() {
+            for (slot, effect) in state.effects.iter_mut().enumerate() {
+                let EffectParams::Delay(params) = &mut effect.params else {
+                    continue;
+                };
+                if params.tempo_sync {
+                    params.time_ms = params.time_division.time_ms(bpm);
+                    changes.push((EffectTarget::Bus(bus as u8), slot as u8, params.time_ms));
+                }
+            }
+        }
+        self.sync_effects();
+        changes
     }
 
     /// Rebuild the edited chain's rows. The model itself is installed on the
@@ -3426,12 +3463,33 @@ impl AppUi {
         }
         {
             let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
             window.on_bpm_changed(move |bpm| {
                 let bpm = bpm as f64;
                 // Preserve stream order: the transport adopts the tempo
-                // first, then the pump allocates and publishes replacements.
+                // first, then every synced delay receives its resolved ms
+                // value before any beat-relative buffer replacement.
                 let _ = tx.send(EngineCommand::SetTempo(bpm));
+                let changes = {
+                    let mut state = st.borrow_mut();
+                    let changes = state.update_tempo_synced_delay_times(bpm);
+                    state.dirty = true;
+                    state.revision = state.revision.wrapping_add(1);
+                    changes
+                };
+                for (target, slot, time_ms) in changes {
+                    let _ = tx.send(EngineCommand::SetEffectParam {
+                        target,
+                        slot,
+                        id: mooloop_core::DELAY_PARAM_TIME_MS,
+                        value: time_ms,
+                    });
+                }
                 let _ = tx.resize_buffers(bpm);
+                if let Some(window) = weak.upgrade() {
+                    st.borrow().update_document_title(&window);
+                }
             });
         }
         {
@@ -5527,6 +5585,58 @@ impl AppUi {
                         id,
                         value,
                     });
+                }
+            });
+        }
+
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_delay_tempo_sync_changed(move |slot, enabled| {
+                let mut state = st.borrow_mut();
+                let slot = slot as usize;
+                let Some(effects) = state.effect_chain_mut() else {
+                    return;
+                };
+                let Some(effect) = effects.get_mut(slot) else {
+                    return;
+                };
+                let EffectParams::Delay(params) = &mut effect.params else {
+                    return;
+                };
+                params.tempo_sync = enabled;
+                let row = effect_slot_row(effect);
+                state.effect_slot_model.set_row_data(slot, row);
+                state.dirty = true;
+                state.revision = state.revision.wrapping_add(1);
+                if let Some(window) = weak.upgrade() {
+                    state.update_document_title(&window);
+                }
+            });
+        }
+
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_delay_time_division_changed(move |slot, division| {
+                let mut state = st.borrow_mut();
+                let slot = slot as usize;
+                let Some(effects) = state.effect_chain_mut() else {
+                    return;
+                };
+                let Some(effect) = effects.get_mut(slot) else {
+                    return;
+                };
+                let EffectParams::Delay(params) = &mut effect.params else {
+                    return;
+                };
+                params.time_division = mooloop_core::DelayTimeDivision::from_index(division);
+                let row = effect_slot_row(effect);
+                state.effect_slot_model.set_row_data(slot, row);
+                state.dirty = true;
+                state.revision = state.revision.wrapping_add(1);
+                if let Some(window) = weak.upgrade() {
+                    state.update_document_title(&window);
                 }
             });
         }

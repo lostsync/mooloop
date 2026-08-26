@@ -139,8 +139,9 @@ struct PlaylistClip {
 // Parameters are positional and normalized: `p0` is the first entry in this
 // kind's descriptor table in mooloop-core, `p1` the second, and so on, each
 // in 0..1. Faces convert to natural units for display using the same mapping
-// the descriptor defines. Keeping the row positional means adding an effect
-// kind costs a device face and nothing here.
+// the descriptor defines. Delay additionally uses `p6`/`p7` for its persisted
+// tempo-sync input mode and beat-division selection; its DSP parameter stays
+// at `p0` in milliseconds.
 struct EffectSlotRow {
     // Matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay,
     // 4=Gate, 5=Compressor, 6=Limiter, 7=EQ, 8=Reverb, 9=Mod,
@@ -477,6 +478,8 @@ export component MainWindow inherits Window {
     // slot, descriptor index within the kind, normalized 0..1. One callback
     // covers every parameter of every effect kind.
     callback effect-param-changed(int, int, float);
+    callback delay-tempo-sync-changed(int, bool);
+    callback delay-time-division-changed(int, int);
     // Slot index and an index into the buffer face's fixed debug event table.
     callback effect-buffer-triggered(int, int);
     // Press/release of the buffer face's held reverse control.
@@ -2368,7 +2371,16 @@ export component MainWindow inherits Window {
                                                 cross: slot.p3;
                                                 tone: slot.p4;
                                                 mix: slot.p5;
+                                                bpm: root.bpm;
+                                                tempo-sync: slot.p6 >= 0.5;
+                                                time-division: round(slot.p7);
                                                 time-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                tempo-sync-changed(enabled) => {
+                                                    root.delay-tempo-sync-changed(index, enabled);
+                                                }
+                                                time-division-changed(division) => {
+                                                    root.delay-time-division-changed(index, division);
+                                                }
                                                 feedback-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                 mode-changed(i) => { root.effect-param-changed(index, 2, i * 1.0 / 2.0); }
                                                 cross-changed(v) => { root.effect-param-changed(index, 3, v); }

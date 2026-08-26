@@ -243,6 +243,7 @@ impl AudioNode for DelayEffect {
 mod tests {
     use super::*;
     use crate::event::TimedEvent;
+    use mooloop_core::DelayTimeDivision;
 
     const SR: u32 = 48_000;
 
@@ -294,6 +295,14 @@ mod tests {
             (peak_at as i64 - expected as i64).abs() <= 4,
             "echo landed at {peak_at}, expected about {expected}"
         );
+    }
+
+    #[test]
+    fn beat_divisions_resolve_to_transport_time() {
+        assert!((DelayTimeDivision::Quarter.time_ms(120.0) - 500.0).abs() < f32::EPSILON);
+        assert!((DelayTimeDivision::DottedEighth.time_ms(120.0) - 375.0).abs() < f32::EPSILON);
+        assert!((DelayTimeDivision::EighthTriplet.time_ms(120.0) - (1_000.0 / 6.0)).abs() < 0.001);
+        assert!((DelayTimeDivision::Quarter.time_ms(90.0) - (2_000.0 / 3.0)).abs() < 0.001);
     }
 
     #[test]
@@ -511,6 +520,8 @@ mod tests {
             let mut effect = DelayEffect::new(
                 DelayParams {
                     time_ms: 120.0,
+                    tempo_sync: false,
+                    time_division: DelayTimeDivision::default(),
                     feedback: 0.98,
                     mode,
                     cross: 0.5,
@@ -562,6 +573,8 @@ mod tests {
         let mut effect = DelayEffect::new(
             DelayParams {
                 time_ms,
+                tempo_sync: false,
+                time_division: DelayTimeDivision::default(),
                 feedback: 0.0,
                 mode: DelayMode::Reverse,
                 mix: 1.0,

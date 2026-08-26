@@ -50,7 +50,7 @@ pub use channel::{
     Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS,
 };
 pub use effect::{
-    BitcrushParams, BufferParams, CompressorParams, DelayMode, DelayParams, DriveCurve,
+    BitcrushParams, BufferParams, CompressorParams, DelayMode, DelayParams, DelayTimeDivision, DriveCurve,
     DriveParams, EffectKind, EffectParams, EffectSlotState, EqBand, EqBandKind, EqParams,
     EqPassFilter, EqQProfile, EqSlope, FilterMode, FilterParams, FilterSlope, GateParams, LimiterParams,
     ModulationMode, ModulationParams, ParamCurve, ParamDescriptor, PlateParams, ReverbMaterial,

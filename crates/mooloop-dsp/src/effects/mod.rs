@@ -57,7 +57,12 @@ pub fn build_effect_at_tempo(
         EffectParams::Filter(p) => Box::new(FilterEffect::new(p, sample_rate)),
         EffectParams::Drive(p) => Box::new(DriveEffect::new(p, sample_rate)),
         EffectParams::Bitcrush(p) => Box::new(BitcrushEffect::new(p)),
-        EffectParams::Delay(p) => Box::new(DelayEffect::new(p, sample_rate)),
+        EffectParams::Delay(mut p) => {
+            if p.tempo_sync {
+                p.time_ms = p.time_division.time_ms(bpm);
+            }
+            Box::new(DelayEffect::new(p, sample_rate))
+        }
         EffectParams::Reverb(p) => Box::new(ReverbEffect::new(p, sample_rate)),
         EffectParams::Plate(p) => Box::new(PlateEffect::new(p, sample_rate)),
         EffectParams::Gate(p) => Box::new(GateEffect::new(p, sample_rate)),

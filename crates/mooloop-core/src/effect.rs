@@ -901,6 +901,59 @@ pub enum DelayMode {
     Reverse,
 }
 
+/// Musical durations offered by a tempo-synced delay. The stored value is a
+/// division, rather than its millisecond result, so a project keeps following
+/// its transport tempo after it is saved and reloaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelayTimeDivision {
+    Half,
+    #[default]
+    Quarter,
+    DottedEighth,
+    EighthTriplet,
+    Sixteenth,
+}
+
+impl DelayTimeDivision {
+    pub const ALL: [Self; 5] = [
+        Self::Half,
+        Self::Quarter,
+        Self::DottedEighth,
+        Self::EighthTriplet,
+        Self::Sixteenth,
+    ];
+
+    /// Duration in quarter-note beats.
+    pub fn beats(self) -> f32 {
+        match self {
+            Self::Half => 0.5,
+            Self::Quarter => 1.0,
+            Self::DottedEighth => 0.75,
+            Self::EighthTriplet => 1.0 / 3.0,
+            Self::Sixteenth => 0.25,
+        }
+    }
+
+    pub fn time_ms(self, bpm: f64) -> f32 {
+        self.beats() * (60_000.0 / bpm.max(1.0)) as f32
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|division| *division == self)
+            .unwrap_or(1) as i32
+    }
+}
+
 impl DelayMode {
     pub fn from_index(index: i32) -> Self {
         match index {
@@ -931,6 +984,14 @@ impl DelayMode {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DelayParams {
     pub time_ms: f32,
+    /// Whether `time_ms` is derived from [`Self::time_division`] and the
+    /// project's current BPM. DSP still receives only the resolved ms value.
+    #[serde(default)]
+    pub tempo_sync: bool,
+    /// Persist the musical input value so the delay continues tracking tempo
+    /// changes after a project round-trip.
+    #[serde(default)]
+    pub time_division: DelayTimeDivision,
     /// Feedback gain in `[0, 0.98]`.
     pub feedback: f32,
     pub mode: DelayMode,
@@ -948,6 +1009,8 @@ impl Default for DelayParams {
     fn default() -> Self {
         Self {
             time_ms: 375.0,
+            tempo_sync: false,
+            time_division: DelayTimeDivision::default(),
             feedback: 0.35,
             mode: DelayMode::default(),
             cross: 0.0,

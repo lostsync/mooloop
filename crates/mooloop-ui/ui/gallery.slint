@@ -4,7 +4,7 @@ import {
     AudioOrientation, IconButton, LedIndicator, MiniKnob, MixerFader, MuteButton,
     ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl, SoloButton,
     StereoPeakMeter, ToggleButton, ToolButton, TransportButton, ValueScale, ValueReadout,
-    ZoomScrollBar
+    TimeDivisionKnob, ZoomScrollBar
 } from "controls.slint";
 import {
     ChannelMeter, ClipIndicator, CorrelationMeter, GainReductionMeter, MasterMeter,
@@ -38,6 +38,9 @@ export component ControlGallery inherits Window {
     background: Theme.background;
 
     in-out property <float> linear-value: 0.64;
+    in-out property <float> gallery-delay-time: 0.7815;
+    in-out property <bool> gallery-delay-tempo-sync: true;
+    in-out property <int> gallery-delay-division: 2;
     in-out property <float> frequency: 440;
     in-out property <float> meter-value: -9;
     in-out property <int> segment: 1;
@@ -143,6 +146,14 @@ export component ControlGallery inherits Window {
                         value-text: root.frequency >= 1000
                             ? round(root.frequency / 100) / 10 + " kHz"
                             : round(root.frequency) + " Hz";
+                    }
+                    TimeDivisionKnob {
+                        label: "DELAY";
+                        tooltip: "Milliseconds or tempo-synced delay time";
+                        value <=> root.gallery-delay-time;
+                        bpm: root.gallery-bpm;
+                        tempo-sync <=> root.gallery-delay-tempo-sync;
+                        division <=> root.gallery-delay-division;
                     }
                     ParameterKnob {
                         label: "DISABLED"; value: 0.35; value-text: "35%"; enabled: false;

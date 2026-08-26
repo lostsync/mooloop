@@ -1,27 +1,32 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, SelectorBank } from "controls.slint";
+import { ParameterKnob, SelectorBank, TimeDivisionKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { DelayEchoDisplay } from "device-displays.slint";
 
-// One delay in a channel's device rack. Two units wide: six working controls
-// do not fit the 1U face the other effects use, and UI_DESIGN.md quantizes
-// device width rather than compressing controls. Header and drag come from
+// One delay in a channel's device rack. Three units wide: its musical time
+// selector sits beside the five working controls instead of compressing them.
+// Header and drag come from
 // the shared EffectDeviceShell.
 export component DelayDeviceFace inherits EffectDeviceShell {
     name: "Delay";
-    kind: "FX / 2U";
+    kind: "FX / 3U";
     in-out property <int> mode;      // 0 = digital, 1 = tape, 2 = reverse
     in-out property <float> time;     // normalized 0..1 (1 ms .. 2000 ms)
     in-out property <float> feedback; // normalized 0..1
     in-out property <float> cross;    // normalized 0..1
     in-out property <float> tone;     // normalized 0..1
     in-out property <float> mix;      // normalized 0..1
+    in property <int> bpm: 120;
+    in-out property <bool> tempo-sync;
+    in-out property <int> time-division: 1;
     callback time-changed(float);
     callback feedback-changed(float);
     callback mode-changed(int);
     callback cross-changed(float);
     callback tone-changed(float);
     callback mix-changed(float);
+    callback tempo-sync-changed(bool);
+    callback time-division-changed(int);
 
     // Normalized -> natural, matching ParamCurve::Exponential over [1, 2000].
     private property <float> time-natural: pow(2000, root.time);
@@ -59,17 +64,17 @@ export component DelayDeviceFace inherits EffectDeviceShell {
         }
         HorizontalLayout {
             spacing: 0px;
-            ParameterKnob {
-                width: 85px;
-                diameter: 40px;
+            TimeDivisionKnob {
                 label: "Time";
-                tooltip: "Delay time";
+                tooltip: "Free milliseconds or a tempo-synced beat division";
                 value <=> root.time;
+                bpm: root.bpm;
+                tempo-sync <=> root.tempo-sync;
+                division <=> root.time-division;
                 default-value: 0.7815;
-                value-text: root.time-natural >= 100
-                    ? round(root.time-natural) + " ms"
-                    : round(root.time-natural * 10) / 10 + " ms";
                 changed(v) => { root.time-changed(v); }
+                tempo-sync-changed(enabled) => { root.tempo-sync-changed(enabled); }
+                division-changed(index) => { root.time-division-changed(index); }
             }
             ParameterKnob {
                 width: 85px;
