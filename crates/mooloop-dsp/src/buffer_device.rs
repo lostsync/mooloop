@@ -292,6 +292,10 @@ fn ms_to_frames(ms: f32, sample_rate: u32) -> u32 {
 }
 
 impl AudioNode for BufferDevice {
+    fn buffer_collisions(&self) -> u64 {
+        self.collision_count
+    }
+
     fn process(
         &mut self,
         context: &ProcessContext,
@@ -442,5 +446,122 @@ mod tests {
         let device = BufferDevice::with_bars(48_000, 120.0, 8);
         assert_eq!(device.capacity_frames(), 768_000);
         assert_eq!(device.memory_bytes(), 6_144_000);
+    }
+
+    /// A 100 Hz tone as a pure function of the absolute frame. Unlike the
+    /// ramp, it is centred on zero, so an equal-power crossfade behaves the
+    /// way it does on real audio rather than on a large DC offset.
+    fn tone(frame: usize) -> f32 {
+        (frame as f32 * core::f32::consts::TAU * 100.0 / 48_000.0).sin()
+    }
+
+    /// Drive `total_frames` of `tone` through a device in `block` sized
+    /// chunks, firing `event` at absolute frame `event_frame`, and return the
+    /// left output. Blocking is the only thing that varies between calls.
+    fn render_blocked(
+        block: usize,
+        total_frames: usize,
+        event_frame: usize,
+        event: BufferEvent,
+    ) -> Vec<f32> {
+        let mut device = BufferDevice::with_capacity(100_000);
+        let mut bus = StereoBus::with_capacity(block);
+        let mut out = Vec::with_capacity(total_frames);
+        let mut first = 0;
+        while first < total_frames {
+            let frames = block.min(total_frames - first);
+            for frame in 0..frames {
+                bus.l[frame] = tone(first + frame);
+                bus.r[frame] = -tone(first + frame);
+            }
+            // The event carries an in-block offset, so the same absolute
+            // frame is addressable no matter where the block boundaries fall.
+            let events: &[TimedBufferEvent] = if (first..first + frames).contains(&event_frame) {
+                &[TimedBufferEvent {
+                    offset: (event_frame - first) as u32,
+                    event,
+                }]
+            } else {
+                &[]
+            };
+            device.process(&context(frames), &mut bus, events);
+            out.extend_from_slice(&bus.l[..frames]);
+            first += frames;
+        }
+        out
+    }
+
+    fn max_step(samples: &[f32]) -> f32 {
+        samples
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max)
+    }
+
+    /// The head is driven in absolute ring frames, never in per-block ones, so
+    /// the period the host happens to run at must not be audible. A stutter
+    /// with a crossfade exercises the event, the window wrap, and the return
+    /// in a single render.
+    #[test]
+    fn output_is_identical_across_block_sizes() {
+        const TOTAL: usize = 24_000;
+        const EVENT_FRAME: usize = 8_192;
+        let event = BufferEvent {
+            offset_beats: -0.0625,
+            rate: 1.0,
+            window_beats: Some(0.0625),
+            repeat: Some(8),
+            duration: BufferDuration::UntilNextEvent,
+            crossfade_ms: 2.5,
+        };
+
+        let reference = render_blocked(64, TOTAL, EVENT_FRAME, event);
+        assert!(
+            reference.iter().any(|sample| *sample != 0.0),
+            "reference render was silent"
+        );
+        for block in [128, 256, 1024] {
+            let rendered = render_blocked(block, TOTAL, EVENT_FRAME, event);
+            assert_eq!(
+                reference, rendered,
+                "block size {block} changed the rendered output"
+            );
+        }
+    }
+
+    /// Both halves of the crossfade contract: 2 ms must smooth the jump's
+    /// discontinuity, and zero must leave it intact. A click is a legitimate
+    /// result to ask for, so the second half matters as much as the first.
+    #[test]
+    fn crossfade_declicks_a_jump_and_zero_leaves_the_click() {
+        const TOTAL: usize = 24_000;
+        // Fire on a peak of the tone, and jump back to a trough: half a beat
+        // is 25 whole periods, so the extra hundredth of a beat lands the read
+        // head half a period out of phase — the worst-case step.
+        const EVENT_FRAME: usize = 18_120;
+        let jump = |crossfade_ms| BufferEvent {
+            offset_beats: -0.51,
+            rate: 1.0,
+            window_beats: None,
+            repeat: None,
+            duration: BufferDuration::UntilNextEvent,
+            crossfade_ms,
+        };
+
+        let abrupt = render_blocked(256, TOTAL, EVENT_FRAME, jump(0.0));
+        let declicked = render_blocked(256, TOTAL, EVENT_FRAME, jump(2.0));
+
+        // The tone's own slope is under 0.02 per frame, so anything near the
+        // full 2.0 peak-to-peak step is the discontinuity itself.
+        assert!(
+            max_step(&abrupt) > 1.5,
+            "zero crossfade must leave the discontinuity: step {}",
+            max_step(&abrupt)
+        );
+        assert!(
+            max_step(&declicked) < 0.2,
+            "2 ms crossfade must smooth the discontinuity: step {}",
+            max_step(&declicked)
+        );
     }
 }

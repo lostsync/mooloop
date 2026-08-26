@@ -38,10 +38,12 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-23
-- Sessions: 3
+- Last seen: 2026-08-25
+- Sessions: 4
 - Notes: Parameter descriptors, the modulation design, seven effects, the
-  mixer bus graph, and the near-term focus sequence.
+  mixer bus graph, and the near-term focus sequence. Buffer device stage 1
+  follow-up: collision telemetry, debug trigger surface, and the remaining
+  block-size and crossfade acceptance coverage.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

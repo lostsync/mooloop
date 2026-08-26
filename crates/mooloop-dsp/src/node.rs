@@ -74,6 +74,14 @@ pub trait AudioNode {
         self.latency_frames()
     }
 
+    /// Number of times a retained-audio read head has been overtaken by its
+    /// writer and force-returned to live. Only the buffer device reports a
+    /// nonzero value; the host publishes it as display telemetry so forced
+    /// returns are observable without logging from the audio thread.
+    fn buffer_collisions(&self) -> u64 {
+        0
+    }
+
     /// Process one block in place on `bus`. `events_in` is sorted by sample
     /// offset; nodes that respond to events must split rendering at those
     /// offsets. `events_out` is provided when the engine wants events back

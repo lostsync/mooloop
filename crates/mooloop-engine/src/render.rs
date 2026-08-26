@@ -431,9 +431,18 @@ impl EffectChain {
                     bus.l[frame] = (self.dry.l[frame] * dry + bus.l[frame] * wet) * trim;
                     bus.r[frame] = (self.dry.r[frame] * dry + bus.r[frame] * wet) * trim;
                 }
-                if let Some((meters, _, target)) = device_display {
+                if let Some((meters, telemetry, target)) = device_display {
                     let (left, right) = bus.peak(context.frames);
                     meters.publish_output(target, slot + 1, left, right);
+                    // Retained-audio forced returns are otherwise invisible:
+                    // the device recovers silently and the only trace is this
+                    // counter. Publishing it here keeps the audio thread free
+                    // of logging.
+                    telemetry.publish_buffer_collisions(
+                        target,
+                        slot + 1,
+                        node.buffer_collisions(),
+                    );
                 }
             }
             self.events[slot].clear();
@@ -2187,5 +2196,139 @@ mod tests {
             slot: 3,
         });
         assert!(reclaimed.is_some());
+    }
+
+    /// Render `blocks` blocks of a one-buffer-insert project, optionally
+    /// firing one event as a command before block `trigger_block`, and return
+    /// the concatenated master output.
+    fn render_with_buffer(
+        project: &Project,
+        blocks: usize,
+        frames: usize,
+        trigger_block: usize,
+        trigger: Option<mooloop_core::BufferEvent>,
+        telemetry: Option<&Arc<DeviceTelemetry>>,
+        device: Box<dyn AudioNode + Send>,
+    ) -> Vec<f32> {
+        let mut render = RenderState::from_project(48_000, project, &[]);
+        if let Some(telemetry) = telemetry {
+            render.attach_device_telemetry(telemetry.clone());
+        }
+        let _ = render.apply_structural(install_effect(EffectTarget::Channel(0), 0, device));
+        render.play();
+        let mut out = Vec::with_capacity(blocks * frames);
+        for block in 0..blocks {
+            if block == trigger_block {
+                if let Some(event) = trigger {
+                    render.apply_command(EngineCommand::TriggerBuffer {
+                        target: EffectTarget::Channel(0),
+                        slot: 0,
+                        event,
+                    });
+                }
+            }
+            render.process_block(frames);
+            out.extend_from_slice(&render.master().l[..frames]);
+        }
+        out
+    }
+
+    fn jump_event(offset_beats: f32, rate: f32) -> mooloop_core::BufferEvent {
+        mooloop_core::BufferEvent {
+            offset_beats,
+            rate,
+            window_beats: None,
+            repeat: None,
+            duration: mooloop_core::BufferDuration::UntilNextEvent,
+            // Zero, so the divergence a test observes is the edit itself and
+            // not a fade that would blur the first frames after it.
+            crossfade_ms: 0.0,
+        }
+    }
+
+    /// The whole command path a debug trigger takes: an `EngineCommand`
+    /// carrying one event tuple, reaching an inserted buffer device, and
+    /// changing what the master renders. Follow is deliberately transparent,
+    /// so nothing short of a fired event proves this plumbing works.
+    #[test]
+    fn triggered_buffer_event_alters_rendered_output() {
+        const BLOCKS: usize = 8;
+        const FRAMES: usize = 1024;
+        const TRIGGER_BLOCK: usize = 4;
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+
+        let follow = render_with_buffer(
+            &project,
+            BLOCKS,
+            FRAMES,
+            TRIGGER_BLOCK,
+            None,
+            None,
+            default_effect(mooloop_core::EffectKind::Buffer),
+        );
+        let jumped = render_with_buffer(
+            &project,
+            BLOCKS,
+            FRAMES,
+            TRIGGER_BLOCK,
+            Some(jump_event(-0.05, 1.0)),
+            None,
+            default_effect(mooloop_core::EffectKind::Buffer),
+        );
+
+        let split = TRIGGER_BLOCK * FRAMES;
+        assert_eq!(
+            follow[..split],
+            jumped[..split],
+            "audio before the trigger must be untouched"
+        );
+        assert!(
+            follow[split..].iter().any(|sample| *sample != 0.0),
+            "reference tail was silent, so divergence would prove nothing"
+        );
+        assert!(
+            follow[split..] != jumped[split..],
+            "TriggerBuffer never reached the inserted device"
+        );
+    }
+
+    /// A reverse head and the ring's trailing edge close on each other at 2x,
+    /// so a backward jump must force a return to live and surface as device
+    /// telemetry — the only trace a forced return leaves, since the audio
+    /// thread cannot log. The ring is deliberately tiny here so the collision
+    /// lands inside a short render instead of eight retained bars later.
+    #[test]
+    fn writer_collision_surfaces_as_device_telemetry() {
+        const BLOCKS: usize = 8;
+        const FRAMES: usize = 1024;
+        const TRIGGER_BLOCK: usize = 4;
+        const RING: usize = 4_096;
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+
+        let telemetry = DeviceTelemetry::new();
+        let _ = render_with_buffer(
+            &project,
+            BLOCKS,
+            FRAMES,
+            TRIGGER_BLOCK,
+            Some(jump_event(-0.02, -1.0)),
+            Some(&telemetry),
+            Box::new(mooloop_dsp::BufferDevice::with_capacity(RING)),
+        );
+        // Stage 0 is the source; the insert in slot 0 publishes as stage 1.
+        assert_eq!(telemetry.read_buffer_collisions(0, 1), 1);
+
+        // Follow never detaches, so it can never be overtaken.
+        let quiet = DeviceTelemetry::new();
+        let _ = render_with_buffer(
+            &project,
+            BLOCKS,
+            FRAMES,
+            TRIGGER_BLOCK,
+            None,
+            Some(&quiet),
+            Box::new(mooloop_dsp::BufferDevice::with_capacity(RING)),
+        );
+        assert_eq!(quiet.read_buffer_collisions(0, 1), 0);
     }
 }

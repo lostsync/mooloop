@@ -45,6 +45,11 @@ pub struct DeviceMeters {
 pub struct DeviceTelemetry {
     spectrum_enabled: Vec<AtomicU32>,
     spectrum: Vec<AtomicU32>,
+    /// Running count of retained-audio writer/read-head collisions per device
+    /// stage. A monotonic counter rather than a flag: the UI compares it
+    /// against the value it last saw, so a forced return landing between two
+    /// GUI frames is still noticed.
+    buffer_collisions: Vec<AtomicU32>,
 }
 
 impl DeviceTelemetry {
@@ -57,6 +62,9 @@ impl DeviceTelemetry {
                 .map(|_| AtomicU32::new(0))
                 .collect(),
             spectrum: (0..Self::TARGETS * Self::STAGES * SPECTRUM_BINS)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+            buffer_collisions: (0..Self::TARGETS * Self::STAGES)
                 .map(|_| AtomicU32::new(0))
                 .collect(),
         })
@@ -114,6 +122,22 @@ impl DeviceTelemetry {
         levels
     }
 
+    /// Publish a buffer device's running collision count from the audio
+    /// thread. Unconditional: unlike a spectrum, this costs one atomic store
+    /// and needs no subscription, and it is what makes a forced return to live
+    /// visible while testing.
+    pub fn publish_buffer_collisions(&self, target: usize, stage: usize, collisions: u64) {
+        if let Some(index) = Self::enabled_index(target, stage) {
+            self.buffer_collisions[index].store(collisions as u32, Ordering::Relaxed);
+        }
+    }
+
+    /// Collisions counted by the device in this stage since it was installed.
+    pub fn read_buffer_collisions(&self, target: usize, stage: usize) -> u32 {
+        Self::enabled_index(target, stage)
+            .map_or(0, |index| self.buffer_collisions[index].load(Ordering::Relaxed))
+    }
+
     /// Clear subscriptions and retained display data before a complete graph
     /// replacement. The UI re-subscribes the new project after it is visible.
     pub fn clear_spectra(&self) {
@@ -121,6 +145,9 @@ impl DeviceTelemetry {
             cell.store(0, Ordering::Relaxed);
         }
         for cell in &self.spectrum {
+            cell.store(0, Ordering::Relaxed);
+        }
+        for cell in &self.buffer_collisions {
             cell.store(0, Ordering::Relaxed);
         }
     }
