@@ -2250,6 +2250,66 @@ mod tests {
     }
 
     #[test]
+    fn a_lane_drives_the_buffer_read_head() {
+        // The point of the whole exercise: a curve drawn in a clip moves a
+        // retained-audio read head, with no gesture and no MIDI involved.
+        let mut channel = ProjectChannel::sampler(0, 1);
+        channel
+            .setup
+            .effects
+            .push(mooloop_core::EffectSlotState::new(
+                mooloop_core::EffectParams::Buffer(mooloop_core::BufferParams {
+                    bars: 1,
+                    ..mooloop_core::BufferParams::default()
+                }),
+            ));
+        let project = synth_project(channel);
+        let target = ParamAddr::effect(
+            EffectTarget::Channel(0),
+            0,
+            mooloop_core::BUFFER_PARAM_OFFSET_BEATS,
+        );
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        // Fill the ring before asking the head to look backward into it.
+        render.process_block(2048);
+
+        for (id, tick, value) in [(1u32, 0u32, 0.0f32), (2, 96, 0.25)] {
+            render.apply_command(EngineCommand::UpsertAutomationPoint {
+                pattern: 0,
+                channel: 0,
+                target,
+                point: mooloop_core::AutomationPoint::new(id, tick, value),
+            });
+        }
+        for _ in 0..8 {
+            render.process_block(2048);
+        }
+
+        let events: Vec<f32> = render.strips[0]
+            .effects
+            .event_scratch
+            .iter()
+            .filter_map(|event| match event.event {
+                Event::ParamValue {
+                    id: mooloop_core::BUFFER_PARAM_OFFSET_BEATS,
+                    value,
+                } => Some(value),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            events.len() > 1,
+            "the lane did not resolve at the control rate: {events:?}"
+        );
+        assert!(
+            events.iter().any(|value| *value > 0.0),
+            "the lane never opened the offset: {events:?}"
+        );
+    }
+
+    #[test]
     fn mixed_source_project_renders_all_preallocated_nodes() {
         let mut project = Project {
             channels: vec![

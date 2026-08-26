@@ -2536,6 +2536,10 @@ export component MainWindow inherits Window {
                                                 slot-count: root.effect-slots.length;
                                                 bypassed: slot.bypassed;
                                                 collisions: slot.buffer-collisions;
+                                                offset: slot.p0;
+                                                crossfade: slot.p1;
+                                                offset-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                crossfade-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                 trigger(id) => { root.effect-buffer-triggered(index, id); }
                                                 reverse-pressed() => { root.effect-buffer-reverse-pressed(index); }
                                                 reverse-released() => { root.effect-buffer-reverse-released(index); }

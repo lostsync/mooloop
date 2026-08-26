@@ -237,6 +237,9 @@ fn render_effect_header_comparison() {
         effect_slot(2, 1),
         effect_slot(5, 2),
         reverb,
+        // The buffer's own knobs, so its face is covered now that it has a
+        // parameter surface and is not only a debug trigger panel.
+        effect_slot(11, 1),
     ]))));
 
     let snapshot = ui.window().take_snapshot().unwrap();

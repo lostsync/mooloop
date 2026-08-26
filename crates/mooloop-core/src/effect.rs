@@ -75,7 +75,7 @@ impl EffectKind {
             Self::Gate => &GATE_DESCRIPTORS,
             Self::Compressor => &COMPRESSOR_DESCRIPTORS,
             Self::Limiter => &LIMITER_DESCRIPTORS,
-            Self::Buffer => &[],
+            Self::Buffer => &BUFFER_DESCRIPTORS,
         }
     }
 
@@ -1547,19 +1547,63 @@ pub struct LimiterParams {
 pub struct BufferParams {
     #[serde(default = "default_buffer_bars")]
     pub bars: u8,
+    /// How far behind the writer the read head sits, in beats. Zero follows
+    /// the input. This is the buffer's one continuous control: the device is
+    /// otherwise driven by discrete [`crate::BufferEvent`] gestures, and a
+    /// gesture is not something a curve can express.
+    #[serde(default)]
+    pub offset_beats: f32,
+    #[serde(default = "default_buffer_crossfade_ms")]
+    pub crossfade_ms: f32,
 }
 
 const fn default_buffer_bars() -> u8 {
     8
 }
 
+const fn default_buffer_crossfade_ms() -> f32 {
+    2.5
+}
+
 impl Default for BufferParams {
     fn default() -> Self {
         Self {
             bars: default_buffer_bars(),
+            offset_beats: 0.0,
+            crossfade_ms: default_buffer_crossfade_ms(),
         }
     }
 }
+
+/// `Event::ParamValue` ids for [`BufferParams`].
+///
+/// `bars` is deliberately absent. Resizing the ring reallocates, which the
+/// engine does off-thread through a prepared replacement; a control-rate
+/// parameter cannot do that, and pretending otherwise would put an allocation
+/// on the audio thread the first time someone drew a curve on it.
+pub const BUFFER_PARAM_OFFSET_BEATS: u32 = 0;
+pub const BUFFER_PARAM_CROSSFADE_MS: u32 = 1;
+
+static BUFFER_DESCRIPTORS: [ParamDescriptor; 2] = [
+    ParamDescriptor {
+        id: BUFFER_PARAM_OFFSET_BEATS,
+        name: "Offset",
+        unit: "beats",
+        min: 0.0,
+        max: 16.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_CROSSFADE_MS,
+        name: "Crossfade",
+        unit: "ms",
+        min: 0.5,
+        max: 50.0,
+        curve: ParamCurve::Exponential,
+        default: 2.5,
+    },
+];
 
 impl Default for LimiterParams {
     fn default() -> Self {
@@ -1817,7 +1861,11 @@ impl EffectParams {
                 LIMITER_PARAM_GAIN_DB => Some(p.gain_db),
                 _ => None,
             },
-            Self::Buffer(_) => None,
+            Self::Buffer(p) => match id {
+                BUFFER_PARAM_OFFSET_BEATS => Some(p.offset_beats),
+                BUFFER_PARAM_CROSSFADE_MS => Some(p.crossfade_ms),
+                _ => None,
+            },
         }
     }
 
@@ -1950,7 +1998,11 @@ impl EffectParams {
                 LIMITER_PARAM_GAIN_DB => p.gain_db = value,
                 _ => return None,
             },
-            Self::Buffer(_) => return None,
+            Self::Buffer(p) => match id {
+                BUFFER_PARAM_OFFSET_BEATS => p.offset_beats = value,
+                BUFFER_PARAM_CROSSFADE_MS => p.crossfade_ms = value,
+                _ => return None,
+            },
         }
         Some(value)
     }

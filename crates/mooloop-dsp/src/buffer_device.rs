@@ -9,6 +9,17 @@ use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 
 use crate::{AudioNode, Event, EventList, ProcessContext, StereoBus};
 
+/// A parameter change placed at a sample offset within a process block. The
+/// buffer takes these separately from [`TimedBufferEvent`] because the two are
+/// different in kind: an event is a gesture that creates a head, a parameter
+/// is a standing value the head reads.
+#[derive(Clone, Copy)]
+pub struct TimedBufferParam {
+    pub offset: u32,
+    pub id: u32,
+    pub value: f32,
+}
+
 /// A [`BufferEvent`] placed at a sample offset within a process block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TimedBufferEvent {
@@ -47,6 +58,12 @@ struct Scrub {
     /// interval: long enough that per-message steps read as continuous
     /// motion, short enough that the head does not lag the hand.
     chase_frames: f64,
+    /// Set when the scrub is driven by the `offset_beats` parameter rather
+    /// than by a hand. The target is then `write_head - offset_frames`
+    /// recomputed every frame, not a value pushed in per control message:
+    /// a held offset has to play forward at unity, and a target that only
+    /// moved 32 frames at a time would sag between messages and warble.
+    offset_frames: Option<f64>,
 }
 
 /// A stopped platter must go silent. Holding at rate zero would repeat one
@@ -80,11 +97,22 @@ pub struct BufferDevice {
     /// observable diagnostic for the host/tests without logging on the RT
     /// thread.
     collision_count: u64,
+    /// Standing crossfade length, set by `BUFFER_PARAM_CROSSFADE_MS`. Gesture
+    /// events carry their own and are unaffected.
+    crossfade_ms: f32,
+    /// An offset carried in from the saved parameter set, applied on the first
+    /// block. Construction has no `ProcessContext`, so it cannot know how many
+    /// frames a beat is, and a loaded project must still come up with its head
+    /// where the document says it was.
+    pending_offset_beats: Option<f32>,
 }
 
 impl BufferDevice {
     pub fn new(params: BufferParams, sample_rate: u32, bpm: f64) -> Self {
-        Self::with_bars(sample_rate, bpm, u32::from(params.bars.max(1)))
+        let mut device = Self::with_bars(sample_rate, bpm, u32::from(params.bars.max(1)));
+        device.crossfade_ms = params.crossfade_ms.clamp(0.0, 50.0);
+        device.pending_offset_beats = (params.offset_beats > 0.0).then_some(params.offset_beats);
+        device
     }
     /// Allocate a ring for `bars` 4/4 bars at the supplied tempo.
     pub fn with_bars(sample_rate: u32, bpm: f64, bars: u32) -> Self {
@@ -105,6 +133,8 @@ impl BufferDevice {
             scrub: None,
             scrub_gain: 0.0,
             collision_count: 0,
+            crossfade_ms: 2.5,
+            pending_offset_beats: None,
         }
     }
 
@@ -134,9 +164,35 @@ impl BufferDevice {
         bus: &mut StereoBus,
         events: &[TimedBufferEvent],
     ) {
+        self.process_with_params(context, bus, events, &[]);
+    }
+
+    /// As [`Self::process`], with parameter changes applied at their own
+    /// sample offsets. Both slices must be in ascending offset order.
+    pub fn process_with_params(
+        &mut self,
+        context: &ProcessContext,
+        bus: &mut StereoBus,
+        events: &[TimedBufferEvent],
+        params: &[TimedBufferParam],
+    ) {
         debug_assert!(context.frames <= bus.capacity());
+        if let Some(beats) = self.pending_offset_beats.take() {
+            self.set_offset_beats(beats, context);
+        }
         let mut event_index = 0;
+        let mut param_index = 0;
         for frame in 0..context.frames {
+            // Parameters first: a gesture arriving on the same frame as an
+            // offset change should see the new crossfade, and a gesture owns
+            // the head afterwards either way.
+            while let Some(timed) = params.get(param_index) {
+                if timed.offset as usize != frame {
+                    break;
+                }
+                self.set_param(timed.id, timed.value, context);
+                param_index += 1;
+            }
             while let Some(timed) = events.get(event_index) {
                 if timed.offset as usize != frame {
                     break;
@@ -186,6 +242,56 @@ impl BufferDevice {
             bus.r[frame] = output_r;
             self.write_head += 1;
             self.advance_head();
+        }
+    }
+
+    fn set_param(&mut self, id: u32, value: f32, context: &ProcessContext) {
+        match id {
+            mooloop_core::BUFFER_PARAM_OFFSET_BEATS => self.set_offset_beats(value, context),
+            mooloop_core::BUFFER_PARAM_CROSSFADE_MS => {
+                self.crossfade_ms = value.clamp(0.0, 50.0)
+            }
+            _ => {}
+        }
+    }
+
+    /// Place the read head `beats` behind the writer, or return it to live at
+    /// zero.
+    ///
+    /// This is position mode, the same as a hand scrub: the head chases the
+    /// offset and the closing speed *is* the playback rate, so sweeping the
+    /// offset is a scrub and holding it is delayed playback at unity. That is
+    /// the whole reason the buffer is worth automating, and it is why there is
+    /// no separate rate parameter — a rate would contradict the position.
+    ///
+    /// A gesture head outranks the parameter. Automation does not fight a
+    /// JUMP/REV/STUT that is already running; the offset re-asserts itself on
+    /// the next control tick after that gesture ends, which for a lane is
+    /// within 32 frames.
+    fn set_offset_beats(&mut self, beats: f32, context: &ProcessContext) {
+        let frames_per_beat = context.sample_rate as f64 * 60.0 / context.bpm.max(1.0);
+        let offset_frames = f64::from(beats.max(0.0)) * frames_per_beat;
+        let ours = self
+            .scrub
+            .is_some_and(|scrub| scrub.offset_frames.is_some());
+        // Below a frame there is no offset to speak of, and asking the head to
+        // sit zero frames behind the writer is a collision by definition.
+        if offset_frames < 1.0 {
+            if ours {
+                if let Some(head) = self.head {
+                    self.return_live(head, head.position);
+                }
+            }
+            return;
+        }
+        if self.head.is_some() && !ours {
+            return;
+        }
+        if !ours {
+            self.scrub_begin(context, self.crossfade_ms);
+        }
+        if let Some(scrub) = &mut self.scrub {
+            scrub.offset_frames = Some(offset_frames);
         }
     }
 
@@ -258,6 +364,7 @@ impl BufferDevice {
         self.scrub = Some(Scrub {
             target: position,
             chase_frames: (context.sample_rate as f64 / 200.0).max(1.0),
+            offset_frames: None,
         });
         self.scrub_gain = 0.0;
     }
@@ -288,7 +395,11 @@ impl BufferDevice {
             // Speed is whatever it takes to close the remaining gap, so the
             // hand's motion sets the pitch without ever being asked for a
             // rate.
-            let rate = ((scrub.target - head.position) / scrub.chase_frames) as f32;
+            let target = match scrub.offset_frames {
+                Some(offset) => self.write_head as f64 - offset,
+                None => scrub.target,
+            };
+            let rate = ((target - head.position) / scrub.chase_frames) as f32;
             head.rate = rate.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
             self.scrub_gain = (head.rate.abs() / SCRUB_MUTE_RATE).min(1.0);
         }
@@ -416,11 +527,31 @@ impl AudioNode for BufferDevice {
             offset: 0,
             event: BufferEvent::live(),
         };
+        const EMPTY_PARAM: TimedBufferParam = TimedBufferParam {
+            offset: 0,
+            id: 0,
+            value: 0.0,
+        };
         let mut buffer_events = [EMPTY; 256];
         let mut len = 0;
+        let mut param_events = [EMPTY_PARAM; 256];
+        let mut param_len = 0;
         for timed in events_in.iter() {
             match timed.event {
+                Event::ParamValue { id, value } => {
+                    if param_len < param_events.len() {
+                        param_events[param_len] = TimedBufferParam {
+                            offset: timed.offset,
+                            id,
+                            value,
+                        };
+                        param_len += 1;
+                    }
+                }
                 Event::Buffer(event) => {
+                    if len == buffer_events.len() {
+                        continue;
+                    }
                     buffer_events[len] = TimedBufferEvent {
                         offset: timed.offset,
                         event,
@@ -432,13 +563,18 @@ impl AudioNode for BufferDevice {
                 // sample loop as a second timed stream.
                 Event::BufferRelease => self.release(),
                 Event::BufferScrub { delta_frames } => {
-                    self.scrub_begin(context, 2.5);
+                    self.scrub_begin(context, self.crossfade_ms);
                     self.scrub_move(f64::from(delta_frames));
                 }
                 _ => {}
             }
         }
-        self.process(context, bus, &buffer_events[..len]);
+        self.process_with_params(
+            context,
+            bus,
+            &buffer_events[..len],
+            &param_events[..param_len],
+        );
     }
 }
 
@@ -462,6 +598,150 @@ mod tests {
             bus.l[frame] = (first + frame) as f32;
             bus.r[frame] = -(first as f32 + frame as f32);
         }
+    }
+
+    fn offset_param(offset: u32, beats: f32) -> TimedBufferParam {
+        TimedBufferParam {
+            offset,
+            id: mooloop_core::BUFFER_PARAM_OFFSET_BEATS,
+            value: beats,
+        }
+    }
+
+    /// Fill the ring with a ramp so a read position can be identified from the
+    /// sample value alone.
+    fn primed(frames: usize) -> (BufferDevice, StereoBus) {
+        let mut device = BufferDevice::with_capacity(frames * 2);
+        let mut bus = StereoBus::with_capacity(frames);
+        fill_ramp(&mut bus, 0, frames);
+        device.process(&context(frames), &mut bus, &[]);
+        (device, bus)
+    }
+
+    #[test]
+    fn a_held_offset_settles_into_playback_at_unity() {
+        // One beat at 120 BPM and 48 kHz is 24 000 frames.
+        let (mut device, mut bus) = primed(48_000);
+        fill_ramp(&mut bus, 48_000, 48_000);
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[],
+            &[offset_param(0, 1.0)],
+        );
+        assert!(!device.is_following());
+
+        // After the chase has converged, consecutive output samples must
+        // advance by one, which is unity rate rather than a sagging chase.
+        fill_ramp(&mut bus, 96_000, 48_000);
+        device.process_with_params(&context(48_000), &mut bus, &[], &[offset_param(0, 1.0)]);
+        let tail = &bus.l[40_000..40_010];
+        for pair in tail.windows(2) {
+            assert!(
+                (pair[1] - pair[0] - 1.0).abs() < 0.05,
+                "offset playback is not running at unity: {tail:?}"
+            );
+        }
+        // ...and it must be reading roughly a beat behind the writer.
+        let lag = (96_000 + 40_000) as f32 - tail[0];
+        assert!(
+            (lag - 24_000.0).abs() < 1_500.0,
+            "expected about one beat of lag, got {lag}"
+        );
+    }
+
+    #[test]
+    fn returning_the_offset_to_zero_returns_the_head_to_live() {
+        let (mut device, mut bus) = primed(48_000);
+        fill_ramp(&mut bus, 48_000, 48_000);
+        device.process_with_params(&context(48_000), &mut bus, &[], &[offset_param(0, 1.0)]);
+        assert!(!device.is_following());
+
+        fill_ramp(&mut bus, 96_000, 48_000);
+        device.process_with_params(&context(48_000), &mut bus, &[], &[offset_param(0, 0.0)]);
+        assert!(device.is_following());
+        assert!(!device.is_scrubbing());
+    }
+
+    #[test]
+    fn sweeping_the_offset_moves_the_head_rather_than_jumping_it() {
+        let (mut device, mut bus) = primed(48_000);
+        // Ramp the offset across the block the way a lane would, one message
+        // per 32 frames.
+        let params: Vec<TimedBufferParam> = (0..48_000 / 32)
+            .map(|tick| {
+                offset_param(tick * 32, tick as f32 / (48_000.0 / 32.0))
+            })
+            .collect();
+        fill_ramp(&mut bus, 48_000, 48_000);
+        device.process_with_params(&context(48_000), &mut bus, &[], &params);
+
+        // `fill_ramp` writes the absolute frame number, so an output sample
+        // *is* the position it was read from. Read the second half, past the
+        // scrub's fade-in from silence — a head at rate zero is deliberately
+        // muted, so early samples report gain, not position.
+        let travel = &bus.l[24_000..48_000];
+        for pair in travel.windows(2) {
+            let step = pair[1] - pair[0];
+            assert!(
+                (0.0..1.0).contains(&step),
+                "the head should crawl forward, slower than the writer: {step}"
+            );
+        }
+        // Half a beat of offset opens across the second half of the block, so
+        // the head must fall behind by about that much and no more.
+        let fell_behind = (travel[0] - travel[travel.len() - 1]) + travel.len() as f32;
+        assert!(
+            (fell_behind - 12_000.0).abs() < 1_000.0,
+            "expected to lose about half a beat over the sweep, lost {fell_behind}"
+        );
+    }
+
+    #[test]
+    fn a_gesture_outranks_the_offset_parameter_while_it_runs() {
+        let (mut device, mut bus) = primed(48_000);
+        fill_ramp(&mut bus, 48_000, 48_000);
+        let jump = TimedBufferEvent {
+            offset: 0,
+            event: BufferEvent {
+                offset_beats: -2.0,
+                duration: BufferDuration::Gate,
+                ..BufferEvent::live()
+            },
+        };
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[jump],
+            &[offset_param(24_000, 1.0)],
+        );
+        // The parameter arrived mid-block while the gesture owned the head; it
+        // must not have converted that head into an offset scrub.
+        assert!(!device.is_scrubbing());
+        assert!(!device.is_following());
+
+        // Once the gesture releases, the next control tick takes the offset.
+        device.release();
+        fill_ramp(&mut bus, 96_000, 48_000);
+        device.process_with_params(&context(48_000), &mut bus, &[], &[offset_param(0, 1.0)]);
+        assert!(device.is_scrubbing());
+    }
+
+    #[test]
+    fn a_saved_offset_is_applied_on_the_first_block() {
+        let mut device = BufferDevice::new(
+            mooloop_core::BufferParams {
+                bars: 1,
+                offset_beats: 1.0,
+                crossfade_ms: 2.5,
+            },
+            48_000,
+            120.0,
+        );
+        let mut bus = StereoBus::with_capacity(1_000);
+        fill_ramp(&mut bus, 0, 1_000);
+        device.process(&context(1_000), &mut bus, &[]);
+        assert!(device.is_scrubbing());
     }
 
     #[test]

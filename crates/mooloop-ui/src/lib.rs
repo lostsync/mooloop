@@ -4070,6 +4070,13 @@ impl AppUi {
                 // Clamp the delta by the group, not per note: letting notes
                 // clip individually would silently collapse a chord onto one
                 // pitch at the edge of the range.
+                //
+                // Bound by note *starts*, not by their tails. A note is
+                // allowed to overhang the pattern's logical end -- that is
+                // how a shortened pattern keeps its notes -- so measuring the
+                // tail would refuse to move a selection right the moment any
+                // member overhung, which is not a rule the single-note drag
+                // ever had.
                 let (mut min_tick, mut max_tick) = (i64::MAX, i64::MIN);
                 let (mut min_note, mut max_note) = (i32::MAX, i32::MIN);
                 for note in st.channels[channel].notes[pattern]
@@ -4077,18 +4084,16 @@ impl AppUi {
                     .filter(|note| moving.contains(&note.id))
                 {
                     min_tick = min_tick.min(note.start_tick as i64);
-                    max_tick = max_tick.max(note.start_tick as i64 + note.duration_ticks as i64);
+                    max_tick = max_tick.max(note.start_tick as i64);
                     min_note = min_note.min(note.note as i32);
                     max_note = max_note.max(note.note as i32);
                 }
                 if min_tick == i64::MAX {
                     return;
                 }
-                let tick_delta = tick_delta
-                    .max(-min_tick)
-                    .min(length_ticks as i64 - max_tick)
-                    .max(-min_tick);
-                let note_delta = note_delta.max(36 - min_note).min(84 - max_note);
+                let last_start = length_ticks.saturating_sub(1) as i64;
+                let tick_delta = tick_delta.clamp(-min_tick, (last_start - max_tick).max(-min_tick));
+                let note_delta = note_delta.clamp(36 - min_note, (84 - max_note).max(36 - min_note));
 
                 let mut edited = Vec::with_capacity(moving.len());
                 let mut touched_steps = Vec::with_capacity(moving.len() * 2);
@@ -4293,9 +4298,12 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_automation_lane_selected(move |index| {
                 let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let destinations = st.automation_destinations();
                 let Some(target) = destinations
@@ -4328,6 +4336,16 @@ impl AppUi {
                     target,
                 });
                 st.refresh_automation(&window);
+                drop(st);
+                // An open lane is saved state even before it has a point in
+                // it, so opening one has to mark the document dirty.
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Automation lane opened",
+                );
             });
         }
         {

@@ -343,6 +343,14 @@ boundary.
   its offsets on top, so an LFO wobbles around a drawn curve. Both resolve at
   the 32-frame control rate into the destination slot's existing event list,
   and no effect needed a change to receive them.
+- The retained-audio buffer is descriptor-addressed: `Offset` places the read
+  head behind the writer in beats and `Crossfade` sets the declick length.
+  Offset is position mode, the same as a hand scrub — the head chases the
+  position and the closing speed *is* the playback rate — so sweeping it is a
+  scrub and holding it is delayed playback at unity. `bars` is deliberately
+  not a parameter: resizing the ring reallocates, which happens off-thread.
+  The JUMP/REV/STUT gestures are unchanged and outrank the offset while they
+  run; the offset re-asserts on the next control tick after one ends.
 - Generators are still not addressable. They ship whole parameter structs
   rather than descriptor-addressed params, so no generator parameter can be
   automated or modulated yet, and the automation picker lists effects only.

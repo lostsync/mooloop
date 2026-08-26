@@ -45,7 +45,9 @@ work session you can recall being part of, and don't stress over precision.
   follow-up: collision telemetry, debug trigger surface, and the remaining
   block-size and crossfade acceptance coverage. Clip automation end to end:
   breakpoint lanes on `ParamAddr`, engine resolution composed with the
-  modulation matrix, and the piano roll's velocity and automation lanes.
+  modulation matrix, and the piano roll's velocity and automation lanes, then
+  the buffer's own offset/crossfade parameters so a lane can move its read
+  head.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

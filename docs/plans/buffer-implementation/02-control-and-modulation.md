@@ -138,6 +138,15 @@ What landed:
 - Velocity lane plus one variable lane below the roll, toggling
   independently, with a device-grouped picker.
 
+Then the buffer itself, which had been the blocker: `EffectKind::Buffer`
+returned an empty descriptor table, so the one device the whole exercise was
+aimed at could not be automated. It now exposes `Offset` and `Crossfade`.
+Offset reuses the existing scrub as *position mode*, which is what makes it
+worth automating: sweep it and the head scrubs, hold it and the head plays
+back at unity that far behind. There is deliberately no rate parameter — a
+rate would contradict a position — and `bars` stays out of the table because
+resizing the ring reallocates off-thread.
+
 Still open here:
 
 - **The modulator source chip.** The plan's gesture is unchanged: no patch

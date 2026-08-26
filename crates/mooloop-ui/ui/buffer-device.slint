@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ToolButton } from "controls.slint";
+import { ParameterKnob, ToolButton } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // A momentary trigger: it reports press and release separately rather than
@@ -43,14 +43,20 @@ component HeldButton inherits Rectangle {
     Tooltip { text: @markdown("\{root.tooltip}"); }
 }
 
-// One retained-audio buffer insert. Stage 1 has no parameter surface — the
-// device is a wire until an event tuple fires at it — so the face is a debug
-// trigger surface: three fixed events that make the read head's behaviour
-// immediately audible, plus the one diagnostic the audio thread can publish.
+// One retained-audio buffer insert.
 //
-// The note-mapping and per-step parameter-lock layers that will eventually
-// produce these events are Stage 2; these buttons are what stands in until
-// then, and they go through the same `TriggerBuffer` command those will.
+// Two surfaces, because the device has two kinds of control. OFFSET and XFADE
+// are standing parameters: descriptor-addressed, so an automation lane or the
+// modulation matrix can drive them like any other knob. Sweeping OFFSET is a
+// scrub — the head chases the position and the closing speed *is* the playback
+// rate — and holding it is delayed playback at unity.
+//
+// The three buttons are gestures, which a curve cannot express: they fire a
+// complete event tuple that creates a head with its own window and repeat
+// count. They remain a debug surface standing in for the note-mapping and
+// parameter-lock layers, and go through the same `TriggerBuffer` command
+// those will. A running gesture outranks OFFSET, which re-asserts itself on
+// the next control tick after the gesture ends.
 export component BufferDeviceFace inherits EffectDeviceShell {
     name: "Buffer";
     kind: "BUFFER / 1U";
@@ -58,8 +64,16 @@ export component BufferDeviceFace inherits EffectDeviceShell {
     // detached head. Monotonic, so a collision landing between two GUI
     // frames still shows up.
     in property <int> collisions;
+    // Normalized 0..1 against the descriptor tables in mooloop-core.
+    in-out property <float> offset;    // 0..16 beats behind the writer
+    in-out property <float> crossfade; // 0.5..50 ms
+    callback offset-changed(float);
+    callback crossfade-changed(float);
     // Index into the fixed debug event table, matching TRIGGERS below.
     callback trigger(int);
+
+    private property <float> offset-beats: root.offset * 16;
+    private property <float> crossfade-ms: 0.5 * pow(100, root.crossfade);
     // Reverse is held rather than latched: it runs while the control is down.
     callback reverse-pressed();
     callback reverse-released();
@@ -97,6 +111,34 @@ export component BufferDeviceFace inherits EffectDeviceShell {
         }
 
         HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 52px;
+                diameter: 36px;
+                label: "Offset";
+                tooltip: "How far behind the input the read head sits";
+                value <=> root.offset;
+                default-value: 0;
+                value-text: root.offset-beats < 0.05
+                    ? "live"
+                    : round(root.offset-beats * 100) / 100 + " beats";
+                changed(v) => { root.offset-changed(v); }
+            }
+            ParameterKnob {
+                width: 52px;
+                diameter: 36px;
+                label: "Xfade";
+                tooltip: "Crossfade applied when the head detaches or returns";
+                value <=> root.crossfade;
+                default-value: 0.348;
+                value-text: round(root.crossfade-ms * 10) / 10 + " ms";
+                changed(v) => { root.crossfade-changed(v); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        HorizontalLayout {
+            height: 26px;
             spacing: 4px;
             ToolButton {
                 text: "JUMP";
@@ -115,5 +157,7 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 clicked => { root.trigger(2); }
             }
         }
+
+        Rectangle { vertical-stretch: 1; }
     }
 }

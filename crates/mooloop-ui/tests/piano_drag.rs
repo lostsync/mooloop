@@ -67,6 +67,26 @@ fn harness(notes: Vec<NoteCell>) -> MainWindow {
 /// would, then release. Multiple moves are the point: one move cannot
 /// distinguish a working drag from one that stalls after the first step.
 fn drag(window: &slint::Window, from: (f32, f32), to: (f32, f32)) {
+    drag_with(window, from, to, None);
+}
+
+/// As `drag`, with a modifier held for the whole gesture.
+fn drag_with(
+    window: &slint::Window,
+    from: (f32, f32),
+    to: (f32, f32),
+    modifier: Option<slint::platform::Key>,
+) {
+    if let Some(key) = modifier {
+        window.dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+    }
+    drag_inner(window, from, to);
+    if let Some(key) = modifier {
+        window.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+    }
+}
+
+fn drag_inner(window: &slint::Window, from: (f32, f32), to: (f32, f32)) {
     let pos = |(x, y): (f32, f32)| LogicalPosition::new(x, y);
     window.dispatch_event(WindowEvent::PointerMoved {
         position: pos(from),
@@ -349,5 +369,96 @@ fn plain_click_reports_no_modifiers_but_shift_click_does() {
         &[(7, false, false), (8, true, false)],
         "a plain click should report no modifiers; a Shift-click should report shift=true \
          so Rust can add to the selection instead of replacing it"
+    );
+}
+
+/// The gesture Adam reported broken: two notes selected, only one movable.
+/// The roll reports the grabbed note's landing position and Rust applies that
+/// delta to the rest, so what this pins is that the drag keeps reporting the
+/// grabbed note's own position for the whole travel.
+#[test]
+fn dragging_one_note_of_a_selection_reports_its_own_landing_position() {
+    let mut notes = two_notes();
+    for note in &mut notes {
+        note.selected = true;
+    }
+    let ui = harness(notes);
+    let moves = Rc::new(std::cell::RefCell::new(Vec::<(i32, i32)>::new()));
+    let sink = moves.clone();
+    ui.on_piano_note_moved(move |id, tick, _| sink.borrow_mut().push((id, tick)));
+
+    drag(
+        ui.window(),
+        (tick_x(0) + 6.0, note_centre_y(60)),
+        (tick_x(4 * TICKS_PER_STEP) + 6.0, note_centre_y(60)),
+    );
+
+    let moves = moves.borrow();
+    assert!(!moves.is_empty(), "the drag reported nothing");
+    assert!(
+        moves.iter().all(|(id, _)| *id == 7),
+        "the drag switched notes mid-gesture: {moves:?}"
+    );
+    assert_eq!(
+        moves.last().unwrap().1,
+        4 * TICKS_PER_STEP,
+        "the grabbed note did not land under the pointer: {moves:?}"
+    );
+}
+
+#[test]
+fn ctrl_drag_duplicates_once_and_continues_on_the_copy() {
+    let ui = harness(one_note());
+    let duplications = Rc::new(std::cell::RefCell::new(Vec::<i32>::new()));
+    let sink = duplications.clone();
+    // Stand in for Rust's real duplication, which returns the copy's ID.
+    ui.on_piano_selection_duplicated(move |anchor| {
+        sink.borrow_mut().push(anchor);
+        99
+    });
+    let moves = Rc::new(std::cell::RefCell::new(Vec::<i32>::new()));
+    let move_sink = moves.clone();
+    ui.on_piano_note_moved(move |id, _, _| move_sink.borrow_mut().push(id));
+
+    drag_with(
+        ui.window(),
+        (tick_x(0) + 6.0, note_centre_y(60)),
+        (tick_x(4 * TICKS_PER_STEP) + 6.0, note_centre_y(60)),
+        Some(slint::platform::Key::Control),
+    );
+
+    assert_eq!(
+        *duplications.borrow(),
+        vec![7],
+        "Ctrl-drag must duplicate exactly once, naming the grabbed note"
+    );
+    let moves = moves.borrow();
+    assert!(
+        moves.iter().all(|id| *id == 99),
+        "the drag did not continue on the copy: {moves:?}"
+    );
+}
+
+#[test]
+fn shift_drag_leaves_the_grid() {
+    let ui = harness(one_note());
+    let moves = Rc::new(std::cell::RefCell::new(Vec::<i32>::new()));
+    let sink = moves.clone();
+    ui.on_piano_note_moved(move |_, tick, _| sink.borrow_mut().push(tick));
+
+    // Half a step across. Snapped, every report would be 0 or a whole step;
+    // free, the ticks in between are reachable.
+    let half_step = tick_x(TICKS_PER_STEP / 2) - tick_x(0);
+    drag_with(
+        ui.window(),
+        (tick_x(0) + 6.0, note_centre_y(60)),
+        (tick_x(0) + 6.0 + half_step, note_centre_y(60)),
+        Some(slint::platform::Key::Shift),
+    );
+
+    let moves = moves.borrow();
+    assert!(
+        moves.iter().any(|tick| *tick % TICKS_PER_STEP != 0),
+        "Shift-drag still snapped to the grid: {moves:?}"
     );
 }
