@@ -8,7 +8,7 @@ fn write_snapshot(
 ) -> Result<(), slint::PlatformError> {
     let snapshot = concepts.window().take_snapshot()?;
     let mut ppm = format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
-    for pixel in snapshot.as_bytes().chunks_exact(4) {
+    for pixel in snapshot.as_bytes().as_chunks::<4>().0 {
         ppm.extend_from_slice(&pixel[..3]);
     }
     std::fs::write(path, ppm).expect("failed to write device rack snapshot");

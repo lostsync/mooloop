@@ -8,7 +8,7 @@ use std::rc::Rc;
 fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variable: &str) {
     if let Ok(path) = std::env::var(variable) {
         let mut ppm = format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
-        for rgba in snapshot.as_bytes().chunks_exact(4) {
+        for rgba in snapshot.as_bytes().as_chunks::<4>().0 {
             ppm.extend_from_slice(&rgba[..3]);
         }
         std::fs::write(path, ppm).unwrap();

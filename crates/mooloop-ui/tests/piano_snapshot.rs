@@ -40,7 +40,7 @@ fn render_piano_snapshot() {
     if let Ok(path) = std::env::var("MOOLOOP_PIANO_SNAPSHOT") {
         let mut ppm =
             format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
-        for rgba in snapshot.as_bytes().chunks_exact(4) {
+        for rgba in snapshot.as_bytes().as_chunks::<4>().0 {
             ppm.extend_from_slice(&rgba[..3]);
         }
         std::fs::write(&path, ppm).unwrap();
@@ -161,7 +161,7 @@ fn render_piano_lanes_snapshot() {
     if let Ok(path) = std::env::var("MOOLOOP_PIANO_LANES_SNAPSHOT") {
         let mut ppm =
             format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
-        for rgba in snapshot.as_bytes().chunks_exact(4) {
+        for rgba in snapshot.as_bytes().as_chunks::<4>().0 {
             ppm.extend_from_slice(&rgba[..3]);
         }
         std::fs::write(&path, ppm).unwrap();
