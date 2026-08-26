@@ -4984,11 +4984,9 @@ impl AppUi {
                             sync_command_availability(&window, &commands.borrow());
                         }
                     }
-                    6 => {
-                        if queue_channel_delete(&tx, &st, &window, index, "Channel deleted") {
-                            commands.borrow_mut().project_edit_pending = true;
-                            sync_command_availability(&window, &commands.borrow());
-                        }
+                    6 if queue_channel_delete(&tx, &st, &window, index, "Channel deleted") => {
+                        commands.borrow_mut().project_edit_pending = true;
+                        sync_command_availability(&window, &commands.borrow());
                     }
                     _ => {}
                 }
@@ -6442,7 +6440,7 @@ impl AppUi {
                                 (LoadTarget::Channel, LoadedDocument::Channel(setup)) => {
                                     let mut project = current;
                                     let selected = project.selected_channel as usize;
-                                    project.channels[selected].setup = setup;
+                                    project.channels[selected].setup = *setup;
                                     let mut samples = current_samples;
                                     samples[selected] = loaded_samples.into_iter().next().flatten();
                                     Some((project, samples, false))

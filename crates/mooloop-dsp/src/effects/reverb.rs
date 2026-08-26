@@ -78,8 +78,7 @@ pub struct PreparedIr {
 
 impl PreparedIr {
     pub fn from_stereo(ir: &StereoIr) -> Self {
-        let partitions =
-            (ir.frames().max(1) + CONVOLUTION_BLOCK_FRAMES - 1) / CONVOLUTION_BLOCK_FRAMES;
+        let partitions = ir.frames().max(1).div_ceil(CONVOLUTION_BLOCK_FRAMES);
         let mut left = vec![Complex::ZERO; partitions * FFT_FRAMES];
         let mut right = vec![Complex::ZERO; partitions * FFT_FRAMES];
         let mut scratch = [Complex::ZERO; FFT_FRAMES];
@@ -87,18 +86,18 @@ impl PreparedIr {
         for part in 0..partitions {
             let start = part * CONVOLUTION_BLOCK_FRAMES;
             scratch.fill(Complex::ZERO);
-            for i in 0..CONVOLUTION_BLOCK_FRAMES {
+            for (i, bin) in scratch.iter_mut().take(CONVOLUTION_BLOCK_FRAMES).enumerate() {
                 if let Some(sample) = ir.left.get(start + i) {
-                    scratch[i].re = *sample;
+                    bin.re = *sample;
                 }
             }
             fft(&mut scratch, false);
             left[part * FFT_FRAMES..(part + 1) * FFT_FRAMES].copy_from_slice(&scratch);
 
             scratch.fill(Complex::ZERO);
-            for i in 0..CONVOLUTION_BLOCK_FRAMES {
+            for (i, bin) in scratch.iter_mut().take(CONVOLUTION_BLOCK_FRAMES).enumerate() {
                 if let Some(sample) = ir.right.get(start + i) {
-                    scratch[i].re = *sample;
+                    bin.re = *sample;
                 }
             }
             fft(&mut scratch, false);

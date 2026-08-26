@@ -103,6 +103,9 @@ pub(crate) struct PreparedProject {
 /// The ordered control stream consumed at block boundaries. Project swaps
 /// share this queue with value commands so edits before and after a load can
 /// never cross the generation boundary.
+// This ring buffer is preallocated. Boxing `EngineCommand` to shrink its
+// elements would deallocate that box on the realtime callback.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum RealtimeCommand {
     Engine(EngineCommand),
     Structural(StructuralCommand),

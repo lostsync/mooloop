@@ -5,6 +5,7 @@
 //! Makes ~4 s of four-on-the-floor kick noise on system playback.
 
 use mooloop_core::{EngineCommand, EngineEvent};
+use mooloop_dsp::SampleData;
 use mooloop_engine::Engine;
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,7 @@ fn main() {
     let (engine, mut handle) =
         Engine::new(mooloop_engine::AudioConfig::default()).expect("failed to open engine");
     let _keep_alive = engine;
+    handle.load_sample(0, SampleData::default_kick(handle.sample_rate()));
 
     // Four-on-the-floor so there's no ambiguity about silence-vs-no-steps.
     for step in [0, 4, 8, 12] {

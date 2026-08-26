@@ -2850,6 +2850,7 @@ name = "mooloop-app"
 version = "0.1.1"
 dependencies = [
  "mooloop-core",
+ "mooloop-dsp",
  "mooloop-engine",
  "mooloop-ui",
 ]

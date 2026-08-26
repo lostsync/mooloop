@@ -53,8 +53,6 @@ pub enum RetriggerMode {
     Layer,
 }
 
-/// All sampler parameters, in the units the DSP and UI share. All points are
-
 impl LoopMode {
     pub fn from_index(index: i32) -> Self {
         match index {
@@ -105,6 +103,7 @@ impl RetriggerMode {
     }
 }
 
+/// All sampler parameters, in the units the DSP and UI share. All points are
 /// fractions of the sample length in `[0, 1]`; times are seconds.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SamplerParams {

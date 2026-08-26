@@ -1726,8 +1726,7 @@ impl RenderState {
         for strip in &mut self.buses {
             strip.bus.clear(frames);
         }
-        for index in 0..active_channels {
-            let ticks = modulator_ticks[index];
+        for (index, &ticks) in modulator_ticks.iter().take(active_channels).enumerate() {
             if self.strips[index].output.muted {
                 continue;
             }

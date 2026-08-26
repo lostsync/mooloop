@@ -134,7 +134,7 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 22] = [
         unit: "",
         min: 1.0,
         max: MAX_SAMPLER_VOICES as f32,
-        curve: ParamCurve::Stepped(MAX_SAMPLER_VOICES as u8),
+        curve: ParamCurve::Stepped(MAX_SAMPLER_VOICES),
         default: 1.0,
     },
     stepped(SAMPLER_PARAM_RETRIGGER_MODE, "Retrigger", 2, 0.0),
@@ -306,7 +306,7 @@ static POLY_DESCRIPTORS: [ParamDescriptor; 32] = {
         unit: "",
         min: 1.0,
         max: MAX_POLY_VOICES as f32,
-        curve: ParamCurve::Stepped(MAX_POLY_VOICES as u8),
+        curve: ParamCurve::Stepped(MAX_POLY_VOICES),
         default: 8.0,
     };
     out[31] = unit(SYNTH_PARAM_SPREAD, "Spread", 0.3);
@@ -387,7 +387,7 @@ fn osc_set(osc: &mut OscParams, offset: u32, value: f32) -> bool {
 fn osc_slot(id: u32) -> Option<(usize, u32)> {
     let index = id.checked_sub(100)?;
     let oscillator = (index / 10) as usize;
-    (oscillator < 3).then(|| (oscillator, index % 10))
+    (oscillator < 3).then_some((oscillator, index % 10))
 }
 
 fn lfo_get(lfo: &LfoParams, id: u32) -> Option<f32> {

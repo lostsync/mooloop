@@ -84,7 +84,7 @@ pub struct SaveReport {
 pub enum LoadedDocument {
     Song(Project),
     Kit(Kit),
-    Channel(ChannelSetup),
+    Channel(Box<ChannelSetup>),
     Generator(ChannelSource),
 }
 
@@ -643,7 +643,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             validate_envelope(&envelope, "channel")?;
             validate_setups(std::slice::from_ref(&envelope.document))?;
             (
-                LoadedDocument::Channel(envelope.document),
+                LoadedDocument::Channel(Box::new(envelope.document)),
                 envelope.asset_mode,
             )
         }
@@ -1408,7 +1408,7 @@ mod tests {
         save_channel(&channel_path, &setup, AssetMode::Referenced).unwrap();
         let loaded_channel = load_bundle(&channel_path).unwrap();
         assert_eq!(loaded_channel.asset_mode, AssetMode::Referenced);
-        assert_eq!(loaded_channel.document, LoadedDocument::Channel(setup));
+        assert_eq!(loaded_channel.document, LoadedDocument::Channel(Box::new(setup)));
     }
 
     #[test]
@@ -1548,7 +1548,7 @@ mod tests {
         assert!(!channel_path.join("samples").exists());
         assert_eq!(
             load_bundle(&channel_path).unwrap().document,
-            LoadedDocument::Channel(channel)
+            LoadedDocument::Channel(Box::new(channel))
         );
     }
 
@@ -1807,7 +1807,10 @@ id = "default_kick"
         let path = temp.path().join("screamer.mooloop-channel");
         save_channel_preset(&path, &setup, info.clone(), AssetMode::Embedded).unwrap();
         let loaded = load_bundle(&path).unwrap();
-        assert_eq!(loaded.document, LoadedDocument::Channel(setup.clone()));
+        assert_eq!(
+            loaded.document,
+            LoadedDocument::Channel(Box::new(setup.clone()))
+        );
 
         let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
         let header: Header = toml::from_str(&manifest).unwrap();
