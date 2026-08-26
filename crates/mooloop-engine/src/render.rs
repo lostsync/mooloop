@@ -5,15 +5,16 @@ use std::sync::Arc;
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
     compile_bus_graph, ChannelSource, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
-    EngineCommand, MonoSynthParams, PolySynthParams, Project, SamplerParams, DEFAULT_STEPS,
-    MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    EngineCommand, ModRack, MonoSynthParams, ParamAddr, ParamOwner, PolySynthParams, Project,
+    SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    MAX_MODULATORS_PER_CHANNEL,
 };
 #[cfg(test)]
 use mooloop_dsp::build_effect;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, DrumSynth,
-    DryAlign, Event, EventList, MonoSynth, PolySynth, ProcessContext, SampleData, Sampler,
-    SpectrumAnalyzer, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
+    DryAlign, Event, EventList, ModulatorRack, MonoSynth, PolySynth, ProcessContext, SampleData,
+    Sampler, SpectrumAnalyzer, StereoBus, TimedEvent, CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
 };
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, PlayheadMeters};
@@ -47,6 +48,13 @@ type Reclaim = Vec<ReclaimedEffect>;
 /// of 256 possible slots would make empty chains prohibitively expensive.
 const MAX_PENDING_EFFECT_PARAMS: usize = 8;
 
+/// `MAX_BLOCK_SIZE` is the executor's explicit block-size boundary. Capturing
+/// one value for each rack slot at every control-rate boundary lets every
+/// effect in a channel read the exact same LFO timeline without allocating or
+/// advancing the source more than once.
+const MAX_CONTROL_TICKS_PER_BLOCK: usize = MAX_BLOCK_SIZE / CONTROL_RATE_FRAMES;
+type ControlOutputs = [[f32; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK];
+
 /// Maximum linear gain of a container input/output trim: +12 dB. The UI
 /// works in dB and clamps there; this bounds what a hand-edited song file or
 /// a stale command can do.
@@ -62,6 +70,16 @@ fn effect_resource_key(params: mooloop_core::EffectParams) -> Option<u64> {
 #[derive(Clone, Copy)]
 struct PendingEffectParams {
     events: [Option<TimedEvent>; MAX_PENDING_EFFECT_PARAMS],
+}
+
+/// The already-ticked control signal for one channel's current block. It is
+/// deliberately a read-only view: only `RenderState` advances modulators, so
+/// graph order cannot accidentally change their phase.
+struct ModulationBlock<'a> {
+    channel: u8,
+    rack: &'a ModRack,
+    outputs: &'a ControlOutputs,
+    ticks: usize,
 }
 
 impl PendingEffectParams {
@@ -118,6 +136,11 @@ struct EffectChain {
     /// Tracks a slot's persisted device identity independently of the trait
     /// object. Prepared resource replacements use this to refuse stale work.
     kinds: [Option<mooloop_core::EffectKind>; MAX_EFFECTS_PER_CHANNEL],
+    /// The authoritative knob value for each installed effect. Nodes retain
+    /// only the resolved value they were last sent; keeping the base here is
+    /// what lets a knob move underneath an active modulator without fighting
+    /// it.
+    base_params: [Option<mooloop_core::EffectParams>; MAX_EFFECTS_PER_CHANNEL],
     /// Control-side identity of an asynchronously prepared device resource.
     /// Ordinary effects leave this empty; resource-backed replacements must
     /// match it before they are allowed to take a slot.
@@ -155,6 +178,7 @@ impl EffectChain {
             nodes: std::array::from_fn(|_| None),
             bound: 0,
             kinds: [None; MAX_EFFECTS_PER_CHANNEL],
+            base_params: [None; MAX_EFFECTS_PER_CHANNEL],
             resource_keys: [None; MAX_EFFECTS_PER_CHANNEL],
             events: [PendingEffectParams::empty(); MAX_EFFECTS_PER_CHANNEL],
             event_scratch: EventList::empty(),
@@ -185,6 +209,7 @@ impl EffectChain {
         }
         self.bypassed = [false; MAX_EFFECTS_PER_CHANNEL];
         self.kinds = [None; MAX_EFFECTS_PER_CHANNEL];
+        self.base_params = [None; MAX_EFFECTS_PER_CHANNEL];
         self.resource_keys = [None; MAX_EFFECTS_PER_CHANNEL];
         self.wet_dry = [1.0; MAX_EFFECTS_PER_CHANNEL];
         self.input_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
@@ -214,6 +239,7 @@ impl EffectChain {
     ) -> ReclaimedEffect {
         if slot < MAX_EFFECTS_PER_CHANNEL {
             self.kinds[slot] = Some(kind);
+            self.base_params[slot] = Some(kind.default_params());
             self.resource_keys[slot] = resource_key;
             self.bound = self.bound.max(slot + 1);
             ReclaimedEffect {
@@ -280,6 +306,9 @@ impl EffectChain {
         if let Some(kind) = self.kinds.get_mut(slot) {
             *kind = None;
         }
+        if let Some(params) = self.base_params.get_mut(slot) {
+            *params = None;
+        }
         if let Some(resource_key) = self.resource_keys.get_mut(slot) {
             *resource_key = None;
         }
@@ -294,6 +323,7 @@ impl EffectChain {
         if slot_a < MAX_EFFECTS_PER_CHANNEL && slot_b < MAX_EFFECTS_PER_CHANNEL {
             self.nodes.swap(slot_a, slot_b);
             self.kinds.swap(slot_a, slot_b);
+            self.base_params.swap(slot_a, slot_b);
             self.resource_keys.swap(slot_a, slot_b);
             self.events.swap(slot_a, slot_b);
             self.bypassed.swap(slot_a, slot_b);
@@ -321,6 +351,59 @@ impl EffectChain {
                 offset: 0,
                 event: Event::ParamValue { id, value },
             });
+        }
+    }
+
+    /// Update a knob's base value through the descriptor table. This is the
+    /// only path that writes base effect state after installation.
+    fn set_base_param(&mut self, slot: usize, id: u32, value: f32) -> Option<f32> {
+        self.base_params.get_mut(slot)?.as_mut()?.set(id, value)
+    }
+
+    fn base_param(&self, slot: usize, id: u32) -> Option<f32> {
+        self.base_params.get(slot)?.as_ref()?.get(id)
+    }
+
+    fn modulation_events_for_slot(&mut self, slot: usize, modulation: &ModulationBlock<'_>) {
+        let Some(kind) = self.kinds.get(slot).copied().flatten() else {
+            return;
+        };
+        let Some(params) = self.base_params.get(slot).copied().flatten() else {
+            return;
+        };
+
+        for descriptor in kind.descriptors() {
+            let destination = ParamAddr::effect(
+                EffectTarget::Channel(modulation.channel),
+                slot as u8,
+                descriptor.id,
+            );
+            if !modulation
+                .rack
+                .destinations()
+                .any(|address| address == destination)
+            {
+                continue;
+            }
+            let Some(base) = params.get(descriptor.id) else {
+                continue;
+            };
+            let base_normalized = descriptor.to_normalized(base);
+            for tick in 0..modulation.ticks {
+                let offset = (tick * CONTROL_RATE_FRAMES) as u32;
+                let offset_normalized = modulation
+                    .rack
+                    .offset_for(destination, &modulation.outputs[tick]);
+                let value = descriptor
+                    .from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
+                let _ = self.event_scratch.push_ordered(TimedEvent {
+                    offset,
+                    event: Event::ParamValue {
+                        id: descriptor.id,
+                        value,
+                    },
+                });
+            }
         }
     }
 
@@ -375,6 +458,7 @@ impl EffectChain {
             if !displaced.is_empty() {
                 reclaim.push(displaced);
             }
+            self.base_params[slot] = Some(effect.params);
             self.bypassed[slot] = effect.bypassed;
             self.wet_dry[slot] = effect.wet_dry.clamp(0.0, 1.0);
             self.input_trim[slot] = effect.input_trim.clamp(0.0, MAX_TRIM_GAIN);
@@ -387,6 +471,7 @@ impl EffectChain {
         context: &ProcessContext,
         bus: &mut StereoBus,
         device_display: Option<(&DeviceMeters, &DeviceTelemetry, usize)>,
+        modulation: Option<&ModulationBlock<'_>>,
     ) {
         for slot in 0..self.bound {
             if let Some((_, telemetry, target)) = device_display {
@@ -421,7 +506,7 @@ impl EffectChain {
                 }
                 continue;
             }
-            if let Some(node) = &mut self.nodes[slot] {
+            if self.nodes[slot].is_some() {
                 let input_trim = self.input_trim[slot];
                 for frame in 0..context.frames {
                     bus.l[frame] *= input_trim;
@@ -441,6 +526,12 @@ impl EffectChain {
                 }
                 self.event_scratch.clear();
                 self.events[slot].copy_to(&mut self.event_scratch);
+                if let Some(modulation) = modulation {
+                    self.modulation_events_for_slot(slot, modulation);
+                }
+                // `modulation_events_for_slot` mutates the shared scratch
+                // list, so take the node borrow only after that work.
+                let node = self.nodes[slot].as_mut().expect("checked above");
                 node.process(context, bus, &self.event_scratch, None);
                 let wet = self.wet_dry[slot];
                 let dry = 1.0 - wet;
@@ -715,6 +806,12 @@ pub(crate) struct RenderState {
     /// audio thread. The executor only installs or walks this value.
     bus_graph: CompiledBusGraph,
     events: Vec<EventList>,
+    /// The saved matrix and the runnable sources are deliberately separate:
+    /// the former is editable/persisted configuration; the latter contains
+    /// LFO phase and other realtime-only state.
+    modulation: Vec<ModRack>,
+    modulators: Vec<ModulatorRack>,
+    control_outputs: Vec<ControlOutputs>,
     sample_rate: u32,
     /// Nodes displaced from effect slots this block, awaiting handoff to the
     /// reclaim ring (realtime playback) or plain drop (offline render).
@@ -746,6 +843,11 @@ impl RenderState {
             buses: (0..MAX_BUSES).map(|_| BusStrip::new()).collect(),
             bus_graph: CompiledBusGraph::default(),
             events: (0..MAX_CHANNELS).map(|_| EventList::empty()).collect(),
+            modulation: (0..MAX_CHANNELS).map(|_| ModRack::default()).collect(),
+            modulators: (0..MAX_CHANNELS).map(|_| ModulatorRack::new()).collect(),
+            control_outputs: (0..MAX_CHANNELS)
+                .map(|_| [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK])
+                .collect(),
             sample_rate,
             reclaim: Vec::new(),
             meters: BusMeters::new(),
@@ -834,6 +936,14 @@ impl RenderState {
                 strip.reset_slot(DeviceKind::Sampler, &mut self.reclaim);
             }
         }
+        for index in 0..MAX_CHANNELS {
+            let modulation = project
+                .channels
+                .get(index)
+                .map(|channel| channel.setup.modulation)
+                .unwrap_or_default();
+            self.set_channel_modulation(index, modulation);
+        }
         for (index, strip) in self.buses.iter_mut().enumerate() {
             match project.buses.get(index) {
                 Some(setup) => {
@@ -872,6 +982,97 @@ impl RenderState {
 
     fn chain_mut(&mut self, target: EffectTarget) -> Option<&mut EffectChain> {
         Self::chain_for(&mut self.strips, &mut self.buses, target)
+    }
+
+    /// Install a complete saved rack while retaining a same-kind LFO's phase.
+    /// Copying the small matrix is realtime-safe; `ModulatorRack::set_slot`
+    /// owns the phase-preserving detail.
+    fn set_channel_modulation(&mut self, channel: usize, modulation: ModRack) {
+        let (Some(saved), Some(runtime)) = (
+            self.modulation.get_mut(channel),
+            self.modulators.get_mut(channel),
+        ) else {
+            return;
+        };
+        let previous = *saved;
+        *saved = modulation;
+        for (slot, params) in modulation.slots.into_iter().enumerate() {
+            runtime.set_slot(slot, params);
+        }
+        // A removed route must return the device to its knob value at the
+        // next block. Without this, it would hold the final LFO-resolved value
+        // until someone happened to touch that knob again.
+        let Some(strip) = self.strips.get_mut(channel) else {
+            return;
+        };
+        for destination in previous.destinations() {
+            if modulation
+                .destinations()
+                .any(|current| current == destination)
+            {
+                continue;
+            }
+            let ParamAddr {
+                scope: EffectTarget::Channel(owner_channel),
+                owner: ParamOwner::Effect { slot },
+                param,
+            } = destination
+            else {
+                continue;
+            };
+            if owner_channel != channel as u8 {
+                continue;
+            }
+            if let Some(base) = strip.effects.base_param(slot as usize, param) {
+                strip.effects.queue_param(slot as usize, param, base);
+            }
+        }
+    }
+
+    fn effect_is_modulated(&self, target: EffectTarget, slot: u8, id: u32) -> bool {
+        let EffectTarget::Channel(channel) = target else {
+            return false;
+        };
+        self.modulation.get(channel as usize).is_some_and(|rack| {
+            rack.destinations()
+                .any(|destination| destination == ParamAddr::effect(target, slot, id))
+        })
+    }
+
+    /// Change the stored base, then immediately queue it only if a control
+    /// signal is not about to resolve that destination for this block.
+    fn set_effect_param(&mut self, target: EffectTarget, slot: u8, id: u32, value: f32) {
+        let Some(value) = self
+            .chain_mut(target)
+            .and_then(|chain| chain.set_base_param(slot as usize, id, value))
+        else {
+            return;
+        };
+        if !self.effect_is_modulated(target, slot, id) {
+            if let Some(chain) = self.chain_mut(target) {
+                chain.queue_param(slot as usize, id, value);
+            }
+        }
+    }
+
+    /// Tick one channel's source rack for every 32-frame subdivision and
+    /// capture each output before advancing it. The final subdivision can be
+    /// shorter; its event still starts at its exact frame offset.
+    fn tick_channel_modulators(&mut self, channel: usize, frames: usize) -> usize {
+        let Some(runtime) = self.modulators.get_mut(channel) else {
+            return 0;
+        };
+        let Some(outputs) = self.control_outputs.get_mut(channel) else {
+            return 0;
+        };
+        let mut tick = 0;
+        for offset in (0..frames).step_by(CONTROL_RATE_FRAMES) {
+            let span = (frames - offset).min(CONTROL_RATE_FRAMES);
+            runtime.tick(self.sample_rate, span);
+            outputs[tick] = *runtime.outputs();
+            tick += 1;
+        }
+        tick
     }
 
     /// Apply a structural change (install/remove of a boxed node). Called on
@@ -967,6 +1168,7 @@ impl RenderState {
                 let channel = self.sequencer.active_channels();
                 if let Some(strip) = self.strips.get_mut(channel) {
                     strip.reset_slot(source, &mut self.reclaim);
+                    self.set_channel_modulation(channel, ModRack::default());
                     self.sequencer.clear_channel(channel);
                     self.sequencer.set_active_channels(channel + 1);
                 }
@@ -975,6 +1177,7 @@ impl RenderState {
                 let active = self.sequencer.active_channels();
                 if let Some(channel) = active.checked_sub(1) {
                     self.strips[channel].reset_slot(DeviceKind::Sampler, &mut self.reclaim);
+                    self.set_channel_modulation(channel, ModRack::default());
                     self.sequencer.set_active_channels(channel);
                 }
             }
@@ -1126,11 +1329,11 @@ impl RenderState {
                 slot,
                 id,
                 value,
-            } => {
-                if let Some(chain) = self.chain_mut(target) {
-                    chain.queue_param(slot as usize, id, value);
-                }
-            }
+            } => self.set_effect_param(target, slot, id, value),
+            EngineCommand::SetChannelModulation {
+                channel,
+                modulation,
+            } => self.set_channel_modulation(channel as usize, modulation),
             EngineCommand::TriggerBuffer {
                 target,
                 slot,
@@ -1305,15 +1508,20 @@ impl RenderState {
         for strip in &mut self.buses {
             strip.bus.clear(frames);
         }
-        for (index, strip) in self
-            .strips
-            .iter_mut()
-            .enumerate()
-            .take(self.sequencer.active_channels())
-        {
-            if strip.output.muted {
+        for index in 0..self.sequencer.active_channels() {
+            // A muted channel's effects do not process, but its free-running
+            // sources still advance so unmuting does not restart its LFO.
+            let ticks = self.tick_channel_modulators(index, frames);
+            if self.strips[index].output.muted {
                 continue;
             }
+            let modulation = ModulationBlock {
+                channel: index as u8,
+                rack: &self.modulation[index],
+                outputs: &self.control_outputs[index],
+                ticks,
+            };
+            let strip = &mut self.strips[index];
             strip.bus.clear(frames);
             strip.process(&context, &self.events[index]);
             let source_peak = strip.bus.peak(frames);
@@ -1325,6 +1533,7 @@ impl RenderState {
                 &context,
                 &mut strip.bus,
                 Some((&self.device_meters, &self.device_telemetry, index)),
+                Some(&modulation),
             );
             strip.output.apply_pan(&mut strip.bus, frames);
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
@@ -1355,6 +1564,7 @@ impl RenderState {
                     &self.device_telemetry,
                     MAX_CHANNELS + index,
                 )),
+                None,
             );
             strip.output.apply_balance(&mut strip.bus, frames);
             // A muted bus still processes, so a delay or reverb tail on it
@@ -1577,6 +1787,110 @@ mod tests {
         render.apply_command(EngineCommand::Stop);
         render.apply_command(EngineCommand::Play);
         assert_eq!(render.process_block(256).peak_l, 0.0);
+    }
+
+    #[test]
+    fn lfo_resolves_filter_cutoff_at_the_control_rate_from_its_base_value() {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        channel
+            .setup
+            .effects
+            .push(mooloop_core::EffectSlotState::filter(
+                mooloop_core::FilterParams {
+                    cutoff_hz: 1_000.0,
+                    resonance: 0.0,
+                    mode: mooloop_core::FilterMode::LowPass,
+                },
+            ));
+        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+            mooloop_core::ModLfoParams {
+                // 32 frames advance the LFO by a quarter-cycle at 48 kHz,
+                // giving this block four clear control-rate landmarks.
+                rate_hz: 375.0,
+                ..mooloop_core::ModLfoParams::default()
+            },
+        ));
+        assert!(channel
+            .setup
+            .modulation
+            .add_route(mooloop_core::ModRoute {
+                source_slot: 0,
+                destination: ParamAddr::effect(
+                    EffectTarget::Channel(0),
+                    0,
+                    mooloop_core::FILTER_PARAM_CUTOFF_HZ,
+                ),
+                depth: 0.25,
+                polarity: mooloop_core::ModPolarity::Bipolar,
+            })
+            .is_some());
+
+        let project = synth_project(channel);
+        let mut fixed_project = project.clone();
+        fixed_project.channels[0].setup.modulation = ModRack::default();
+        let mut fixed = RenderState::from_project(48_000, &fixed_project, &[]);
+        fixed.play();
+        fixed.process_block(128);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        // This command changes the base, not an absolute value that the LFO
+        // will overwrite. It is deliberately issued before the block whose
+        // event list we inspect.
+        render.apply_command(EngineCommand::SetEffectParam {
+            target: EffectTarget::Channel(0),
+            slot: 0,
+            id: mooloop_core::FILTER_PARAM_CUTOFF_HZ,
+            value: 1_000.0,
+        });
+        render.play();
+        render.process_block(128);
+
+        let cutoff_events: Vec<_> = render.strips[0]
+            .effects
+            .event_scratch
+            .iter()
+            .filter_map(|event| match event.event {
+                Event::ParamValue {
+                    id: mooloop_core::FILTER_PARAM_CUTOFF_HZ,
+                    value,
+                } => Some((event.offset, value)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            cutoff_events
+                .iter()
+                .map(|(offset, _)| *offset)
+                .collect::<Vec<_>>(),
+            vec![0, 32, 64, 96],
+        );
+        let values: Vec<_> = cutoff_events.iter().map(|(_, value)| *value).collect();
+        assert!(
+            (values[0] - 1_000.0).abs() < 1.0,
+            "base event was {values:?}"
+        );
+        assert!(
+            values[1] > values[0] * 3.0,
+            "LFO did not open cutoff: {values:?}"
+        );
+        assert!(
+            values[3] < values[0] * 0.4,
+            "LFO did not close cutoff: {values:?}"
+        );
+        assert_eq!(
+            render.strips[0].effects.base_params[0]
+                .unwrap()
+                .get(mooloop_core::FILTER_PARAM_CUTOFF_HZ),
+            Some(1_000.0),
+        );
+        let audible_difference: f32 = render.master().l[..128]
+            .iter()
+            .zip(&fixed.master().l[..128])
+            .map(|(modulated, fixed)| (modulated - fixed).abs())
+            .sum();
+        assert!(
+            audible_difference > 0.01,
+            "LFO modulation did not change the rendered signal"
+        );
     }
 
     #[test]
@@ -2109,7 +2423,7 @@ mod tests {
         let mut bus = StereoBus::with_capacity(MAX_BLOCK_SIZE);
         bus.l[0] = 1.0;
         bus.r[0] = 1.0;
-        chain.process(&context, &mut bus, None);
+        chain.process(&context, &mut bus, None, None);
 
         assert!(
             bus.l[..LATENCY].iter().all(|s| *s == 0.0),

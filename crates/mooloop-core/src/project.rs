@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::{
     default_buses, BusSetup, Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter,
-    MonoSynthParams, NoteEvent, NoteId, PatternPlacement, PlaybackMode, PolySynthParams,
+    ModRack, MonoSynthParams, NoteEvent, NoteId, PatternPlacement, PlaybackMode, PolySynthParams,
     SamplerParams, SnareCharacter, DEFAULT_STEPS,
 };
 
@@ -146,6 +146,10 @@ pub struct ChannelSetup {
     /// `MonoSynthParams.lfo`).
     #[serde(default)]
     pub effects: Vec<crate::EffectSlotState>,
+    /// Per-channel modulator slots and their matrix routes. The default keeps
+    /// projects written before modulation was added completely compatible.
+    #[serde(default)]
+    pub modulation: ModRack,
 }
 
 impl ChannelSetup {
@@ -154,6 +158,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::Sampler),
             source: ChannelSource::default(),
             effects: Vec::new(),
+            modulation: ModRack::default(),
         }
     }
 
@@ -166,6 +171,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::DrumSynth),
             source: ChannelSource::DrumSynth(DrumSynthState { params }),
             effects: Vec::new(),
+            modulation: ModRack::default(),
         }
     }
 
@@ -178,6 +184,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::MonoSynth),
             source: ChannelSource::MonoSynth(MonoSynthState { params }),
             effects: Vec::new(),
+            modulation: ModRack::default(),
         }
     }
 
@@ -190,6 +197,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::PolySynth),
             source: ChannelSource::PolySynth(PolySynthState { params }),
             effects: Vec::new(),
+            modulation: ModRack::default(),
         }
     }
 
@@ -503,5 +511,30 @@ mod tests {
         assert_eq!(poly.kind(), DeviceKind::PolySynth);
         assert!(poly.poly_synth_state().is_some());
         assert!(poly.sampler_state().is_none());
+    }
+
+    #[test]
+    fn project_round_trip_keeps_channel_modulation() {
+        let mut project = Project::default();
+        let rack = &mut project.channels[0].setup.modulation;
+        rack.slots[0] = Some(crate::ModulatorParams::Lfo(crate::ModLfoParams {
+            rate_hz: 2.5,
+            ..crate::ModLfoParams::default()
+        }));
+        assert!(rack
+            .add_route(crate::ModRoute {
+                source_slot: 0,
+                destination: crate::ParamAddr::effect(
+                    crate::EffectTarget::Channel(0),
+                    0,
+                    crate::FILTER_PARAM_CUTOFF_HZ,
+                ),
+                depth: 0.3,
+                polarity: crate::ModPolarity::Bipolar,
+            })
+            .is_some());
+
+        let text = toml::to_string(&project).unwrap();
+        assert_eq!(toml::from_str::<Project>(&text).unwrap(), project);
     }
 }

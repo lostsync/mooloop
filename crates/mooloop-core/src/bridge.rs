@@ -10,8 +10,8 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::{
-    BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget, MonoSynthParams,
-    NoteEvent, NoteId, PlaybackMode, PolySynthParams, SamplerParams,
+    BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget, ModRack,
+    MonoSynthParams, NoteEvent, NoteId, PlaybackMode, PolySynthParams, SamplerParams,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
@@ -149,6 +149,10 @@ pub enum EngineCommand {
         id: u32,
         value: f32,
     },
+    /// Replace one channel's fixed-size modulator rack and matrix. The
+    /// renderer applies it at a block boundary and preserves the phase of any
+    /// LFO slot that remains an LFO.
+    SetChannelModulation { channel: u8, modulation: ModRack },
     /// Fire one complete retained-audio edit at the start of the next block.
     /// The tuple is never split into parameter updates, so the read head sees
     /// one sample-accurate change.

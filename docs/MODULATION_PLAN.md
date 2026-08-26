@@ -126,6 +126,28 @@ gate's open state) as modulator sources. The dynamics effects already compute
 exactly these internally; exposing them is a matter of publishing the value,
 not of new DSP.
 
+### Generator outlets
+
+Generators also publish named, channel-rate outlets. This is how note-derived
+data reaches an effect without pretending a shared channel effect can own
+per-voice state: a generator reduces its voices to one musical control signal,
+then a downstream effect consumes ordinary CV. A sampler or synth may, for
+example, assign velocity to an outlet; an effect adds a `DeviceIn` modulator,
+chooses that named outlet, and supplies trim and smoothing.
+
+An outlet address is `(channel, outlet index)` plus its user-facing name.
+The first reduction is last-note; a later explicit outlet mode can add highest
+or loudest note without changing routing. `DeviceIn` is a sibling of `Lfo`,
+not telemetry: its smoothing is part of its musical contract, because an
+unsmoothed velocity step can click a filter cutoff.
+
+Generators publish outlets into a per-channel table. Consumers read the table
+on the following block, with exactly one block of declared latency. That makes
+offline and realtime behavior identical and leaves graph order irrelevant; do
+not add a same-block exception. These outlets remain distinct from the display
+telemetry bank below, which is observation-only and has no audio timing
+contract.
+
 **Across channels: deferred, by decision.** Not in this pass. `ParamAddr` will
 carry `channel` from the day it is introduced so that enabling it later is a
 routing change rather than a retyping of every engine command.

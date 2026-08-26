@@ -172,6 +172,64 @@ pub struct ModRack {
     pub routes: [Option<ModRoute>; MAX_MOD_ROUTES_PER_CHANNEL],
 }
 
+/// The persisted form stays sparse: TOML has no `null`, so serializing the
+/// fixed realtime arrays directly would either fail or write sixteen empty
+/// rows. Slot numbers make an absent entry unambiguous and leave room for the
+/// rack capacity to grow without changing a saved route's meaning.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedModRack {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    slots: Vec<SavedModulatorSlot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    routes: Vec<ModRoute>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedModulatorSlot {
+    slot: u8,
+    params: ModulatorParams,
+}
+
+impl serde::Serialize for ModRack {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let slots = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, params)| {
+                params.map(|params| SavedModulatorSlot {
+                    slot: slot as u8,
+                    params,
+                })
+            })
+            .collect();
+        let routes = self.routes.iter().flatten().copied().collect();
+        SavedModRack { slots, routes }.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ModRack {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let saved = SavedModRack::deserialize(deserializer)?;
+        let mut rack = Self::default();
+        for saved_slot in saved.slots {
+            if let Some(slot) = rack.slots.get_mut(saved_slot.slot as usize) {
+                *slot = Some(saved_slot.params);
+            }
+        }
+        for route in saved.routes {
+            let _ = rack.add_route(route);
+        }
+        Ok(rack)
+    }
+}
+
 impl Default for ModRack {
     fn default() -> Self {
         Self {
@@ -364,5 +422,25 @@ mod tests {
         let remaining: Vec<_> = rack.routes.iter().flatten().collect();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].source_slot, 1);
+    }
+
+    #[test]
+    fn sparse_rack_round_trips_through_toml() {
+        let mut rack = ModRack::default();
+        rack.slots[2] = Some(ModulatorParams::Lfo(ModLfoParams {
+            rate_hz: 3.5,
+            ..ModLfoParams::default()
+        }));
+        rack.add_route(ModRoute {
+            source_slot: 2,
+            destination: addr(4),
+            depth: -0.75,
+            polarity: ModPolarity::Unipolar,
+        });
+
+        let text = toml::to_string(&rack).unwrap();
+        assert!(text.contains("slot = 2"));
+        assert!(!text.contains("null"));
+        assert_eq!(toml::from_str::<ModRack>(&text).unwrap(), rack);
     }
 }

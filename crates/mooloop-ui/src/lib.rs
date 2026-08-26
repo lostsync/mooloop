@@ -19,7 +19,7 @@ use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, BufferDuration,
     BufferEvent, BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode,
     DrumSynthParams, DrumSynthState, EffectKind, EffectParams, EffectSlotState, EffectTarget,
-    EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit, LfoWave, LoopMode,
+    EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit, LfoWave, LoopMode, ModRack,
     MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, PatternPlacement, PlaybackMode,
     PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, ReverbParams,
     SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
@@ -329,6 +329,7 @@ struct ChannelState {
     notes: Vec<Vec<NoteEvent>>,
     next_note_id: NoteId,
     effects: Vec<EffectSlotState>,
+    modulation: ModRack,
     /// Mixer bus this channel feeds; 0 is the master.
     bus: u8,
 }
@@ -359,6 +360,7 @@ impl ChannelState {
             notes: vec![Vec::new()],
             next_note_id: 1,
             effects: Vec::new(),
+            modulation: ModRack::default(),
             bus: MASTER_BUS,
         }
     }
@@ -1375,6 +1377,7 @@ impl UiState {
                         },
                         source,
                         effects: channel.effects.clone(),
+                        modulation: channel.modulation,
                     },
                     notes: channel.notes.clone(),
                     next_note_id: channel.next_note_id,
@@ -1558,6 +1561,7 @@ impl UiState {
                     notes: project_channel.notes.clone(),
                     next_note_id: project_channel.next_note_id,
                     effects: setup.effects.clone(),
+                    modulation: setup.modulation,
                     bus: setup.channel.bus,
                 }
             })
