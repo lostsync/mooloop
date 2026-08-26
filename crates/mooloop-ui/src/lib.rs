@@ -20,6 +20,7 @@ use mooloop_core::{
     AutomationPoint, BufferDuration,
     BufferEvent, BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode,
     DrumSynthParams, DrumSynthState, EffectKind, EffectParams, EffectSlotState, EffectTarget,
+    GeneratorParams,
     EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit, LfoWave, LoopMode, ModRack,
     MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, ParamAddr, ParamDescriptor,
     ParamOwner, PatternPlacement, PlaybackMode, PointId,
@@ -342,6 +343,18 @@ struct ChannelState {
 }
 
 impl ChannelState {
+    /// This channel's generator parameters in their addressable form. The
+    /// `ChannelState` keeps one struct per kind so switching sources does not
+    /// lose the others; only the active kind is addressable.
+    fn generator_params(&self) -> GeneratorParams {
+        match self.kind {
+            DeviceKind::Sampler => GeneratorParams::Sampler(self.params),
+            DeviceKind::MonoSynth => GeneratorParams::MonoSynth(self.mono_params),
+            DeviceKind::PolySynth => GeneratorParams::PolySynth(self.poly_params),
+            DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
+        }
+    }
+
     /// A brand new sampler channel is silent and empty until a sample is
     /// loaded or a project assigns one.
     fn new(index: usize) -> Self {
@@ -1831,6 +1844,21 @@ impl UiState {
         let mut rows = Vec::new();
         let channel = EffectTarget::Channel(self.selected as u8);
         if let Some(state) = self.channels.get(self.selected) {
+            // The generator first: it is the top of the signal path, and it is
+            // what most channels have instead of an effect chain.
+            let generator = state.generator_params();
+            let device = state.name.clone();
+            for descriptor in generator.kind().descriptors() {
+                rows.push((
+                    ParamAddr {
+                        scope: channel,
+                        owner: ParamOwner::Source,
+                        param: descriptor.id,
+                    },
+                    device.clone(),
+                    descriptor,
+                ));
+            }
             for (slot, effect) in state.effects.iter().enumerate() {
                 let kind = effect.kind();
                 let device = format!("{} {}", kind.label(), slot + 1);
@@ -1888,17 +1916,31 @@ impl UiState {
     /// breakpoints back into the natural units the readout displays.
     fn automation_descriptor(&self) -> Option<&'static ParamDescriptor> {
         let target = self.automation_target.get()?;
-        let ParamOwner::Effect { slot } = target.owner else {
-            return None;
-        };
-        let effects = match target.scope {
-            EffectTarget::Channel(channel) => &self.channels.get(channel as usize)?.effects,
-            EffectTarget::Bus(bus) => &self.buses.get(bus as usize)?.effects,
-        };
-        effects
-            .get(slot as usize)?
-            .kind()
-            .descriptor(target.param)
+        match target.owner {
+            ParamOwner::Source => {
+                let EffectTarget::Channel(channel) = target.scope else {
+                    return None;
+                };
+                self.channels
+                    .get(channel as usize)?
+                    .generator_params()
+                    .kind()
+                    .descriptor(target.param)
+            }
+            ParamOwner::Effect { slot } => {
+                let effects = match target.scope {
+                    EffectTarget::Channel(channel) => {
+                        &self.channels.get(channel as usize)?.effects
+                    }
+                    EffectTarget::Bus(bus) => &self.buses.get(bus as usize)?.effects,
+                };
+                effects
+                    .get(slot as usize)?
+                    .kind()
+                    .descriptor(target.param)
+            }
+            ParamOwner::Modulator { .. } | ParamOwner::Strip => None,
+        }
     }
 
     /// Rebuilds the lane picker, the drawn curve, and the header label.

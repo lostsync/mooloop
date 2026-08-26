@@ -129,6 +129,21 @@ impl PolySynth {
         self.apply_params_to_voices(polyphony);
     }
 
+    /// Apply one descriptor-addressed parameter, leaving the rest alone.
+    ///
+    /// Routed through `set_params` rather than writing the field directly so a
+    /// control-rate change gets exactly the same clamping and voice
+    /// reconfiguration a whole-struct update does. Both are non-allocating.
+    fn apply_param(&mut self, id: u32, value: f32) {
+        let mut params = mooloop_core::GeneratorParams::PolySynth(self.params);
+        if params.set(id, value).is_none() {
+            return;
+        }
+        if let mooloop_core::GeneratorParams::PolySynth(params) = params {
+            self.set_params(params);
+        }
+    }
+
     fn apply_params_to_voices(&mut self, polyphony: u8) {
         for (index, voice) in self.voices.iter_mut().enumerate() {
             voice.env.configure(
@@ -369,10 +384,8 @@ impl AudioNode for PolySynth {
                 Event::NoteOn { id, note, velocity } => self.note_on(id, note, velocity),
                 Event::NoteOff { id, .. } => self.note_off(id),
                 Event::Choke => self.release_all(),
-                Event::ParamValue { .. }
-                | Event::Buffer(_)
-                | Event::BufferRelease
-                | Event::BufferScrub { .. } => {}
+                Event::ParamValue { id, value } => self.apply_param(id, value),
+                Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
             }
             pos = off;
         }

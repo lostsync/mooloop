@@ -287,6 +287,28 @@ impl Sampler {
         }
     }
 
+    /// Apply one descriptor-addressed parameter, leaving the rest alone.
+    ///
+    /// Routed through `set_params` rather than writing the field directly so a
+    /// control-rate change gets exactly the same clamping and voice
+    /// reconfiguration a whole-struct update does. Both are non-allocating.
+    fn apply_param(&mut self, id: u32, value: f32) {
+        let mut params = mooloop_core::GeneratorParams::Sampler(self.params);
+        if params.set(id, value).is_none() {
+            return;
+        }
+        if let mooloop_core::GeneratorParams::Sampler(params) = params {
+            self.set_params(params);
+        }
+    }
+
+    /// The device's currently resolved parameters. This is what it was last
+    /// *sent*, which after a control tick is base plus modulation, not the
+    /// knob; the engine keeps the knob separately.
+    pub fn params(&self) -> SamplerParams {
+        self.params
+    }
+
     pub fn choke_group(&self) -> u8 {
         self.params.choke_group
     }
@@ -653,10 +675,8 @@ impl AudioNode for Sampler {
                 Event::NoteOn { id, note, velocity } => self.trigger(id, note, velocity),
                 Event::NoteOff { id, .. } => self.release_note(id),
                 Event::Choke => self.choke(),
-                Event::ParamValue { .. }
-                | Event::Buffer(_)
-                | Event::BufferRelease
-                | Event::BufferScrub { .. } => {}
+                Event::ParamValue { id, value } => self.apply_param(id, value),
+                Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
             }
             pos = off;
         }

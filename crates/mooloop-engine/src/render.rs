@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    compile_bus_graph, AutomationLane, ChannelSource, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
+    compile_bus_graph, AutomationLane, ChannelSource, GeneratorParams, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
     EngineCommand, ModRack, MonoSynthParams, ParamAddr, ParamOwner, PolySynthParams, Project,
     SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
     MAX_MODULATORS_PER_CHANNEL,
@@ -59,6 +59,15 @@ type ControlOutputs = [[f32; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_
 /// works in dB and clamps there; this bounds what a hand-edited song file or
 /// a stale command can do.
 const MAX_TRIM_GAIN: f32 = 4.0;
+
+fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
+    match kind {
+        DeviceKind::Sampler => GeneratorParams::Sampler(SamplerParams::default()),
+        DeviceKind::MonoSynth => GeneratorParams::MonoSynth(MonoSynthParams::default()),
+        DeviceKind::PolySynth => GeneratorParams::PolySynth(PolySynthParams::default()),
+        DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
+    }
+}
 
 fn effect_resource_key(params: mooloop_core::EffectParams) -> Option<u64> {
     params
@@ -698,6 +707,11 @@ struct ChannelStrip {
     mono_synth: MonoSynth,
     poly_synth: PolySynth,
     active_source: DeviceKind,
+    /// The knob value for the active generator's parameters. The device
+    /// retains only the value it was last sent, so this is what lets a knob
+    /// move underneath an active lane without the two fighting -- the same
+    /// split `EffectChain::base_params` makes for effects.
+    source_base: GeneratorParams,
     effects: EffectChain,
     bus: StereoBus,
     output: OutputStage,
@@ -713,6 +727,7 @@ impl ChannelStrip {
             mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
             poly_synth: PolySynth::new(PolySynthParams::default(), sample_rate),
             active_source: DeviceKind::Sampler,
+            source_base: GeneratorParams::Sampler(SamplerParams::default()),
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             output: OutputStage::new(0.8),
@@ -721,6 +736,7 @@ impl ChannelStrip {
     }
 
     fn reset_sources_to_defaults(&mut self, source: DeviceKind) {
+        self.source_base = default_generator_params(source);
         self.sampler.reset();
         self.drum_synth.reset();
         self.mono_synth.reset();
@@ -741,12 +757,24 @@ impl ChannelStrip {
 
     fn load_source(&mut self, source: &ChannelSource) {
         self.reset_sources_to_defaults(source.kind());
-        match source {
-            ChannelSource::Sampler(state) => self.sampler.set_params(state.params),
-            ChannelSource::DrumSynth(state) => self.drum_synth.set_params(state.params),
-            ChannelSource::MonoSynth(state) => self.mono_synth.set_params(state.params),
-            ChannelSource::PolySynth(state) => self.poly_synth.set_params(state.params),
-        }
+        self.source_base = match source {
+            ChannelSource::Sampler(state) => {
+                self.sampler.set_params(state.params);
+                GeneratorParams::Sampler(state.params)
+            }
+            ChannelSource::DrumSynth(state) => {
+                self.drum_synth.set_params(state.params);
+                GeneratorParams::DrumSynth
+            }
+            ChannelSource::MonoSynth(state) => {
+                self.mono_synth.set_params(state.params);
+                GeneratorParams::MonoSynth(state.params)
+            }
+            ChannelSource::PolySynth(state) => {
+                self.poly_synth.set_params(state.params);
+                GeneratorParams::PolySynth(state.params)
+            }
+        };
     }
 
     fn choke_group(&self) -> u8 {
@@ -1105,19 +1133,33 @@ impl RenderState {
     /// lane or a matrix route otherwise leaves the device holding whatever the
     /// control signal last resolved, until someone happens to touch that knob.
     fn restore_base_param(&mut self, destination: ParamAddr) {
-        let ParamAddr {
-            scope,
-            owner: ParamOwner::Effect { slot },
-            param,
-        } = destination
-        else {
-            return;
-        };
-        let Some(chain) = self.chain_mut(scope) else {
-            return;
-        };
-        if let Some(base) = chain.base_param(slot as usize, param) {
-            chain.queue_param(slot as usize, param, base);
+        match destination.owner {
+            ParamOwner::Effect { slot } => {
+                let Some(chain) = self.chain_mut(destination.scope) else {
+                    return;
+                };
+                if let Some(base) = chain.base_param(slot as usize, destination.param) {
+                    chain.queue_param(slot as usize, destination.param, base);
+                }
+            }
+            // A generator has no queue between blocks; its base is applied
+            // directly, which is safe because `set_params` allocates nothing.
+            ParamOwner::Source => {
+                let EffectTarget::Channel(channel) = destination.scope else {
+                    return;
+                };
+                let Some(strip) = self.strips.get_mut(channel as usize) else {
+                    return;
+                };
+                let base = strip.source_base;
+                match base {
+                    GeneratorParams::Sampler(params) => strip.sampler.set_params(params),
+                    GeneratorParams::MonoSynth(params) => strip.mono_synth.set_params(params),
+                    GeneratorParams::PolySynth(params) => strip.poly_synth.set_params(params),
+                    GeneratorParams::DrumSynth => {}
+                }
+            }
+            ParamOwner::Modulator { .. } | ParamOwner::Strip => {}
         }
     }
 
@@ -1401,26 +1443,31 @@ impl RenderState {
             EngineCommand::SetChannelSamplerParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.sampler.set_params(params);
+                    strip.source_base = GeneratorParams::Sampler(params);
                 }
             }
             EngineCommand::SetChannelSource { channel, source } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.reset_sources_to_defaults(source);
+                    strip.source_base = default_generator_params(source);
                 }
             }
             EngineCommand::SetChannelDrumSynthParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.drum_synth.set_params(params);
+                    strip.source_base = GeneratorParams::DrumSynth;
                 }
             }
             EngineCommand::SetChannelMonoSynthParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.mono_synth.set_params(params);
+                    strip.source_base = GeneratorParams::MonoSynth(params);
                 }
             }
             EngineCommand::SetChannelPolySynthParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.poly_synth.set_params(params);
+                    strip.source_base = GeneratorParams::PolySynth(params);
                 }
             }
             EngineCommand::SwapEffectSlots {
@@ -1689,6 +1736,60 @@ impl RenderState {
                 outputs: &self.control_outputs[index],
                 ticks,
             };
+            // The generator's control events go into the channel's own note
+            // list, which is the event stream it already splits its block on.
+            // Written inline rather than as a method because the automation
+            // block holds `&self.sequencer` for the whole loop, and only the
+            // compiler's field-level borrow splitting can see that
+            // `self.events` and `self.strips` are disjoint from it.
+            {
+                let base = self.strips[index].source_base;
+                let scope = EffectTarget::Channel(index as u8);
+                for descriptor in base.kind().descriptors() {
+                    let destination = ParamAddr {
+                        scope,
+                        owner: ParamOwner::Source,
+                        param: descriptor.id,
+                    };
+                    let modulated = modulation
+                        .rack
+                        .destinations()
+                        .any(|address| address == destination);
+                    let curve = automation
+                        .as_ref()
+                        .and_then(|automation| automation.curve_for(destination));
+                    if !modulated && curve.is_none() {
+                        continue;
+                    }
+                    let Some(knob) = base.get(descriptor.id) else {
+                        continue;
+                    };
+                    let knob_normalized = descriptor.to_normalized(knob);
+                    for tick in 0..ticks.max(automation.as_ref().map_or(0, |a| a.ticks)) {
+                        let base_normalized = curve
+                            .as_ref()
+                            .zip(automation.as_ref())
+                            .and_then(|(curve, automation)| automation.value_at(curve, tick))
+                            .unwrap_or(knob_normalized);
+                        let offset_normalized = if modulated {
+                            modulation
+                                .rack
+                                .offset_for(destination, &modulation.outputs[tick])
+                        } else {
+                            0.0
+                        };
+                        let value = descriptor
+                            .from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
+                        let _ = self.events[index].push_ordered(TimedEvent {
+                            offset: (tick * CONTROL_RATE_FRAMES) as u32,
+                            event: Event::ParamValue {
+                                id: descriptor.id,
+                                value,
+                            },
+                        });
+                    }
+                }
+            }
             let strip = &mut self.strips[index];
             strip.bus.clear(frames);
             strip.process(&context, &self.events[index]);
@@ -2307,6 +2408,89 @@ mod tests {
             events.iter().any(|value| *value > 0.0),
             "the lane never opened the offset: {events:?}"
         );
+    }
+
+    #[test]
+    fn a_lane_drives_a_generator_parameter() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let target = ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Source,
+            param: mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF,
+        };
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        for (id, tick, value) in [(1u32, 0u32, 1.0f32), (2, 96, 0.0)] {
+            render.apply_command(EngineCommand::UpsertAutomationPoint {
+                pattern: 0,
+                channel: 0,
+                target,
+                point: mooloop_core::AutomationPoint::new(id, tick, value),
+            });
+        }
+        render.play();
+        render.process_block(128);
+
+        let values: Vec<f32> = render.events[0]
+            .iter()
+            .filter_map(|event| match event.event {
+                Event::ParamValue {
+                    id: mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF,
+                    value,
+                } => Some(value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            values.len(),
+            4,
+            "the lane should resolve once per control tick: {values:?}"
+        );
+        assert!(
+            values.windows(2).all(|pair| pair[1] < pair[0]),
+            "the ramp did not fall across the block: {values:?}"
+        );
+        // The knob is untouched: a lane supplies the base, it does not
+        // overwrite what the user set.
+        assert_eq!(
+            render.strips[0]
+                .source_base
+                .get(mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF),
+            Some(1.0),
+        );
+    }
+
+    #[test]
+    fn a_generator_parameter_reaches_the_device() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let target = ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Source,
+            param: mooloop_core::SAMPLER_PARAM_DRIVE,
+        };
+        render.apply_command(EngineCommand::UpsertAutomationPoint {
+            pattern: 0,
+            channel: 0,
+            target,
+            point: mooloop_core::AutomationPoint::new(1, 0, 1.0),
+        });
+        render.play();
+        render.process_block(128);
+        assert!(
+            (render.strips[0].sampler.params().drive - 1.0).abs() < 1e-3,
+            "the lane did not reach the sampler: {}",
+            render.strips[0].sampler.params().drive
+        );
+
+        // Clearing it returns the device to the knob rather than leaving it
+        // holding the last resolved value.
+        render.apply_command(EngineCommand::ClearAutomationLane {
+            pattern: 0,
+            channel: 0,
+            target,
+        });
+        render.process_block(128);
+        assert_eq!(render.strips[0].sampler.params().drive, 0.0);
     }
 
     #[test]

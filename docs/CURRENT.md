@@ -351,9 +351,12 @@ boundary.
   not a parameter: resizing the ring reallocates, which happens off-thread.
   The JUMP/REV/STUT gestures are unchanged and outrank the offset while they
   run; the offset re-asserts on the next control tick after one ends.
-- Generators are still not addressable. They ship whole parameter structs
-  rather than descriptor-addressed params, so no generator parameter can be
-  automated or modulated yet, and the automation picker lists effects only.
+- The sampler, mono synth, and poly synth are descriptor-addressed through
+  `GeneratorParams`, so their parameters automate and modulate like an
+  effect's. The three-oscillator synths reserve ten parameter ids per
+  oscillator, starting at 100. The drum synth is not addressable: its
+  twenty-five fields are three voices' worth of detail, and it is listed in
+  the picker with no parameters rather than with some of them.
   `docs/MODULATION_PLAN.md` records the approved design; build order is in
   `docs/plans/buffer-implementation/02-control-and-modulation.md`.
 - Clip automation is per (pattern, channel), lives in the clip that drew it,

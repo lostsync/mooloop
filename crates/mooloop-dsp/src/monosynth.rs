@@ -113,6 +113,21 @@ impl MonoSynth {
             .configure(params.attack, params.decay, params.sustain, params.release);
     }
 
+    /// Apply one descriptor-addressed parameter, leaving the rest alone.
+    ///
+    /// Routed through `set_params` rather than writing the field directly so a
+    /// control-rate change gets exactly the same clamping and voice
+    /// reconfiguration a whole-struct update does. Both are non-allocating.
+    fn apply_param(&mut self, id: u32, value: f32) {
+        let mut params = mooloop_core::GeneratorParams::MonoSynth(self.params);
+        if params.set(id, value).is_none() {
+            return;
+        }
+        if let mooloop_core::GeneratorParams::MonoSynth(params) = params {
+            self.set_params(params);
+        }
+    }
+
     /// Immediately invalidate the active voice and return every oscillator
     /// and filter to its initial state.
     pub fn reset(&mut self) {
@@ -296,10 +311,8 @@ impl AudioNode for MonoSynth {
                 Event::NoteOn { id, note, velocity } => self.note_on(id, note, velocity),
                 Event::NoteOff { id, .. } => self.note_off(id),
                 Event::Choke => self.release_all(),
-                Event::ParamValue { .. }
-                | Event::Buffer(_)
-                | Event::BufferRelease
-                | Event::BufferScrub { .. } => {}
+                Event::ParamValue { id, value } => self.apply_param(id, value),
+                Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
             }
             pos = off;
         }

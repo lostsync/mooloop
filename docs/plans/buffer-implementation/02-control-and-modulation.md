@@ -98,17 +98,32 @@ before any general editor.
 Done when an LFO visibly and audibly moves a filter cutoff, knob and
 modulator do not fight, and it survives save and reload.
 
-### 2. Generator parameter descriptors
+### 2. Generator parameter descriptors — **done except the drum synth**
 
 Effects are descriptor-addressed: `(EffectTarget, slot, param_id)` with
-ranges and curves. **Generators are not** — they ship whole structs
-(`SetChannelSamplerParams { channel, params: SamplerParams }`). So
-`song.channel().generator().property` is not addressable and cannot be a
-modulation destination.
+ranges and curves. **Generators were not** — they ship whole structs
+(`SetChannelSamplerParams { channel, params: SamplerParams }`), so
+`song.channel().generator().property` could not be named and could not be a
+modulation or automation destination.
 
-Closing this is mechanical but broad: descriptor tables for sampler, drum,
-mono, and poly params mirroring the effect ones. Do it before the UI grows an
-assignment gesture, or the gesture will only work on half the project.
+`GeneratorParams` in `mooloop-core/src/generator.rs` closes this, mirroring
+`EffectParams` exactly: same `ParamDescriptor`, same never-renumber rule, same
+`get`/`set` returning the clamped value. Sampler, mono, and poly are complete.
+The three-oscillator synths reserve ten ids per oscillator from 100, so a
+fourth oscillator parameter can be appended without disturbing a shipped id
+that a saved lane holds.
+
+Engine side: `ChannelStrip` gained `source_base`, the same split
+`EffectChain::base_params` makes — the device retains only what it was last
+sent, so the knob and a lane cannot fight. Resolved events go into the
+channel's own note `EventList`, which generators already split their block on;
+none of them needed a new event path, only a `ParamValue` arm.
+
+**The drum synth is deliberately still empty.** Twenty-five fields across
+three independent voices, and a half-addressable device is worse than an
+honestly unaddressable one: the picker would list some of its knobs and
+silently omit the rest. Giving it a table is mechanical typing against the
+pattern the other three now set.
 
 ### 3. Generator outlets and `DeviceIn`
 
