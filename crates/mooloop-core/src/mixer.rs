@@ -35,7 +35,10 @@ pub const MASTER_BUS: u8 = 0;
 
 /// Where an effect chain lives. Effect commands address a target rather than a
 /// channel so one set of install/remove/param messages serves both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum EffectTarget {
     Channel(u8),
     Bus(u8),

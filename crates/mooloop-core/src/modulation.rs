@@ -1,0 +1,368 @@
+//! Parameter addressing and the modulator rack.
+//!
+//! `docs/MODULATION_PLAN.md` is the approved design; this implements it.
+//! Two ideas carry the whole thing:
+//!
+//! - A parameter is named by a [`ParamAddr`], not by a bespoke command per
+//!   device kind. One address type is what makes an automation lane, a mod
+//!   matrix row, and a knob all talk about the same thing.
+//! - The engine owns a **base** value and the sum of **modulation offsets**,
+//!   and emits the resolved sum. Devices store only resolved values, so no
+//!   effect needs any change to support modulation.
+
+use crate::EffectTarget;
+
+/// Which device inside a channel or bus owns the parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParamOwner {
+    /// The channel's generator. Buses have none.
+    Source,
+    Effect {
+        slot: u8,
+    },
+    Modulator {
+        slot: u8,
+    },
+    /// Volume, pan, mute — the strip itself rather than a device on it.
+    Strip,
+}
+
+/// A parameter, anywhere in the project.
+///
+/// `scope` carries the channel or bus from the day this type exists, so
+/// enabling cross-channel modulation later is a routing change rather than a
+/// retyping of every engine command (`MODULATION_PLAN.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ParamAddr {
+    pub scope: EffectTarget,
+    pub owner: ParamOwner,
+    /// The owning kind's stable descriptor id. Never renumbered, because
+    /// modulation and automation persist it.
+    pub param: u32,
+}
+
+impl ParamAddr {
+    pub const fn effect(scope: EffectTarget, slot: u8, param: u32) -> Self {
+        Self {
+            scope,
+            owner: ParamOwner::Effect { slot },
+            param,
+        }
+    }
+}
+
+/// Shape of a free-running LFO.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModLfoWaveform {
+    #[default]
+    Sine,
+    Triangle,
+    Saw,
+    Square,
+    /// Stepped random, held between transitions. Sample-and-hold as a wave
+    /// rather than a separate modulator kind.
+    Random,
+}
+
+/// A modulator's own parameters. Modulators are addressable like any other
+/// device, so these have descriptor ids too.
+pub const LFO_PARAM_RATE_HZ: u32 = 0;
+pub const LFO_PARAM_DEPTH: u32 = 1;
+pub const LFO_PARAM_WAVEFORM: u32 = 2;
+pub const LFO_PARAM_PHASE: u32 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModLfoParams {
+    pub rate_hz: f32,
+    /// Output scale, `0..1`. Per-destination depth is separate and lives in
+    /// the matrix row; this is the modulator's own level.
+    pub depth: f32,
+    pub waveform: ModLfoWaveform,
+    /// Starting phase in `0..1`, applied on reset.
+    pub phase: f32,
+    /// Restart the phase on note-on. What makes an LFO feel played rather
+    /// than merely running.
+    pub retrigger: bool,
+}
+
+impl Default for ModLfoParams {
+    fn default() -> Self {
+        Self {
+            rate_hz: 1.0,
+            depth: 1.0,
+            waveform: ModLfoWaveform::Sine,
+            phase: 0.0,
+            retrigger: false,
+        }
+    }
+}
+
+/// One modulator slot's configuration.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ModulatorParams {
+    Lfo(ModLfoParams),
+}
+
+impl ModulatorParams {
+    pub fn kind(self) -> ModulatorKind {
+        match self {
+            Self::Lfo(_) => ModulatorKind::Lfo,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModulatorKind {
+    Lfo,
+}
+
+impl ModulatorKind {
+    pub const ALL: [ModulatorKind; 1] = [ModulatorKind::Lfo];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lfo => "LFO",
+        }
+    }
+
+    pub fn default_params(self) -> ModulatorParams {
+        match self {
+            Self::Lfo => ModulatorParams::Lfo(ModLfoParams::default()),
+        }
+    }
+}
+
+/// How a source's `-1..1` output is applied to a destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModPolarity {
+    /// The full signed swing, centred on the base value.
+    #[default]
+    Bipolar,
+    /// Only the positive half, so the base value is the floor.
+    Unipolar,
+}
+
+/// One matrix row: a modulator slot driving one parameter.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModRoute {
+    pub source_slot: u8,
+    pub destination: ParamAddr,
+    /// Signed, `-1..1`, as a fraction of the destination's full range. The
+    /// drag depth of the assignment gesture.
+    pub depth: f32,
+    pub polarity: ModPolarity,
+}
+
+/// Fixed rack size. Four slots per channel, matching the rack UI and keeping
+/// a channel a self-contained instrument (`MODULATION_PLAN.md`).
+pub const MAX_MODULATORS_PER_CHANNEL: usize = 4;
+/// Ceiling on matrix rows per channel. Bounded so evaluation is a fixed cost
+/// and the whole rack stays `Copy`.
+pub const MAX_MOD_ROUTES_PER_CHANNEL: usize = 16;
+
+/// One channel's complete modulation state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModRack {
+    pub slots: [Option<ModulatorParams>; MAX_MODULATORS_PER_CHANNEL],
+    pub routes: [Option<ModRoute>; MAX_MOD_ROUTES_PER_CHANNEL],
+}
+
+impl Default for ModRack {
+    fn default() -> Self {
+        Self {
+            slots: [None; MAX_MODULATORS_PER_CHANNEL],
+            routes: [None; MAX_MOD_ROUTES_PER_CHANNEL],
+        }
+    }
+}
+
+impl ModRack {
+    pub fn is_empty(&self) -> bool {
+        self.slots.iter().all(Option::is_none)
+    }
+
+    /// Add a route, returning its index. Returns `None` when the matrix is
+    /// full rather than silently dropping the assignment.
+    pub fn add_route(&mut self, route: ModRoute) -> Option<usize> {
+        // An existing row for the same pair is retuned rather than doubled:
+        // dragging depth on an already-assigned knob must not stack a second
+        // route on top of the first.
+        if let Some(index) = self.routes.iter().position(|existing| {
+            existing.is_some_and(|existing| {
+                existing.source_slot == route.source_slot
+                    && existing.destination == route.destination
+            })
+        }) {
+            self.routes[index] = Some(route);
+            return Some(index);
+        }
+        let index = self.routes.iter().position(Option::is_none)?;
+        self.routes[index] = Some(route);
+        Some(index)
+    }
+
+    pub fn remove_route(&mut self, source_slot: u8, destination: ParamAddr) {
+        for route in self.routes.iter_mut() {
+            if route.is_some_and(|route| {
+                route.source_slot == source_slot && route.destination == destination
+            }) {
+                *route = None;
+            }
+        }
+    }
+
+    /// Total signed offset applied to `destination`, as a fraction of its
+    /// range, given each slot's current output.
+    pub fn offset_for(
+        &self,
+        destination: ParamAddr,
+        outputs: &[f32; MAX_MODULATORS_PER_CHANNEL],
+    ) -> f32 {
+        let mut total = 0.0;
+        for route in self.routes.iter().flatten() {
+            if route.destination != destination {
+                continue;
+            }
+            let Some(output) = outputs.get(route.source_slot as usize) else {
+                continue;
+            };
+            let shaped = match route.polarity {
+                ModPolarity::Bipolar => *output,
+                // Half the swing, lifted, so the base value is the floor
+                // rather than the midpoint.
+                ModPolarity::Unipolar => (*output + 1.0) * 0.5,
+            };
+            total += shaped * route.depth;
+        }
+        total
+    }
+
+    /// Every destination this rack drives, for the UI's "which knobs are
+    /// modulated" pass.
+    pub fn destinations(&self) -> impl Iterator<Item = ParamAddr> + '_ {
+        self.routes.iter().flatten().map(|route| route.destination)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addr(param: u32) -> ParamAddr {
+        ParamAddr::effect(EffectTarget::Channel(0), 0, param)
+    }
+
+    /// Re-assigning the same source to the same destination retunes the
+    /// existing row. Otherwise dragging depth on an assigned knob would
+    /// stack routes until the matrix filled up.
+    #[test]
+    fn reassigning_a_pair_retunes_rather_than_stacking() {
+        let mut rack = ModRack::default();
+        let route = ModRoute {
+            source_slot: 0,
+            destination: addr(7),
+            depth: 0.25,
+            polarity: ModPolarity::Bipolar,
+        };
+        assert_eq!(rack.add_route(route), Some(0));
+        assert_eq!(
+            rack.add_route(ModRoute {
+                depth: 0.75,
+                ..route
+            }),
+            Some(0)
+        );
+        assert_eq!(rack.routes.iter().flatten().count(), 1);
+        assert_eq!(rack.routes[0].unwrap().depth, 0.75);
+
+        // A different source to the same destination is a separate row.
+        assert_eq!(
+            rack.add_route(ModRoute {
+                source_slot: 1,
+                ..route
+            }),
+            Some(1)
+        );
+        assert_eq!(rack.routes.iter().flatten().count(), 2);
+    }
+
+    #[test]
+    fn a_full_matrix_refuses_rather_than_dropping_silently() {
+        let mut rack = ModRack::default();
+        for param in 0..MAX_MOD_ROUTES_PER_CHANNEL as u32 {
+            assert!(rack
+                .add_route(ModRoute {
+                    source_slot: 0,
+                    destination: addr(param),
+                    depth: 1.0,
+                    polarity: ModPolarity::Bipolar,
+                })
+                .is_some());
+        }
+        assert_eq!(
+            rack.add_route(ModRoute {
+                source_slot: 0,
+                destination: addr(999),
+                depth: 1.0,
+                polarity: ModPolarity::Bipolar,
+            }),
+            None
+        );
+    }
+
+    /// Offsets from several sources sum, and polarity decides whether the
+    /// base value sits at the centre of the swing or at its floor.
+    #[test]
+    fn offsets_sum_and_polarity_shapes_the_swing() {
+        let mut rack = ModRack::default();
+        rack.add_route(ModRoute {
+            source_slot: 0,
+            destination: addr(1),
+            depth: 0.5,
+            polarity: ModPolarity::Bipolar,
+        });
+        rack.add_route(ModRoute {
+            source_slot: 1,
+            destination: addr(1),
+            depth: 1.0,
+            polarity: ModPolarity::Unipolar,
+        });
+        let mut outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
+
+        // Both sources at full negative: bipolar swings down, unipolar rests
+        // on the base value.
+        outputs[0] = -1.0;
+        outputs[1] = -1.0;
+        assert_eq!(rack.offset_for(addr(1), &outputs), -0.5);
+
+        // Both at full positive.
+        outputs[0] = 1.0;
+        outputs[1] = 1.0;
+        assert_eq!(rack.offset_for(addr(1), &outputs), 1.5);
+
+        // An unrelated destination is untouched.
+        assert_eq!(rack.offset_for(addr(2), &outputs), 0.0);
+    }
+
+    #[test]
+    fn removing_a_route_leaves_its_neighbours() {
+        let mut rack = ModRack::default();
+        for slot in 0..2u8 {
+            rack.add_route(ModRoute {
+                source_slot: slot,
+                destination: addr(1),
+                depth: 1.0,
+                polarity: ModPolarity::Bipolar,
+            });
+        }
+        rack.remove_route(0, addr(1));
+        let remaining: Vec<_> = rack.routes.iter().flatten().collect();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].source_slot, 1);
+    }
+}

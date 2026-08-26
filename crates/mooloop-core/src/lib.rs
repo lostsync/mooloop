@@ -8,6 +8,7 @@ pub mod buffer;
 pub mod channel;
 pub mod effect;
 pub mod midi;
+pub mod modulation;
 pub mod mixer;
 pub mod pattern;
 pub mod playlist;
@@ -19,6 +20,10 @@ pub mod time;
 pub use bridge::{EngineCommand, EngineEvent};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
+pub use modulation::{
+    ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModulatorKind, ModulatorParams,
+    ParamAddr, ParamOwner, MAX_MODULATORS_PER_CHANNEL, MAX_MOD_ROUTES_PER_CHANNEL,
+};
 pub use channel::{
     Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS,
 };
