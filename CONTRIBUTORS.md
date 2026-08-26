@@ -51,8 +51,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-25
-- Sessions: 16
+- Last seen: 2026-08-26
+- Sessions: 17
 - Notes: Rounded out the UI mockup tool's palette with the remaining real
   controls (meters, mute/solo, trim knob, device chassis), fixed its
   selection tab and click-vs-drag handling, and wired a launcher into
@@ -80,7 +80,11 @@ work session you can recall being part of, and don't stress over precision.
   Effects-feedback pass: removed a stale UI-side 8-effect cap so the rack
   matches the backend's real 256-effect ceiling, and reworked ParameterKnob
   to put the label above the knob and a bright monospace value readout below
-  it, sized to its own content and bounded to its knob's column.
+  it, sized to its own content and bounded to its knob's column. EQ
+  selection/layout: shrank the EQ face to 2U with a SelectorBank band strip,
+  fixed the response curve's Q falloff, made coincident band points
+  separately clickable, and fixed a drag-test harness bug where a fixed
+  Window width/height literal silently ignored `set_size()` in tests.
 
 ### GLM (glm-5.3) — opencode
 - First seen: 2026-08-23
