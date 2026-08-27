@@ -36,7 +36,8 @@ component OscillatorDeviceStrip inherits Rectangle {
             }
         }
         Rectangle {
-            height: 42px;
+            vertical-stretch: 1;
+            min-height: 28px;
             OscillatorTrace {
                 x: 5px; y: 4px; width: parent.width - 10px; height: parent.height - 8px;
                 wave: root.wave;
@@ -110,6 +111,7 @@ export component PolyDeviceFace inherits Rectangle {
         Rectangle { height: 1px; background: Theme.border; }
 
         if root.page == 0 : HorizontalLayout {
+            vertical-stretch: 1;
             spacing: 5px;
             OscillatorDeviceStrip {
                 horizontal-stretch: 1; title: "OSC 1";
@@ -133,14 +135,15 @@ export component PolyDeviceFace inherits Rectangle {
             vertical-stretch: 1;
             spacing: 6px;
             Rectangle {
-                width: 360px;
+                horizontal-stretch: 5;
                 background: Theme.panel;
                 border-radius: 2px;
                 VerticalLayout {
                     padding: 5px; spacing: 4px;
                     Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: 8px; }
                     EnvelopeEditor {
-                        height: 66px;
+                        vertical-stretch: 1;
+                        min-height: 50px;
                         attack: root.attack / 2; decay: root.decay / 2; sustain <=> root.sustain; release: root.release / 2;
                         attack-text: round(root.attack * 1000) + " ms"; decay-text: round(root.decay * 1000) + " ms"; sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 1000) + " ms";
                         attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
@@ -159,14 +162,15 @@ export component PolyDeviceFace inherits Rectangle {
                 }
             }
             Rectangle {
-                width: 280px;
+                horizontal-stretch: 4;
                 background: Theme.panel;
                 border-radius: 2px;
                 VerticalLayout {
                     padding: 5px; spacing: 4px;
                     Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: 8px; }
                     FilterResponseDisplay {
-                        height: 90px;
+                        vertical-stretch: 1;
+                        min-height: 50px;
                         mode: 0;
                         cutoff: root.filter-cutoff;
                         resonance: root.filter-resonance;
@@ -201,7 +205,8 @@ export component PolyDeviceFace inherits Rectangle {
                         selected(i) => { root.lfo-wave-changed(i); }
                     }
                     Rectangle {
-                        height: 90px;
+                        vertical-stretch: 1;
+                        min-height: 40px;
                         Path {
                             x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
                             viewbox-width: 200; viewbox-height: 70;

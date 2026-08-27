@@ -2235,9 +2235,9 @@ export component MainWindow inherits Window {
                                         }
 
                                         if !root.editing-bus && root.source-kind == 3 : PolyDeviceFace {
-                                            x: 0px;
+                                            x: DeviceRackMetrics.rail-width;
                                             y: DeviceRackMetrics.header-height;
-                                            width: parent.width;
+                                            width: parent.content-width;
                                             height: parent.height - DeviceRackMetrics.header-height;
                                             page <=> root.poly-device-page;
                                             osc1-wave <=> root.poly-osc1-wave; osc1-semitones <=> root.poly-osc1-semitones; osc1-cents <=> root.poly-osc1-cents; osc1-level <=> root.poly-osc1-level; osc1-pulse-width <=> root.poly-osc1-pulse-width;

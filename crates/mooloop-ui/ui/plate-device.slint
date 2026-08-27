@@ -2,6 +2,99 @@ import { Theme } from "theme.slint";
 import { ParameterKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
+// A compact, parameter-derived view of the comb/allpass tail. Each tap is a
+// pair of stereo reflections: Size spaces them, Decay preserves their level,
+// Damp removes the bright inner stroke, and Width separates the two lanes.
+component PlateTailDisplay inherits Rectangle {
+    in property <float> size;
+    in property <float> decay;
+    in property <float> damping;
+    in property <float> width-value;
+
+    private property <length> tap-spacing: 9px + root.size * 6px;
+    private property <length> stereo-offset: root.width-value * 5px;
+    private property <float> tail-retention: 0.72 + root.decay * 0.25;
+
+    background: Theme.panel;
+    border-radius: 2px;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+
+    Text {
+        x: 5px;
+        y: 3px;
+        text: "PLATE TAIL";
+        color: Theme.text-faint;
+        font-size: 8px;
+    }
+    Text {
+        x: 5px;
+        y: parent.height - 11px;
+        text: "L";
+        color: Theme.text-faint;
+        font-size: 7px;
+    }
+    Text {
+        x: 5px;
+        y: parent.height - 19px;
+        text: "R";
+        color: Theme.text-faint;
+        font-size: 7px;
+    }
+    Rectangle {
+        x: 14px;
+        y: parent.height * 0.39 - root.stereo-offset;
+        width: parent.width - 19px;
+        height: 1px;
+        background: Theme.border;
+    }
+    Rectangle {
+        x: 14px;
+        y: parent.height * 0.67 + root.stereo-offset;
+        width: parent.width - 19px;
+        height: 1px;
+        background: Theme.border;
+    }
+    for tap in 10 : Rectangle {
+        private property <length> reflection-height: max(2px, 13px * pow(root.tail-retention, tap));
+        x: 18px + tap * root.tap-spacing;
+        y: parent.height * 0.39 - root.stereo-offset - self.reflection-height / 2;
+        width: 2px;
+        height: self.reflection-height;
+        border-radius: 1px;
+        background: Theme.accent.with-alpha(0.85 - tap * 0.045);
+
+        // The narrow bright component is the high-frequency content left in
+        // each reflection. More damping shortens it without hiding the tail.
+        Rectangle {
+            x: 0px;
+            y: (parent.height - self.height) / 2;
+            width: parent.width;
+            height: parent.height * (1 - root.damping * 0.8);
+            border-radius: 1px;
+            background: Theme.text.with-alpha(0.7 - tap * 0.04);
+        }
+    }
+    for tap in 10 : Rectangle {
+        private property <length> reflection-height: max(2px, 13px * pow(root.tail-retention, tap));
+        x: 18px + tap * root.tap-spacing + 2px;
+        y: parent.height * 0.67 + root.stereo-offset - self.reflection-height / 2;
+        width: 2px;
+        height: self.reflection-height;
+        border-radius: 1px;
+        background: Theme.accent.with-alpha(0.85 - tap * 0.045);
+        Rectangle {
+            x: 0px;
+            y: (parent.height - self.height) / 2;
+            width: parent.width;
+            height: parent.height * (1 - root.damping * 0.8);
+            border-radius: 1px;
+            background: Theme.text.with-alpha(0.7 - tap * 0.04);
+        }
+    }
+}
+
 // One "Plate" reverb in a channel's device rack: a lightweight comb/allpass
 // feedback network, the cheap alternative to ReverbDeviceFace's generated-
 // room convolution. Four continuous knobs fit a 1U face like the other
@@ -28,63 +121,62 @@ export component PlateDeviceFace inherits EffectDeviceShell {
         padding: 6px;
         padding-top: DeviceRackMetrics.header-height + 6px;
         spacing: 4px;
-        Rectangle {
-            height: 104px;
-            background: Theme.panel;
-            border-radius: 2px;
-            Text {
-                text: "comb / allpass";
-                color: Theme.text-faint;
-                font-size: 9px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                width: parent.width;
-                height: parent.height;
-            }
+        PlateTailDisplay {
+            height: 56px;
+            size: root.size;
+            decay: root.decay;
+            damping: root.damping;
+            width-value: root.width-value;
         }
-        HorizontalLayout {
+        VerticalLayout {
             spacing: 0px;
-            ParameterKnob {
-                width: 69px;
-                diameter: 36px;
-                label: "Size";
-                tooltip: "Room size: shorter or longer taps between echoes";
-                value <=> root.size;
-                default-value: 0.5;
-                value-text: round(root.size * 100) + "%";
-                changed(v) => { root.size-changed(v); }
+            HorizontalLayout {
+                spacing: 0px;
+                ParameterKnob {
+                    width: 69px;
+                    diameter: 36px;
+                    label: "Size";
+                    tooltip: "Room size: shorter or longer taps between echoes";
+                    value <=> root.size;
+                    default-value: 0.5;
+                    value-text: round(root.size * 100) + "%";
+                    changed(v) => { root.size-changed(v); }
+                }
+                ParameterKnob {
+                    width: 69px;
+                    diameter: 36px;
+                    label: "Decay";
+                    tooltip: "How long the tail takes to fade";
+                    value <=> root.decay;
+                    default-value: 0.5886;
+                    value-text: root.decay-natural >= 10
+                        ? round(root.decay-natural) + " s"
+                        : round(root.decay-natural * 10) / 10 + " s";
+                    changed(v) => { root.decay-changed(v); }
+                }
             }
-            ParameterKnob {
-                width: 69px;
-                diameter: 36px;
-                label: "Decay";
-                tooltip: "How long the tail takes to fade";
-                value <=> root.decay;
-                default-value: 0.5886;
-                value-text: root.decay-natural >= 10
-                    ? round(root.decay-natural) + " s"
-                    : round(root.decay-natural * 10) / 10 + " s";
-                changed(v) => { root.decay-changed(v); }
-            }
-            ParameterKnob {
-                width: 69px;
-                diameter: 36px;
-                label: "Damp";
-                tooltip: "High-frequency loss per bounce: dark to open";
-                value <=> root.damping;
-                default-value: 0.4;
-                value-text: round(root.damping * 100) + "%";
-                changed(v) => { root.damping-changed(v); }
-            }
-            ParameterKnob {
-                width: 69px;
-                diameter: 36px;
-                label: "Width";
-                tooltip: "Stereo spread of the tail";
-                value <=> root.width-value;
-                default-value: 1.0;
-                value-text: round(root.width-value * 100) + "%";
-                changed(v) => { root.width-changed(v); }
+            HorizontalLayout {
+                spacing: 0px;
+                ParameterKnob {
+                    width: 69px;
+                    diameter: 36px;
+                    label: "Damp";
+                    tooltip: "High-frequency loss per bounce: dark to open";
+                    value <=> root.damping;
+                    default-value: 0.4;
+                    value-text: round(root.damping * 100) + "%";
+                    changed(v) => { root.damping-changed(v); }
+                }
+                ParameterKnob {
+                    width: 69px;
+                    diameter: 36px;
+                    label: "Width";
+                    tooltip: "Stereo spread of the tail";
+                    value <=> root.width-value;
+                    default-value: 1.0;
+                    value-text: round(root.width-value * 100) + "%";
+                    changed(v) => { root.width-changed(v); }
+                }
             }
         }
     }
