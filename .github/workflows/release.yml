@@ -168,6 +168,7 @@ jobs:
             curl \
             git \
             binutils \
+            file \
             pkg-config \
             libjack-jackd2-dev \
             libasound2-dev \
