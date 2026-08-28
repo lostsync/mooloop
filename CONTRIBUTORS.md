@@ -124,7 +124,9 @@ work session you can recall being part of, and don't stress over precision.
   reference, then pinned the per-oscillator unity reference and made
   drive level-compensated (reference-anchored saturation shared by every
   drive stage), then energy-normalized the reverb IR, level-matched the
-  plate, and switched the host wet/dry blend to equal-power.
+  plate, and switched the host wet/dry blend to equal-power, then put
+  the meters on IEC 60268-18 with the warning threshold at -10 and
+  pixel-verified colour transitions, completing the gain-structure plan.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21

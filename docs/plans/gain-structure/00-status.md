@@ -6,6 +6,9 @@ should be read first even when picking up a later step.
 07 (reverb normalization) and 08 (metering) are independent of 05/06 and
 can be done out of order if something else blocks.
 
+**All steps complete** — see the per-step sections and "Plan complete"
+at the bottom.
+
 ## Step 02 — measured (done, `feat/gain-structure-02-measure`)
 
 Characterization tests live in
@@ -178,3 +181,45 @@ and the test suite can only confirm the numbers, not the musicality.
 - **Adam: the acceptance criterion is your ear at 1%, 10%, and 50% wet**
   — the numbers only prove the cause is gone. dsp 202, engine 77, core
   57, all green.
+
+## Step 08 — metering standard (done, two commits)
+
+- **Colour thresholds** (`d09427c`): warning -12 → **-10** (`hot` stays
+  -3), now `gain::METER_WARNING_DB`/`METER_HOT_DB`, mirrored into
+  `GainMath` and covered by the Rust/Slint agreement test like the
+  taper. `SegmentedMeter` and `PeakMeter` read their defaults from
+  GainMath; no call-site overrides existed. Verified with rendered
+  pixels (`tests/meter_threshold.rs`): a 50-segment harness shows
+  SegmentedMeter, ChannelMeter, and MasterMeter green at -10.5, yellow
+  at -9.5, red at -2.5 — the transition lands on the standard, in
+  pixels, not property math.
+- **Ballistics** (`247865c`): fall rate 20 dB/s → **20 dB in 1.7 s**
+  (~11.76 dB/s) per IEC 60268-18; instantaneous attack and the 1 s hold
+  were already standard. Test renamed and re-pinned.
+- Deliberately not done: the optional piecewise meter scale (item 4) —
+  the standard thresholds were the actual gap; revisit if the meters
+  still read poorly. The clip latch is untouched, and no threshold was
+  moved to compensate for step 05 (that is the point of it).
+- Note: the plan's verification line expected kick-and-snare "near -9 in
+  green", but with yellow starting at -10 (Adam's own expectation),
+  kick+snare at -7.4 correctly reads **yellow with red far away** — a
+  healthy default project that shows real level with headroom.
+
+## Plan complete
+
+All eight steps are done on `feat/gain-structure-02-measure`, in order:
+02 measured the old behaviour, 03 built the shared module, 04 tapered
+the faders, 05 set the operating level, 06 pinned oscillator summing and
+compensated drive, 07 level-matched the wet paths and equal-powered the
+blend, 08 put the meters on IEC 60268-18. `docs/GAIN_STRUCTURE.md` is
+the standing reference; `mooloop_core::gain` + `GainMath` are the only
+implementations; the characterization tests pin every deliberate number
+and say so in their headers.
+
+Deferred to human judgement (the parts only ears can sign off):
+- Step 05/06: are the new default levels musical? Per-device calibration
+  is one constant each if a source sits wrong.
+- Step 07: does the wet/dry control feel proportional at 1/10/50%?
+- Tonal material still reads ~+10 dB over dry in the reverb at 100% wet
+  (the tail's low-tilt spectrum); if that bothers you in practice, the
+  fix is in the IR generator's brightness filter, not the normalizer.
