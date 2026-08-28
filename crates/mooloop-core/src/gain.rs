@@ -12,6 +12,14 @@ pub const MIN_DB: f32 = -60.0;
 /// Ceiling of the trim range: +12 dB.
 pub const MAX_DB: f32 = 12.0;
 
+/// Where a peak meter turns from green to yellow. The conventional digital
+/// peak warning point, and the one the reference level gives headroom
+/// against: the operating level sits 2 dB below it.
+pub const METER_WARNING_DB: f32 = -10.0;
+
+/// Where a peak meter turns red: 3 dB of headroom left before full scale.
+pub const METER_HOT_DB: f32 = -3.0;
+
 /// Largest persisted linear gain for a channel/device output, shared by the
 /// UI trim controls and the engine's clamps. Slightly above 10^(12/20) so a
 /// value produced from that dB conversion always remains representable.

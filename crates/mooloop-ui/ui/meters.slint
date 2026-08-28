@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
 import { AudioOrientation } from "controls.slint";
 
 // Metering family.
@@ -75,8 +76,8 @@ export component SegmentedMeter inherits Rectangle {
     in property <float> level-db: -60;
     in property <float> held-db: -60;
     in property <float> minimum-db: -60;
-    in property <float> warning-db: -12;
-    in property <float> hot-db: -3;
+    in property <float> warning-db: GainMath.meter-warning-db;
+    in property <float> hot-db: GainMath.meter-hot-db;
     in property <bool> clipping;
     in property <int> segments: 22;
     in property <AudioOrientation> orientation: AudioOrientation.vertical;

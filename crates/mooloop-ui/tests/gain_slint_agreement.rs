@@ -89,3 +89,28 @@ fn trim_knob_reads_through_the_shared_formatter() {
         "TrimKnob grew its own formatting again:\n{knob}"
     );
 }
+
+#[test]
+fn slint_meter_thresholds_match_the_rust_constants() {
+    use mooloop_core::gain::{METER_HOT_DB, METER_WARNING_DB};
+
+    for (name, expected) in [
+        ("meter-warning-db", METER_WARNING_DB),
+        ("meter-hot-db", METER_HOT_DB),
+    ] {
+        let marker = format!("{name}: ");
+        let line = GAIN_SLINT
+            .lines()
+            .find(|line| line.contains(&marker))
+            .unwrap_or_else(|| panic!("gain.slint no longer declares {name}"));
+        let value: f32 = line
+            .rsplit(':')
+            .next()
+            .and_then(|rest| rest.trim().trim_end_matches(';').parse().ok())
+            .unwrap_or_else(|| panic!("{name} is not a plain float literal"));
+        assert!(
+            (value - expected).abs() < 1e-4,
+            "{name}: slint {value} vs rust {expected}"
+        );
+    }
+}

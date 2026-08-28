@@ -6,6 +6,12 @@
 // Slint has no infinity literal: -99999.0 stands in for -inf dB and
 // `format-db` spells it "-inf" like any other floor value.
 export global GainMath {
+    // Colour thresholds for peak meters, mirroring
+    // mooloop_core::gain::{METER_WARNING_DB, METER_HOT_DB} (the agreement
+    // test in gain_slint_agreement.rs checks these too).
+    in property <float> meter-warning-db: -10.0;
+    in property <float> meter-hot-db: -3.0;
+
     // The mixer fader taper, (travel, dB) pairs, linear in dB between
     // breakpoints. Unity at three-quarter travel, +6 dB at full throw.
     property <[float]> fader-travel: [1.0, 0.75, 0.5, 0.3, 0.15, 0.05, 0.0];
