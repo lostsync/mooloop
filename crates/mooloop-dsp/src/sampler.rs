@@ -46,8 +46,14 @@ impl SampleData {
     }
 
     /// A punchy synthesised kick so the app makes sound out of the box. The
-    /// user can load a real WAV to replace it.
+    /// user can load a real WAV to replace it. This is also the *known test
+    /// asset* for gain structure: arbitrary user samples cannot be
+    /// calibrated, but this one is generated to peak within a dB of
+    /// `mooloop_core::gain::REFERENCE_PEAK_DBFS` at the master.
     pub fn default_kick(sample_rate: u32) -> Arc<Self> {
+        /// The builtin kick's output reference, matched to
+        /// `mooloop_core::gain::REFERENCE_PEAK_DBFS`.
+        const OUTPUT_REFERENCE: f32 = 0.278;
         let dur_s = 0.25;
         let n = (dur_s * sample_rate as f64) as usize;
         let mut frames = Vec::with_capacity(n);
@@ -68,7 +74,7 @@ impl SampleData {
                 0.0
             };
             let amp = (-t * 12.0).exp();
-            let s = ((body + click) * amp) as f32;
+            let s = (((body + click) * amp) as f32) * OUTPUT_REFERENCE;
             frames.push([s, s]);
         }
         Arc::new(Self {

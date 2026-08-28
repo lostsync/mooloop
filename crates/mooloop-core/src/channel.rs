@@ -54,7 +54,10 @@ impl Channel {
             name: name.into(),
             kind,
             muted: false,
-            volume: 0.8,
+            // Genuinely at unity: the operating-level headroom comes from
+            // source calibration (`gain::REFERENCE_PEAK_DBFS`), not from a
+            // quiet default fader.
+            volume: 1.0,
             pan: 0.0,
             bus: crate::MASTER_BUS,
         }

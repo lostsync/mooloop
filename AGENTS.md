@@ -44,6 +44,7 @@ that affect the decision at hand:
 | UI layout, controls, or interaction | `docs/UI_DESIGN.md` |
 | Retained-audio buffer work | `docs/BUFFER_ENGINE.md` |
 | Audio-engine contract work | `docs/AUDIO_ARCHITECTURE.md` |
+| Gain, level, or metering work | `docs/GAIN_STRUCTURE.md` |
 
 Current explicit user feedback and purpose-built UI designs outrank these
 documents.

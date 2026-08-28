@@ -17,6 +17,11 @@ use mooloop_core::{PolySynthParams, MAX_POLY_VOICES};
 /// Minimum glide time; at or below this, pitch changes are instant.
 const MIN_GLIDE_S: f32 = 1.0e-3;
 
+/// The voice's absolute output reference, set so one oscillator at its 0 dB
+/// top (which the default patch runs at) peaks within a dB of
+/// `mooloop_core::gain::REFERENCE_PEAK_DBFS` (-12 dBFS) at the master.
+const VOICE_OUTPUT_REFERENCE: f32 = 0.51;
+
 /// Fast release used when the transport stops (seconds).
 const STOP_RELEASE_S: f32 = 0.005;
 
@@ -352,7 +357,8 @@ impl PolySynth {
                         .0
                 };
 
-                let sample = apply_drive(filtered, drive) * voice.env.level() * velocity * tremolo;
+                let sample = apply_drive(filtered, drive) * voice.env.level() * velocity * tremolo
+                    * VOICE_OUTPUT_REFERENCE;
                 let pan = voice_pan(voice_index, polyphony, spread);
                 let (gain_l, gain_r) = pan_gains(pan);
                 bus.l[i] += sample * gain_l;

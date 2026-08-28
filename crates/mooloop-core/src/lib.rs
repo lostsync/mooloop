@@ -48,7 +48,9 @@ pub use generator::{
     synth_osc_param,
 };
 pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS};
-pub use gain::{db_to_linear, format_db, linear_to_db, MAX_DB, MAX_LINEAR_GAIN, MIN_DB};
+pub use gain::{
+    db_to_linear, format_db, linear_to_db, MAX_DB, MAX_LINEAR_GAIN, MIN_DB, REFERENCE_PEAK_DBFS,
+};
 pub use effect::{
     BitcrushParams, BufferParams, CompressorParams, DelayMode, DelayParams, DelayTimeDivision, DriveCurve,
     DriveParams, EffectKind, EffectParams, EffectSlotState, EqBand, EqBandKind, EqParams,

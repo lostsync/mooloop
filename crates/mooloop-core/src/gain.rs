@@ -17,6 +17,13 @@ pub const MAX_DB: f32 = 12.0;
 /// value produced from that dB conversion always remains representable.
 pub const MAX_LINEAR_GAIN: f32 = 4.0;
 
+/// Peak level a generator's default patch produces at default velocity with
+/// its channel at unity. The headroom between this and 0 dBFS is what lets
+/// sources sum without pulling the master down first. Device calibration
+/// against this constant lives in each generator; `gain_structure_tests.rs`
+/// pins the measurements.
+pub const REFERENCE_PEAK_DBFS: f32 = -12.0;
+
 /// At or below `MIN_DB` is silence (0.0), not residual gain.
 pub fn linear_to_db(linear: f32) -> f32 {
     if !linear.is_finite() || linear <= 0.0 {

@@ -118,7 +118,10 @@ work session you can recall being part of, and don't stress over precision.
   the shared gain module (`mooloop-core/src/gain.rs` + `GainMath` in
   `gain.slint`) with the fader taper and its cross-boundary agreement
   test, then the fader taper and dB readouts across mixer strips, the
-  bus output stage, and oscillator level knobs.
+  bus output stage, and oscillator level knobs, then the -12 dBFS
+  operating level: calibrated every generator against it, set channels
+  genuinely at unity, and wrote docs/GAIN_STRUCTURE.md as the standing
+  reference.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21

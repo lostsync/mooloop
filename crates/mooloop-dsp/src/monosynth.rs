@@ -22,6 +22,11 @@ use mooloop_core::MonoSynthParams;
 /// Minimum glide time; at or below this, pitch changes are instant.
 const MIN_GLIDE_S: f32 = 1.0e-3;
 
+/// The voice's absolute output reference, set so one oscillator at its 0 dB
+/// top (which the default patch runs at) peaks within a dB of
+/// `mooloop_core::gain::REFERENCE_PEAK_DBFS` (-12 dBFS) at the master.
+const VOICE_OUTPUT_REFERENCE: f32 = 0.36;
+
 /// Fast release used when the transport stops (seconds).
 const STOP_RELEASE_S: f32 = 0.005;
 
@@ -281,7 +286,9 @@ impl MonoSynth {
             // Tremolo modulates downward from unity, so depth never makes the
             // voice louder than it is without the LFO.
             let tremolo = 1.0 - to_amp * (1.0 - lfo_value) * 0.5;
-            let sample = apply_drive(filtered, drive) * voice.env.level() * velocity * tremolo;
+            let sample =
+                apply_drive(filtered, drive) * voice.env.level() * velocity * tremolo
+                    * VOICE_OUTPUT_REFERENCE;
             bus.l[i] += sample;
             bus.r[i] += sample;
         }

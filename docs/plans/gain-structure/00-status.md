@@ -89,3 +89,36 @@ the difference does not matter; the range assertion (-8..0) absorbs it.
 - Step-02's fader test flipped: travel 0.75 now reads 0 dB, full throw
   +6 dB. Kick+snare peak unchanged; nothing audible moved. Full
   mooloop-ui suite + mixer snapshot (via `scripts/antibox --pull`) pass.
+
+## Step 05 — reference level and headroom (done, same branch)
+
+`gain::REFERENCE_PEAK_DBFS = -12.0` added. Calibrations: `DrumSynth`
+`OUTPUT_REFERENCE = 0.26` (the anchor shared by the character tables,
+ratios kept), `MonoSynth`/`PolySynth` `VOICE_OUTPUT_REFERENCE = 0.36/0.51`
+with the default patch now running one oscillator wide open
+(`OscParams::level 0.8 → 1.0` in both defaults), builtin `default_kick`
+generated at `0.278`. `Channel::new` volume is genuinely 1.0 now. No bus
+or master default moved; no limiter added. Re-measured (same setup as
+step 02):
+
+- **Source peak at unity**: Sampler **-12.0**, DrumSynth **-11.9**,
+  MonoSynth **-12.0**, PolySynth **-12.0** — all within a dB of the
+  reference. One oscillator at full *is* -12.0 on both synths.
+- **Kick + snare** (downbeat, unity): **-7.4** (plan predicted "somewhere
+  near -9"; two hits at -12 summing on the downbeat can reach -6, so
+  -7.4 sits inside honest-summing behaviour).
+- **Channel summing**: N=1 **-12.0**, N=2 **-6.0**, N=4 **0.0**,
+  N=8 **+6.0** — textbook 20·log10(N) growth, crosses 0 dBFS at ~4
+  channels (was between 2 and 3). Eight channels at +6 sit inside the
+  +12 dB clamp: the headroom is real.
+- **Oscillator summing**: one at full **-12.0** → three **-2.5** on both
+  synths, delta **+9.5 dB** — the contract's "-2.4 at three full
+  oscillators" landed on the nose.
+- **Reverb wet/dry**: bypass now -12.0; 100% wet peaks -2.4 (Reverb) /
+  -0.3 (Plate), still +9.7/+11.7 dB above the dry path. Step 07's target,
+  unchanged in relative terms.
+- dsp 201, core 57, engine 76+34, all green. `docs/GAIN_STRUCTURE.md`
+  written and added to AGENTS.md's task-context table.
+
+Adam: this is the step to **listen** to — defaults are now 12 dB quieter
+and the test suite can only confirm the numbers, not the musicality.

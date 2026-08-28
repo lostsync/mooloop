@@ -31,6 +31,12 @@ const CHOKE_DECAY_S: f32 = 0.005;
 /// Beater click duration for the kick (seconds).
 const CLICK_S: f32 = 0.003;
 
+/// The drum voice's absolute output reference. The character tables below
+/// are relative balances between characters; this is the anchor they share,
+/// set so the default kick at full velocity peaks within a dB of
+/// `mooloop_core::gain::REFERENCE_PEAK_DBFS` (-12 dBFS) at the master.
+const OUTPUT_REFERENCE: f32 = 0.26;
+
 /// The two detuned square frequencies (Hz, before keyboard tracking) that
 /// give the hat its metallic edge.
 const HAT_METAL_A_HZ: f32 = 587.33;
@@ -337,7 +343,7 @@ impl DrumSynth {
                     * gain_scale
             }
         };
-        apply_drive(out, params.drive)
+        apply_drive(out, params.drive) * OUTPUT_REFERENCE
     }
 
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {

@@ -373,7 +373,10 @@ impl Default for MonoSynthParams {
         Self {
             osc: [
                 OscParams {
-                    level: 0.8,
+                    // Wide open: the default patch IS the reference patch,
+                    // calibrated against `gain::REFERENCE_PEAK_DBFS` with the
+                    // oscillator's knob at its 0 dB top.
+                    level: 1.0,
                     ..OscParams::default()
                 },
                 OscParams {
@@ -446,7 +449,10 @@ impl Default for PolySynthParams {
         Self {
             osc: [
                 OscParams {
-                    level: 0.8,
+                    // Wide open: the default patch IS the reference patch,
+                    // calibrated against `gain::REFERENCE_PEAK_DBFS` with the
+                    // oscillator's knob at its 0 dB top.
+                    level: 1.0,
                     ..OscParams::default()
                 },
                 OscParams {

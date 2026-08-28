@@ -69,10 +69,12 @@ fn osc_levels(level: f32, count: usize) -> [OscParams; 3] {
 }
 
 #[test]
-fn source_peak_at_unity_is_today_s_baseline() {
-    // Step 05 moves these to ~-12 dBFS. Record today's numbers; only a wide
-    // sanity band is asserted so a deliberate level change does not fight
-    // this test — read the printed values and update 00-status.md.
+fn source_peak_at_unity_hits_the_reference_level() {
+    // Step 05 calibrated every generator so its default patch, at default
+    // velocity and a unity channel, peaks within ~1 dB of
+    // `gain::REFERENCE_PEAK_DBFS`. The sampler's case is the builtin kick,
+    // the plan's "known test asset": user samples are the channel trim's
+    // job.
     for kind in [
         DeviceKind::Sampler,
         DeviceKind::DrumSynth,
@@ -82,31 +84,30 @@ fn source_peak_at_unity_is_today_s_baseline() {
         let peak = peak_dbfs(&single_channel_project(one_note_channel(kind)), 2.0);
         println!("source peak at unity, {kind:?}: {peak:.1} dBFS");
         assert!(
-            (-40.0..=0.0).contains(&peak),
-            "{kind:?} default patch peaked at {peak:.1} dBFS"
+            (-13.0..=-11.0).contains(&peak),
+            "{kind:?} default patch peaked at {peak:.1} dBFS, want ~-12"
         );
     }
 }
 
 #[test]
 fn kick_and_snare_reproduces_adam_s_measurement() {
-    // As shipped today: default channel volume (0.8 linear), a default kick
-    // on step 0 and a default snare one beat later — neither at unity.
-    // Adam measured -4.2 dBFS on the master. Assert a range, not a point.
-    let mut kick = one_note_channel(DeviceKind::DrumSynth);
-    kick.setup.channel.volume = 0.8;
+    // Adam's case: default kick and snare on the downbeat, default channel
+    // volume, default patches. Was -4.2 live / hot pre-calibration; with the
+    // reference level both hits peak near -12 and their sum lands "somewhere
+    // near -9". Assert a range, not a point.
+    let kick = one_note_channel(DeviceKind::DrumSynth);
     let mut snare = one_note_channel(DeviceKind::DrumSynth);
-    snare.setup.channel.volume = 0.8;
     snare.setup.drum_synth_state_mut().unwrap().params.mode = DrumMode::Snare;
-    snare.notes[0][0].start_tick = 96;
+    snare.notes[0][0].start_tick = 0;
     let project = Project {
         channels: vec![kick, snare],
         ..Project::default()
     };
     let peak = peak_dbfs(&project, 2.0);
-    println!("kick + snare master peak (default volumes): {peak:.1} dBFS");
+    println!("kick + snare master peak (downbeat, unity): {peak:.1} dBFS");
     assert!(
-        (-8.0..=0.0).contains(&peak),
+        (-12.0..=-5.0).contains(&peak),
         "kick + snare peaked at {peak:.1} dBFS"
     );
 }
