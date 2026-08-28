@@ -2,7 +2,9 @@
 /// same floor the master meter uses.
 pub(crate) use mooloop_core::gain::MIN_DB;
 use mooloop_core::gain::linear_to_db;
-const DECAY_DB_PER_SECOND: f32 = 20.0;
+/// IEC 60268-18 digital peak fall rate: 20 dB in 1.7 s. Attack is
+/// instantaneous and the peak hold is 1 s; those were already standard.
+const DECAY_DB_PER_SECOND: f32 = 20.0 / 1.7;
 const HOLD_SECONDS: f32 = 1.0;
 const CLIP_LATCH_SECONDS: f32 = 2.0;
 
@@ -74,11 +76,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn attacks_immediately_and_decays_at_twenty_db_per_second() {
+    fn attacks_instantly_and_falls_twenty_db_in_one_point_seven_seconds() {
         let mut meter = MeterBallistics::default();
         assert_eq!(meter.update(1.0, 0.01).level_db, 0.0);
-        let reading = meter.update(0.0, 0.5);
-        assert!((reading.level_db - -10.0).abs() < 0.001);
+        // Half the standard's fall time, half the fall.
+        let reading = meter.update(0.0, 0.85);
+        assert!((reading.level_db - -10.0).abs() < 0.01);
     }
 
     #[test]

@@ -94,10 +94,14 @@ reverb and plate open at 0.25, modulation at 0.5.
 
 ## Metering
 
-Peak metering in dBFS, floor -60 dBFS (`gain::MIN_DB`). Green below -10,
-yellow -10 to -3, red above -3. Ballistics per IEC 60268-18 digital peak:
-instantaneous attack, 20 dB fall in 1.7 s, 1 s peak hold. Implemented in
-`mooloop-ui/src/meter.rs` (`MeterBallistics`).
+Peak metering in dBFS, floor -60 dBFS (`gain::MIN_DB`). Green below -10
+(`gain::METER_WARNING_DB`), yellow -10 to -3, red above -3
+(`gain::METER_HOT_DB`); both thresholds are mirrored into `GainMath` and
+the SegmentedMeter/PeakMeter defaults read from there. Ballistics per
+IEC 60268-18 digital peak: instantaneous attack, 20 dB fall in 1.7 s,
+1 s peak hold (`MeterBallistics` in `mooloop-ui/src/meter.rs`). The clip
+latch is a separate full-scale detector (≥ 0 dBFS, 2 s latch) and is not
+tied to the colour thresholds.
 
 ## Where things live
 
