@@ -40,7 +40,28 @@ this table in the same commit.
   flips it to the taper table.
 
 Note: the kick + snare render measures -2.1 against Adam's live -4.2.
-Plausible causes: live default kit differs, AD/DA rounding, or his
-pattern had different velocities. The range assertion (-8..0) absorbs
-it; if step 05 needs his exact number re-measured, do it on the live
-app, not here.
+Adam confirmed the -4.2 was just what the output meter held as a peak, so
+the difference does not matter; the range assertion (-8..0) absorbs it.
+
+## Step 03 — shared gain module (done, same branch)
+
+- `crates/mooloop-core/src/gain.rs`: `MIN_DB`/`MAX_DB`,
+  `db_to_linear`/`linear_to_db` (moved from `mooloop-ui/src/meter.rs`,
+  semantics unchanged, tests moved with them), `MAX_LINEAR_GAIN`
+  (`channel.rs` re-exports it; engine `MAX_TRIM_GAIN` deleted, clamps
+  untouched), `FADER_BREAKPOINTS` + `fader_position_to_db`/
+  `fader_db_to_position` (round-trip tested; travel between 0 and the
+  -60 dB breakpoint holds `MIN_DB` — interpolating towards -inf dB is
+  meaningless), `format_db`.
+- `ui/gain.slint`: `GainMath` global mirroring all of the above. Slint
+  1.17 has no `log10`; `log(x, 10)` is the form. -inf is spelled
+  `-99999.0` and `format-db` renders it as `-inf`. `TrimKnob` and both
+  `main.slint` `pow(10, v / 20)` sites now go through it.
+- `crates/mooloop-ui/tests/gain_slint_agreement.rs`: parses the taper
+  lists out of `gain.slint` and fails if they drift from
+  `FADER_BREAKPOINTS`; also guards `TrimKnob` against growing a second
+  formatter.
+- Nothing audible changed (step-02 characterization tests pass
+  unchanged). Verification: mooloop-core 57, mooloop-engine 76+34,
+  mooloop-ui full suite, all green — run on the remote box via
+  `scripts/antibox`.
