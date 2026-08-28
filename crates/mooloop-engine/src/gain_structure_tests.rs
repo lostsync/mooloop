@@ -10,9 +10,9 @@
 
 use crate::render::RenderState;
 use mooloop_core::{
-    DeviceKind, DrumMode, EffectKind, EffectParams, EffectSlotState, MonoSynthParams,
+    DeviceKind, DrumMode, EffectKind, EffectParams, EffectSlotState, FilterParams, MonoSynthParams,
     NoteEvent, OscParams, PlateParams, PolySynthParams, Project, ProjectChannel, ReverbParams,
-    SampleReference,
+    SampleReference, MAX_LINEAR_GAIN,
 };
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -288,4 +288,190 @@ fn fader_travel_is_tapered_in_db() {
     // The stored-gain identity is gone: 0.75 linear is no longer what
     // three-quarter travel produces.
     assert!((20.0 * 0.75f32.log10() - -2.5).abs() < 0.05, "sanity");
+}
+
+// --- Level-dependent gain: is the summing path linear? ----------------------
+//
+// Adam's report: raising the pad's fader makes the drums quieter, whatever
+// bus the pad is assigned to. Two categories of cause, and they need
+// different fixes. Control-dependent: something derives a scalar from the
+// track gains (`1.0 / max(gains)` and friends), so moving one fader moves
+// everything. Signal-dependent: something in the shared path reacts to the
+// audio, so a loud pad pushes a drum transient down. The tests below
+// separate them, and they are also the regression fence for the summing
+// contract in `docs/GAIN_STRUCTURE.md`: "no summing point normalizes by its
+// input count".
+
+/// Render the project offline and keep the master's samples, not just its
+/// peak. Superposition can only be checked sample by sample.
+fn render_master(project: &Project, seconds: f32) -> (Vec<f32>, Vec<f32>) {
+    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
+    render.play();
+    let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
+    let mut left = Vec::with_capacity(remaining);
+    let mut right = Vec::with_capacity(remaining);
+    while remaining > 0 {
+        let frames = remaining.min(1024);
+        render.process_once_block(frames);
+        let master = render.master();
+        left.extend_from_slice(&master.l[..frames]);
+        right.extend_from_slice(&master.r[..frames]);
+        remaining -= frames;
+    }
+    (left, right)
+}
+
+fn peak_of(samples: &[f32]) -> f32 {
+    samples.iter().fold(0.0f32, |p, s| p.max(s.abs()))
+}
+
+/// A sustained low note: the "pad" whose fader is the one being moved.
+fn pad_channel(volume: f32) -> ProjectChannel {
+    let mut channel = one_note_channel(DeviceKind::PolySynth);
+    channel.setup.channel.volume = volume;
+    // Two seconds at 120 BPM, low enough that its waveform spends most of
+    // each cycle away from zero — the bias a shaper would ride on.
+    channel.notes[0][0] = NoteEvent::new(1, 0, 96 * 4, 40, 127);
+    channel
+}
+
+/// A kick landing a beat in, on top of the pad's sustain.
+fn drum_channel() -> ProjectChannel {
+    let mut channel = one_note_channel(DeviceKind::DrumSynth);
+    channel.notes[0][0].start_tick = 96;
+    channel
+}
+
+/// The pad and the drums together, with either one optionally silenced by
+/// its mute rather than by removing it, so all three renders walk the same
+/// graph.
+fn pad_and_drums(pad_volume: f32, pad_muted: bool, drums_muted: bool) -> Project {
+    let mut pad = pad_channel(pad_volume);
+    pad.setup.channel.muted = pad_muted;
+    let mut drums = drum_channel();
+    drums.setup.channel.muted = drums_muted;
+    Project {
+        channels: vec![pad, drums],
+        ..Project::default()
+    }
+}
+
+/// Largest sample-by-sample departure from superposition: how far
+/// `(pad + drums)` rendered together sits from the two rendered apart and
+/// added. Zero for any linear mixer, whatever the faders are set to.
+fn superposition_error(pad_volume: f32) -> (f32, f32) {
+    let (both_l, _) = render_master(&pad_and_drums(pad_volume, false, false), 2.5);
+    let (pad_l, _) = render_master(&pad_and_drums(pad_volume, false, true), 2.5);
+    let (drums_l, _) = render_master(&pad_and_drums(pad_volume, true, false), 2.5);
+    let error = both_l
+        .iter()
+        .zip(pad_l.iter().zip(drums_l.iter()))
+        .fold(0.0f32, |worst, (both, (pad, drums))| {
+            worst.max((both - pad - drums).abs())
+        });
+    (error, peak_of(&both_l))
+}
+
+#[test]
+fn summing_stays_linear_however_the_faders_sit() {
+    // The control-dependent hypothesis, tested directly: if any headroom
+    // scalar were derived from the track gains, moving the pad's fader
+    // would change what the drums contribute, and superposition would fail
+    // at every fader position but one. Sweep the pad from silence to the
+    // +12 dB ceiling.
+    for pad_volume in [0.0, 0.5, 1.0, 2.0, MAX_LINEAR_GAIN] {
+        let (error, peak) = superposition_error(pad_volume);
+        println!(
+            "pad fader {pad_volume:.2} linear: superposition error {error:.3e} \
+             against a {peak:.3} peak"
+        );
+        assert!(
+            error < 1e-6,
+            "pad fader at {pad_volume} broke superposition by {error:.3e}: \
+             something in the summing path depends on the other track's gain"
+        );
+    }
+}
+
+/// Level of the drums' own contribution over the 50 ms after their onset:
+/// the difference the drum channel makes to the master, in RMS. The window
+/// matters — a nonlinearity's gain swings with the pad's waveform, so a peak
+/// would report the single most favourable instant rather than what is heard.
+fn drum_contribution_db(pad_volume: f32, master: &[EffectSlotState]) -> f32 {
+    let chain = |pad_muted, drums_muted| {
+        let mut project = pad_and_drums(pad_volume, pad_muted, drums_muted);
+        project.buses[0].effects = master.to_vec();
+        project
+    };
+    // The kick lands on beat 2: tick 96 at 120 BPM.
+    let onset = (SAMPLE_RATE / 2) as usize;
+    let window = onset..onset + SAMPLE_RATE as usize / 20;
+    let (both, _) = render_master(&chain(false, false), 2.5);
+    let (pad_only, _) = render_master(&chain(false, true), 2.5);
+    let (drums_only, _) = render_master(&chain(true, false), 2.5);
+    let rms = |samples: &[f32]| {
+        (samples
+            .iter()
+            .map(|s| (*s as f64) * (*s as f64))
+            .sum::<f64>()
+            / samples.len() as f64)
+            .sqrt()
+    };
+    let difference: Vec<f32> = both[window.clone()]
+        .iter()
+        .zip(pad_only[window.clone()].iter())
+        .map(|(both, pad)| both - pad)
+        .collect();
+    20.0 * (rms(&difference).max(1e-12) / rms(&drums_only[window]).max(1e-12)).log10() as f32
+}
+
+#[test]
+fn a_shared_saturation_stage_is_what_ducks_one_track_under_another() {
+    // The signal-dependent hypothesis, and the only mechanism in this
+    // codebase that produces Adam's symptom. `apply_drive` (mooloop-dsp
+    // `filter.rs`) is the one static nonlinearity in the shared path, and
+    // the filter effect carries it, so a filter with drive up on the master
+    // bus sits under everything. A sustained pad then biases the shaper onto
+    // its compressive region and the drum transient riding on top is
+    // multiplied by the local slope. Raising the pad's fader deepens it, and
+    // no bus assignment escapes it, because every bus drains to the master.
+    let driven_filter = |drive: f32| {
+        vec![EffectSlotState::new(EffectParams::Filter(FilterParams {
+            // Wide open: the drive stage is the only thing under test.
+            cutoff_hz: 18_000.0,
+            drive,
+            ..FilterParams::default()
+        }))]
+    };
+
+    // With nothing shared, the pad's fader cannot touch the drums at all —
+    // the same fact `summing_stays_linear_however_the_faders_sit` proves
+    // sample by sample, stated in the terms the symptom was reported in.
+    for pad_volume in [1.0, 2.0, MAX_LINEAR_GAIN] {
+        let clean = drum_contribution_db(pad_volume, &[]);
+        println!("bare master, pad fader {pad_volume:.2}: drums {clean:+.2} dB");
+        assert!(
+            clean.abs() < 0.01,
+            "a bare master moved the drums by {clean:.2} dB at pad fader {pad_volume}"
+        );
+    }
+
+    // With a driven filter on the master, the pad's fader is a ducking
+    // control over the drums.
+    let mut previous = 0.0f32;
+    for pad_volume in [1.0, 2.0, MAX_LINEAR_GAIN] {
+        let ducked = drum_contribution_db(pad_volume, &driven_filter(0.6));
+        println!("master filter at drive 0.6, pad fader {pad_volume:.2}: drums {ducked:+.2} dB");
+        assert!(
+            ducked < previous - 0.1,
+            "pad fader {pad_volume} left the drums at {ducked:+.2} dB, \
+             no deeper than the {previous:+.2} dB of the fader below it"
+        );
+        previous = ducked;
+    }
+    assert!(
+        previous < -2.0,
+        "the deepest duck was only {previous:+.2} dB; the mechanism should be \
+         plainly audible at the +12 dB end of the pad's fader"
+    );
 }

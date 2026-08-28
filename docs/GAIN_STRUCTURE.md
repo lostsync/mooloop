@@ -36,6 +36,21 @@ unity (`MixerBus::new`), buses sum into the master at unity. With the
 operating level, eight identical channels peak near +6 dBFS — inside the
 +12 dB clamp, audible, and the user's problem, not the engine's.
 
+**No fader touches another track.** The whole summing path is linear: a
+channel's gain and pan, `StereoBus::add_from`, and the bus walk in
+`RenderState::process_block` are all plain multiply-and-add, so rendering
+two channels together gives exactly what rendering them apart and adding
+gives, at every fader position. `summing_stays_linear_however_the_faders_sit`
+holds that sample by sample up to the +12 dB ceiling. If one track ever
+appears to duck another, nothing in the summing path can be responsible;
+look for a shared *nonlinear* stage instead — a driven filter, the drive
+effect, a compressor or limiter on a bus every source drains through. Those
+are level-dependent by design, they have no time constant when the shaper is
+static, and no bus assignment escapes one sitting on the master.
+`a_shared_saturation_stage_is_what_ducks_one_track_under_another` measures
+it: a filter at drive 0.6 on the master pulls the drums down 4.7 dB as the
+pad's fader travels from unity to +12.
+
 **Per-oscillator unity reference.** A synth oscillator's 0 dB knob position
 *is* the device reference: one oscillator at full peaks at
 `REFERENCE_PEAK_DBFS`, three at full sum honestly to about -2.4 dBFS. The

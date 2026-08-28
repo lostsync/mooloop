@@ -5360,7 +5360,10 @@ impl AppUi {
                 let Ok(index) = usize::try_from(bus) else {
                     return;
                 };
-                let volume = volume.clamp(0.0, 1.0);
+                // The bus fader's throw reaches +6 dB and the engine's
+                // output stage accepts +12, same as a channel's: clamping
+                // here at unity left the top of every bus fader dead.
+                let volume = volume.clamp(0.0, MAX_LINEAR_GAIN);
                 let mut guard = st.borrow_mut();
                 let Some(setup) = guard.buses.get_mut(index) else {
                     return;

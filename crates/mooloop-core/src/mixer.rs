@@ -49,7 +49,8 @@ pub enum EffectTarget {
 pub struct MixerBus {
     pub name: String,
     pub muted: bool,
-    /// Linear output volume in [0, 1].
+    /// Linear output volume in [0, `crate::gain::MAX_LINEAR_GAIN`] (+12 dB),
+    /// the same range a channel's gets: a bus is a gain stage too.
     pub volume: f32,
     /// Stereo pan in [-1, 1].
     pub pan: f32,
