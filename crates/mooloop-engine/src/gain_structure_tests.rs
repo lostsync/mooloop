@@ -397,10 +397,15 @@ fn summing_stays_linear_however_the_faders_sit() {
 /// the difference the drum channel makes to the master, in RMS. The window
 /// matters — a nonlinearity's gain swings with the pad's waveform, so a peak
 /// would report the single most favourable instant rather than what is heard.
-fn drum_contribution_db(pad_volume: f32, master: &[EffectSlotState]) -> f32 {
+fn drum_contribution_db(
+    pad_volume: f32,
+    master: &[EffectSlotState],
+    pad_channel: &[EffectSlotState],
+) -> f32 {
     let chain = |pad_muted, drums_muted| {
         let mut project = pad_and_drums(pad_volume, pad_muted, drums_muted);
         project.buses[0].effects = master.to_vec();
+        project.channels[0].setup.effects = pad_channel.to_vec();
         project
     };
     // The kick lands on beat 2: tick 96 at 120 BPM.
@@ -448,7 +453,7 @@ fn a_shared_saturation_stage_is_what_ducks_one_track_under_another() {
     // the same fact `summing_stays_linear_however_the_faders_sit` proves
     // sample by sample, stated in the terms the symptom was reported in.
     for pad_volume in [1.0, 2.0, MAX_LINEAR_GAIN] {
-        let clean = drum_contribution_db(pad_volume, &[]);
+        let clean = drum_contribution_db(pad_volume, &[], &[]);
         println!("bare master, pad fader {pad_volume:.2}: drums {clean:+.2} dB");
         assert!(
             clean.abs() < 0.01,
@@ -460,7 +465,7 @@ fn a_shared_saturation_stage_is_what_ducks_one_track_under_another() {
     // control over the drums.
     let mut previous = 0.0f32;
     for pad_volume in [1.0, 2.0, MAX_LINEAR_GAIN] {
-        let ducked = drum_contribution_db(pad_volume, &driven_filter(0.6));
+        let ducked = drum_contribution_db(pad_volume, &driven_filter(0.6), &[]);
         println!("master filter at drive 0.6, pad fader {pad_volume:.2}: drums {ducked:+.2} dB");
         assert!(
             ducked < previous - 0.1,
@@ -474,4 +479,23 @@ fn a_shared_saturation_stage_is_what_ducks_one_track_under_another() {
         "the deepest duck was only {previous:+.2} dB; the mechanism should be \
          plainly audible at the +12 dB end of the pad's fader"
     );
+
+    // Placement is the whole mechanism, not the effect. The same filter at
+    // the same drive on the pad's own channel runs on the pad's buffer
+    // before anything is summed (`RenderState::process_block`: the chain
+    // processes `strip.bus`, and only then is it added into the destination
+    // bus), so it cannot reach the drums however hard the pad is driven
+    // into it.
+    for pad_volume in [1.0, 2.0, MAX_LINEAR_GAIN] {
+        let on_the_channel = drum_contribution_db(pad_volume, &[], &driven_filter(0.6));
+        println!(
+            "pad-channel filter at drive 0.6, pad fader {pad_volume:.2}: \
+             drums {on_the_channel:+.2} dB"
+        );
+        assert!(
+            on_the_channel.abs() < 0.01,
+            "a filter on the pad's own channel moved the drums by \
+             {on_the_channel:+.2} dB at pad fader {pad_volume}"
+        );
+    }
 }

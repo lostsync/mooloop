@@ -47,9 +47,13 @@ look for a shared *nonlinear* stage instead — a driven filter, the drive
 effect, a compressor or limiter on a bus every source drains through. Those
 are level-dependent by design, they have no time constant when the shaper is
 static, and no bus assignment escapes one sitting on the master.
+What matters is placement, not the effect: a channel's chain runs on that
+channel's own buffer and is only then added into its destination bus, so the
+same device on a channel touches nothing else.
 `a_shared_saturation_stage_is_what_ducks_one_track_under_another` measures
-it: a filter at drive 0.6 on the master pulls the drums down 4.7 dB as the
-pad's fader travels from unity to +12.
+both: a filter at drive 0.6 on the master pulls the drums down 4.7 dB as the
+pad's fader travels from unity to +12, and the same filter on the pad's own
+channel moves them 0.00 dB.
 
 **Per-oscillator unity reference.** A synth oscillator's 0 dB knob position
 *is* the device reference: one oscillator at full peaks at
