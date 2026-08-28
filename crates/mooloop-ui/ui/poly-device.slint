@@ -67,7 +67,14 @@ component OscillatorDeviceStrip inherits Rectangle {
                 value: GainMath.linear-to-db(root.level);
                 maximum: 0;
                 default-value: -60;
-                changed(v) => { root.level-changed(GainMath.db-to-linear(v)); }
+                changed(v) => {
+                    // The knob works in dB but `level` is the stored linear
+                    // value; restate it so the scope and the face property
+                    // track the drag immediately instead of waiting for the
+                    // engine's params to come back.
+                    root.level = GainMath.db-to-linear(v);
+                    root.level-changed(root.level);
+                }
             }
             ParameterKnob {
                 width: 48px; diameter: 36px; label: "Width"; tooltip: "Pulse width";
