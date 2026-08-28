@@ -46,7 +46,12 @@ macro_rules! action {
             id: $id,
             label: $label,
             category: $category,
-            default: Some(RawChord { ctrl: true, shift: true, alt: false, key: $key }),
+            default: Some(RawChord {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                key: $key,
+            }),
         }
     };
     ($id:literal, $label:literal, $category:literal, ctrl+alt+$key:literal) => {
@@ -54,7 +59,12 @@ macro_rules! action {
             id: $id,
             label: $label,
             category: $category,
-            default: Some(RawChord { ctrl: true, shift: false, alt: true, key: $key }),
+            default: Some(RawChord {
+                ctrl: true,
+                shift: false,
+                alt: true,
+                key: $key,
+            }),
         }
     };
     ($id:literal, $label:literal, $category:literal, ctrl+$key:literal) => {
@@ -62,7 +72,12 @@ macro_rules! action {
             id: $id,
             label: $label,
             category: $category,
-            default: Some(RawChord { ctrl: true, shift: false, alt: false, key: $key }),
+            default: Some(RawChord {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                key: $key,
+            }),
         }
     };
     ($id:literal, $label:literal, $category:literal, $key:literal) => {
@@ -70,7 +85,12 @@ macro_rules! action {
             id: $id,
             label: $label,
             category: $category,
-            default: Some(RawChord { ctrl: false, shift: false, alt: false, key: $key }),
+            default: Some(RawChord {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                key: $key,
+            }),
         }
     };
 }
@@ -90,7 +110,12 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("edit.copy-channel", "Copy Channel", "Edit", ctrl + "c"),
     action!("edit.paste-channel", "Paste Channel", "Edit", ctrl + "v"),
     action!("edit.select-all", "Select All Notes", "Edit", ctrl + "a"),
-    action!("edit.delete-note", "Delete Selected Notes", "Edit", "delete"),
+    action!(
+        "edit.delete-note",
+        "Delete Selected Notes",
+        "Edit",
+        "delete"
+    ),
     action!("view.pane-next", "Next Pane", "View", ctrl + "right"),
     action!("view.pane-prev", "Previous Pane", "View", ctrl + "left"),
     action!("view.pane-steps", "Show Steps", "View", ctrl + "1"),
@@ -101,7 +126,12 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("view.zoom-in", "Zoom In", "View", ctrl + "="),
     action!("view.zoom-out", "Zoom Out", "View", ctrl + "-"),
     action!("channel.add", "Add Channel", "Channel", ctrl + shift + "n"),
-    action!("channel.remove", "Remove Channel", "Channel", ctrl + "delete"),
+    action!(
+        "channel.remove",
+        "Remove Channel",
+        "Channel",
+        ctrl + "delete"
+    ),
     action!("channel.clone", "Clone Channel", "Channel", ctrl + "d"),
     action!("pattern.add", "Add Pattern", "Pattern", ctrl + shift + "p"),
     action!(
@@ -110,7 +140,12 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         "Pattern",
         ctrl + shift + "delete"
     ),
-    action!("pattern.clone", "Clone Pattern", "Pattern", ctrl + alt + "d"),
+    action!(
+        "pattern.clone",
+        "Clone Pattern",
+        "Pattern",
+        ctrl + alt + "d"
+    ),
     // No default chord: every nearby Pattern-menu action already claims a
     // Ctrl+<modifier>+key combination, and Ctrl+Alt+Delete is a poor choice
     // to fight the desktop environment over. Still registered so it shows

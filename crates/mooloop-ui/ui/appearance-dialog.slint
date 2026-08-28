@@ -1,8 +1,87 @@
 import { HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { IconButton, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
+import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { JackControlSurface, OutputTargetRow } from "audio-preferences.slint";
 export { OutputTargetRow }
+
+// One selectable palette in Preferences > Appearance. `tint` fields carry the
+// parsed seed colors because Slint cannot turn a hex string into a color --
+// Rust sends both the text it round-trips and the swatch color to draw.
+export struct AppearanceSchemeRow {
+    name: string,
+    base: color,
+    accent: color,
+    alert: color,
+    is-user: bool,
+}
+
+struct ColorChoice {
+    value: string,
+    tint: color,
+}
+
+// Label, quick swatches, and a hex field for one seed color. Every path here
+// writes `value` and then raises `changed`, so the caller has a single place
+// to push a live preview from.
+component ColorField inherits VerticalBox {
+    in property <string> label;
+    in property <string> description;
+    in property <[ColorChoice]> choices;
+    in-out property <string> value;
+    in property <color> resolved;
+    callback changed();
+
+    padding: 0px;
+    spacing: 2px;
+
+    HorizontalBox {
+        padding: 0px;
+        spacing: 6px;
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: 11px;
+            vertical-alignment: center;
+            width: 54px;
+        }
+        for choice in root.choices : Rectangle {
+            width: 22px;
+            height: 22px;
+            border-radius: Theme.radius-md;
+            background: choice.tint;
+            border-width: choice.value == root.value ? 2px : 1px;
+            border-color: choice.value == root.value ? Theme.text : Theme.border;
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.value = choice.value;
+                    root.changed();
+                }
+            }
+        }
+        LineEdit {
+            width: 96px;
+            text <=> root.value;
+            placeholder-text: "#RRGGBB";
+            edited => { root.changed(); }
+        }
+        Rectangle {
+            width: 22px;
+            height: 22px;
+            border-radius: Theme.radius-md;
+            background: root.resolved;
+            border-width: 1px;
+            border-color: Theme.border;
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    Text {
+        x: 60px;
+        text: root.description;
+        color: Theme.text-muted;
+        font-size: 10px;
+    }
+}
 
 component PreferenceNavItem inherits Rectangle {
     in property <string> text;
@@ -49,7 +128,7 @@ export component ShortcutRowView inherits Rectangle {
     callback capture-cancelled();
 
     height: 30px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     background: capture-focus.has-focus ? Theme.surface-active : transparent;
 
     HorizontalBox {
@@ -236,10 +315,230 @@ export component ShortcutRowView inherits Rectangle {
     }
 }
 
+// The Appearance page's body, exported so it can be rendered unclipped in a
+// snapshot test. The dialog only ever shows it through a ScrollView, which
+// crops it to the fixed dialog height.
+export component AppearancePage inherits VerticalLayout {
+    in-out property <string> scheme;
+    in-out property <[AppearanceSchemeRow]> schemes;
+    in-out property <string> base;
+    in-out property <string> accent;
+    in-out property <string> alert;
+    in-out property <float> contrast;
+    in-out property <float> roundness;
+    in-out property <string> scheme-name;
+    in-out property <bool> smooth-curves;
+    in property <string> validation-error;
+    callback preview-changed();
+    callback select-scheme(string);
+    callback save-scheme(string);
+    callback remove-scheme(string);
+
+    spacing: 8px;
+    // Children keep their preferred heights and stack from the top, so any
+    // slack collects at the bottom rather than inflating the ColorFields,
+    // which inherit VerticalBox and would otherwise absorb it as layouts do.
+    alignment: start;
+
+    Text { text: "Appearance"; color: Theme.text; font-size: 14px; height: 20px; }
+
+    SectionLabel { text: "SCHEME"; }
+    Rectangle {
+        height: 108px;
+        background: Theme.background;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: Theme.radius-md;
+        ScrollView {
+            VerticalLayout {
+                padding: 4px;
+                spacing: 2px;
+                for scheme in root.schemes : Rectangle {
+                    height: 26px;
+                    border-radius: Theme.radius-sm;
+                    background: scheme.name == root.scheme
+                        ? Theme.surface-raised
+                        : scheme-tap.has-hover ? Theme.surface : transparent;
+                    scheme-tap := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.select-scheme(scheme.name); }
+                    }
+                    HorizontalBox {
+                        padding: 4px;
+                        spacing: 6px;
+                        for tint in [scheme.base, scheme.accent, scheme.alert] : Rectangle {
+                            width: 14px;
+                            height: 14px;
+                            y: (parent.height - 14px) / 2;
+                            border-radius: Theme.radius-sm;
+                            background: tint;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                        }
+                        Text {
+                            text: scheme.name;
+                            color: scheme.name == root.scheme ? Theme.text : Theme.text-muted;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        if scheme.is-user : ToolButton {
+                            text: "Remove";
+                            tooltip: "Delete the " + scheme.name + " scheme";
+                            min-width: 56px;
+                            min-height: 20px;
+                            clicked => { root.remove-scheme(scheme.name); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    HorizontalBox {
+        padding: 0px;
+        spacing: 6px;
+        LineEdit {
+            horizontal-stretch: 1;
+            text <=> root.scheme-name;
+            placeholder-text: "New scheme name";
+        }
+        ToolButton {
+            text: "Save Scheme";
+            tooltip: "Save the current colors as a scheme";
+            min-width: 88px;
+            clicked => { root.save-scheme(root.scheme-name); }
+        }
+    }
+
+    SectionLabel { text: "COLORS"; }
+    ColorField {
+        label: "Base";
+        description: "Seeds every neutral: background, panels, borders, and text.";
+        value <=> root.base;
+        resolved: Theme.background;
+        choices: [
+            { value: "#18181B", tint: #18181B },
+            { value: "#151617", tint: #151617 },
+            { value: "#000000", tint: #000000 },
+            { value: "#1A1413", tint: #1A1413 },
+            { value: "#14141F", tint: #14141F },
+            { value: "#EDEDF0", tint: #EDEDF0 },
+        ];
+        changed => { root.preview-changed(); }
+    }
+    ColorField {
+        label: "Accent";
+        description: "State: selection, focus, and meters in their safe range.";
+        value <=> root.accent;
+        resolved: Theme.accent;
+        choices: [
+            { value: "#84CC16", tint: #84CC16 },
+            { value: "#22D3EE", tint: #22D3EE },
+            { value: "#F59E0B", tint: #F59E0B },
+            { value: "#F43F5E", tint: #F43F5E },
+            { value: "#A78BFA", tint: #A78BFA },
+            { value: "#3F7D00", tint: #3F7D00 },
+        ];
+        changed => { root.preview-changed(); }
+    }
+    ColorField {
+        label: "Alert";
+        description: "Attention: warnings, meter headroom, out-of-range values.";
+        value <=> root.alert;
+        resolved: Theme.warning;
+        choices: [
+            { value: "#EAB308", tint: #EAB308 },
+            { value: "#F97316", tint: #F97316 },
+            { value: "#FACC15", tint: #FACC15 },
+            { value: "#38BDF8", tint: #38BDF8 },
+            { value: "#F472B6", tint: #F472B6 },
+            { value: "#B45309", tint: #B45309 },
+        ];
+        changed => { root.preview-changed(); }
+    }
+    Text { text: root.validation-error; color: Theme.destructive; font-size: 10px; height: 18px; }
+
+    SectionLabel { text: "INTERFACE"; }
+    ParameterFader {
+        label: "Roundness";
+        tooltip: "Corner radius across the whole interface";
+        label-width: 54px;
+        minimum: 0;
+        maximum: 3;
+        step: 0.05;
+        value <=> root.roundness;
+        value-text: round(root.roundness * 100) + "%";
+        changed(v) => { root.preview-changed(); }
+    }
+    ParameterFader {
+        label: "Contrast";
+        tooltip: "Spread between the background, surfaces, and text";
+        label-width: 54px;
+        minimum: 0.6;
+        maximum: 1.4;
+        step: 0.02;
+        value <=> root.contrast;
+        value-text: round(root.contrast * 100) + "%";
+        changed(v) => { root.preview-changed(); }
+    }
+
+    SectionLabel { text: "GRAPHICS"; }
+    HorizontalBox {
+        height: 36px;
+        padding: 0px;
+        spacing: 8px;
+        VerticalBox {
+            spacing: 0px;
+            padding: 0px;
+            Text { text: "Smooth curves"; color: Theme.text; font-size: 11px; }
+            Text { text: "Antialias device graphs and filter curves"; color: Theme.text-muted; font-size: 10px; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        ToggleButton {
+            text: root.smooth-curves ? "On" : "Off";
+            tooltip: "Draw smooth antialiased curves";
+            max-width: 72px;
+            checked <=> root.smooth-curves;
+        }
+    }
+
+    SectionLabel { text: "PREVIEW"; }
+    Rectangle {
+        height: 64px;
+        background: Theme.background;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: Theme.radius-md;
+        HorizontalBox {
+            padding: 10px;
+            spacing: 8px;
+            VerticalBox {
+                padding: 0px;
+                spacing: 1px;
+                Text { text: "Value"; color: Theme.text; font-size: 11px; }
+                Text { text: "Label"; color: Theme.text-muted; font-size: 10px; }
+                Text { text: "Hint"; color: Theme.text-faint; font-size: 10px; }
+            }
+            ToolButton { text: "Selected"; active: true; }
+            ToolButton { text: "Idle"; }
+            Rectangle { horizontal-stretch: 1; }
+            Rectangle { width: 44px; height: 10px; y: (parent.height - 10px) / 2; background: Theme.accent; border-radius: Theme.radius-sm; }
+            Rectangle { width: 22px; height: 10px; y: (parent.height - 10px) / 2; background: Theme.warning; border-radius: Theme.radius-sm; }
+            Rectangle { width: 12px; height: 10px; y: (parent.height - 10px) / 2; background: Theme.destructive; border-radius: Theme.radius-sm; }
+        }
+    }
+}
+
 export component PreferencesDialog inherits Rectangle {
     in-out property <bool> open;
-    in-out property <int> appearance-preset;
+    in-out property <string> appearance-scheme;
+    in-out property <[AppearanceSchemeRow]> appearance-schemes;
+    in-out property <string> appearance-base;
     in-out property <string> appearance-accent;
+    in-out property <string> appearance-alert;
+    in-out property <float> appearance-contrast;
+    in-out property <float> appearance-roundness;
+    in-out property <string> appearance-scheme-name;
     in-out property <bool> developer-mode;
     in-out property <bool> smooth-curves;
     in property <string> validation-error;
@@ -250,8 +549,13 @@ export component PreferencesDialog inherits Rectangle {
     in property <string> audio-error;
     in property <[ShortcutRow]> shortcut-rows;
     in-out property <string> shortcut-capturing-id;
-    callback appearance-preview(int, string);
-    callback save(int, string, bool, bool) -> bool;
+    // base, accent, alert, contrast, roundness
+    callback appearance-preview(string, string, string, float, float);
+    callback appearance-select-scheme(string);
+    callback appearance-save-scheme(string);
+    callback appearance-remove-scheme(string);
+    // base, accent, alert, contrast, roundness, developer-mode, smooth-curves
+    callback save(string, string, string, float, float, bool, bool) -> bool;
     callback cancelled;
     callback audio-refresh-targets();
     callback audio-select-output(string, string, string);
@@ -263,6 +567,18 @@ export component PreferencesDialog inherits Rectangle {
     callback open-mockup-tool();
 
     private property <int> page: 0;
+
+    // Every appearance edit funnels through here so the live preview and the
+    // Apply/OK payload can never drift apart.
+    function preview-appearance() {
+        root.appearance-preview(
+            root.appearance-base,
+            root.appearance-accent,
+            root.appearance-alert,
+            root.appearance-contrast,
+            root.appearance-roundness,
+        );
+    }
     visible: root.open;
     background: #00000099;
     z: 100;
@@ -276,7 +592,7 @@ export component PreferencesDialog inherits Rectangle {
         background: Theme.panel;
         border-width: 1px;
         border-color: Theme.border;
-        border-radius: 2px;
+        border-radius: Theme.radius-sm;
 
         VerticalBox {
             spacing: 0px;
@@ -388,73 +704,34 @@ export component PreferencesDialog inherits Rectangle {
                             SectionLabel { text: "MIDI DEVICES"; }
                             Text { text: "MIDI device settings will appear here."; color: Theme.text-muted; font-size: 11px; }
                         }
-                        if root.page == 3 : VerticalBox {
-                            spacing: 8px;
-                            Text { text: "Appearance"; color: Theme.text; font-size: 14px; height: 20px; }
-                            SectionLabel { text: "THEME PRESET"; }
-                            HorizontalBox {
-                                spacing: 6px;
-                                for name[i] in ["Mooloop", "Graphite", "High Contrast"] : ToolButton {
-                                    text: name;
-                                    tooltip: "Use " + name + " palette";
-                                    active: root.appearance-preset == i;
-                                    horizontal-stretch: 1;
-                                    clicked => {
-                                        root.appearance-preset = i;
-                                        root.appearance-accent = i == 0 ? "#84CC16" : i == 1 ? "#F59E0B" : "#22D3EE";
-                                        root.appearance-preview(root.appearance-preset, root.appearance-accent);
-                                    }
-                                }
-                            }
-                            SectionLabel { text: "ACCENT"; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                alignment: start;
-                                for swatch[i] in [#84cc16, #22d3ee, #f59e0b, #f43f5e, #a78bfa] : Rectangle {
-                                    width: 28px;
-                                    height: 28px;
-                                    border-radius: 3px;
-                                    border-width: swatch == Theme.accent ? 2px : 1px;
-                                    border-color: swatch == Theme.accent ? Theme.text : Theme.border;
-                                    background: swatch;
-                                    TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.appearance-accent = i == 0 ? "#84CC16" : i == 1 ? "#22D3EE" : i == 2 ? "#F59E0B" : i == 3 ? "#F43F5E" : "#A78BFA";
-                                            root.appearance-preview(root.appearance-preset, root.appearance-accent);
-                                        }
-                                    }
-                                }
-                                LineEdit { text <=> root.appearance-accent; width: 120px; placeholder-text: "#RRGGBB"; edited => { root.appearance-preview(root.appearance-preset, root.appearance-accent); } }
-                                Rectangle { horizontal-stretch: 1; }
-                            }
-                            Text { text: root.validation-error; color: Theme.destructive; font-size: 10px; height: 18px; }
-                            SectionLabel { text: "GRAPHICS"; }
-                            HorizontalBox {
-                                height: 36px;
-                                spacing: 8px;
-                                VerticalBox {
-                                    spacing: 0px;
-                                    Text { text: "Smooth curves"; color: Theme.text; font-size: 11px; }
-                                    Text { text: "Antialias device graphs and filter curves"; color: Theme.text-muted; font-size: 10px; }
-                                }
-                                Rectangle { horizontal-stretch: 1; }
-                                ToggleButton { text: root.smooth-curves ? "On" : "Off"; tooltip: "Draw smooth antialiased curves"; checked <=> root.smooth-curves; }
-                            }
-                            Rectangle {
-                                height: 64px;
-                                background: Theme.background;
-                                border-width: 1px;
-                                border-color: Theme.border;
-                                border-radius: 3px;
-                                HorizontalBox {
-                                    padding: 10px;
-                                    spacing: 8px;
-                                    Text { text: "Preview"; color: Theme.text; vertical-alignment: center; }
-                                    ToolButton { text: "Selected"; active: true; }
-                                    Rectangle { horizontal-stretch: 1; }
-                                    Rectangle { width: 80px; height: 8px; background: Theme.accent; border-radius: 2px; }
-                                }
+                        if root.page == 3 : ScrollView {
+                            // The page is taller than the dialog body, so it
+                            // scrolls. `viewport-height` must be a constant:
+                            // binding it to the page's own preferred height is
+                            // circular (the child is sized by the viewport it
+                            // would define) and Slint breaks that loop by
+                            // collapsing everything below the fold. Same fixed
+                            // -viewport idiom the control gallery uses. Keep
+                            // this in step with the page's content height.
+                            vertical-stretch: 1;
+                            viewport-width: self.visible-width;
+                            viewport-height: 684px;
+                            appearance-page := AppearancePage {
+                                width: parent.visible-width - 8px;
+                                scheme <=> root.appearance-scheme;
+                                schemes <=> root.appearance-schemes;
+                                base <=> root.appearance-base;
+                                accent <=> root.appearance-accent;
+                                alert <=> root.appearance-alert;
+                                contrast <=> root.appearance-contrast;
+                                roundness <=> root.appearance-roundness;
+                                scheme-name <=> root.appearance-scheme-name;
+                                smooth-curves <=> root.smooth-curves;
+                                validation-error: root.validation-error;
+                                preview-changed => { root.preview-appearance(); }
+                                select-scheme(name) => { root.appearance-select-scheme(name); }
+                                save-scheme(name) => { root.appearance-save-scheme(name); }
+                                remove-scheme(name) => { root.appearance-remove-scheme(name); }
                             }
                         }
                         if root.page == 4 : VerticalBox {
@@ -509,7 +786,12 @@ export component PreferencesDialog inherits Rectangle {
                                 ToolButton { text: "Open"; clicked => { root.open-mockup-tool(); } }
                             }
                         }
-                        Rectangle { vertical-stretch: 1; }
+                        // Pads out the short, non-scrolling pages. A page
+                        // that scrolls must not share the body height with
+                        // it: two siblings at vertical-stretch 1 split the
+                        // space evenly, which halves the scroll viewport and
+                        // hides everything past the fold.
+                        if root.page != 1 && root.page != 3 : Rectangle { vertical-stretch: 1; }
                     }
                 }
             }
@@ -522,8 +804,25 @@ export component PreferencesDialog inherits Rectangle {
                     spacing: 6px;
                     Rectangle { horizontal-stretch: 1; }
                     ToolButton { text: "Cancel"; clicked => { root.cancelled(); root.open = false; } }
-                    ToolButton { text: "Apply"; clicked => { root.save(root.appearance-preset, root.appearance-accent, root.developer-mode, root.smooth-curves); } }
-                    ToolButton { text: "OK"; active: true; clicked => { if (root.save(root.appearance-preset, root.appearance-accent, root.developer-mode, root.smooth-curves)) { root.open = false; } } }
+                    ToolButton {
+                        text: "Apply";
+                        clicked => {
+                            root.save(root.appearance-base, root.appearance-accent, root.appearance-alert,
+                                root.appearance-contrast, root.appearance-roundness,
+                                root.developer-mode, root.smooth-curves);
+                        }
+                    }
+                    ToolButton {
+                        text: "OK";
+                        active: true;
+                        clicked => {
+                            if (root.save(root.appearance-base, root.appearance-accent, root.appearance-alert,
+                                    root.appearance-contrast, root.appearance-roundness,
+                                    root.developer-mode, root.smooth-curves)) {
+                                root.open = false;
+                            }
+                        }
+                    }
                 }
             }
         }

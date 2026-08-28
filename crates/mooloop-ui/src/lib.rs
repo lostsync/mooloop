@@ -17,20 +17,18 @@ use history::{Entry as HistoryEntry, History};
 use meter::{db_to_linear, linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, AutomationLane,
-    AutomationPoint, BufferDuration,
-    BufferEvent, BusSetup, Channel, ChannelSetup, ChannelSource, DeviceKind, DrumMode,
-    DrumSynthParams, DrumSynthState, EffectKind, EffectParams, EffectSlotState, EffectTarget,
-    GeneratorParams,
-    EngineCommand, EngineEvent, HatCharacter, KickCharacter, Kit, LfoWave, LoopMode, ModRack,
-    MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, ParamAddr, ParamDescriptor,
-    ParamOwner, PatternPlacement, PlaybackMode, PointId,
-    PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, ReverbParams,
-    SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
+    AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup, ChannelSource,
+    DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectParams,
+    EffectSlotState, EffectTarget, EngineCommand, EngineEvent, GeneratorParams, HatCharacter,
+    KickCharacter, Kit, LfoWave, LoopMode, ModRack, MonoSynthParams, MonoSynthState, NoteEvent,
+    NoteId, OscWave, ParamAddr, ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode,
+    PointId, PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode,
+    ReverbParams, SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS,
-    MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
-    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS,
-    MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES,
-    MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
+    MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
+    MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH,
+    TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect, build_effect_at_tempo, DrumSynth, DryAlign, SampleData,
@@ -43,7 +41,7 @@ use mooloop_engine::{
 use mooloop_project::{
     AssetMode, AssetWarning, LoadReport, LoadedDocument, PresetInfo, PresetSummary, SaveReport,
 };
-use settings::{AppearancePreset, AppearanceSettings, ThemePalette, UiSettings};
+use settings::{AppearanceSettings, ThemePalette, ThemeScheme, UiSettings};
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -198,14 +196,63 @@ fn apply_theme(window: &MainWindow, palette: ThemePalette) {
     theme.set_meter_clip(palette.meter_clip.color());
 }
 
-fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
-    window.set_preferences_appearance_preset(settings.appearance.preset.index());
-    window.set_preferences_appearance_accent(settings.appearance.accent.as_str().into());
-    window.set_preferences_developer_mode(settings.general.developer_mode);
-    window.set_preferences_smooth_curves(settings.appearance.smooth_curves);
+/// Pushes one appearance state -- colors and the shared radius scale -- into
+/// the running window. Live preview and a committed save both go through here,
+/// so what the user sees while dragging is exactly what Apply persists.
+fn apply_appearance(window: &MainWindow, appearance: &AppearanceSettings) {
+    apply_theme(window, appearance.palette());
+    window.global::<Theme>().set_roundness(appearance.roundness);
     window
         .global::<DisplayPrefs>()
-        .set_smooth_curves(settings.appearance.smooth_curves);
+        .set_smooth_curves(appearance.smooth_curves);
+}
+
+/// Reads back the Appearance page's live, uncommitted state. The dialog holds
+/// the edit in its properties until Apply, so this is what preview, scheme
+/// selection, and Save Scheme all have to work from.
+fn window_appearance(window: &MainWindow, stored: &AppearanceSettings) -> AppearanceSettings {
+    AppearanceSettings {
+        scheme: window.get_preferences_appearance_scheme().into(),
+        base: window.get_preferences_appearance_base().into(),
+        accent: window.get_preferences_appearance_accent().into(),
+        alert: window.get_preferences_appearance_alert().into(),
+        contrast: window.get_preferences_appearance_contrast(),
+        roundness: window.get_preferences_appearance_roundness(),
+        smooth_curves: window.get_preferences_smooth_curves(),
+        user_schemes: stored.user_schemes.clone(),
+    }
+}
+
+fn scheme_rows(appearance: &AppearanceSettings) -> ModelRc<AppearanceSchemeRow> {
+    let swatch = |hex: &str| settings::Rgb::parse_or_black(hex).color();
+    let rows: Vec<AppearanceSchemeRow> = appearance
+        .schemes()
+        .into_iter()
+        .map(|scheme| AppearanceSchemeRow {
+            base: swatch(&scheme.base),
+            accent: swatch(&scheme.accent),
+            alert: swatch(&scheme.alert),
+            is_user: !ThemeScheme::is_builtin(&scheme.name),
+            name: scheme.name.into(),
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(rows)))
+}
+
+fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
+    let appearance = &settings.appearance;
+    window.set_preferences_appearance_scheme(appearance.scheme.as_str().into());
+    window.set_preferences_appearance_schemes(scheme_rows(appearance));
+    window.set_preferences_appearance_base(appearance.base.as_str().into());
+    window.set_preferences_appearance_accent(appearance.accent.as_str().into());
+    window.set_preferences_appearance_alert(appearance.alert.as_str().into());
+    window.set_preferences_appearance_contrast(appearance.contrast);
+    window.set_preferences_appearance_roundness(appearance.roundness);
+    window.set_preferences_developer_mode(settings.general.developer_mode);
+    window.set_preferences_smooth_curves(appearance.smooth_curves);
+    window
+        .global::<DisplayPrefs>()
+        .set_smooth_curves(appearance.smooth_curves);
     window.set_preferences_error("".into());
     let buffer_index = settings
         .audio
@@ -1883,7 +1930,11 @@ impl UiState {
                 let device = format!("{} · {} {}", bus.bus.name, kind.label(), slot + 1);
                 for descriptor in kind.descriptors() {
                     rows.push((
-                        ParamAddr::effect(EffectTarget::Bus(index as u8), slot as u8, descriptor.id),
+                        ParamAddr::effect(
+                            EffectTarget::Bus(index as u8),
+                            slot as u8,
+                            descriptor.id,
+                        ),
                         device.clone(),
                         descriptor,
                     ));
@@ -1935,15 +1986,10 @@ impl UiState {
             }
             ParamOwner::Effect { slot } => {
                 let effects = match target.scope {
-                    EffectTarget::Channel(channel) => {
-                        &self.channels.get(channel as usize)?.effects
-                    }
+                    EffectTarget::Channel(channel) => &self.channels.get(channel as usize)?.effects,
                     EffectTarget::Bus(bus) => &self.buses.get(bus as usize)?.effects,
                 };
-                effects
-                    .get(slot as usize)?
-                    .kind()
-                    .descriptor(target.param)
+                effects.get(slot as usize)?.kind().descriptor(target.param)
             }
             ParamOwner::Modulator { .. } | ParamOwner::Strip => None,
         }
@@ -2145,7 +2191,11 @@ impl UiState {
                 };
                 if params.tempo_sync {
                     params.time_ms = params.time_division.time_ms(bpm);
-                    changes.push((EffectTarget::Channel(channel as u8), slot as u8, params.time_ms));
+                    changes.push((
+                        EffectTarget::Channel(channel as u8),
+                        slot as u8,
+                        params.time_ms,
+                    ));
                 }
             }
         }
@@ -3125,7 +3175,7 @@ impl AppUi {
         let mockup_window: Rc<RefCell<Option<MockupCanvas>>> = Rc::new(RefCell::new(None));
         {
             let settings = ui_settings.borrow();
-            apply_theme(&window, settings.appearance.palette());
+            apply_appearance(&window, &settings.appearance);
             sync_preferences_properties(&window, &settings);
             audio_tx.send(AudioAction::ApplyPersisted(settings.audio.engine_config()));
         }
@@ -3319,7 +3369,7 @@ impl AppUi {
             window.on_preferences_opened(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let settings = settings.borrow();
-                apply_theme(&window, settings.appearance.palette());
+                apply_appearance(&window, &settings.appearance);
                 sync_preferences_properties(&window, &settings);
                 tx.send(AudioAction::RefreshTargets);
             });
@@ -3327,16 +3377,53 @@ impl AppUi {
         {
             let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_preferences_appearance_preview(move |preset, accent| {
+            window.on_preferences_appearance_preview(
+                move |base, accent, alert, contrast, roundness| {
+                    let Some(window) = weak.upgrade() else { return };
+                    let candidate = AppearanceSettings {
+                        base: base.into(),
+                        accent: accent.into(),
+                        alert: alert.into(),
+                        contrast,
+                        roundness,
+                        smooth_curves: window.get_preferences_smooth_curves(),
+                        ..settings.borrow().appearance.clone()
+                    };
+                    // A hand-typed hex is invalid for the few keystrokes it takes
+                    // to finish typing it, so a rejected preview reports the
+                    // reason and leaves the last good theme on screen.
+                    match candidate.validated() {
+                        Ok(appearance) => {
+                            window.set_preferences_appearance_scheme(
+                                appearance.matching_scheme_name().into(),
+                            );
+                            apply_appearance(&window, &appearance);
+                            window.set_preferences_error("".into());
+                        }
+                        Err(error) => window.set_preferences_error(error.to_string().into()),
+                    }
+                },
+            );
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_appearance_select_scheme(move |name| {
                 let Some(window) = weak.upgrade() else { return };
-                let smooth_curves = settings.borrow().appearance.smooth_curves;
-                match AppearanceSettings::validated(
-                    AppearancePreset::from_index(preset),
-                    accent.as_str(),
-                    smooth_curves,
-                ) {
+                let mut candidate = window_appearance(&window, &settings.borrow().appearance);
+                let Some(scheme) = candidate.scheme(name.as_str()) else {
+                    return;
+                };
+                candidate.apply_scheme(&scheme);
+                // Selecting a scheme is a preview like any other: it only
+                // reaches settings.toml through Apply or OK.
+                match candidate.validated() {
                     Ok(appearance) => {
-                        apply_theme(&window, appearance.palette());
+                        window.set_preferences_appearance_base(appearance.base.as_str().into());
+                        window.set_preferences_appearance_accent(appearance.accent.as_str().into());
+                        window.set_preferences_appearance_alert(appearance.alert.as_str().into());
+                        window.set_preferences_appearance_scheme(appearance.scheme.as_str().into());
+                        apply_appearance(&window, &appearance);
                         window.set_preferences_error("".into());
                     }
                     Err(error) => window.set_preferences_error(error.to_string().into()),
@@ -3346,40 +3433,100 @@ impl AppUi {
         {
             let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_preferences_save(move |preset, accent, developer_mode, smooth_curves| {
-                let Some(window) = weak.upgrade() else {
-                    return false;
-                };
-                let appearance = match AppearanceSettings::validated(
-                    AppearancePreset::from_index(preset),
-                    accent.as_str(),
-                    smooth_curves,
-                ) {
+            window.on_preferences_appearance_save_scheme(move |name| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut settings = settings.borrow_mut();
+                let mut candidate = window_appearance(&window, &settings.appearance);
+                let mut appearance = match candidate.validated() {
                     Ok(appearance) => appearance,
                     Err(error) => {
                         window.set_preferences_error(error.to_string().into());
-                        return false;
+                        return;
                     }
                 };
-                apply_theme(&window, appearance.palette());
-                window
-                    .global::<DisplayPrefs>()
-                    .set_smooth_curves(smooth_curves);
-                let mut settings = settings.borrow_mut();
-                let previous = settings.appearance.clone();
-                settings.appearance = appearance;
-                let previous_developer_mode = settings.general.developer_mode;
-                settings.general.developer_mode = developer_mode;
+                if let Err(error) = appearance.save_user_scheme(name.as_str()) {
+                    window.set_preferences_error(error.to_string().into());
+                    return;
+                }
+                candidate = appearance;
+                let previous = std::mem::replace(&mut settings.appearance, candidate);
                 if let Err(error) = settings.save() {
                     settings.appearance = previous;
-                    settings.general.developer_mode = previous_developer_mode;
                     window
                         .set_preferences_error(format!("Could not save settings: {error}").into());
-                    return false;
+                    return;
                 }
+                window.set_preferences_appearance_scheme_name("".into());
+                apply_appearance(&window, &settings.appearance);
                 sync_preferences_properties(&window, &settings);
-                true
             });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_appearance_remove_scheme(move |name| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut settings = settings.borrow_mut();
+                let mut appearance = settings.appearance.clone();
+                appearance.remove_user_scheme(name.as_str());
+                let previous = std::mem::replace(&mut settings.appearance, appearance);
+                if let Err(error) = settings.save() {
+                    settings.appearance = previous;
+                    window
+                        .set_preferences_error(format!("Could not save settings: {error}").into());
+                    return;
+                }
+                // Removing a scheme drops the stored name but keeps the colors
+                // on screen, so the list refreshes without the theme flickering.
+                let scheme = window.get_preferences_appearance_scheme();
+                window.set_preferences_appearance_schemes(scheme_rows(&settings.appearance));
+                if scheme == name {
+                    window.set_preferences_appearance_scheme("".into());
+                }
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_save(
+                move |base, accent, alert, contrast, roundness, developer_mode, smooth_curves| {
+                    let Some(window) = weak.upgrade() else {
+                        return false;
+                    };
+                    let mut settings = settings.borrow_mut();
+                    let candidate = AppearanceSettings {
+                        base: base.into(),
+                        accent: accent.into(),
+                        alert: alert.into(),
+                        contrast,
+                        roundness,
+                        smooth_curves,
+                        ..settings.appearance.clone()
+                    };
+                    let mut appearance = match candidate.validated() {
+                        Ok(appearance) => appearance,
+                        Err(error) => {
+                            window.set_preferences_error(error.to_string().into());
+                            return false;
+                        }
+                    };
+                    appearance.scheme = appearance.matching_scheme_name();
+                    apply_appearance(&window, &appearance);
+                    let previous = std::mem::replace(&mut settings.appearance, appearance);
+                    let previous_developer_mode = settings.general.developer_mode;
+                    settings.general.developer_mode = developer_mode;
+                    if let Err(error) = settings.save() {
+                        settings.appearance = previous;
+                        settings.general.developer_mode = previous_developer_mode;
+                        window.set_preferences_error(
+                            format!("Could not save settings: {error}").into(),
+                        );
+                        return false;
+                    }
+                    sync_preferences_properties(&window, &settings);
+                    true
+                },
+            );
         }
         {
             let settings = ui_settings.clone();
@@ -3387,7 +3534,7 @@ impl AppUi {
             window.on_preferences_cancelled(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let settings = settings.borrow();
-                apply_theme(&window, settings.appearance.palette());
+                apply_appearance(&window, &settings.appearance);
                 sync_preferences_properties(&window, &settings);
             });
         }
@@ -4193,8 +4340,10 @@ impl AppUi {
                     return;
                 }
                 let last_start = length_ticks.saturating_sub(1) as i64;
-                let tick_delta = tick_delta.clamp(-min_tick, (last_start - max_tick).max(-min_tick));
-                let note_delta = note_delta.clamp(36 - min_note, (84 - max_note).max(36 - min_note));
+                let tick_delta =
+                    tick_delta.clamp(-min_tick, (last_start - max_tick).max(-min_tick));
+                let note_delta =
+                    note_delta.clamp(36 - min_note, (84 - max_note).max(36 - min_note));
 
                 let mut edited = Vec::with_capacity(moving.len());
                 let mut touched_steps = Vec::with_capacity(moving.len() * 2);
@@ -4238,7 +4387,9 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_selection_duplicated(move |anchor_id| {
-                let Some(window) = weak.upgrade() else { return -1 };
+                let Some(window) = weak.upgrade() else {
+                    return -1;
+                };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let pattern = st.current_pattern;
@@ -4247,9 +4398,7 @@ impl AppUi {
                 let originals: Vec<NoteEvent> = st.channels[channel].notes[pattern]
                     .iter()
                     .copied()
-                    .filter(|note| {
-                        note.id == anchor_id || st.selected_note_ids.contains(&note.id)
-                    })
+                    .filter(|note| note.id == anchor_id || st.selected_note_ids.contains(&note.id))
                     .collect();
                 if originals.is_empty() {
                     return -1;
@@ -4553,7 +4702,9 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_automation_point_created(move |tick, value| {
-                let Some(window) = weak.upgrade() else { return -1 };
+                let Some(window) = weak.upgrade() else {
+                    return -1;
+                };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let (pattern, channel) = (st.current_pattern, st.selected);
@@ -4921,7 +5072,8 @@ impl AppUi {
                 let index = st.channels.len();
                 let mut ch = ChannelState::new(index);
                 ch.notes.resize_with(st.pattern_lengths.len(), Vec::new);
-                ch.automation.resize_with(st.pattern_lengths.len(), Vec::new);
+                ch.automation
+                    .resize_with(st.pattern_lengths.len(), Vec::new);
                 let cells: Vec<StepCell> = (0..st.pattern_lengths[st.current_pattern])
                     .map(|step| rack_cell(&ch.notes[st.current_pattern], step))
                     .collect();

@@ -90,7 +90,7 @@ export component MenuBarItem inherits Rectangle {
     property <bool> popup-open: menu.is-open;
 
     width: title-text.preferred-width + 16px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     background: !root.enabled ? transparent
         : root.open-menu == root.menu-id || touch.has-hover
         ? Theme.surface-active : transparent;
@@ -198,7 +198,7 @@ export component MenuBarItem inherits Rectangle {
             background: Theme.surface;
             border-width: 1px;
             border-color: Theme.border;
-            border-radius: 3px;
+            border-radius: Theme.radius-md;
 
             menu-frame-content := VerticalLayout {
                 padding: 4px;

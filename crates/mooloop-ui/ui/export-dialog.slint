@@ -20,7 +20,7 @@ export component ExportDialog inherits Rectangle {
         background: Theme.surface;
         border-width: 1px;
         border-color: Theme.border;
-        border-radius: 4px;
+        border-radius: Theme.radius-lg;
         VerticalLayout {
             padding: 18px;
             spacing: 14px;
@@ -54,12 +54,12 @@ export component ExportDialog inherits Rectangle {
                 spacing: 8px;
                 alignment: end;
                 Rectangle {
-                    width: 76px; height: 28px; border-radius: 3px; background: cancel-touch.has-hover ? Theme.surface-active : Theme.surface-raised;
+                    width: 76px; height: 28px; border-radius: Theme.radius-md; background: cancel-touch.has-hover ? Theme.surface-active : Theme.surface-raised;
                     Text { text: "Cancel"; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
                     cancel-touch := TouchArea { clicked => { root.cancelled(); root.open = false; } }
                 }
                 Rectangle {
-                    width: 76px; height: 28px; border-radius: 3px; background: export-touch.pressed ? Theme.accent-active : Theme.accent;
+                    width: 76px; height: 28px; border-radius: Theme.radius-md; background: export-touch.pressed ? Theme.accent-active : Theme.accent;
                     Text { text: "Export"; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; }
                     export-touch := TouchArea { clicked => { root.accepted(root.format-index, root.bitrate-index, root.tail-seconds); } }
                 }

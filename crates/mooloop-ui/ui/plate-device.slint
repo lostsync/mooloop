@@ -16,7 +16,7 @@ component PlateTailDisplay inherits Rectangle {
     private property <float> tail-retention: 0.72 + root.decay * 0.25;
 
     background: Theme.panel;
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     border-width: 1px;
     border-color: Theme.border;
     clip: true;
@@ -62,7 +62,7 @@ component PlateTailDisplay inherits Rectangle {
         y: parent.height * 0.39 - root.stereo-offset - self.reflection-height / 2;
         width: 2px;
         height: self.reflection-height;
-        border-radius: 1px;
+        border-radius: Theme.radius-xs;
         background: Theme.accent.with-alpha(0.85 - tap * 0.045);
 
         // The narrow bright component is the high-frequency content left in
@@ -72,7 +72,7 @@ component PlateTailDisplay inherits Rectangle {
             y: (parent.height - self.height) / 2;
             width: parent.width;
             height: parent.height * (1 - root.damping * 0.8);
-            border-radius: 1px;
+            border-radius: Theme.radius-xs;
             background: Theme.text.with-alpha(0.7 - tap * 0.04);
         }
     }
@@ -82,14 +82,14 @@ component PlateTailDisplay inherits Rectangle {
         y: parent.height * 0.67 + root.stereo-offset - self.reflection-height / 2;
         width: 2px;
         height: self.reflection-height;
-        border-radius: 1px;
+        border-radius: Theme.radius-xs;
         background: Theme.accent.with-alpha(0.85 - tap * 0.045);
         Rectangle {
             x: 0px;
             y: (parent.height - self.height) / 2;
             width: parent.width;
             height: parent.height * (1 - root.damping * 0.8);
-            border-radius: 1px;
+            border-radius: Theme.radius-xs;
             background: Theme.text.with-alpha(0.7 - tap * 0.04);
         }
     }

@@ -12,7 +12,7 @@ import {
 } from "toolbar.slint";
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
-import { PreferencesDialog, OutputTargetRow, ShortcutRow } from "appearance-dialog.slint";
+import { PreferencesDialog, AppearanceSchemeRow, OutputTargetRow, ShortcutRow } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
@@ -51,6 +51,7 @@ export { EqDeviceDragHarness, FilterDeviceDragHarness, ReverbDeviceDragHarness }
 export { MixerStripRow }
 export { OutputTargetRow }
 export { ShortcutRow }
+export { AppearanceSchemeRow }
 
 // One step cell used in the step-grid models.
 struct StepCell {
@@ -277,8 +278,14 @@ export component MainWindow inherits Window {
 
     // ---- preferences ----
     in-out property <bool> preferences-open;
-    in-out property <int> preferences-appearance-preset;
+    in-out property <string> preferences-appearance-scheme: "Mooloop";
+    in-out property <[AppearanceSchemeRow]> preferences-appearance-schemes;
+    in-out property <string> preferences-appearance-base: "#18181B";
     in-out property <string> preferences-appearance-accent: "#84CC16";
+    in-out property <string> preferences-appearance-alert: "#EAB308";
+    in-out property <float> preferences-appearance-contrast: 1.0;
+    in-out property <float> preferences-appearance-roundness: 1.0;
+    in-out property <string> preferences-appearance-scheme-name;
     in-out property <bool> preferences-developer-mode;
     in-out property <bool> preferences-smooth-curves;
     in-out property <string> preferences-error;
@@ -290,8 +297,11 @@ export component MainWindow inherits Window {
     in property <[ShortcutRow]> preferences-shortcut-rows;
     in-out property <string> preferences-shortcut-capturing-id;
     callback preferences-opened();
-    callback preferences-appearance-preview(int, string);
-    callback preferences-save(int, string, bool, bool) -> bool;
+    callback preferences-appearance-preview(string, string, string, float, float);
+    callback preferences-appearance-select-scheme(string);
+    callback preferences-appearance-save-scheme(string);
+    callback preferences-appearance-remove-scheme(string);
+    callback preferences-save(string, string, string, float, float, bool, bool) -> bool;
     callback preferences-cancelled();
     callback preferences-audio-refresh-targets();
     callback preferences-audio-select-output(string, string, string);
@@ -1222,7 +1232,7 @@ export component MainWindow inherits Window {
                         Rectangle {
                             height: 24px;
                             width: pattern-group.preferred-width;
-                            border-radius: 3px;
+                            border-radius: Theme.radius-md;
                             background: Theme.surface-raised;
                             pattern-group := HorizontalLayout {
                                 spacing: 0px;
@@ -1393,7 +1403,7 @@ export component MainWindow inherits Window {
                     Rectangle {
                         width: 88px;
                         min-height: 24px;
-                        border-radius: 3px;
+                        border-radius: Theme.radius-md;
                         background: row.selected ? Theme.surface-active : Theme.surface;
                         Text {
                             text: row.name;
@@ -1428,7 +1438,7 @@ export component MainWindow inherits Window {
                                 background: Theme.surface;
                                 border-width: 1px;
                                 border-color: Theme.border;
-                                border-radius: 3px;
+                                border-radius: Theme.radius-md;
                                 VerticalLayout {
                                     padding: 4px;
                                     MenuRow { text: "Cut Channel"; shortcut: "Ctrl+X"; enabled: root.channels.length > 1; selected => { root.edit-command-requested(2, ch); } }
@@ -1501,7 +1511,7 @@ export component MainWindow inherits Window {
                             for cell[i] in row.steps : Rectangle {
                                 width: 24px;
                                 height: 24px;
-                                border-radius: 2px;
+                                border-radius: Theme.radius-sm;
                                 clip: true;
                                 border-width: root.playing && root.current-step == i ? 1px : 0px;
                                 border-color: Theme.text;
@@ -1635,7 +1645,7 @@ export component MainWindow inherits Window {
                                 background: Theme.surface;
                                 border-width: 1px;
                                 border-color: Theme.border;
-                                border-radius: 3px;
+                                border-radius: Theme.radius-md;
                                 VerticalLayout {
                                     padding: 4px;
                                     spacing: 1px;
@@ -1813,7 +1823,7 @@ export component MainWindow inherits Window {
                                         x: 8px;
                                         width: 88px;
                                         height: parent.height;
-                                        border-radius: 3px;
+                                        border-radius: Theme.radius-md;
                                         background: root.current-pattern == pattern
                                             ? Theme.surface-active : Theme.surface;
                                         Text {
@@ -1850,7 +1860,7 @@ export component MainWindow inherits Window {
                                                 background: Theme.surface;
                                                 border-width: 1px;
                                                 border-color: Theme.border;
-                                                border-radius: 3px;
+                                                border-radius: Theme.radius-md;
                                                 VerticalLayout {
                                                     padding: 4px;
                                                     MenuRow { text: "Clone Pattern"; shortcut: "Ctrl+Alt+D"; enabled: root.pattern-count < 256; selected => { root.pattern-clone-requested(); } }
@@ -1897,7 +1907,7 @@ export component MainWindow inherits Window {
                                             width: max(4px,
                                                 clip.length-steps * root.playlist-bar-width / 16);
                                             height: parent.height - 4px;
-                                            border-radius: 2px;
+                                            border-radius: Theme.radius-sm;
                                             border-width: root.playing && root.song-mode
                                                 && root.playlist-position-ticks >= clip.start-tick
                                                 && root.playlist-position-ticks < self.clip-end-tick ? 1px : 0px;
@@ -3204,7 +3214,7 @@ export component MainWindow inherits Window {
                                                     background: Theme.surface;
                                                     border-width: 1px;
                                                     border-color: Theme.border;
-                                                    border-radius: 3px;
+                                                    border-radius: Theme.radius-md;
                                                     menu-content := AutomationLaneMenu {
                                                         targets: root.automation-targets;
                                                         has-lane: root.automation-lane-name != "";
@@ -3321,7 +3331,7 @@ export component MainWindow inherits Window {
                                             y: parent.value-y(point.value) - 4px;
                                             width: 8px;
                                             height: 8px;
-                                            border-radius: 4px;
+                                            border-radius: Theme.radius-lg;
                                             background: point.selected ? Theme.focus : Theme.accent;
                                             border-width: 1px;
                                             border-color: Theme.surface;
@@ -3417,8 +3427,14 @@ export component MainWindow inherits Window {
         width: parent.width;
         height: parent.height;
         open <=> root.preferences-open;
-        appearance-preset <=> root.preferences-appearance-preset;
+        appearance-scheme <=> root.preferences-appearance-scheme;
+        appearance-schemes <=> root.preferences-appearance-schemes;
+        appearance-base <=> root.preferences-appearance-base;
         appearance-accent <=> root.preferences-appearance-accent;
+        appearance-alert <=> root.preferences-appearance-alert;
+        appearance-contrast <=> root.preferences-appearance-contrast;
+        appearance-roundness <=> root.preferences-appearance-roundness;
+        appearance-scheme-name <=> root.preferences-appearance-scheme-name;
         developer-mode <=> root.preferences-developer-mode;
         smooth-curves <=> root.preferences-smooth-curves;
         validation-error: root.preferences-error;
@@ -3429,8 +3445,15 @@ export component MainWindow inherits Window {
         audio-error: root.preferences-audio-error;
         shortcut-rows: root.preferences-shortcut-rows;
         shortcut-capturing-id <=> root.preferences-shortcut-capturing-id;
-        appearance-preview(preset, accent) => { root.preferences-appearance-preview(preset, accent); }
-        save(preset, accent, developer-mode, smooth-curves) => { root.preferences-save(preset, accent, developer-mode, smooth-curves) }
+        appearance-preview(base, accent, alert, contrast, roundness) => {
+            root.preferences-appearance-preview(base, accent, alert, contrast, roundness);
+        }
+        appearance-select-scheme(name) => { root.preferences-appearance-select-scheme(name); }
+        appearance-save-scheme(name) => { root.preferences-appearance-save-scheme(name); }
+        appearance-remove-scheme(name) => { root.preferences-appearance-remove-scheme(name); }
+        save(base, accent, alert, contrast, roundness, developer-mode, smooth-curves) => {
+            root.preferences-save(base, accent, alert, contrast, roundness, developer-mode, smooth-curves)
+        }
         cancelled => { root.preferences-cancelled(); }
         audio-refresh-targets => { root.preferences-audio-refresh-targets(); }
         audio-select-output(client, port-l, port-r) => { root.preferences-audio-select-output(client, port-l, port-r); }

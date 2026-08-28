@@ -47,7 +47,7 @@ export component BusPicker inherits Rectangle {
 
     width: 30px;
     height: 22px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     background: pick-touch.has-hover && root.enabled ? Theme.surface-active : Theme.surface;
     border-width: 1px;
     border-color: Theme.border;
@@ -83,7 +83,7 @@ export component BusPicker inherits Rectangle {
             background: Theme.surface;
             border-width: 1px;
             border-color: Theme.border;
-            border-radius: 3px;
+            border-radius: Theme.radius-md;
             VerticalLayout {
                 padding: 4px;
                 spacing: 1px;
@@ -125,7 +125,7 @@ component MixerStrip inherits Rectangle {
     background: root.strip.selected ? Theme.surface-active : Theme.surface;
     border-width: 1px;
     border-color: root.strip.selected ? Theme.accent : Theme.border;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
 
     VerticalLayout {
         padding: 4px;
@@ -135,7 +135,7 @@ component MixerStrip inherits Rectangle {
         // below at this bus, so it covers the full width of the strip.
         Rectangle {
             height: 20px;
-            border-radius: 2px;
+            border-radius: Theme.radius-sm;
             background: root.strip.selected ? Theme.accent-active : Theme.surface-raised;
             Text {
                 text: root.strip.name;

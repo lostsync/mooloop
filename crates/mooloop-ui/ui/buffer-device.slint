@@ -13,7 +13,7 @@ component HeldButton inherits Rectangle {
 
     min-width: 44px;
     min-height: 24px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     border-width: tap.has-hover ? 1px : 0px;
     border-color: Theme.border;
     background: tap.pressed ? Theme.accent-active : Theme.surface-raised;
@@ -86,7 +86,7 @@ export component BufferDeviceFace inherits EffectDeviceShell {
         Rectangle {
             height: 34px;
             background: Theme.panel;
-            border-radius: 2px;
+            border-radius: Theme.radius-sm;
             HorizontalLayout {
                 padding: 6px;
                 spacing: 6px;

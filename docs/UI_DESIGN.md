@@ -132,6 +132,28 @@ Use contrast and spacing to show hierarchy, not floating cards within cards.
 The source editor should feel like one instrument front panel. It should not
 look like several cards dropped into the center of a page.
 
+## Theme Tokens
+
+The palette has three user-set seeds, and every token is derived from them in
+`settings::derive_palette`:
+
+- **Base** seeds all neutrals: background, panel, the three surface levels,
+  border, and the three text weights. A light base flips the ramp, so light
+  schemes work without a second code path.
+- **Accent** is state: selection, focus, and meters in their safe range.
+- **Alert** is attention: warnings, meter headroom, out-of-range readouts.
+
+Only a true clip uses the fixed destructive red; it is not user-set, because a
+clip must never blend into a chosen palette.
+
+Two scalars retune the derived result live: **contrast** scales every neutral's
+distance from the base, and **roundness** scales the shared corner radii.
+
+A component must not write its own hex color or literal corner radius. Use
+`Theme.*` colors and the `Theme.radius-xs/sm/md/lg` tokens; anything hardcoded
+is invisible to Preferences > Appearance. Pill shapes stay local geometry
+(`height / 2`), since they track their own bounds rather than the radius scale.
+
 ## Device Rack Layout
 
 The lower source editor is an ordered horizontal device rack. Signal flows

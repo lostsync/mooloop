@@ -48,7 +48,7 @@ component PaletteEntry inherits Rectangle {
     in property <string> text;
     callback clicked;
     min-height: 26px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     background: touch.pressed ? Theme.surface-active : touch.has-hover ? Theme.surface-raised : transparent;
 
     Text {
@@ -115,7 +115,7 @@ component PlacedItem inherits Rectangle {
         height: parent.height + 4px;
         border-width: 1px;
         border-color: Theme.focus;
-        border-radius: 3px;
+        border-radius: Theme.radius-md;
     }
 
     // File-folder tab: sits flush above the item's top edge and only
@@ -126,7 +126,7 @@ component PlacedItem inherits Rectangle {
         height: 14px;
         visible: root.selected;
         background: Theme.focus.with-alpha(0.3);
-        border-radius: 2px;
+        border-radius: Theme.radius-sm;
         HorizontalLayout {
             padding-left: 4px;
             padding-right: 2px;
@@ -266,7 +266,7 @@ component PlacedItem inherits Rectangle {
             background: Theme.warning.with-alpha(0.16);
             border-width: 1px;
             border-color: Theme.warning.with-alpha(0.5);
-            border-radius: 3px;
+            border-radius: Theme.radius-md;
             // Sits under the text input so a click on the note's own border
             // still selects it - the input itself covers most of the area
             // and needs plain clicks for caret placement.
@@ -548,7 +548,7 @@ export component MockupCanvas inherits Window {
                     Rectangle {
                         height: 22px;
                         background: Theme.surface;
-                        border-radius: 2px;
+                        border-radius: Theme.radius-sm;
                         TextInput {
                             x: 4px;
                             width: parent.width - 8px;
@@ -572,7 +572,7 @@ export component MockupCanvas inherits Window {
                     Rectangle {
                         height: 60px;
                         background: Theme.surface;
-                        border-radius: 2px;
+                        border-radius: Theme.radius-sm;
                         TextInput {
                             x: 4px;
                             y: 4px;

@@ -66,7 +66,7 @@ export component ToolButton inherits Rectangle {
 
     min-width: 44px;
     min-height: 24px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     border-width: (tap.has-hover || button-keyboard.has-focus) && root.enabled ? 1px : 0px;
     border-color: button-keyboard.has-focus ? Theme.focus : Theme.border;
     background: !root.enabled
@@ -148,7 +148,7 @@ export component SegmentedControl inherits Rectangle {
 
     min-height: 26px;
     background: Theme.surface;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     border-width: 1px;
     border-color: Theme.border;
 
@@ -182,7 +182,7 @@ export component SelectorBank inherits Rectangle {
     height: 26px;
     width: selector-layout.preferred-width;
     background: Theme.surface;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     border-width: 1px;
     border-color: Theme.border;
 
@@ -217,7 +217,7 @@ export component InstrumentModule inherits Rectangle {
 
     min-height: 64px;
     background: Theme.surface;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     border-width: 1px;
     border-color: Theme.border;
 
@@ -245,7 +245,7 @@ export component ValueReadout inherits Rectangle {
     in property <length> readout-max-width: 10000px;
     min-height: 16px;
     width: min(readout-text.preferred-width + 10px, root.readout-max-width);
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.border;
@@ -688,7 +688,7 @@ export component ParameterFader inherits Rectangle {
                 y: (parent.height - 12px) / 2;
                 width: 2px;
                 height: 12px;
-                border-radius: 1px;
+                border-radius: Theme.radius-xs;
                 background: root.enabled ? Theme.text : Theme.text-faint;
             }
             TouchArea {
@@ -747,7 +747,7 @@ export component ParameterFader inherits Rectangle {
                 y: clamp(parent.height * (1 - root.normalized) - 2px, 0px, parent.height - 4px);
                 width: 14px;
                 height: 4px;
-                border-radius: 1px;
+                border-radius: Theme.radius-xs;
                 background: root.enabled ? Theme.text : Theme.text-faint;
             }
             TouchArea {
@@ -804,7 +804,7 @@ export component PeakMeter inherits Rectangle {
         (root.held-db - root.minimum-db) / (0 - root.minimum-db), 0, 1);
     min-width: root.orientation == AudioOrientation.horizontal ? 72px : 8px;
     min-height: root.orientation == AudioOrientation.horizontal ? 8px : 72px;
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     background: Theme.border;
     clip: true;
 
@@ -1032,7 +1032,7 @@ export component TransportButton inherits Rectangle {
 
     min-width: 34px;
     min-height: 26px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     border-width: transport-touch.has-hover && root.enabled ? 1px : 0px;
     border-color: root.role-color;
     background: !root.enabled
@@ -1133,7 +1133,7 @@ export component MixerFader inherits Rectangle {
             y: root.cap-height / 2;
             width: 4px;
             height: parent.height - root.cap-height;
-            border-radius: 2px;
+            border-radius: Theme.radius-sm;
             background: Theme.background;
             border-width: 1px;
             border-color: Theme.border;
@@ -1145,7 +1145,7 @@ export component MixerFader inherits Rectangle {
             y: root.cap-height / 2 + (parent.height - root.cap-height) * (1 - root.normalized);
             width: 4px;
             height: (parent.height - root.cap-height) * root.normalized;
-            border-radius: 2px;
+            border-radius: Theme.radius-sm;
             background: root.enabled ? root.fill : Theme.text-faint;
         }
 
@@ -1155,7 +1155,7 @@ export component MixerFader inherits Rectangle {
             y: (parent.height - root.cap-height) * (1 - root.normalized);
             width: 18px;
             height: root.cap-height;
-            border-radius: 2px;
+            border-radius: Theme.radius-sm;
             background: mixer-touch.pressed ? Theme.surface-active : Theme.surface-raised;
             border-width: mixer-keyboard.has-focus || mixer-touch.has-hover ? 2px : 1px;
             border-color: mixer-keyboard.has-focus ? Theme.focus : Theme.border;
@@ -1253,7 +1253,7 @@ export component ZoomScrollBar inherits Rectangle {
 
     min-width: root.vertical ? 14px : 64px;
     min-height: root.vertical ? 64px : 14px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     border-width: 1px;
     border-color: Theme.border;
     background: Theme.surface;
@@ -1276,7 +1276,7 @@ export component ZoomScrollBar inherits Rectangle {
         y: root.vertical ? root.thumb-start : 0px;
         width: root.vertical ? parent.width : root.thumb-length;
         height: root.vertical ? root.thumb-length : parent.height;
-        border-radius: 2px;
+        border-radius: Theme.radius-sm;
         border-width: 1px;
         border-color: (root.active-zone == "left" || root.active-zone == "right" || root.active-zone == "body")
             ? Theme.text-faint : Theme.border;
@@ -1293,7 +1293,7 @@ export component ZoomScrollBar inherits Rectangle {
             y: root.vertical ? 3px : 2px;
             width: root.vertical ? parent.width - 4px : 2px;
             height: root.vertical ? 2px : parent.height - 4px;
-            border-radius: 1px;
+            border-radius: Theme.radius-xs;
             background: root.enabled
                 ? (root.active-zone == "left" ? Theme.focus : Theme.text-faint) : Theme.text-faint;
         }
@@ -1302,7 +1302,7 @@ export component ZoomScrollBar inherits Rectangle {
             y: root.vertical ? parent.height - 5px : 2px;
             width: root.vertical ? parent.width - 4px : 2px;
             height: root.vertical ? 2px : parent.height - 4px;
-            border-radius: 1px;
+            border-radius: Theme.radius-xs;
             background: root.enabled
                 ? (root.active-zone == "right" ? Theme.focus : Theme.text-faint) : Theme.text-faint;
         }

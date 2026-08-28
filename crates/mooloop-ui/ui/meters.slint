@@ -90,7 +90,7 @@ export component SegmentedMeter inherits Rectangle {
     min-width: root.orientation == AudioOrientation.vertical ? 9px : 60px;
     min-height: root.orientation == AudioOrientation.vertical ? 60px : 9px;
     background: Theme.background;
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     clip: true;
 
     // Colour for the segment at index i, by its own position on the scale.
@@ -111,7 +111,7 @@ export component SegmentedMeter inherits Rectangle {
             y: parent.height * (1 - (i + 1) / root.segments) + 1px;
             width: parent.width - 2px;
             height: parent.height / root.segments - 1px;
-            border-radius: 1px;
+            border-radius: Theme.radius-xs;
             background: self.lit || self.peak
                 ? root.segment-color(i)
                 : root.segment-color(i).with-alpha(0.13);
@@ -128,7 +128,7 @@ export component SegmentedMeter inherits Rectangle {
             y: 1px;
             width: parent.width / root.segments - 1px;
             height: parent.height - 2px;
-            border-radius: 1px;
+            border-radius: Theme.radius-xs;
             background: self.lit || self.peak
                 ? root.segment-color(i)
                 : root.segment-color(i).with-alpha(0.13);
@@ -145,7 +145,7 @@ export component ClipIndicator inherits Rectangle {
 
     width: 9px;
     height: 9px;
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     background: root.clipping ? Theme.meter-clip : Theme.meter-clip.with-alpha(0.15);
     accessible-role: button;
     accessible-label: "Clip indicator";
@@ -311,7 +311,7 @@ export component GainReductionMeter inherits Rectangle {
     min-width: root.orientation == AudioOrientation.horizontal ? 80px : 9px;
     min-height: root.orientation == AudioOrientation.horizontal ? 9px : 60px;
     background: Theme.background;
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     clip: true;
 
     if root.orientation == AudioOrientation.horizontal : Rectangle {
@@ -342,7 +342,7 @@ export component CorrelationMeter inherits Rectangle {
         Rectangle {
             height: 7px;
             background: Theme.background;
-            border-radius: 2px;
+            border-radius: Theme.radius-sm;
             clip: true;
             Rectangle {
                 x: root.clamped >= 0 ? parent.width / 2 : parent.width / 2 * (1 + root.clamped);

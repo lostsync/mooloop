@@ -19,7 +19,7 @@ component OscillatorDeviceStrip inherits Rectangle {
     callback pulse-width-changed(float);
 
     background: Theme.panel;
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     VerticalLayout {
         padding: 5px;
         spacing: 4px;
@@ -137,7 +137,7 @@ export component PolyDeviceFace inherits Rectangle {
             Rectangle {
                 horizontal-stretch: 5;
                 background: Theme.panel;
-                border-radius: 2px;
+                border-radius: Theme.radius-sm;
                 VerticalLayout {
                     padding: 5px; spacing: 4px;
                     Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: 8px; }
@@ -164,7 +164,7 @@ export component PolyDeviceFace inherits Rectangle {
             Rectangle {
                 horizontal-stretch: 4;
                 background: Theme.panel;
-                border-radius: 2px;
+                border-radius: Theme.radius-sm;
                 VerticalLayout {
                     padding: 5px; spacing: 4px;
                     Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: 8px; }
@@ -191,7 +191,7 @@ export component PolyDeviceFace inherits Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
             background: Theme.panel;
-            border-radius: 2px;
+            border-radius: Theme.radius-sm;
             HorizontalLayout {
                 padding: 8px; spacing: 8px;
                 VerticalLayout {
@@ -234,7 +234,7 @@ export component PolyDeviceFace inherits Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
             background: Theme.panel;
-            border-radius: 2px;
+            border-radius: Theme.radius-sm;
             HorizontalLayout {
                 padding: 8px; spacing: 8px;
                 alignment: space-around;

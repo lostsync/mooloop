@@ -104,8 +104,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   filter response geometry is reusable for LPF, BPF, and HPF modes.
 - A two-pane Preferences dialog with General, Audio, MIDI, Appearance, and
   Shortcuts pages; General persists developer mode and reveals the presently
-  empty Developer page. Appearance presets and custom accents preview live
-  and persist on Apply or OK. Shared audio controls, tooltips, and master
+  empty Developer page. Appearance is seeded by three colors -- base (every
+  neutral), accent (state), and alert (attention) -- with six built-in
+  schemes, user schemes that can be saved and removed, and roundness and
+  contrast scalars that retune the whole UI. All of it previews live and
+  persists on Apply or OK. Shared audio controls, tooltips, and master
   peak-meter ballistics. A fresh install requests a 256-frame JACK buffer by
   default (Preferences > Audio picks from 64/128/256/512/1024/2048); a saved
   config that already has a buffer size choice keeps it, and the engine

@@ -51,7 +51,7 @@ export component EnvelopeEditor inherits Rectangle {
 
     min-width: 120px;
     min-height: 48px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.border;
@@ -231,7 +231,7 @@ export component EnvelopeEditor inherits Rectangle {
         y: 6px;
         width: readout.preferred-width + 10px;
         height: 15px;
-        border-radius: 2px;
+        border-radius: Theme.radius-sm;
         background: Theme.surface;
         readout := Text {
             text: root.active-handle == 0 ? "A " + root.attack-text

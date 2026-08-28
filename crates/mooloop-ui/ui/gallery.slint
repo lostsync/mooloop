@@ -15,7 +15,7 @@ import {
     BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
     ToolbarLabel, ToolbarRule, ToolIcons, ToolModeButton
 } from "toolbar.slint";
-import { PreferencesDialog } from "appearance-dialog.slint";
+import { PreferencesDialog, AppearanceSchemeRow } from "appearance-dialog.slint";
 import {
     DeviceAddSlot, DeviceFrame, DeviceRackMetrics
 } from "device-rack.slint";
@@ -46,7 +46,13 @@ export component ControlGallery inherits Window {
     in-out property <int> segment: 1;
     in-out property <int> gallery-preset;
     in-out property <bool> gallery-dialog-open;
+    in-out property <string> gallery-base: "#18181B";
     in-out property <string> gallery-accent: "#84CC16";
+    in-out property <string> gallery-alert: "#EAB308";
+    in-out property <float> gallery-contrast: 1.0;
+    in-out property <float> gallery-roundness: 1.0;
+    in-out property <string> gallery-scheme: "Mooloop";
+    in-out property <string> gallery-scheme-name;
     in-out property <bool> gallery-developer-mode;
     in-out property <bool> gallery-smooth-curves: true;
     in-out property <float> bipolar-value: 0.5;
@@ -437,7 +443,7 @@ export component ControlGallery inherits Window {
                 Rectangle {
                     height: 34px;
                     background: Theme.surface;
-                    border-radius: 3px;
+                    border-radius: Theme.radius-md;
                     HorizontalBox {
                         padding-left: 6px;
                         padding-right: 6px;
@@ -459,7 +465,7 @@ export component ControlGallery inherits Window {
                         Rectangle {
                             height: 24px;
                             width: gallery-pattern-group.preferred-width;
-                            border-radius: 3px;
+                            border-radius: Theme.radius-md;
                             background: Theme.surface-raised;
                             gallery-pattern-group := HorizontalLayout {
                                 spacing: 0px;
@@ -762,14 +768,32 @@ export component ControlGallery inherits Window {
         width: parent.width;
         height: parent.height;
         open <=> root.gallery-dialog-open;
-        appearance-preset <=> root.gallery-preset;
+        appearance-base <=> root.gallery-base;
         appearance-accent <=> root.gallery-accent;
+        appearance-alert <=> root.gallery-alert;
+        appearance-contrast <=> root.gallery-contrast;
+        appearance-roundness <=> root.gallery-roundness;
+        appearance-scheme <=> root.gallery-scheme;
+        appearance-scheme-name <=> root.gallery-scheme-name;
+        // The palette ramp is derived in Rust (`settings::derive_palette`), so
+        // this harness cannot preview a seed color the way the app does: it
+        // shows the page's layout and previews the parts Slint owns on its
+        // own. Use the toolbar presets above for palette checks.
+        appearance-schemes: [
+            { name: "Mooloop", base: #18181b, accent: #84cc16, alert: #eab308, is-user: false },
+            { name: "Graphite", base: #151617, accent: #f59e0b, alert: #38bdf8, is-user: false },
+            { name: "Daylight", base: #ededf0, accent: #3f7d00, alert: #b45309, is-user: false },
+            { name: "My Scheme", base: #14141f, accent: #a78bfa, alert: #f472b6, is-user: true },
+        ];
         developer-mode <=> root.gallery-developer-mode;
         smooth-curves <=> root.gallery-smooth-curves;
-        appearance-preview(preset, accent) => { root.use-preset(preset); }
-        save(preset, accent, developer-mode, smooth-curves) => {
+        appearance-preview(base, accent, alert, contrast, roundness) => {
+            Theme.roundness = roundness;
+        }
+        appearance-select-scheme(name) => { root.gallery-scheme = name; }
+        save(base, accent, alert, contrast, roundness, developer-mode, smooth-curves) => {
             DisplayPrefs.smooth-curves = smooth-curves;
-            root.use-preset(preset);
+            Theme.roundness = roundness;
             true
         }
     }

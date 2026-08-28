@@ -22,8 +22,8 @@ component DeviceHeader inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 6px;
-        Rectangle { width: 4px; height: 16px; border-radius: 2px; background: root.device-color; }
-        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.device-color; }
+        Rectangle { width: 4px; height: 16px; border-radius: Theme.radius-sm; background: root.device-color; }
+        Rectangle { width: 8px; height: 8px; border-radius: Theme.radius-lg; background: root.device-color; }
         Text { text: root.name; color: Theme.text; font-size: 11px; vertical-alignment: center; }
         Text { text: root.kind; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
         Rectangle { horizontal-stretch: 1; }
@@ -41,7 +41,7 @@ component DeviceFrame inherits Rectangle {
     background: Theme.surface;
     border-width: 1px;
     border-color: Theme.border;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     clip: true;
 }
 
@@ -59,7 +59,7 @@ component WaveDisplay inherits Rectangle {
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.border;
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     Path {
         x: 8px;
         y: 8px;
@@ -80,7 +80,7 @@ component BufferDisplay inherits Rectangle {
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.border;
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     for tick in 15: Rectangle { x: tick * parent.width / 15; width: 1px; height: 100%; background: Theme.border.with-alpha(0.35); }
     Rectangle { x: parent.width * 0.12; y: parent.height * 0.18; width: 68%; height: 64%; background: #38bdf8.with-alpha(0.12); }
     Rectangle { x: parent.width * 0.55; width: 2px; height: 100%; background: #38bdf8; }
@@ -93,7 +93,7 @@ component EqDisplay inherits Rectangle {
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.border;
-    border-radius: 2px;
+    border-radius: Theme.radius-sm;
     for tick in 5: Rectangle { y: tick * parent.height / 5; width: 100%; height: 1px; background: Theme.border.with-alpha(0.35); }
     Path {
         x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px;
@@ -101,8 +101,8 @@ component EqDisplay inherits Rectangle {
         commands: "M 0 42 C 24 42 30 56 50 56 C 76 56 74 28 101 28 C 130 28 128 40 180 40";
         stroke: #f59e0b; stroke-width: 2px; fill: transparent;
     }
-    Rectangle { x: parent.width * 0.27; y: parent.height * 0.70; width: 7px; height: 7px; border-radius: 4px; background: #f59e0b; }
-    Rectangle { x: parent.width * 0.55; y: parent.height * 0.32; width: 7px; height: 7px; border-radius: 4px; background: #f59e0b; }
+    Rectangle { x: parent.width * 0.27; y: parent.height * 0.70; width: 7px; height: 7px; border-radius: Theme.radius-lg; background: #f59e0b; }
+    Rectangle { x: parent.width * 0.55; y: parent.height * 0.32; width: 7px; height: 7px; border-radius: Theme.radius-lg; background: #f59e0b; }
 }
 
 component SamplerFace inherits DeviceFrame {
@@ -210,7 +210,7 @@ component HorizontalConcept inherits Rectangle {
                             EqFace { width: 220px; height: 268px; }
                             SignalJoin { height: 268px; }
                             Rectangle {
-                                width: 50px; height: 268px; border-width: 1px; border-color: Theme.border; border-radius: 3px;
+                                width: 50px; height: 268px; border-width: 1px; border-color: Theme.border; border-radius: Theme.radius-md;
                                 Text { text: "+"; color: Theme.text-muted; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
                             }
                         }

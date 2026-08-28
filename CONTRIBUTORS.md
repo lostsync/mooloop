@@ -38,8 +38,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-26
-- Sessions: 5
+- Last seen: 2026-08-27
+- Sessions: 6
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -47,7 +47,8 @@ work session you can recall being part of, and don't stress over precision.
   breakpoint lanes on `ParamAddr`, engine resolution composed with the
   modulation matrix, and the piano roll's velocity and automation lanes, then
   the buffer's own offset/crossfade parameters so a lane can move its read
-  head.
+  head. Rebuilt Preferences > Appearance on three color seeds with derived
+  palettes, saveable schemes, and live roundness/contrast scalars.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

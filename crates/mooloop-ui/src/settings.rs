@@ -6,106 +6,89 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const SCHEMA_VERSION: u32 = 1;
+const DEFAULT_BASE: &str = "#18181B";
 const DEFAULT_ACCENT: &str = "#84CC16";
+const DEFAULT_ALERT: &str = "#EAB308";
 const MIN_ACCENT_CONTRAST: f32 = 3.0;
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum AppearancePreset {
-    #[default]
-    Mooloop,
-    Graphite,
-    HighContrast,
-}
+pub(crate) const MIN_CONTRAST: f32 = 0.6;
+pub(crate) const MAX_CONTRAST: f32 = 1.4;
+pub(crate) const MIN_ROUNDNESS: f32 = 0.0;
+pub(crate) const MAX_ROUNDNESS: f32 = 3.0;
 
-impl AppearancePreset {
-    pub(crate) fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Graphite,
-            2 => Self::HighContrast,
-            _ => Self::Mooloop,
-        }
-    }
-
-    pub(crate) fn index(self) -> i32 {
-        match self {
-            Self::Mooloop => 0,
-            Self::Graphite => 1,
-            Self::HighContrast => 2,
-        }
-    }
-
-    pub(crate) fn palette(self, accent: Rgb) -> ThemePalette {
-        let (background, panel, surface, raised, active, border, text, muted, faint) = match self {
-            Self::Mooloop => (
-                rgb(0x18, 0x18, 0x1b),
-                rgb(0x13, 0x13, 0x16),
-                rgb(0x23, 0x23, 0x28),
-                rgb(0x2a, 0x2a, 0x2e),
-                rgb(0x33, 0x33, 0x3a),
-                rgb(0x3f, 0x3f, 0x46),
-                rgb(0xe4, 0xe4, 0xe7),
-                rgb(0xa1, 0xa1, 0xaa),
-                rgb(0x52, 0x52, 0x5b),
-            ),
-            Self::Graphite => (
-                rgb(0x15, 0x16, 0x17),
-                rgb(0x11, 0x12, 0x13),
-                rgb(0x22, 0x24, 0x26),
-                rgb(0x2c, 0x2f, 0x31),
-                rgb(0x37, 0x3a, 0x3d),
-                rgb(0x45, 0x49, 0x4d),
-                rgb(0xf1, 0xf3, 0xf5),
-                rgb(0xa6, 0xad, 0xb4),
-                rgb(0x61, 0x68, 0x6f),
-            ),
-            Self::HighContrast => (
-                rgb(0x00, 0x00, 0x00),
-                rgb(0x08, 0x08, 0x08),
-                rgb(0x15, 0x15, 0x15),
-                rgb(0x26, 0x26, 0x26),
-                rgb(0x36, 0x36, 0x36),
-                rgb(0x70, 0x70, 0x70),
-                rgb(0xff, 0xff, 0xff),
-                rgb(0xc7, 0xc7, 0xc7),
-                rgb(0x88, 0x88, 0x88),
-            ),
-        };
-        let on_accent = if relative_luminance(accent) > 0.45 {
-            rgb(0, 0, 0)
-        } else {
-            rgb(255, 255, 255)
-        };
-        ThemePalette {
-            background,
-            panel,
-            surface,
-            raised,
-            active,
-            border,
-            text,
-            muted,
-            faint,
-            accent,
-            accent_active: mix(accent, background, 0.58),
-            focus: mix(accent, on_accent, 0.22),
-            warning: rgb(0xea, 0xb3, 0x08),
-            destructive: rgb(0xef, 0x44, 0x44),
-            destructive_active: rgb(0x7f, 0x1d, 0x1d),
-            meter_safe: rgb(0x22, 0xc5, 0x5e),
-            meter_warning: rgb(0xea, 0xb3, 0x08),
-            meter_clip: rgb(0xef, 0x44, 0x44),
-        }
-    }
-}
+/// The whole palette is grown from three seeds, so a scheme is just those
+/// three hex strings under a name. `base` seeds every neutral (background,
+/// panel, surfaces, border, and the three text weights); `accent` is UI state
+/// -- selection, focus, meters in their safe range; `alert` is the attention
+/// color used for warnings, clipping headroom, and out-of-range readouts.
+const BUILTIN_SCHEMES: [(&str, &str, &str, &str); 6] = [
+    ("Mooloop", DEFAULT_BASE, DEFAULT_ACCENT, DEFAULT_ALERT),
+    ("Graphite", "#151617", "#F59E0B", "#38BDF8"),
+    ("High Contrast", "#000000", "#22D3EE", "#FACC15"),
+    ("Ember", "#1A1413", "#F97316", "#38BDF8"),
+    ("Indigo", "#14141F", "#A78BFA", "#F472B6"),
+    ("Daylight", "#EDEDF0", "#3F7D00", "#B45309"),
+];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) struct AppearanceSettings {
-    pub preset: AppearancePreset,
+pub(crate) struct ThemeScheme {
+    pub name: String,
+    pub base: String,
     pub accent: String,
+    pub alert: String,
+}
+
+impl ThemeScheme {
+    fn new(name: &str, base: &str, accent: &str, alert: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            base: base.to_owned(),
+            accent: accent.to_owned(),
+            alert: alert.to_owned(),
+        }
+    }
+
+    pub(crate) fn builtins() -> Vec<Self> {
+        BUILTIN_SCHEMES
+            .iter()
+            .map(|&(name, base, accent, alert)| Self::new(name, base, accent, alert))
+            .collect()
+    }
+
+    pub(crate) fn is_builtin(name: &str) -> bool {
+        BUILTIN_SCHEMES.iter().any(|&(builtin, ..)| builtin == name)
+    }
+}
+
+/// Everything the Appearance page owns. The palette is not stored: it is
+/// derived from these seeds on every apply, so old configs pick up palette
+/// changes instead of freezing a stale ramp.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct AppearanceSettings {
+    /// Name of the scheme the colors came from, or empty once they have been
+    /// edited away from it. Purely a UI affordance -- the colors below are
+    /// authoritative.
+    #[serde(default)]
+    pub scheme: String,
+    #[serde(default = "default_base")]
+    pub base: String,
+    #[serde(default = "default_accent")]
+    pub accent: String,
+    #[serde(default = "default_alert")]
+    pub alert: String,
+    /// Multiplies every neutral's distance from `base`. 1.0 is the tuned ramp.
+    #[serde(default = "default_unit")]
+    pub contrast: f32,
+    /// Multiplies the shared corner-radius scale. 0 gives square corners.
+    #[serde(default = "default_unit")]
+    pub roundness: f32,
     #[serde(default = "default_true")]
     pub smooth_curves: bool,
+    /// Schemes saved from the Appearance page, listed after the built-ins.
+    #[serde(default)]
+    pub user_schemes: Vec<ThemeScheme>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -124,6 +107,22 @@ pub(crate) enum AudioDriverKind {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_unit() -> f32 {
+    1.0
+}
+
+fn default_base() -> String {
+    DEFAULT_BASE.to_owned()
+}
+
+fn default_accent() -> String {
+    DEFAULT_ACCENT.to_owned()
+}
+
+fn default_alert() -> String {
+    DEFAULT_ALERT.to_owned()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -185,35 +184,122 @@ impl AudioSettings {
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
-            preset: AppearancePreset::Mooloop,
+            scheme: BUILTIN_SCHEMES[0].0.to_owned(),
+            base: DEFAULT_BASE.to_owned(),
             accent: DEFAULT_ACCENT.to_owned(),
+            alert: DEFAULT_ALERT.to_owned(),
+            contrast: 1.0,
+            roundness: 1.0,
             smooth_curves: true,
+            user_schemes: Vec::new(),
         }
     }
 }
 
 impl AppearanceSettings {
-    pub(crate) fn validated(
-        preset: AppearancePreset,
-        accent: &str,
-        smooth_curves: bool,
-    ) -> Result<Self, ValidationError> {
-        let accent_rgb = Rgb::parse(accent)?;
-        let surface = preset.palette(accent_rgb).surface;
-        if contrast_ratio(accent_rgb, surface) < MIN_ACCENT_CONTRAST {
+    /// Normalizes the seeds (hex casing, clamped scalars) and rejects an
+    /// accent that would be unreadable against the surface it derives.
+    pub(crate) fn validated(&self) -> Result<Self, ValidationError> {
+        let base = Rgb::parse(&self.base).ok_or(ValidationError::InvalidBase)?;
+        let accent = Rgb::parse(&self.accent).ok_or(ValidationError::InvalidAccent)?;
+        let alert = Rgb::parse(&self.alert).ok_or(ValidationError::InvalidAlert)?;
+        let contrast = self.contrast.clamp(MIN_CONTRAST, MAX_CONTRAST);
+        let roundness = self.roundness.clamp(MIN_ROUNDNESS, MAX_ROUNDNESS);
+        let surface = derive_palette(base, accent, alert, contrast).surface;
+        if contrast_ratio(accent, surface) < MIN_ACCENT_CONTRAST {
             return Err(ValidationError::LowContrast);
         }
         Ok(Self {
-            preset,
-            accent: accent_rgb.to_hex(),
-            smooth_curves,
+            scheme: self.scheme.clone(),
+            base: base.to_hex(),
+            accent: accent.to_hex(),
+            alert: alert.to_hex(),
+            contrast,
+            roundness,
+            smooth_curves: self.smooth_curves,
+            user_schemes: self.user_schemes.clone(),
         })
     }
 
     pub(crate) fn palette(&self) -> ThemePalette {
-        let accent =
-            Rgb::parse(&self.accent).unwrap_or_else(|_| Rgb::parse(DEFAULT_ACCENT).unwrap());
-        self.preset.palette(accent)
+        let seed = |value: &str, fallback: &str| {
+            Rgb::parse(value).unwrap_or_else(|| Rgb::parse(fallback).expect("valid default"))
+        };
+        derive_palette(
+            seed(&self.base, DEFAULT_BASE),
+            seed(&self.accent, DEFAULT_ACCENT),
+            seed(&self.alert, DEFAULT_ALERT),
+            self.contrast,
+        )
+    }
+
+    /// Built-in schemes first, then the user's own, in save order.
+    pub(crate) fn schemes(&self) -> Vec<ThemeScheme> {
+        let mut schemes = ThemeScheme::builtins();
+        schemes.extend(self.user_schemes.iter().cloned());
+        schemes
+    }
+
+    /// Name of the scheme whose three seeds match the current colors, or
+    /// empty once they have been edited away from every one of them.
+    pub(crate) fn matching_scheme_name(&self) -> String {
+        let matches = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+        self.schemes()
+            .into_iter()
+            .find(|scheme| {
+                matches(&scheme.base, &self.base)
+                    && matches(&scheme.accent, &self.accent)
+                    && matches(&scheme.alert, &self.alert)
+            })
+            .map(|scheme| scheme.name)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn scheme(&self, name: &str) -> Option<ThemeScheme> {
+        self.schemes()
+            .into_iter()
+            .find(|scheme| scheme.name == name)
+    }
+
+    /// Applies a scheme's three seeds, leaving contrast, roundness, and the
+    /// graphics preferences alone -- those are independent of color.
+    pub(crate) fn apply_scheme(&mut self, scheme: &ThemeScheme) {
+        self.scheme = scheme.name.clone();
+        self.base = scheme.base.clone();
+        self.accent = scheme.accent.clone();
+        self.alert = scheme.alert.clone();
+    }
+
+    /// Saves the current colors under `name`, replacing a user scheme of the
+    /// same name. Built-in names are reserved.
+    pub(crate) fn save_user_scheme(&mut self, name: &str) -> Result<(), ValidationError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptySchemeName);
+        }
+        if ThemeScheme::is_builtin(name) {
+            return Err(ValidationError::ReservedSchemeName);
+        }
+        let scheme = ThemeScheme::new(name, &self.base, &self.accent, &self.alert);
+        match self
+            .user_schemes
+            .iter_mut()
+            .find(|existing| existing.name == name)
+        {
+            Some(existing) => *existing = scheme,
+            None => self.user_schemes.push(scheme),
+        }
+        self.scheme = name.to_owned();
+        Ok(())
+    }
+
+    /// Removes a user scheme. Built-ins are silently left in place, since the
+    /// UI only offers Remove on user rows.
+    pub(crate) fn remove_user_scheme(&mut self, name: &str) {
+        self.user_schemes.retain(|scheme| scheme.name != name);
+        if self.scheme == name {
+            self.scheme = String::new();
+        }
     }
 }
 
@@ -227,7 +313,7 @@ pub(crate) struct ShortcutSettings {
     pub overrides: std::collections::HashMap<String, String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct UiSettings {
     schema_version: u32,
@@ -276,9 +362,10 @@ impl UiSettings {
         if settings.schema_version != SCHEMA_VERSION {
             return Err(SettingsError::UnsupportedVersion(settings.schema_version));
         }
-        let appearance =
-            AppearanceSettings::validated(settings.appearance.preset, &settings.appearance.accent, settings.appearance.smooth_curves)
-                .map_err(SettingsError::Validation)?;
+        let appearance = settings
+            .appearance
+            .validated()
+            .map_err(SettingsError::Validation)?;
         Ok(Self {
             appearance,
             ..settings
@@ -364,21 +451,28 @@ pub(crate) struct Rgb {
 }
 
 impl Rgb {
-    fn parse(value: &str) -> Result<Self, ValidationError> {
-        let hex = value.strip_prefix('#').ok_or(ValidationError::InvalidHex)?;
+    fn parse(value: &str) -> Option<Self> {
+        let hex = value.strip_prefix('#')?;
         if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(ValidationError::InvalidHex);
+            return None;
         }
-        Ok(Self {
-            r: u8::from_str_radix(&hex[0..2], 16).map_err(|_| ValidationError::InvalidHex)?,
-            g: u8::from_str_radix(&hex[2..4], 16).map_err(|_| ValidationError::InvalidHex)?,
-            b: u8::from_str_radix(&hex[4..6], 16).map_err(|_| ValidationError::InvalidHex)?,
+        Some(Self {
+            r: u8::from_str_radix(&hex[0..2], 16).ok()?,
+            g: u8::from_str_radix(&hex[2..4], 16).ok()?,
+            b: u8::from_str_radix(&hex[4..6], 16).ok()?,
         })
     }
 
     fn to_hex(self) -> String {
         format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
     }
+    /// Swatch colors come straight from stored hex that has already been
+    /// validated once; black is a visible, harmless fallback for the case
+    /// where a hand-edited config slipped something else through.
+    pub(crate) fn parse_or_black(value: &str) -> Self {
+        Self::parse(value).unwrap_or(rgb(0, 0, 0))
+    }
+
     pub(crate) fn color(self) -> Color {
         Color::from_rgb_u8(self.r, self.g, self.b)
     }
@@ -404,6 +498,66 @@ pub(crate) struct ThemePalette {
     pub meter_safe: Rgb,
     pub meter_warning: Rgb,
     pub meter_clip: Rgb,
+}
+
+/// Grows the full token set from the three seeds.
+///
+/// Every neutral is `base` moved a fixed fraction toward the contrasting pole
+/// (white on a dark base, black on a light one), which is what lets any base
+/// color -- including a light one -- produce a coherent ramp instead of only
+/// the three ramps the old hardcoded presets shipped. `contrast` scales those
+/// fractions, so one control tightens or opens the whole hierarchy at once.
+fn derive_palette(base: Rgb, accent: Rgb, alert: Rgb, contrast: f32) -> ThemePalette {
+    let dark = relative_luminance(base) < 0.4;
+    let scale = contrast.clamp(MIN_CONTRAST, MAX_CONTRAST);
+    let step = |fraction: f32| shade(base, dark, fraction * scale);
+    let background = base;
+    let on_accent = if relative_luminance(accent) > 0.45 {
+        rgb(0, 0, 0)
+    } else {
+        rgb(255, 255, 255)
+    };
+    let destructive = rgb(0xef, 0x44, 0x44);
+    ThemePalette {
+        background,
+        // The panel sits behind the work surface, so it moves away from the
+        // contrast pole rather than toward it.
+        panel: step(-0.12),
+        surface: step(0.055),
+        raised: step(0.075),
+        active: step(0.115),
+        border: step(0.17),
+        text: step(0.87),
+        muted: step(0.62),
+        faint: step(0.25),
+        accent,
+        accent_active: mix(accent, background, 0.58),
+        focus: mix(accent, on_accent, 0.22),
+        warning: alert,
+        destructive,
+        destructive_active: mix(destructive, background, 0.62),
+        // Meters read as one instrument with the rest of the UI: safe level is
+        // the accent, the headroom warning is the alert color, and only a true
+        // clip falls back to the fixed destructive red.
+        meter_safe: accent,
+        meter_warning: alert,
+        meter_clip: destructive,
+    }
+}
+
+/// Moves `color` toward the foreground pole for positive `amount` and toward
+/// the background pole for negative, where the poles swap on a light base.
+fn shade(color: Rgb, dark: bool, amount: f32) -> Rgb {
+    let (foreground, background) = if dark {
+        (rgb(255, 255, 255), rgb(0, 0, 0))
+    } else {
+        (rgb(0, 0, 0), rgb(255, 255, 255))
+    };
+    if amount >= 0.0 {
+        mix(color, foreground, amount.min(1.0))
+    } else {
+        mix(color, background, (-amount).min(1.0))
+    }
 }
 
 const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
@@ -438,15 +592,23 @@ fn contrast_ratio(a: Rgb, b: Rgb) -> f32 {
 
 #[derive(Debug)]
 pub(crate) enum ValidationError {
-    InvalidHex,
+    InvalidBase,
+    InvalidAccent,
+    InvalidAlert,
     LowContrast,
+    EmptySchemeName,
+    ReservedSchemeName,
 }
 
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidHex => write!(f, "Enter an accent as #RRGGBB"),
-            Self::LowContrast => write!(f, "Accent needs more contrast against the selected theme"),
+            Self::InvalidBase => write!(f, "Enter a base color as #RRGGBB"),
+            Self::InvalidAccent => write!(f, "Enter an accent as #RRGGBB"),
+            Self::InvalidAlert => write!(f, "Enter an alert color as #RRGGBB"),
+            Self::LowContrast => write!(f, "Accent needs more contrast against the base color"),
+            Self::EmptySchemeName => write!(f, "Name the scheme before saving it"),
+            Self::ReservedSchemeName => write!(f, "That name belongs to a built-in scheme"),
         }
     }
 }
@@ -476,18 +638,147 @@ impl fmt::Display for SettingsError {
 mod tests {
     use super::*;
 
+    fn appearance(base: &str, accent: &str, alert: &str) -> AppearanceSettings {
+        AppearanceSettings {
+            base: base.to_owned(),
+            accent: accent.to_owned(),
+            alert: alert.to_owned(),
+            ..AppearanceSettings::default()
+        }
+    }
+
     #[test]
-    fn validates_and_normalizes_accent() {
-        let settings = AppearanceSettings::validated(AppearancePreset::Mooloop, "#84cc16", true).unwrap();
+    fn validates_and_normalizes_seed_colors() {
+        let settings = appearance("#18181b", "#84cc16", "#eab308")
+            .validated()
+            .unwrap();
+        assert_eq!(settings.base, "#18181B");
         assert_eq!(settings.accent, "#84CC16");
+        assert_eq!(settings.alert, "#EAB308");
         assert!(matches!(
-            AppearanceSettings::validated(AppearancePreset::Mooloop, "lime", true),
-            Err(ValidationError::InvalidHex)
+            appearance("#18181B", "lime", "#EAB308").validated(),
+            Err(ValidationError::InvalidAccent)
         ));
         assert!(matches!(
-            AppearanceSettings::validated(AppearancePreset::Mooloop, "#232328", true),
+            appearance("18181B", "#84CC16", "#EAB308").validated(),
+            Err(ValidationError::InvalidBase)
+        ));
+        assert!(matches!(
+            appearance("#18181B", "#232328", "#EAB308").validated(),
             Err(ValidationError::LowContrast)
         ));
+    }
+
+    #[test]
+    fn clamps_contrast_and_roundness() {
+        let settings = AppearanceSettings {
+            contrast: 9.0,
+            roundness: -4.0,
+            ..AppearanceSettings::default()
+        }
+        .validated()
+        .unwrap();
+        assert_eq!(settings.contrast, MAX_CONTRAST);
+        assert_eq!(settings.roundness, MIN_ROUNDNESS);
+    }
+
+    #[test]
+    fn every_builtin_scheme_validates() {
+        for scheme in ThemeScheme::builtins() {
+            let mut settings = AppearanceSettings::default();
+            settings.apply_scheme(&scheme);
+            assert!(
+                settings.validated().is_ok(),
+                "built-in scheme {} fails validation",
+                scheme.name
+            );
+        }
+    }
+
+    #[test]
+    fn derives_a_readable_ramp_from_a_light_base() {
+        // A light base has to flip the ramp: text goes dark, surfaces go
+        // darker than the background rather than lighter.
+        let palette = appearance("#EDEDF0", "#3F7D00", "#B45309").palette();
+        assert!(relative_luminance(palette.text) < relative_luminance(palette.background));
+        assert!(relative_luminance(palette.surface) < relative_luminance(palette.background));
+        assert!(contrast_ratio(palette.text, palette.background) > 7.0);
+    }
+
+    #[test]
+    fn palette_follows_the_three_seeds() {
+        let palette = appearance("#101014", "#22D3EE", "#F97316").palette();
+        assert_eq!(palette.accent, Rgb::parse("#22D3EE").unwrap());
+        assert_eq!(palette.meter_safe, palette.accent);
+        assert_eq!(palette.warning, Rgb::parse("#F97316").unwrap());
+        assert_eq!(palette.meter_warning, palette.warning);
+        assert_eq!(palette.background, Rgb::parse("#101014").unwrap());
+    }
+
+    #[test]
+    fn contrast_control_widens_the_neutral_ramp() {
+        let tight = AppearanceSettings {
+            contrast: MIN_CONTRAST,
+            ..AppearanceSettings::default()
+        }
+        .palette();
+        let wide = AppearanceSettings {
+            contrast: MAX_CONTRAST,
+            ..AppearanceSettings::default()
+        }
+        .palette();
+        assert!(
+            contrast_ratio(wide.border, wide.background)
+                > contrast_ratio(tight.border, tight.background)
+        );
+    }
+
+    #[test]
+    fn saves_and_removes_user_schemes() {
+        let mut settings = appearance("#101014", "#22D3EE", "#F97316");
+        settings.save_user_scheme("  Mine  ").unwrap();
+        assert_eq!(settings.scheme, "Mine");
+        assert_eq!(settings.user_schemes.len(), 1);
+        assert_eq!(settings.scheme("Mine").unwrap().accent, "#22D3EE");
+        assert_eq!(settings.schemes().len(), ThemeScheme::builtins().len() + 1);
+
+        // Re-saving the same name replaces rather than duplicates.
+        settings.accent = "#84CC16".to_owned();
+        settings.save_user_scheme("Mine").unwrap();
+        assert_eq!(settings.user_schemes.len(), 1);
+        assert_eq!(settings.scheme("Mine").unwrap().accent, "#84CC16");
+
+        assert!(matches!(
+            settings.save_user_scheme("Mooloop"),
+            Err(ValidationError::ReservedSchemeName)
+        ));
+        assert!(matches!(
+            settings.save_user_scheme("   "),
+            Err(ValidationError::EmptySchemeName)
+        ));
+
+        settings.remove_user_scheme("Mine");
+        assert!(settings.user_schemes.is_empty());
+        assert_eq!(settings.scheme, "");
+    }
+
+    #[test]
+    fn upgrades_a_preset_era_config_without_losing_the_accent() {
+        // Configs written before schemes carry `preset`/`accent` only; the
+        // unknown key is ignored and the new seeds fall back to defaults.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "schema-version = 1\n[appearance]\npreset = 'graphite'\naccent = '#F59E0B'\n",
+        )
+        .unwrap();
+        let appearance = UiSettings::load_from(&path).unwrap().appearance;
+        assert_eq!(appearance.accent, "#F59E0B");
+        assert_eq!(appearance.base, DEFAULT_BASE);
+        assert_eq!(appearance.alert, DEFAULT_ALERT);
+        assert_eq!(appearance.contrast, 1.0);
+        assert_eq!(appearance.roundness, 1.0);
     }
 
     #[test]
@@ -499,7 +790,8 @@ mod tests {
             general: GeneralSettings {
                 developer_mode: true,
             },
-            appearance: AppearanceSettings::validated(AppearancePreset::Graphite, "#F59E0B", true)
+            appearance: appearance("#151617", "#F59E0B", "#38BDF8")
+                .validated()
                 .unwrap(),
             audio: AudioSettings {
                 driver: AudioDriverKind::Jack,

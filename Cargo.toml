@@ -52,3 +52,13 @@ debug = true
 opt-level = 1
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
+
+# `mooloop-ui` is the slowest crate in the workspace to rebuild by a wide
+# margin: `build.rs` compiles `ui/main.slint`, which transitively imports every
+# device face, control, and dialog, so Slint hands rustc one enormous generated
+# module and any `.slint` edit regenerates all of it. Optimizing that glue buys
+# nothing -- the deadline-sensitive per-sample code lives in `mooloop-dsp` and
+# `mooloop-engine`, which keep the profile's `opt-level = 1` above. Turning it
+# off here is purely an edit-loop win.
+[profile.dev.package.mooloop-ui]
+opt-level = 0

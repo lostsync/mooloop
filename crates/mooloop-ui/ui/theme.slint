@@ -1,4 +1,9 @@
 // Runtime theme tokens shared by every mooloop control in a component tree.
+//
+// Colors are derived in Rust (`settings::ThemePalette`) from three user-set
+// seeds -- base, accent, and alert -- so the whole ramp moves together when
+// any one of them changes. Nothing here should be hardcoded in a component:
+// a control that writes its own hex is invisible to Preferences > Appearance.
 export global Theme {
     in-out property <color> background: #18181b;
     in-out property <color> panel: #131316;
@@ -18,6 +23,16 @@ export global Theme {
     in-out property <color> meter-safe: #22c55e;
     in-out property <color> meter-warning: #eab308;
     in-out property <color> meter-clip: #ef4444;
+
+    // Corner-radius scale. Components use these tokens instead of literal
+    // pixel radii so the Appearance page's one roundness control retunes the
+    // whole UI live. Pill shapes stay expressed as `height / 2` locally --
+    // they track their own geometry, not this scale.
+    in-out property <float> roundness: 1.0;
+    out property <length> radius-xs: 1px * root.roundness;
+    out property <length> radius-sm: 2px * root.roundness;
+    out property <length> radius-md: 3px * root.roundness;
+    out property <length> radius-lg: 4px * root.roundness;
 }
 
 // Rendering preferences set from Preferences > Appearance, alongside the

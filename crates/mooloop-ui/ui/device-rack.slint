@@ -24,7 +24,7 @@ component EffectTypeRow inherits Rectangle {
 
     preferred-width: label.preferred-width + 20px;
     height: 22px;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     background: touch.has-hover ? Theme.surface-active : transparent;
 
     label := Text {
@@ -100,7 +100,7 @@ export component DeviceFrame inherits Rectangle {
     background: Theme.surface;
     border-width: 1px;
     border-color: Theme.border;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     clip: true;
 
     // These are deliberately a shell rather than a per-effect header: source,
@@ -130,7 +130,7 @@ export component DeviceFrame inherits Rectangle {
                         background: Theme.surface;
                         border-width: 1px;
                         border-color: Theme.border;
-                        border-radius: 3px;
+                        border-radius: Theme.radius-md;
                         menu-content := EffectTypeMenu {
                             kind-selected(kind) => {
                                 insert-menu.close();
@@ -249,13 +249,13 @@ export component DeviceHeader inherits Rectangle {
         Rectangle {
             width: 4px;
             height: 16px;
-            border-radius: 2px;
+            border-radius: Theme.radius-sm;
             background: root.enabled ? root.device-color : Theme.text-faint;
         }
         Rectangle {
             width: 8px;
             height: 8px;
-            border-radius: 4px;
+            border-radius: Theme.radius-lg;
             background: root.enabled ? root.device-color : Theme.text-faint;
         }
         Text {
@@ -350,7 +350,7 @@ export component DeviceAddSlot inherits Rectangle {
     height: DeviceRackMetrics.face-height;
     border-width: 1px;
     border-color: Theme.border;
-    border-radius: 3px;
+    border-radius: Theme.radius-md;
     background: add-touch.has-hover && root.enabled ? Theme.surface : transparent;
     Text {
         text: "+";
@@ -376,7 +376,7 @@ export component DeviceAddSlot inherits Rectangle {
             background: Theme.surface;
             border-width: 1px;
             border-color: Theme.border;
-            border-radius: 3px;
+            border-radius: Theme.radius-md;
             menu-content := EffectTypeMenu {
                 kind-selected(kind) => {
                     insert-menu.close();

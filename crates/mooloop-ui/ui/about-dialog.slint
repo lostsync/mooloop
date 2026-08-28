@@ -17,7 +17,7 @@ export component AboutDialog inherits Rectangle {
         background: Theme.surface;
         border-width: 1px;
         border-color: Theme.border;
-        border-radius: 4px;
+        border-radius: Theme.radius-lg;
         VerticalLayout {
             padding: 18px;
             spacing: 10px;
@@ -39,7 +39,7 @@ export component AboutDialog inherits Rectangle {
                 Rectangle {
                     width: 76px;
                     height: 28px;
-                    border-radius: 3px;
+                    border-radius: Theme.radius-md;
                     background: close-touch.has-hover ? Theme.surface-active : Theme.surface-raised;
                     Text {
                         text: "Close";

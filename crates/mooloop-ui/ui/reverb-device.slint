@@ -28,7 +28,7 @@ component RoomPlan inherits Rectangle {
         for column in 5 : Rectangle { x: column * parent.width / 4; width: 1px; height: 100%; background: Theme.border.with-alpha(0.42); }
         for row in 5 : Rectangle { y: row * parent.height / 4; width: 100%; height: 1px; background: Theme.border.with-alpha(0.42); }
         // Fixed asymmetric source marker; only the capture point is edited.
-        Rectangle { x: parent.width * 0.32 - 4px; y: parent.height * 0.29 - 4px; width: 8px; height: 8px; border-radius: 1px; background: Theme.accent; }
+        Rectangle { x: parent.width * 0.32 - 4px; y: parent.height * 0.29 - 4px; width: 8px; height: 8px; border-radius: Theme.radius-xs; background: Theme.accent; }
         TouchArea {
             x: parent.width * root.capture-x - 7px; y: parent.height * root.capture-y - 7px;
             width: 14px; height: 14px; mouse-cursor: MouseCursor.crosshair;
