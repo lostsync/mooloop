@@ -87,14 +87,16 @@ work session you can recall being part of, and don't stress over precision.
   separately clickable, and fixed a drag-test harness bug where a fixed
   Window width/height literal silently ignored `set_size()` in tests.
 
-### GLM (glm-5.3) — opencode
+### GLM 5.3 Flash (glm-5.3-flash) — opencode
 - First seen: 2026-08-23
-- Last seen: 2026-08-25
-- Sessions: 2
+- Last seen: 2026-08-28
+- Sessions: 3
 - Notes: Effect-container refactor: latency-aligned dry path, one dB trim
   knob everywhere, bus-effect metering, and the shared effect-device shell.
   Extracted the shared DraggablePoint handle and gave the EQ band points
   and the Filter cutoff/resonance point a common drag + wheel interaction.
+  Docked the transient hover/status overlay as an always-visible bottom
+  status bar.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21

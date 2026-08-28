@@ -83,9 +83,12 @@ fn render_playlist_snapshot() {
         let offset = (y * snapshot.width() as usize + x) * 4;
         &snapshot.as_bytes()[offset..offset + 3]
     };
-    let clip_color = pixel(120, 450).to_vec();
-    assert_eq!(pixel(159, 450), clip_color);
-    assert_ne!(pixel(160, 450), clip_color);
+    // The playlist canvas lives inside the fixed-height editor dock, which
+    // the docked status bar lifts 24px: 450 in window coordinates before the
+    // bar is 426 after.
+    let clip_color = pixel(120, 426).to_vec();
+    assert_eq!(pixel(159, 426), clip_color);
+    assert_ne!(pixel(160, 426), clip_color);
 
     // The step grid starts after the rack row's name, mute, the volume/pan
     // knobs and the mixer-bus picker, so these x coordinates move whenever
@@ -138,7 +141,7 @@ fn render_playlist_snapshot() {
         let removed = removed.clone();
         move |pattern, tick| removed.set(Some((pattern, tick)))
     });
-    let position = LogicalPosition::new(124.0, 450.0);
+    let position = LogicalPosition::new(124.0, 426.0);
     for button in [PointerEventButton::Left, PointerEventButton::Right] {
         ui.window()
             .dispatch_event(WindowEvent::PointerMoved { position });

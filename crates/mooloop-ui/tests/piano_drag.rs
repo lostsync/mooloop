@@ -22,12 +22,12 @@ use std::rc::Rc;
 /// software render of the 960x760 window on the Notes page. These move if the
 /// editor's left gutter or the toolbar above it is resized.
 const GRID_ORIGIN_X: f32 = 54.0;
-const GRID_TOP_Y: f32 = 407.0;
+const GRID_TOP_Y: f32 = 383.0;
 const ROW_HEIGHT: f32 = 8.0;
 const STEP_WIDTH: f32 = 32.0;
 const TICKS_PER_STEP: i32 = 24;
 const HIGH_NOTE: i32 = 84;
-const H_SCROLLBAR_Y: f32 = 673.0;
+const H_SCROLLBAR_Y: f32 = 649.0;
 const V_SCROLLBAR_X: f32 = 946.0;
 
 fn note_centre_y(midi_note: i32) -> f32 {

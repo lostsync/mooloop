@@ -3401,26 +3401,33 @@ export component MainWindow inherits Window {
             }
         }
 
-    }
+        // ===== Status bar =====
+        //
+        // A docked, always-visible row: the work surface ends at this bar's
+        // top edge, so nothing ever reflows or hides under the pointer when
+        // a hint appears. Live gesture hints (hover-hint) take priority over
+        // the last status-message; permanent readouts can join the strip.
+        Rectangle {
+            height: 24px;
+            background: Theme.surface-raised;
 
-    // Overlay rather than a VerticalLayout row: appearing on hover must not
-    // reflow the work surface beneath the pointer.
-    if root.hover-hint != "" || root.status-message != "" : Rectangle {
-        y: parent.height - self.height;
-        width: parent.width;
-        height: 24px;
-        z: 100;
-        background: Theme.surface-raised;
-        border-width: 1px;
-        border-color: Theme.border;
-        Text {
-            text: root.hover-hint != "" ? root.hover-hint : root.status-message;
-            color: Theme.text-muted;
-            font-size: 10px;
-            x: 8px;
-            vertical-alignment: center;
-            overflow: elide;
+            Rectangle {
+                width: parent.width;
+                height: 1px;
+                background: Theme.border;
+            }
+
+            Text {
+                text: root.hover-hint != "" ? root.hover-hint : root.status-message;
+                color: Theme.text-muted;
+                font-size: 10px;
+                x: 8px;
+                width: parent.width - 16px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
         }
+
     }
 
     PreferencesDialog {
