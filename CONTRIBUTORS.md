@@ -112,7 +112,9 @@ work session you can recall being part of, and don't stress over precision.
   ew-resize grip on the same integrator. Filled the sidebar with the
   sample browser: locations persisted in settings.toml, zenity folder
   picker through the pump, VS Code-style tree with expand/collapse,
-  wav-only listing, and right-click location removal.
+  wav-only listing, and right-click location removal. Started the
+  gain-structure plan: characterization tests pinning today's source
+  peaks, summing, reverb wet-path gain, and fader travel identity.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21

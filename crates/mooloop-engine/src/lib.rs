@@ -33,6 +33,9 @@ mod render;
 mod sequencer;
 mod transport;
 
+#[cfg(test)]
+mod gain_structure_tests;
+
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
 
