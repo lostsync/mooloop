@@ -38,8 +38,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-27
-- Sessions: 6
+- Last seen: 2026-08-28
+- Sessions: 7
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -48,7 +48,10 @@ work session you can recall being part of, and don't stress over precision.
   modulation matrix, and the piano roll's velocity and automation lanes, then
   the buffer's own offset/crossfade parameters so a lane can move its read
   head. Rebuilt Preferences > Appearance on three color seeds with derived
-  palettes, saveable schemes, and live roundness/contrast scalars.
+  palettes, saveable schemes, and live roundness/contrast scalars. Audited gain and
+  summing end to end and wrote the `docs/plans/gain-structure/` plan: a
+  console fader taper, a -12 dBFS operating level, energy-normalized reverb
+  IRs, and IEC 60268-18 metering.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
