@@ -65,3 +65,27 @@ the difference does not matter; the range assertion (-8..0) absorbs it.
   unchanged). Verification: mooloop-core 57, mooloop-engine 76+34,
   mooloop-ui full suite, all green — run on the remote box via
   `scripts/antibox`.
+
+## Step 04 — fader taper and dB readouts (done, same branch)
+
+- `MixerFader` grew `in property <bool> db-taper` (default true): travel
+  is linear in dB through `GainMath.fader-position-to-db`/
+  `fader-db-to-position`; `value` stays the stored linear gain, so no
+  project-format change. The relative drag still moves position. Travel
+  ticks now sit on the taper's breakpoints (+6/0/-12/-24/-40 ends) when
+  tapered, even spacing otherwise. `default-value` is 1.0.
+- Mixer strips (`mixer.slint`) and the bus output stage
+  (`bus-device.slint`) cap their throw at `GainMath.db-to-linear(6.0)`
+  and label `GainMath.format-db(GainMath.linear-to-db(volume))` — the
+  readout travels in the tooltip per the project convention; the
+  snapshot shows caps at three-quarter travel for a unity bus.
+- Oscillator Level knobs on `mono-device.slint` and `poly-device.slint`
+  are now `TrimKnob`s in dB (`maximum: 0`, double-click default -60 =
+  the stored default of silence), converting to linear at the boundary.
+  `OscParams::level` stays linear in [0, 1]; what the defaults should be
+  is step 06's.
+- Gallery volume demos read dB now. `mockup.slint` stays percent: it is
+  the design playground, its values are abstract mock data, not gains.
+- Step-02's fader test flipped: travel 0.75 now reads 0 dB, full throw
+  +6 dB. Kick+snare peak unchanged; nothing audible moved. Full
+  mooloop-ui suite + mixer snapshot (via `scripts/antibox --pull`) pass.

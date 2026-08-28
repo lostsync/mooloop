@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
 import { MixerFader, MiniKnob, MuteButton, ToolButton } from "controls.slint";
+import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 
 // One mixer bus as the pane and the Rust side exchange it. Levels arrive
@@ -169,9 +170,10 @@ component MixerStrip inherits Rectangle {
             MixerFader {
                 width: 30px;
                 value: root.strip.volume;
+                maximum: GainMath.db-to-linear(6.0);
                 default-value: 1.0;
                 tooltip: root.strip.name + " level";
-                value-text: round(root.strip.volume * 100) + "%";
+                value-text: GainMath.format-db(GainMath.linear-to-db(root.strip.volume));
                 changed(v) => { root.volume-changed(v); }
             }
         }

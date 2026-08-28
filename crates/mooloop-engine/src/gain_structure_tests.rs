@@ -207,12 +207,19 @@ fn reverb_wet_path_is_loud_relative_to_dry_today() {
 }
 
 #[test]
-fn fader_travel_maps_linearly_to_gain_today() {
-    // Today the mixer fader's travel IS the linear gain (mixer.slint binds
-    // `value: root.strip.volume` in [0, 1] with no taper), so 0.75 travel is
-    // 0.75 linear gain = -2.5 dB. Step 04 replaces this identity with the
-    // piecewise dB taper; flip this assertion there.
-    let travel = 0.75f32;
-    let db = 20.0 * travel.log10();
-    assert!((db - -2.5).abs() < 0.05, "travel 0.75 read {db:.2} dB");
+fn fader_travel_is_tapered_in_db() {
+    // Step 04 flipped the mixer fader from travel==linear-gain to the shared
+    // dB taper: unity sits at three-quarter travel, the top of the throw is
+    // +6 dB. The stored value stays linear; only the mapping changed.
+    assert!(
+        mooloop_core::gain::fader_position_to_db(0.75).abs() < 0.05,
+        "travel 0.75 should read 0 dB"
+    );
+    assert!(
+        (mooloop_core::gain::fader_position_to_db(1.0) - 6.0).abs() < 0.05,
+        "full throw should read +6 dB"
+    );
+    // The stored-gain identity is gone: 0.75 linear is no longer what
+    // three-quarter travel produces.
+    assert!((20.0 * 0.75f32.log10() - -2.5).abs() < 0.05, "sanity");
 }

@@ -1076,12 +1076,19 @@ export component SoloButton inherits ToolButton {
 // Mixer-style fader with a real cap and travel ticks, for channel strips.
 // ParameterFader stays the right choice for inline parameter rows; this is
 // the one that should look like a console.
+//
+// `value` is always the stored linear gain, but with `db-taper` the *travel*
+// is linear in dB per the gain contract (docs/plans/gain-structure/): unity
+// at three-quarter throw, +6 dB at the top, the drag stays relative in
+// position units so the throw feels even in dB. Travel ticks land on the
+// taper's breakpoints instead of even spacing.
 export component MixerFader inherits Rectangle {
     in property <string> tooltip: "Level";
     in-out property <float> value;
     in property <float> minimum: 0;
     in property <float> maximum: 1;
-    in property <float> default-value: 0.8;
+    in property <bool> db-taper: true;
+    in property <float> default-value: 1.0;
     in property <float> step: 0;
     in property <bool> enabled: true;
     in property <string> value-text;
@@ -1089,7 +1096,12 @@ export component MixerFader inherits Rectangle {
     callback changed(float);
 
     private property <float> normalized: root.maximum <= root.minimum
-        ? 0 : clamp((root.value - root.minimum) / (root.maximum - root.minimum), 0, 1);
+        ? 0 : root.db-taper
+            ? clamp(GainMath.fader-db-to-position(GainMath.linear-to-db(root.value)), 0, 1)
+            : clamp((root.value - root.minimum) / (root.maximum - root.minimum), 0, 1);
+    private property <[float]> tick-positions: root.db-taper
+        ? [1.0, 0.75, 0.5, 0.3, 0.15, 0.0]
+        : [1.0, 0.75, 0.5, 0.25, 0.0];
     private property <float> pressed-normalized;
     private property <bool> fine-drag;
     private property <length> cap-height: 16px;
@@ -1102,6 +1114,15 @@ export component MixerFader inherits Rectangle {
     forward-focus: mixer-keyboard;
 
     function set-normalized(n: float) {
+        if (root.db-taper) {
+            let db = GainMath.fader-position-to-db(clamp(n, 0, 1));
+            let next = clamp(GainMath.db-to-linear(db), root.minimum, root.maximum);
+            if (next != root.value) {
+                root.value = next;
+                root.changed(next);
+            }
+            return;
+        }
         let raw = root.minimum + clamp(n, 0, 1) * (root.maximum - root.minimum);
         let quantized = root.step > 0
             ? root.minimum + round((raw - root.minimum) / root.step) * root.step
@@ -1117,11 +1138,12 @@ export component MixerFader inherits Rectangle {
         width: 100%;
         height: 100%;
 
-        // Travel ticks down the left, so throw is readable without a scale.
-        for i in 5 : Rectangle {
+        // Travel ticks: the taper's own breakpoints down the left, so throw
+        // is readable without a scale.
+        for tick[i] in root.tick-positions : Rectangle {
             x: 2px;
-            y: (parent.height - root.cap-height) * i / 4 + root.cap-height / 2;
-            width: i == 0 || i == 4 ? 6px : 4px;
+            y: (parent.height - root.cap-height) * (1 - tick) + root.cap-height / 2;
+            width: i == 0 || i == root.tick-positions.length - 1 ? 6px : 4px;
             height: 1px;
             background: Theme.text-faint;
         }

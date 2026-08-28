@@ -117,7 +117,8 @@ work session you can recall being part of, and don't stress over precision.
   peaks, summing, reverb wet-path gain, and fader travel identity, then
   the shared gain module (`mooloop-core/src/gain.rs` + `GainMath` in
   `gain.slint`) with the fader taper and its cross-boundary agreement
-  test.
+  test, then the fader taper and dB readouts across mixer strips, the
+  bus output stage, and oscillator level knobs.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21

@@ -1,5 +1,6 @@
 import { HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
 import { DisplayPrefs, Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
 import {
     AudioOrientation, IconButton, LedIndicator, MiniKnob, MixerFader, MuteButton,
     ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl, SoloButton,
@@ -259,7 +260,7 @@ export component ControlGallery inherits Window {
                             alignment: start;
                             MiniKnob {
                                 label: "Volume"; value <=> root.mini-volume; default-value: 0.8;
-                                value-text: round(root.mini-volume * 100) + "%";
+                                value-text: GainMath.format-db(GainMath.linear-to-db(root.mini-volume));
                             }
                             MiniKnob {
                                 label: "Pan"; value <=> root.mini-pan;
@@ -392,7 +393,7 @@ export component ControlGallery inherits Window {
                             MixerFader {
                                 height: 150px;
                                 value <=> root.linear-value;
-                                value-text: round(root.linear-value * 100) + "%";
+                                value-text: GainMath.format-db(GainMath.linear-to-db(root.linear-value));
                             }
                             ChannelMeter {
                                 height: 150px;

@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
-import { NoteFormat, ParameterKnob, SelectorBank, ToggleButton, ValueScale } from "controls.slint";
+import { NoteFormat, ParameterKnob, SelectorBank, ToggleButton, TrimKnob, ValueScale } from "controls.slint";
+import { GainMath } from "gain.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { FilterResponseDisplay, OscillatorTrace } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
@@ -60,11 +61,12 @@ component OscillatorDeviceStrip inherits Rectangle {
                 value-text: (root.cents > 0 ? "+" : "") + round(root.cents) + " ct";
                 changed(v) => { root.cents-changed(v); }
             }
-            ParameterKnob {
-                width: 48px; diameter: 36px; label: "Level"; tooltip: "Oscillator level";
-                value <=> root.level; default-value: 0;
-                value-text: round(root.level * 100) + "%";
-                changed(v) => { root.level-changed(v); }
+            TrimKnob {
+                width: 48px; diameter: 36px; label: "Level";
+                value: GainMath.linear-to-db(root.level);
+                maximum: 0;
+                default-value: -60;
+                changed(v) => { root.level-changed(GainMath.db-to-linear(v)); }
             }
             ParameterKnob {
                 width: 48px; diameter: 36px; label: "Width"; tooltip: "Pulse width";

@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
 import { MixerFader, MiniKnob, MuteButton, SectionLabel } from "controls.slint";
+import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
 import { BusPicker } from "mixer.slint";
@@ -57,9 +58,10 @@ export component BusDeviceFace inherits Rectangle {
                         MixerFader {
                             width: 30px;
                             value: root.volume;
+                            maximum: GainMath.db-to-linear(6.0);
                             default-value: 1.0;
                             tooltip: root.name + " level";
-                            value-text: round(root.volume * 100) + "%";
+                            value-text: GainMath.format-db(GainMath.linear-to-db(root.volume));
                             changed(v) => { root.volume-changed(v); }
                         }
                     }
