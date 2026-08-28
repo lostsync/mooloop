@@ -102,7 +102,7 @@ work session you can recall being part of, and don't stress over precision.
 ### GLM 5.3 Flash (glm-5.3-flash) — opencode
 - First seen: 2026-08-23
 - Last seen: 2026-08-28
-- Sessions: 6
+- Sessions: 7
 - Notes: Effect-container refactor: latency-aligned dry path, one dB trim
   knob everywhere, bus-effect metering, and the shared effect-device shell.
   Extracted the shared DraggablePoint handle and gave the EQ band points
@@ -115,7 +115,10 @@ work session you can recall being part of, and don't stress over precision.
   ew-resize grip on the same integrator. Filled the sidebar with the
   sample browser: locations persisted in settings.toml, zenity folder
   picker through the pump, VS Code-style tree with expand/collapse,
-  wav-only listing, and right-click location removal. Started the
+  wav-only listing, and right-click location removal. Browser pass two:
+  playable-children filtering behind a format predicate, an autoplay arm
+  and preview-volume trim knob, and a header-stats info pane fed by a
+  dedicated engine preview voice with live shared gain. Started the
   gain-structure plan: characterization tests pinning today's source
   peaks, summing, reverb wet-path gain, and fader travel identity, then
   the shared gain module (`mooloop-core/src/gain.rs` + `GainMath` in

@@ -36,7 +36,7 @@ use mooloop_dsp::{
     SpectrumAnalyzer,
 };
 use mooloop_engine::{
-    EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope,
+    EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, PreviewCommand, RenderScope,
     StructuralCommand, WavEncoding,
 };
 use mooloop_project::{
@@ -68,6 +68,9 @@ enum PendingEngineMessage {
     ProjectEdit(ProjectEdit),
     Audio(AudioAction),
     Telemetry(TelemetryAction),
+    /// Linear preview gain. A plain value rather than a command because the
+    /// engine reads it from a shared cell, live, while a preview plays.
+    PreviewGain(f32),
 }
 
 /// A prepared-room request stays off the UI and audio threads. A short
@@ -160,6 +163,15 @@ struct TelemetryActionSender(std::sync::mpsc::Sender<PendingEngineMessage>);
 impl TelemetryActionSender {
     fn send(&self, action: TelemetryAction) -> bool {
         self.0.send(PendingEngineMessage::Telemetry(action)).is_ok()
+    }
+}
+
+#[derive(Clone)]
+struct PreviewSender(std::sync::mpsc::Sender<PendingEngineMessage>);
+
+impl PreviewSender {
+    fn send_gain(&self, gain: f32) -> bool {
+        self.0.send(PendingEngineMessage::PreviewGain(gain)).is_ok()
     }
 }
 
@@ -3131,6 +3143,7 @@ impl AppUi {
         let project_edit_tx = ProjectEditSender(pending_tx.clone());
         let audio_tx = AudioActionSender(pending_tx.clone());
         let telemetry_tx = TelemetryActionSender(pending_tx.clone());
+        let preview_tx = PreviewSender(pending_tx.clone());
         let structural_tx = StructuralCommandSender(pending_tx);
         let sample_rate = handle.sample_rate();
         let (reverb_build_tx, reverb_build_rx) = std::sync::mpsc::channel::<ReverbBuildRequest>();
@@ -6471,6 +6484,26 @@ impl AppUi {
         //     worker thread like every other zenity call, handing the picked
         //     path to the pump, which applies it on the UI thread. ---
         let (browser_pick_tx, browser_pick_rx) = std::sync::mpsc::channel::<PathBuf>();
+        let (browser_info_tx, browser_info_rx) =
+            std::sync::mpsc::channel::<Result<SampleInspection, (String, String)>>();
+        {
+            let browser_info_tx = browser_info_tx.clone();
+            window.on_browser_row_previewed(move |path| {
+                let path = PathBuf::from(path.to_string());
+                let tx = browser_info_tx.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(
+                        inspect_sample(&path).map_err(|error| (path.display().to_string(), error)),
+                    );
+                });
+            });
+        }
+        {
+            let preview_tx = preview_tx.clone();
+            window.on_browser_preview_gain_changed(move |gain| {
+                preview_tx.send_gain(gain);
+            });
+        }
         {
             let browser_pick_tx = browser_pick_tx.clone();
             window.on_browser_add_location(move || {
@@ -6665,6 +6698,32 @@ impl AppUi {
                             format!("Could not save settings: {error}").into(),
                         ),
                     };
+                }
+                // Finished inspections fill the info pane and, when autoplay
+                // is armed, hand the decoded sample to the preview voice.
+                while let Ok(inspection) = browser_info_rx.try_recv() {
+                    let Some(window) = weak.upgrade() else {
+                        continue;
+                    };
+                    match inspection {
+                        Ok(inspection) => {
+                            window.set_browser_info_name(inspection.name.into());
+                            window.set_browser_info_stats(inspection.stats.into());
+                            window.set_browser_info_waveform(ModelRc::from(Rc::new(
+                                VecModel::from(inspection.peaks),
+                            )));
+                            if window.get_browser_autoplay() {
+                                handle.preview(PreviewCommand::Play {
+                                    sample: inspection.sample,
+                                });
+                            }
+                        }
+                        Err((path, error)) => {
+                            window.set_status_message(
+                                format!("Could not preview {path}: {error}").into(),
+                            );
+                        }
+                    }
                 }
                 while let Ok(result) = document_rx.try_recv() {
                     let Some(window) = weak.upgrade() else {
@@ -6963,6 +7022,10 @@ impl AppUi {
                                 eprintln!("autodrive cmd: {cmd:?}");
                             }
                             handle.send(cmd);
+                            forwarded += 1;
+                        }
+                        PendingEngineMessage::PreviewGain(gain) => {
+                            handle.set_preview_gain(gain);
                             forwarded += 1;
                         }
                         PendingEngineMessage::ResizeBuffers { bpm } => {
@@ -8148,9 +8211,46 @@ fn decode_wav(path: &Path) -> Result<Arc<SampleData>, String> {
     }))
 }
 
+/// Extensions the browser treats as playable. The decoder decides what we
+/// can actually open; this list decides what the tree shows, and grows with
+/// it (see `decode_wav`).
+const SUPPORTED_SAMPLE_EXTENSIONS: [&str; 1] = ["wav"];
+
+/// Anything the tree counts as playable, now and as formats are added.
+fn is_playable_sample(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        SUPPORTED_SAMPLE_EXTENSIONS
+            .iter()
+            .any(|supported| extension.eq_ignore_ascii_case(supported))
+    })
+}
+
+/// Whether `path` contains a playable sample anywhere below it. Folders
+/// without one are dead weight in the tree, so the browser hides them;
+/// the recursion is bounded because symlink cycles terminate at `MAX_DEPTH`.
+fn has_playable_descendant(path: &Path, depth: usize) -> bool {
+    const MAX_DEPTH: usize = 16;
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if is_playable_sample(&child) {
+            return true;
+        }
+        if child.is_dir() && has_playable_descendant(&child, depth + 1) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Entries of `path` the sample browser shows: subdirectories first, then
-/// `.wav` files, each case-insensitively sorted by name. Hidden entries are
-/// skipped, and an unreadable directory simply lists as empty.
+/// playable sample files, each case-insensitively sorted by name. Hidden
+/// entries are skipped, and an unreadable directory simply lists as empty.
 fn scan_browser_dir(path: &Path) -> Vec<(bool, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(path) else {
         return Vec::new();
@@ -8167,10 +8267,7 @@ fn scan_browser_dir(path: &Path) -> Vec<(bool, PathBuf)> {
         }
         if child.is_dir() {
             dirs.push(child);
-        } else if child
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
-        {
+        } else if is_playable_sample(&child) {
             files.push(child);
         }
     }
@@ -8189,12 +8286,15 @@ fn scan_browser_dir(path: &Path) -> Vec<(bool, PathBuf)> {
         .collect()
 }
 
-/// Flattens the browser's folder hierarchy into visible rows: each location,
-/// then recursively the children of every expanded folder.
+/// Flattens the browser's folder hierarchy into visible rows: each location
+/// that can play something, then recursively the children of every expanded
+/// folder. Folders whose whole subtree is unplayable are hidden.
 fn build_browser_rows(locations: &[PathBuf], expanded: &HashSet<PathBuf>) -> Vec<BrowserRow> {
     let mut rows = Vec::new();
     for location in locations {
-        push_browser_rows(&mut rows, location, 0, expanded);
+        if has_playable_descendant(location, 0) {
+            push_browser_rows(&mut rows, location, 0, expanded);
+        }
     }
     rows
 }
@@ -8218,7 +8318,11 @@ fn push_browser_rows(
     }
     for (is_dir, child) in scan_browser_dir(path) {
         if is_dir {
-            push_browser_rows(rows, &child, depth + 1, expanded);
+            // A folder with nothing playable below it is noise, however
+            // legitimately it exists on disk.
+            if has_playable_descendant(&child, depth + 1) {
+                push_browser_rows(rows, &child, depth + 1, expanded);
+            }
         } else {
             rows.push(BrowserRow {
                 depth: depth as i32 + 1,
@@ -8245,9 +8349,89 @@ fn refresh_browser(st: &UiState) {
     ));
 }
 
+/// Bins for the info pane's waveform. The pane is a couple of inches wide;
+/// more bins would be sub-pixel detail.
+const BROWSER_INFO_BINS: usize = 128;
+
+/// Everything the sidebar's info pane shows about one inspected file, plus
+/// the decoded sample itself for the preview voice.
+struct SampleInspection {
+    name: String,
+    stats: String,
+    peaks: Vec<f32>,
+    sample: Arc<SampleData>,
+}
+
+/// Reads a WAV's header and decodes it once for the pane's waveform, stats,
+/// and preview voice. The header numbers come straight from the format: the
+/// decoded stereo frames cannot answer "mono or 24-bit?" on their own.
+fn inspect_sample(path: &Path) -> Result<SampleInspection, String> {
+    let spec = hound::WavReader::open(path)
+        .map_err(|error| error.to_string())?
+        .spec();
+    let sample = decode_wav(path)?;
+    let kind = match spec.sample_format {
+        hound::SampleFormat::Float => "float",
+        hound::SampleFormat::Int => "int",
+    };
+    let channels = match spec.channels {
+        1 => "mono".to_owned(),
+        2 => "stereo".to_owned(),
+        other => format!("{other}ch"),
+    };
+    let stats = format!(
+        "{} Hz · {}-bit {} · {}\n{} frames · {:.2} s",
+        spec.sample_rate,
+        spec.bits_per_sample,
+        kind,
+        channels,
+        sample.frames.len(),
+        sample_duration(&sample)
+    );
+    Ok(SampleInspection {
+        name: browser_display_name(path),
+        stats,
+        peaks: waveform_peaks(&sample, BROWSER_INFO_BINS),
+        sample,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_tree_hides_folders_without_playable_samples() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        // `Empty` has nothing below it, `Deep` only earns its place through
+        // a wav two levels down, and `silent` holds nothing but text.
+        std::fs::create_dir_all(root.join("Empty")).unwrap();
+        std::fs::create_dir_all(root.join("Deep/Nested")).unwrap();
+        std::fs::create_dir_all(root.join("silent")).unwrap();
+        std::fs::write(root.join("Deep/Nested/hit.wav"), b"x").unwrap();
+        std::fs::write(root.join("silent/readme.txt"), b"x").unwrap();
+
+        let rows = build_browser_rows(
+            &[root.to_path_buf()],
+            &HashSet::from([root.to_path_buf()]),
+        );
+        let names: Vec<String> = rows.iter().map(|row| row.name.to_string()).collect();
+        // The collapsed root hides its children, so expansion is required to
+        // prove `Deep` survives (via a wav two levels down) while `Empty` and
+        // `silent` — nothing playable below either — are hidden.
+        assert_eq!(names, vec![browser_display_name(root), "Deep".to_owned()]);
+
+        // A location with nothing playable anywhere below it lists as
+        // nothing at all.
+        let bare = tempfile::tempdir().unwrap();
+        std::fs::write(bare.path().join("notes.txt"), b"x").unwrap();
+        assert!(build_browser_rows(&[bare.path().to_path_buf()], &HashSet::new()).is_empty());
+
+        // The playable predicate is the single switch new formats flip.
+        assert!(is_playable_sample(Path::new("a.WAV")));
+        assert!(!is_playable_sample(Path::new("a.txt")));
+    }
 
     #[test]
     fn browser_tree_lists_folders_first_and_only_wavs() {
@@ -8282,8 +8466,8 @@ mod tests {
             summary,
             vec![
                 (0, 0, true, browser_display_name(root)),
+                // `ambience` has nothing playable below it, so it is hidden;
                 // Dirs before files, case-insensitively sorted.
-                (1, 0, false, "ambience".into()),
                 (1, 0, true, "Drums".into()),
                 (2, 0, false, "Kicks".into()),
                 (1, 1, false, "apple.wav".into()),
@@ -8291,14 +8475,49 @@ mod tests {
             ]
         );
         // The rows carry their paths so toggling and removal round-trip.
-        assert_eq!(rows[2].path, root.join("Drums").to_string_lossy().to_string());
-        assert_eq!(rows[3].path, root.join("Drums/Kicks").to_string_lossy().to_string());
-        assert_eq!(rows[4].path, root.join("apple.wav").to_string_lossy().to_string());
+        assert_eq!(rows[1].path, root.join("Drums").to_string_lossy().to_string());
+        assert_eq!(rows[2].path, root.join("Drums/Kicks").to_string_lossy().to_string());
+        assert_eq!(rows[3].path, root.join("apple.wav").to_string_lossy().to_string());
 
         // Collapsed locations list as a single row with no children.
         let rows = build_browser_rows(&[root.to_path_buf()], &HashSet::new());
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].expanded);
+    }
+
+    #[test]
+    fn inspect_sample_reports_header_stats_and_peaks() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tone.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for index in 0..4_410 {
+            writer.write_sample(((index % 100) * 200) as i16).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let inspection = inspect_sample(&path).unwrap();
+        assert_eq!(inspection.name, "tone.wav");
+        assert!(inspection.stats.contains("44100 Hz"), "{}", inspection.stats);
+        assert!(
+            inspection.stats.contains("16-bit int"),
+            "{}",
+            inspection.stats
+        );
+        assert!(inspection.stats.contains("mono"), "{}", inspection.stats);
+        assert_eq!(inspection.sample.frames.len(), 4_410);
+        assert_eq!(inspection.peaks.len(), BROWSER_INFO_BINS);
+        assert!(inspection.peaks.iter().any(|peak| *peak > 0.0));
+
+        // Anything the decoder cannot open never reaches the pane.
+        let text = temp.path().join("noise.wav");
+        std::fs::write(&text, b"definitely not RIFF").unwrap();
+        assert!(inspect_sample(&text).is_err());
     }
 
     #[test]

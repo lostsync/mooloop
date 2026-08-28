@@ -1,6 +1,7 @@
 //! JACK-independent render state shared by realtime playback and file export.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
@@ -20,7 +21,7 @@ use mooloop_dsp::{
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, PlayheadMeters};
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
-use crate::StructuralCommand;
+use crate::{PreviewCommand, StructuralCommand};
 
 /// A displaced effect-slot occupant: the node plus the dry-align delay the
 /// container allocated alongside it. Both halves are heap objects built on
@@ -931,6 +932,20 @@ pub(crate) struct RenderState {
     buffer_midi: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
     buffer_cc: BufferCcState,
     playhead_meters: Arc<PlayheadMeters>,
+    /// The sample browser's audition voice, if something is playing. One at
+    /// a time: a new preview replaces the old, and the retired sample's
+    /// ownership returns to the UI thread through the reclaim ring.
+    preview: Option<PreviewVoice>,
+    preview_retired: Vec<Arc<SampleData>>,
+    /// Linear preview gain, shared with the GUI so the knob is heard live.
+    preview_gain: Arc<AtomicU32>,
+}
+
+/// One-shot straight to the master output: no envelope, no channel strip.
+/// A browser preview should sound like the file, not like the project.
+struct PreviewVoice {
+    sample: Arc<SampleData>,
+    position: usize,
 }
 
 impl RenderState {
@@ -959,6 +974,9 @@ impl RenderState {
             buffer_midi: Arc::new(ArcSwapOption::empty()),
             buffer_cc: BufferCcState::default(),
             playhead_meters: PlayheadMeters::new(),
+            preview: None,
+            preview_retired: Vec::new(),
+            preview_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
         }
     }
 
@@ -970,6 +988,60 @@ impl RenderState {
 
     pub(crate) fn attach_device_meters(&mut self, meters: Arc<DeviceMeters>) {
         self.device_meters = meters;
+    }
+
+    /// Points the preview voice at the gain cell the GUI's volume knob
+    /// writes. Read once per block, so knob turns are heard live.
+    pub(crate) fn attach_preview_gain(&mut self, gain: Arc<AtomicU32>) {
+        self.preview_gain = gain;
+    }
+
+    /// Starts, restarts, or stops the preview voice. Returns the replaced
+    /// sample, if there was one, for off-thread disposal.
+    pub(crate) fn apply_preview(&mut self, command: PreviewCommand) -> Option<Arc<SampleData>> {
+        let replaced = self.preview.take().map(|voice| voice.sample);
+        match command {
+            PreviewCommand::Play { sample } => {
+                self.preview = Some(PreviewVoice {
+                    sample,
+                    position: 0,
+                });
+            }
+            PreviewCommand::Stop => {}
+        }
+        replaced
+    }
+
+    /// Hands back a sample whose preview finished, for disposal off the
+    /// realtime thread.
+    pub(crate) fn pop_retired_preview(&mut self) -> Option<Arc<SampleData>> {
+        self.preview_retired.pop()
+    }
+
+    /// Sums the preview voice into the master bus. Deliberately after the
+    /// bus walk: the preview bypasses the project's chains, balance, and
+    /// mute so the file is heard as the file.
+    fn render_preview(&mut self, frames: usize) {
+        let Some(voice) = self.preview.as_mut() else {
+            return;
+        };
+        let gain = f32::from_bits(self.preview_gain.load(Ordering::Relaxed));
+        let samples = &voice.sample.frames;
+        let start = voice.position.min(samples.len());
+        let count = (start + frames).min(samples.len()) - start;
+        let master = &mut self.buses[MASTER_BUS as usize].bus;
+        for index in 0..count {
+            let frame = samples[start + index];
+            master.l[index] += frame[0] * gain;
+            master.r[index] += frame[1] * gain;
+        }
+        let played = start + count;
+        if played >= samples.len() {
+            let voice = self.preview.take().expect("preview checked above");
+            self.preview_retired.push(voice.sample);
+        } else {
+            self.preview.as_mut().expect("preview checked above").position = played;
+        }
     }
 
     pub(crate) fn attach_device_telemetry(&mut self, telemetry: Arc<DeviceTelemetry>) {
@@ -1859,6 +1931,9 @@ impl RenderState {
                 mix_into(&mut self.buses, index, destination, frames);
             }
         }
+        // After the walk on purpose: the preview bypasses every chain, so it
+        // is heard raw and does not move the mixer's meters.
+        self.render_preview(frames);
         let (peak_l, peak_r) = master_peak;
         RenderReport {
             position_tick: self.transport.position_ticks as u64,
@@ -1956,6 +2031,87 @@ mod tests {
                 channel.iter().nth(1).unwrap().event,
                 Event::NoteOn { .. }
             ));
+        }
+    }
+
+    #[test]
+    fn preview_voice_plays_replaces_and_retires() {
+        let slots = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        let mut render = RenderState::new(48_000, slots);
+        let first = Arc::new(SampleData {
+            frames: vec![[0.5, -0.5]; 1_000],
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        assert!(
+            render
+                .apply_preview(PreviewCommand::Play {
+                    sample: first.clone(),
+                })
+                .is_none()
+        );
+        render.process_block(512);
+        let master = render.master();
+        assert!(
+            master.l[..512].iter().any(|sample| *sample != 0.0),
+            "the preview must reach the master bus while the transport is stopped"
+        );
+
+        // Replacing a playing preview hands the old sample back for UI-side
+        // disposal before it can ever be dropped on the realtime thread.
+        let second = Arc::new(SampleData {
+            frames: vec![[1.0, 1.0]; 10],
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        let replaced = render.apply_preview(PreviewCommand::Play { sample: second.clone() });
+        assert!(Arc::ptr_eq(&replaced.expect("a preview was playing"), &first));
+
+        // Ten frames are gone after one block; retirement follows.
+        render.process_block(512);
+        let retired = render.pop_retired_preview().expect("voice finished");
+        assert!(Arc::ptr_eq(&retired, &second));
+        assert!(render.pop_retired_preview().is_none());
+
+        // And the preview is silent again.
+        render.process_block(512);
+        assert!(
+            !render
+                .master()
+                .l[..512]
+                .iter()
+                .any(|sample| *sample != 0.0)
+        );
+    }
+
+    #[test]
+    fn preview_gain_cell_is_heard_live() {
+        let slots = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        let mut render = RenderState::new(48_000, slots);
+        let loud = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+        render.attach_preview_gain(loud.clone());
+        render.apply_preview(PreviewCommand::Play {
+            sample: Arc::new(SampleData {
+                frames: vec![[0.5, 0.5]; 4_000],
+                sample_rate: 48_000,
+                root_note: 60,
+            }),
+        });
+        loud.store(0.25f32.to_bits(), Ordering::Relaxed);
+        render.process_block(512);
+        for sample in &render.master().l[..512] {
+            assert!(
+                (*sample - 0.125).abs() < 1e-6,
+                "the shared gain cell must gate the preview immediately"
+            );
         }
     }
 

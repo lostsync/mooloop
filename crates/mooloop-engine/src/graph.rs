@@ -7,7 +7,7 @@ use arc_swap::ArcSwap;
 use jack::ProcessHandler;
 use jack::{AudioOut, Client, Control, MidiIn, Port, PortId, ProcessScope};
 use mooloop_core::{EngineEvent, MidiMessage};
-use mooloop_dsp::MAX_BLOCK_SIZE;
+use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
 use rtrb::Consumer;
 
 use crate::render::RenderState;
@@ -40,6 +40,8 @@ pub(crate) struct Graph {
     /// A command popped from the ordered stream while reclamation is
     /// backpressured. No later command may pass it.
     pending_command: Option<RealtimeCommand>,
+    /// Preview samples whose voice has finished, awaiting reclaim-ring slots.
+    retired_previews: Vec<Arc<SampleData>>,
     xrun_count: Arc<AtomicU64>,
     last_seen_xruns: u64,
 }
@@ -60,6 +62,7 @@ impl Graph {
             evt_tx: io.evt_tx,
             reclaim_tx: io.reclaim_tx,
             pending_command: None,
+            retired_previews: Vec::new(),
             xrun_count,
             last_seen_xruns: 0,
         }
@@ -131,6 +134,14 @@ impl ProcessHandler for Graph {
                     }
                     continue;
                 }
+                RealtimeCommand::Preview(command) => {
+                    if let Some(sample) = self.render.apply_preview(command) {
+                        // The replaced sample leaves through the reclaim ring
+                        // with the rest, below.
+                        self.retired_previews.push(sample);
+                    }
+                    continue;
+                }
                 RealtimeCommand::InstallProject(prepared) => prepared,
             };
             if self.reclaim_tx.slots() == 0 {
@@ -166,6 +177,20 @@ impl ProcessHandler for Graph {
         self.render.apply_midi(&self.midi_scratch[..midi_len]);
 
         let report = self.render.process_block(frames);
+        // Finished preview samples return to the UI thread for disposal,
+        // the same ownership round trip displaced effect nodes take. The
+        // reclaim ring is never the sample's last reference, so a full ring
+        // just delays disposal to a later block.
+        while let Some(sample) = self.render.pop_retired_preview() {
+            self.retired_previews.push(sample);
+        }
+        if self.reclaim_tx.slots() >= self.retired_previews.len() {
+            for sample in self.retired_previews.drain(..) {
+                let _ = self
+                    .reclaim_tx
+                    .push(StructuralReclaim::PreviewSample { sample });
+            }
+        }
         let master = self.render.master();
         let buffer_l = self.out_l.as_mut_slice(scope);
         let buffer_r = self.out_r.as_mut_slice(scope);

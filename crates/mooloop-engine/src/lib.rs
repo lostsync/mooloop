@@ -11,7 +11,7 @@
 //! `Engine` owns the JACK `AsyncClient` and must stay alive for as long as the
 //! handle is used. Dropping `Engine` deactivates audio.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arc_swap::{ArcSwap, ArcSwapOption};
@@ -84,6 +84,16 @@ pub enum StructuralCommand {
     RemoveEffect { target: EffectTarget, slot: u8 },
 }
 
+/// GUI -> audio for the sample browser's audition voice. Owned here rather
+/// than in `mooloop-core`'s `EngineCommand` because `SampleData` comes from
+/// `mooloop-dsp`, which `mooloop-core` must not depend on.
+pub enum PreviewCommand {
+    /// Start (or restart) the preview voice with this decoded sample.
+    Play { sample: Arc<SampleData> },
+    /// Silence and release the preview voice, if one is playing.
+    Stop,
+}
+
 /// audio -> GUI. Hands back displaced occupants so the GUI thread can drop
 /// (deallocate) them safely, off the realtime thread. Drained as a side
 /// effect of `EngineHandle::poll` — there is nothing to inspect.
@@ -93,6 +103,10 @@ pub(crate) enum StructuralReclaim {
     /// lets the realtime thread swap ownership without allocating; the box is
     /// destroyed when `EngineHandle::poll` drains this variant.
     RenderState(Box<RenderState>),
+    /// A sample whose browser preview finished or was replaced. Same
+    /// ownership round trip as an effect node: the sample's last reference
+    /// must not be dropped on the realtime thread.
+    PreviewSample { sample: Arc<SampleData> },
 }
 
 /// A project that has already been instantiated and allocated off the audio
@@ -112,6 +126,7 @@ pub(crate) struct PreparedProject {
 pub(crate) enum RealtimeCommand {
     Engine(EngineCommand),
     Structural(StructuralCommand),
+    Preview(PreviewCommand),
     InstallProject(PreparedProject),
 }
 
@@ -197,6 +212,7 @@ impl Engine {
         let device_meters = DeviceMeters::new();
         let device_telemetry = DeviceTelemetry::new();
         let playhead_meters = PlayheadMeters::new();
+        let preview_gain = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>> =
             Arc::new(ArcSwapOption::empty());
         let mut render = RenderState::new(sample_rate, sample_slots.clone());
@@ -205,6 +221,7 @@ impl Engine {
         render.attach_device_telemetry(device_telemetry.clone());
         render.attach_playhead_meters(playhead_meters.clone());
         render.attach_buffer_midi_map(buffer_midi_map.clone());
+        render.attach_preview_gain(preview_gain.clone());
         let io = graph::GraphIo {
             out_l,
             out_r,
@@ -268,6 +285,7 @@ impl Engine {
                 client: async_client,
                 output_target,
                 auto_reconnect,
+                preview_gain,
             },
         ))
     }
@@ -291,6 +309,7 @@ pub struct EngineHandle {
     client: Arc<AsyncClient>,
     output_target: Arc<ArcSwap<(String, String)>>,
     auto_reconnect: Arc<AtomicBool>,
+    preview_gain: Arc<AtomicU32>,
 }
 
 impl EngineHandle {
@@ -346,6 +365,7 @@ impl EngineHandle {
             match reclaim {
                 StructuralReclaim::Effect(effect) => drop(effect),
                 StructuralReclaim::RenderState(render) => drop(render),
+                StructuralReclaim::PreviewSample { sample } => drop(sample),
             }
         }
         loop {
@@ -375,6 +395,17 @@ impl EngineHandle {
         }
     }
 
+    /// Queue a preview-voice command. Non-blocking; drops on overflow.
+    pub fn preview(&mut self, command: PreviewCommand) {
+        let _ = self.cmd_tx.push(RealtimeCommand::Preview(command));
+    }
+
+    /// Sets the preview voice's linear output gain. Live: the voice reads
+    /// the shared cell every block, so turning the knob is heard at once.
+    pub fn set_preview_gain(&self, gain: f32) {
+        self.preview_gain.store(gain.to_bits(), Ordering::Relaxed);
+    }
+
     /// Prepare a complete executor from a validated project on this
     /// non-realtime thread, then queue an ownership swap for the next block.
     /// The displaced executor returns through the reclaim ring and is dropped
@@ -395,6 +426,7 @@ impl EngineHandle {
         render.attach_device_telemetry(self.device_telemetry.clone());
         render.attach_buffer_midi_map(self.buffer_midi_map.clone());
         render.attach_playhead_meters(self.playhead_meters.clone());
+        render.attach_preview_gain(self.preview_gain.clone());
         render.load_project(&project);
         let prepared = PreparedProject {
             generation,

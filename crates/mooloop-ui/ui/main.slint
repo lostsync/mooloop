@@ -40,6 +40,7 @@ import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { PolyDeviceFace } from "poly-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
+import { SampleTrace } from "device-displays.slint";
 export { Theme }
 export { ControlGallery } from "gallery.slint";
 export { MockupCanvas, MockupItem } from "mockup.slint";
@@ -508,11 +509,23 @@ export component MainWindow inherits Window {
     }
     // Sample browser tree, flattened by Rust into one row per visible
     // folder/file. Adding a location opens the folder picker on a worker
-    // thread; toggling expands or collapses that folder in place.
+    // thread; toggling expands or collapses that folder in place. Clicking
+    // a sample row fills the info pane and, with autoplay armed, plays it.
     in-out property <[BrowserRow]> browser-rows;
     callback browser-add-location();
     callback browser-row-toggled(string);
     callback browser-location-removed(string);
+    callback browser-row-previewed(string);
+    // Preview voice controls: the toggle arms click-to-play, the knob is
+    // the preview's own gain in dB (the callback carries linear gain).
+    in-out property <bool> browser-autoplay: true;
+    in-out property <float> browser-preview-gain-db;
+    callback browser-preview-gain-changed(float);
+    // Info pane for the last-clicked sample. Empty waveform = nothing
+    // inspected yet.
+    in-out property <[float]> browser-info-waveform;
+    in-out property <string> browser-info-name;
+    in-out property <string> browser-info-stats;
     in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
@@ -3518,8 +3531,8 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             padding-left: 8px;
                             padding-right: 3px;
-                            padding-top: 3px;
-                            padding-bottom: 3px;
+                            padding-top: 2px;
+                            padding-bottom: 2px;
                             spacing: 4px;
                             Text {
                                 text: "SAMPLES";
@@ -3528,6 +3541,39 @@ export component MainWindow inherits Window {
                                 vertical-alignment: center;
                             }
                             Rectangle { horizontal-stretch: 1; }
+                            // Autoplay arm: when tinted, clicking a sample
+                            // row plays it.
+                            Rectangle {
+                                width: 18px;
+                                border-radius: Theme.radius-sm;
+                                background: root.browser-autoplay
+                                    ? Theme.accent-active
+                                    : browser-autoplay-touch.has-hover
+                                        ? Theme.surface-active : Theme.surface-raised;
+                                Text {
+                                    width: parent.width;
+                                    text: "♪";
+                                    color: root.browser-autoplay
+                                        ? Theme.text : Theme.text-muted;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: center;
+                                }
+                                browser-autoplay-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.browser-autoplay = !root.browser-autoplay;
+                                    }
+                                }
+                            }
+                            TrimKnob {
+                                label: "Preview volume";
+                                diameter: 20px;
+                                value <=> root.browser-preview-gain-db;
+                                changed(v) => {
+                                    root.browser-preview-gain-changed(GainMath.db-to-linear(v));
+                                }
+                            }
                             Rectangle {
                                 width: 18px;
                                 border-radius: Theme.radius-sm;
@@ -3596,6 +3642,8 @@ export component MainWindow inherits Window {
                                     clicked => {
                                         if (row.kind == 0) {
                                             root.browser-row-toggled(row.path);
+                                        } else {
+                                            root.browser-row-previewed(row.path);
                                         }
                                     }
                                     pointer-event(e) => {
@@ -3606,6 +3654,43 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                    // Info pane for the last-clicked sample: its waveform
+                    // plus the format stats the file's header carries.
+                    if root.browser-info-waveform.length > 0 : Rectangle {
+                        height: 78px;
+                        background: Theme.surface;
+
+                        Rectangle {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: 1px;
+                            background: Theme.border;
+                        }
+
+                        VerticalLayout {
+                            padding: 6px;
+                            padding-top: 9px;
+                            spacing: 4px;
+                            Text {
+                                text: root.browser-info-name;
+                                color: Theme.text-muted;
+                                font-size: 9px;
+                                overflow: elide;
+                            }
+                            SampleTrace {
+                                vertical-stretch: 1;
+                                maximums: root.browser-info-waveform;
+                            }
+                            Text {
+                                text: root.browser-info-stats;
+                                color: Theme.text-faint;
+                                font-size: 9px;
+                                wrap: no-wrap;
+                                overflow: elide;
                             }
                         }
                     }
