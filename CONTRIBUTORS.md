@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-28
-- Sessions: 7
+- Sessions: 8
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -51,7 +51,11 @@ work session you can recall being part of, and don't stress over precision.
   palettes, saveable schemes, and live roundness/contrast scalars. Audited gain and
   summing end to end and wrote the `docs/plans/gain-structure/` plan: a
   console fader taper, a -12 dBFS operating level, energy-normalized reverb
-  IRs, and IEC 60268-18 metering.
+  IRs, and IEC 60268-18 metering. Turned the synth v2 direction spec into two
+  plans that split Mono and Poly apart: `docs/plans/mono-synth-v2/` (ladder and
+  acid filter models, pre-filter drive, a held-note stack with priority and
+  legato, velocity accent) and `docs/plans/poly-synth-v2/` (deterministic
+  per-voice drift, a multimode filter, grouped unison, an internal chorus).
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
