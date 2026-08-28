@@ -1634,6 +1634,11 @@ id = "default_kick"
             .sample = SampleReference::Builtin {
             id: "default_kick".into(),
         };
+        // The manifest stores the pre-reference-level default of 0.8, which
+        // the loader must honor rather than replace with today's unity
+        // default. Asserting it here is the point: a stored gain survives a
+        // change to what a fresh channel starts at.
+        expected.channels[0].setup.channel.volume = 0.8;
         assert_eq!(loaded, expected);
         assert_eq!(loaded.buses.len(), mooloop_core::MAX_BUSES);
         assert_eq!(
