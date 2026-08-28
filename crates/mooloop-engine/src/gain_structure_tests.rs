@@ -146,17 +146,15 @@ fn oscillator_summing_gain_matches_today() {
             let mut channel = one_note_channel(kind);
             match kind {
                 DeviceKind::MonoSynth => {
-                    channel.setup.mono_synth_state_mut().unwrap().params = {
-                        let mut params = MonoSynthParams::default();
-                        params.osc = osc_levels(1.0, count);
-                        params
+                    channel.setup.mono_synth_state_mut().unwrap().params = MonoSynthParams {
+                        osc: osc_levels(1.0, count),
+                        ..MonoSynthParams::default()
                     };
                 }
                 DeviceKind::PolySynth => {
-                    channel.setup.poly_synth_state_mut().unwrap().params = {
-                        let mut params = PolySynthParams::default();
-                        params.osc = osc_levels(1.0, count);
-                        params
+                    channel.setup.poly_synth_state_mut().unwrap().params = PolySynthParams {
+                        osc: osc_levels(1.0, count),
+                        ..PolySynthParams::default()
                     };
                 }
                 _ => unreachable!(),
