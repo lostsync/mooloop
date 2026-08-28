@@ -99,7 +99,7 @@ work session you can recall being part of, and don't stress over precision.
 ### GLM 5.3 Flash (glm-5.3-flash) — opencode
 - First seen: 2026-08-23
 - Last seen: 2026-08-28
-- Sessions: 5
+- Sessions: 6
 - Notes: Effect-container refactor: latency-aligned dry path, one dB trim
   knob everywhere, bus-effect metering, and the shared effect-device shell.
   Extracted the shared DraggablePoint handle and gave the EQ band points
@@ -109,7 +109,10 @@ work session you can recall being part of, and don't stress over precision.
   splitter, with a moving-origin drag integrator and a snapshot-tested
   clamp/restore contract. Added the browser sidebar shell: right-docked
   column in flow with the work area, status-bar toggle chip, and an
-  ew-resize grip on the same integrator.
+  ew-resize grip on the same integrator. Filled the sidebar with the
+  sample browser: locations persisted in settings.toml, zenity folder
+  picker through the pump, VS Code-style tree with expand/collapse,
+  wav-only listing, and right-click location removal.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21

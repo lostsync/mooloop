@@ -135,6 +135,19 @@ struct PlaylistClip {
     length-steps: int,
 }
 
+// One row of the sample browser's tree, flattened from the folder hierarchy
+// in Rust: folders first, then the WAVs beside them, children of an expanded
+// folder immediately following their parent.
+struct BrowserRow {
+    depth: int,
+    // 0 = folder, 1 = sample file.
+    kind: int,
+    name: string,
+    // Absolute path; toggling and removal hand it back to Rust verbatim.
+    path: string,
+    expanded: bool,
+}
+
 // One effect slot in the selected channel's chain, in signal order.
 //
 // Parameters are positional and normalized: `p0` is the first entry in this
@@ -492,6 +505,13 @@ export component MainWindow inherits Window {
                 min(root.sidebar-width, min(400px, root.width - 280px)));
         }
     }
+    // Sample browser tree, flattened by Rust into one row per visible
+    // folder/file. Adding a location opens the folder picker on a worker
+    // thread; toggling expands or collapses that folder in place.
+    in-out property <[BrowserRow]> browser-rows;
+    callback browser-add-location();
+    callback browser-row-toggled(string);
+    callback browser-location-removed(string);
     in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
@@ -3477,14 +3497,118 @@ export component MainWindow inherits Window {
 
             // ===== Browser sidebar =====
             //
-            // A placeholder column for sample and preset browsing; the
-            // contents arrive in a later pass. Its left edge carries the
-            // same moving-origin drag integrator as the dock splitter:
-            // the grip rides the edge it moves, so each event folds its
-            // offset into the current width. Dragging left widens.
+            // Sample (and later, preset) browsing. Its left edge carries the
+            // same moving-origin drag integrator as the dock splitter: the
+            // grip rides the edge it moves, so each event folds its offset
+            // into the current width. Dragging left widens. The tree itself
+            // is flattened by Rust; rows toggle and top-level folders are
+            // removed by path.
             if root.sidebar-visible : Rectangle {
                 width: root.sidebar-width;
                 background: Theme.panel;
+
+                VerticalLayout {
+                    spacing: 0px;
+
+                    Rectangle {
+                        height: 24px;
+                        background: Theme.surface;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 3px;
+                            padding-top: 3px;
+                            padding-bottom: 3px;
+                            spacing: 4px;
+                            Text {
+                                text: "SAMPLES";
+                                color: Theme.text-faint;
+                                font-size: 9px;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Rectangle {
+                                width: 18px;
+                                border-radius: Theme.radius-sm;
+                                background: browser-add-touch.pressed
+                                    || browser-add-touch.has-hover
+                                    ? Theme.surface-active : Theme.surface-raised;
+                                Text {
+                                    width: parent.width;
+                                    text: "+";
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: center;
+                                }
+                                browser-add-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.browser-add-location(); }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.browser-rows.length == 0 : Text {
+                        text: "Click + to add a folder of samples";
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    ScrollView {
+                        vertical-stretch: 1;
+                        viewport-height: root.browser-rows.length * 20px;
+
+                        VerticalLayout {
+                            spacing: 0px;
+                            for row[index] in root.browser-rows : Rectangle {
+                                height: 20px;
+                                background: browser-row-touch.has-hover
+                                    ? Theme.surface-active : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px + row.depth * 12px;
+                                    padding-right: 6px;
+                                    spacing: 5px;
+                                    Text {
+                                        width: 10px;
+                                        text: row.kind == 0
+                                            ? (row.expanded ? "▾" : "▸") : "♪";
+                                        color: row.kind == 0
+                                            ? Theme.text-muted : Theme.accent;
+                                        font-size: 9px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: row.name;
+                                        color: row.kind == 0
+                                            ? Theme.text-muted : Theme.text;
+                                        font-size: 10px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+                                browser-row-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        if (row.kind == 0) {
+                                            root.browser-row-toggled(row.path);
+                                        }
+                                    }
+                                    pointer-event(e) => {
+                                        if (e.kind == PointerEventKind.down
+                                                && e.button == PointerEventButton.right
+                                                && row.depth == 0) {
+                                            root.browser-location-removed(row.path);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Rectangle {
                     x: 0;

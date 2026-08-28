@@ -313,6 +313,16 @@ pub(crate) struct ShortcutSettings {
     pub overrides: std::collections::HashMap<String, String>,
 }
 
+/// Everything the sample browser owns: the folders it lists, in display
+/// order. Removal and reordering get a Preferences area in a later pass;
+/// today the browser's own add affordance is the only writer.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct BrowserSettings {
+    #[serde(default)]
+    pub locations: Vec<PathBuf>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct UiSettings {
@@ -324,6 +334,8 @@ pub(crate) struct UiSettings {
     pub audio: AudioSettings,
     #[serde(default)]
     pub shortcuts: ShortcutSettings,
+    #[serde(default)]
+    pub browser: BrowserSettings,
 }
 
 impl Default for UiSettings {
@@ -334,6 +346,7 @@ impl Default for UiSettings {
             appearance: AppearanceSettings::default(),
             audio: AudioSettings::default(),
             shortcuts: ShortcutSettings::default(),
+            browser: BrowserSettings::default(),
         }
     }
 }
@@ -807,9 +820,24 @@ mod tests {
                     .into_iter()
                     .collect(),
             },
+            browser: BrowserSettings {
+                locations: vec![PathBuf::from("/sounds/one-shots")],
+            },
         };
         expected.save_to(&path).unwrap();
         assert_eq!(UiSettings::load_from(&path).unwrap(), expected);
+    }
+
+    #[test]
+    fn defaults_missing_browser_settings_for_existing_configs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n",
+        )
+        .unwrap();
+        assert!(UiSettings::load_from(&path).unwrap().browser.locations.is_empty());
     }
 
     #[test]

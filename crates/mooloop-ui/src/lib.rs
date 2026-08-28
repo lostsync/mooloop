@@ -1341,6 +1341,14 @@ struct UiState {
     playhead_model: Rc<VecModel<f32>>,
     effect_slot_model: Rc<VecModel<EffectSlotRow>>,
     mixer_strip_model: Rc<VecModel<MixerStripRow>>,
+    /// Flattened sample-browser tree, rebuilt whenever locations or folder
+    /// expansion change.
+    browser_rows: Rc<VecModel<BrowserRow>>,
+    /// Sample-browser folders in display order, mirroring the persisted
+    /// settings for this session.
+    browser_locations: Vec<PathBuf>,
+    /// Folders currently expanded, by path, so a refresh survives reordering.
+    browser_expanded: HashSet<PathBuf>,
     default_waveform: Vec<f32>,
     default_sample_description: String,
     default_sample_duration: f32,
@@ -2563,6 +2571,7 @@ impl AppUi {
         let playhead_model = Rc::new(VecModel::from(Vec::<f32>::new()));
         let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
         let mixer_strip_model = Rc::new(VecModel::from(Vec::<MixerStripRow>::new()));
+        let browser_row_model = Rc::new(VecModel::from(Vec::<BrowserRow>::new()));
         window.set_channels(ModelRc::from(rows_model.clone()));
         window.set_notes(ModelRc::from(note_model.clone()));
         window.set_automation_points(ModelRc::from(automation_point_model.clone()));
@@ -2572,6 +2581,7 @@ impl AppUi {
         window.set_playhead_positions(ModelRc::from(playhead_model.clone()));
         window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
         window.set_mixer_strips(ModelRc::from(mixer_strip_model.clone()));
+        window.set_browser_rows(ModelRc::from(browser_row_model.clone()));
         window.set_pattern_count(1);
 
         let state = Rc::new(RefCell::new(UiState {
@@ -2584,6 +2594,9 @@ impl AppUi {
             playhead_model,
             effect_slot_model,
             mixer_strip_model,
+            browser_rows: browser_row_model,
+            browser_locations: Vec::new(),
+            browser_expanded: HashSet::new(),
             default_waveform,
             default_sample_description,
             default_sample_duration,
@@ -3178,6 +3191,12 @@ impl AppUi {
             apply_appearance(&window, &settings.appearance);
             sync_preferences_properties(&window, &settings);
             audio_tx.send(AudioAction::ApplyPersisted(settings.audio.engine_config()));
+            // The browser opens with every top-level location expanded: the
+            // point of the sidebar is seeing samples without extra clicks.
+            let mut st = state.borrow_mut();
+            st.browser_locations = settings.browser.locations.clone();
+            st.browser_expanded = st.browser_locations.iter().cloned().collect();
+            refresh_browser(&st);
         }
 
         // The action registry (`actions.rs`, `docs/ACTIONS.md`): resolves a
@@ -6443,6 +6462,66 @@ impl AppUi {
         wire_poly_osc_float!(on_poly_osc3_level_changed, 2, level);
         wire_poly_osc_float!(on_poly_osc3_pulse_width_changed, 2, pulse_width);
 
+        // --- Sample browser: locations persist in settings.toml and the
+        //     tree re-flattens on every change. The folder picker runs on a
+        //     worker thread like every other zenity call, handing the picked
+        //     path to the pump, which applies it on the UI thread. ---
+        let (browser_pick_tx, browser_pick_rx) = std::sync::mpsc::channel::<PathBuf>();
+        {
+            let browser_pick_tx = browser_pick_tx.clone();
+            window.on_browser_add_location(move || {
+                let tx = browser_pick_tx.clone();
+                std::thread::spawn(move || {
+                    if let Some(path) = pick_bundle_via_zenity("Add sample folder") {
+                        let _ = tx.send(path);
+                    }
+                });
+            });
+        }
+        {
+            let st = state.clone();
+            window.on_browser_row_toggled(move |path| {
+                let path = PathBuf::from(path.to_string());
+                let mut st = st.borrow_mut();
+                // Insert-or-remove: a path never expanded collapses to a
+                // no-op remove, so the set only ever holds expanded folders.
+                if !st.browser_expanded.remove(&path) {
+                    st.browser_expanded.insert(path);
+                }
+                refresh_browser(&st);
+            });
+        }
+        {
+            let st = state.clone();
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_browser_location_removed(move |path| {
+                let path = PathBuf::from(path.to_string());
+                let window = match weak.upgrade() {
+                    Some(window) => window,
+                    None => return,
+                };
+                // Only top-level rows offer removal, so anything the tree
+                // hands back that is not a location is a stale no-op.
+                settings.borrow_mut().browser.locations.retain(|p| p != &path);
+                let saved = settings.borrow().save();
+                {
+                    let mut st = st.borrow_mut();
+                    st.browser_locations.retain(|p| p != &path);
+                    st.browser_expanded.remove(&path);
+                    refresh_browser(&st);
+                }
+                match saved {
+                    Ok(()) => window.set_status_message(
+                        format!("Removed sample folder {}", path.display()).into(),
+                    ),
+                    Err(error) => window.set_status_message(
+                        format!("Could not save settings: {error}").into(),
+                    ),
+                };
+            });
+        }
+
         // --- Sample loading via zenity + hound (selected channel) ---
         // The dialog + decode run on a worker thread so the UI stays
         // responsive (a blocking dialog makes the OS mark the app frozen and
@@ -6549,6 +6628,40 @@ impl AppUi {
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
+                // Applied here rather than in the callback because the
+                // settings and state live in non-Send Rc/RefCells, while the
+                // picked path crosses the thread boundary as plain data.
+                while let Ok(path) = browser_pick_rx.try_recv() {
+                    let Some(window) = weak.upgrade() else {
+                        continue;
+                    };
+                    if st.borrow().browser_locations.contains(&path) {
+                        window.set_status_message(
+                            format!("Already browsing {}", path.display()).into(),
+                        );
+                        continue;
+                    }
+                    ui_settings_for_pump
+                        .borrow_mut()
+                        .browser
+                        .locations
+                        .push(path.clone());
+                    let saved = ui_settings_for_pump.borrow().save();
+                    {
+                        let mut state = st.borrow_mut();
+                        state.browser_locations.push(path.clone());
+                        state.browser_expanded.insert(path.clone());
+                        refresh_browser(&state);
+                    }
+                    match saved {
+                        Ok(()) => window.set_status_message(
+                            format!("Added sample folder {}", path.display()).into(),
+                        ),
+                        Err(error) => window.set_status_message(
+                            format!("Could not save settings: {error}").into(),
+                        ),
+                    };
+                }
                 while let Ok(result) = document_rx.try_recv() {
                     let Some(window) = weak.upgrade() else {
                         return;
@@ -8031,9 +8144,158 @@ fn decode_wav(path: &Path) -> Result<Arc<SampleData>, String> {
     }))
 }
 
+/// Entries of `path` the sample browser shows: subdirectories first, then
+/// `.wav` files, each case-insensitively sorted by name. Hidden entries are
+/// skipped, and an unreadable directory simply lists as empty.
+fn scan_browser_dir(path: &Path) -> Vec<(bool, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let child = entry.path();
+        let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        if child.is_dir() {
+            dirs.push(child);
+        } else if child
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+        {
+            files.push(child);
+        }
+    }
+    let by_lower_name = |child: &PathBuf| {
+        child
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_lowercase()
+    };
+    dirs.sort_by_key(&by_lower_name);
+    files.sort_by_key(by_lower_name);
+    dirs.into_iter()
+        .map(|child| (true, child))
+        .chain(files.into_iter().map(|child| (false, child)))
+        .collect()
+}
+
+/// Flattens the browser's folder hierarchy into visible rows: each location,
+/// then recursively the children of every expanded folder.
+fn build_browser_rows(locations: &[PathBuf], expanded: &HashSet<PathBuf>) -> Vec<BrowserRow> {
+    let mut rows = Vec::new();
+    for location in locations {
+        push_browser_rows(&mut rows, location, 0, expanded);
+    }
+    rows
+}
+
+fn push_browser_rows(
+    rows: &mut Vec<BrowserRow>,
+    path: &Path,
+    depth: usize,
+    expanded: &HashSet<PathBuf>,
+) {
+    let is_expanded = expanded.contains(path);
+    rows.push(BrowserRow {
+        depth: depth as i32,
+        kind: 0,
+        name: browser_display_name(path).into(),
+        path: path.to_string_lossy().to_string().into(),
+        expanded: is_expanded,
+    });
+    if !is_expanded {
+        return;
+    }
+    for (is_dir, child) in scan_browser_dir(path) {
+        if is_dir {
+            push_browser_rows(rows, &child, depth + 1, expanded);
+        } else {
+            rows.push(BrowserRow {
+                depth: depth as i32 + 1,
+                kind: 1,
+                name: browser_display_name(&child).into(),
+                path: child.to_string_lossy().to_string().into(),
+                expanded: false,
+            });
+        }
+    }
+}
+
+fn browser_display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+/// Rebuilds the visible tree from the session's locations and expansion set.
+fn refresh_browser(st: &UiState) {
+    st.browser_rows.set_vec(build_browser_rows(
+        &st.browser_locations,
+        &st.browser_expanded,
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_tree_lists_folders_first_and_only_wavs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join("Drums/Kicks")).unwrap();
+        std::fs::create_dir_all(root.join("ambience")).unwrap();
+        std::fs::write(root.join("Drums/Kicks/909.wav"), b"x").unwrap();
+        std::fs::write(root.join("Drums/Kicks/notes.txt"), b"x").unwrap();
+        std::fs::write(root.join("zebra.WAV"), b"x").unwrap();
+        std::fs::write(root.join(".hidden.wav"), b"x").unwrap();
+        std::fs::write(root.join("apple.wav"), b"x").unwrap();
+
+        // Root and Drums expanded; everything else starts collapsed.
+        let expanded: HashSet<PathBuf> = [root.to_path_buf(), root.join("Drums")]
+            .into_iter()
+            .collect();
+        let rows = build_browser_rows(&[root.to_path_buf()], &expanded);
+
+        let summary: Vec<(usize, i32, bool, String)> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.depth as usize,
+                    row.kind,
+                    row.expanded,
+                    row.name.to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (0, 0, true, browser_display_name(root)),
+                // Dirs before files, case-insensitively sorted.
+                (1, 0, false, "ambience".into()),
+                (1, 0, true, "Drums".into()),
+                (2, 0, false, "Kicks".into()),
+                (1, 1, false, "apple.wav".into()),
+                (1, 1, false, "zebra.WAV".into()),
+            ]
+        );
+        // The rows carry their paths so toggling and removal round-trip.
+        assert_eq!(rows[2].path, root.join("Drums").to_string_lossy().to_string());
+        assert_eq!(rows[3].path, root.join("Drums/Kicks").to_string_lossy().to_string());
+        assert_eq!(rows[4].path, root.join("apple.wav").to_string_lossy().to_string());
+
+        // Collapsed locations list as a single row with no children.
+        let rows = build_browser_rows(&[root.to_path_buf()], &HashSet::new());
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].expanded);
+    }
 
     #[test]
     fn copied_channel_names_are_readable_and_unique() {
