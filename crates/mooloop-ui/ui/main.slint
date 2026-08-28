@@ -469,6 +469,18 @@ export component MainWindow inherits Window {
 
     // ---- lower editor ----
     in-out property <int> editor-page;      // 0=Source, 1=Notes, 2=Playlist
+    // Dock height the piano roll restores. Only the notes page drives the
+    // splitter today; other pages stay at the 410px default.
+    in-out property <length> piano-dock-height: 410px;
+    // The grip clamps while dragging, but only this catches the window
+    // itself shrinking under a tall dock. Kept out of the dock's height
+    // binding: reading root.height there loops through the layout.
+    changed height => {
+        if (root.editor-page == 1) {
+            root.piano-dock-height = max(140px,
+                min(root.piano-dock-height, root.height - 220px));
+        }
+    }
     in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
@@ -1670,11 +1682,48 @@ export component MainWindow inherits Window {
             }
         }
 
-        Rectangle { height: 1px; background: Theme.border; }
+        // Dock splitter. The 1px line is the visual; the grab zone is 6px
+        // tall, reaching 5px up into the work surface and not at all into
+        // the dock's page tabs. Enabled on the piano roll page for now.
+        Rectangle {
+            height: 1px;
+            background: dock-grip.has-hover || dock-grip.pressed
+                ? Theme.focus : Theme.border;
+
+            dock-grip := TouchArea {
+                y: -5px;
+                width: parent.width;
+                height: 6px;
+                enabled: root.editor-page == 1;
+                mouse-cursor: ns-resize;
+                property <length> grab-y;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        self.grab-y = self.mouse-y;
+                    } else if (e.kind == PointerEventKind.move && self.pressed) {
+                        // The grip itself travels with the dock edge, so
+                        // mouse-y is measured against a moving origin: fold
+                        // each event's offset into the current height
+                        // rather than replaying from the press position.
+                        let target = root.piano-dock-height
+                            - (self.mouse-y - self.grab-y);
+                        let clamped = max(140px,
+                            min(target, root.height - 220px));
+                        if (clamped != target) {
+                            // A bound swallowed the move; re-anchor so
+                            // reversing direction responds immediately
+                            // instead of unwinding the overshoot.
+                            self.grab-y = self.mouse-y;
+                        }
+                        root.piano-dock-height = clamped;
+                    }
+                }
+            }
+        }
 
         // ===== Bottom dock: sampler and note editors =====
         Rectangle {
-            height: 410px;
+            height: root.editor-page == 1 ? root.piano-dock-height : 410px;
             background: Theme.panel;
 
             VerticalLayout {

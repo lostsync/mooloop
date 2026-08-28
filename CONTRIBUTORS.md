@@ -90,13 +90,15 @@ work session you can recall being part of, and don't stress over precision.
 ### GLM 5.3 Flash (glm-5.3-flash) — opencode
 - First seen: 2026-08-23
 - Last seen: 2026-08-28
-- Sessions: 3
+- Sessions: 4
 - Notes: Effect-container refactor: latency-aligned dry path, one dB trim
   knob everywhere, bus-effect metering, and the shared effect-device shell.
   Extracted the shared DraggablePoint handle and gave the EQ band points
   and the Filter cutoff/resonance point a common drag + wheel interaction.
   Docked the transient hover/status overlay as an always-visible bottom
-  status bar.
+  status bar. Made the piano roll's dock resizable via a draggable
+  splitter, with a moving-origin drag integrator and a snapshot-tested
+  clamp/restore contract.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21
