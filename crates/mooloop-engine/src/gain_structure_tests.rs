@@ -356,13 +356,35 @@ fn pad_and_drums(pad_volume: f32, pad_muted: bool, drums_muted: bool) -> Project
     }
 }
 
+/// Send the pad down a chain of insert buses that ends at the master. A
+/// channel that feeds the master directly never exercises `mix_into`, the
+/// bus-to-bus hop, so the straight-to-master case alone would leave the bus
+/// walk's own summing untested.
+fn route_pad_through(mut project: Project, chain: &[u8]) -> Project {
+    let Some((&first, rest)) = chain.split_first() else {
+        return project;
+    };
+    project.channels[0].setup.channel.bus = first;
+    let mut current = first;
+    for &next in rest {
+        project.buses[current as usize].bus.output = next;
+        current = next;
+    }
+    project.buses[current as usize].bus.output = mooloop_core::MASTER_BUS;
+    project
+}
+
 /// Largest sample-by-sample departure from superposition: how far
 /// `(pad + drums)` rendered together sits from the two rendered apart and
-/// added. Zero for any linear mixer, whatever the faders are set to.
-fn superposition_error(pad_volume: f32) -> (f32, f32) {
-    let (both_l, _) = render_master(&pad_and_drums(pad_volume, false, false), 2.5);
-    let (pad_l, _) = render_master(&pad_and_drums(pad_volume, false, true), 2.5);
-    let (drums_l, _) = render_master(&pad_and_drums(pad_volume, true, false), 2.5);
+/// added. Zero for any linear mixer, whatever the faders are set to and
+/// whatever the pad is routed through.
+fn superposition_error(pad_volume: f32, chain: &[u8]) -> (f32, f32) {
+    let project = |pad_muted, drums_muted| {
+        route_pad_through(pad_and_drums(pad_volume, pad_muted, drums_muted), chain)
+    };
+    let (both_l, _) = render_master(&project(false, false), 2.5);
+    let (pad_l, _) = render_master(&project(false, true), 2.5);
+    let (drums_l, _) = render_master(&project(true, false), 2.5);
     let error = both_l
         .iter()
         .zip(pad_l.iter().zip(drums_l.iter()))
@@ -378,18 +400,22 @@ fn summing_stays_linear_however_the_faders_sit() {
     // scalar were derived from the track gains, moving the pad's fader
     // would change what the drums contribute, and superposition would fail
     // at every fader position but one. Sweep the pad from silence to the
-    // +12 dB ceiling.
-    for pad_volume in [0.0, 0.5, 1.0, 2.0, MAX_LINEAR_GAIN] {
-        let (error, peak) = superposition_error(pad_volume);
-        println!(
-            "pad fader {pad_volume:.2} linear: superposition error {error:.3e} \
-             against a {peak:.3} peak"
-        );
-        assert!(
-            error < 1e-6,
-            "pad fader at {pad_volume} broke superposition by {error:.3e}: \
-             something in the summing path depends on the other track's gain"
-        );
+    // +12 dB ceiling, both straight to the master and down a two-hop bus
+    // chain, so the channel sum and the bus-to-bus sum are both covered.
+    for chain in [&[][..], &[5, 2][..]] {
+        for pad_volume in [0.0, 0.5, 1.0, 2.0, MAX_LINEAR_GAIN] {
+            let (error, peak) = superposition_error(pad_volume, chain);
+            println!(
+                "pad via {chain:?}, fader {pad_volume:.2} linear: \
+                 superposition error {error:.3e} against a {peak:.3} peak"
+            );
+            assert!(
+                error < 1e-6,
+                "pad fader at {pad_volume} via {chain:?} broke superposition by \
+                 {error:.3e}: something in the summing path depends on the \
+                 other track's gain"
+            );
+        }
     }
 }
 

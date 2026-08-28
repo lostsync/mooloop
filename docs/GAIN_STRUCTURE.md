@@ -53,7 +53,18 @@ same device on a channel touches nothing else.
 `a_shared_saturation_stage_is_what_ducks_one_track_under_another` measures
 both: a filter at drive 0.6 on the master pulls the drums down 4.7 dB as the
 pad's fader travels from unity to +12, and the same filter on the pad's own
-channel moves them 0.00 dB.
+channel moves them 0.00 dB. The bus walk itself adds nothing either: the
+same superposition holds with the pad routed down a two-hop insert chain,
+which is what puts audio through `mix_into`.
+
+**Nothing bounds a sample in the live path.** The engine's only writes into
+a bus buffer are the effect container's input trim, its wet/dry blend and
+output trim, the dry-path delay ring, and `StereoBus`'s add and multiply —
+every one of them linear in the signal. The single place a sample is
+clipped anywhere in the codebase is `pcm24`, in
+`mooloop-engine/src/offline.rs`: that is the 24-bit WAV encoder, so exports
+hard-clip at full scale and live playback does not. Sums above 0 dBFS reach
+the output device intact, and pulling them down is the user's business.
 
 **Per-oscillator unity reference.** A synth oscillator's 0 dB knob position
 *is* the device reference: one oscillator at full peaks at
