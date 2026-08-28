@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-28
-- Sessions: 8
+- Sessions: 9
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -56,6 +56,8 @@ work session you can recall being part of, and don't stress over precision.
   acid filter models, pre-filter drive, a held-note stack with priority and
   legato, velocity accent) and `docs/plans/poly-synth-v2/` (deterministic
   per-voice drift, a multimode filter, grouped unison, an internal chorus).
+  Added `scripts/antibox`, which runs builds, tests, and headless UI snapshots
+  on the remote build box instead of the laptop.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

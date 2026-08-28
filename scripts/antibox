@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Run a command -- by default the test suite -- against this checkout on a
+# remote build box instead of Adam's laptop.
+#
+#   scripts/antibox                          # cargo test --workspace
+#   scripts/antibox cargo test -p mooloop-ui
+#   scripts/antibox cargo clippy --workspace --all-targets
+#   scripts/antibox --pull /tmp/window.ppm \
+#     env MOOLOOP_PLAYLIST_SNAPSHOT=/tmp/window.ppm \
+#     cargo test -p mooloop-ui --test playlist_snapshot
+#
+# The working tree is mirrored with rsync (gitignored paths excluded), so
+# uncommitted work is tested as-is and nothing needs pushing first. Each local
+# checkout gets its own remote directory and its own Cargo target directory,
+# keyed by absolute path, so parallel worktrees never fight over one cache.
+set -euo pipefail
+
+HOST="${MOOLOOP_REMOTE_HOST:-antibox}"
+SYNC=1
+CLEAN=0
+PULL=()
+
+usage() {
+  awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
+  cat <<'USAGE'
+
+Options:
+  --host NAME     Remote ssh host (default: antibox, or $MOOLOOP_REMOTE_HOST).
+  --no-sync       Reuse the remote copy as-is; skip the rsync step.
+  --clean         Delete the remote checkout and target cache, then re-sync.
+  --pull PATH     After the run, copy PATH back from the remote. Relative
+                  paths resolve inside the remote checkout; the file lands in
+                  the same relative spot locally, absolute paths land in the
+                  same absolute spot. Repeatable.
+  -h, --help      Show this help.
+
+Exits with the remote command's exit status.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host) HOST="${2:?--host needs a value}"; shift 2 ;;
+    --no-sync) SYNC=0; shift ;;
+    --clean) CLEAN=1; shift ;;
+    --pull) PULL+=("${2:?--pull needs a path}"); shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) echo "antibox: unknown option $1" >&2; usage >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+
+ROOT="$(git rev-parse --show-toplevel)"
+# Keyed by absolute path so sibling worktrees with the same basename, and two
+# clones in different places, stay apart on the remote.
+SLUG="$(basename "$ROOT")-$(printf '%s' "$ROOT" | sha1sum | cut -c1-8)"
+
+# One multiplexed connection covers the preflight, sync, run, and pull.
+CONTROL="${TMPDIR:-/tmp}/antibox-$(id -u)-%C"
+SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=$CONTROL" -o ControlPersist=120)
+ssh_run() { ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
+
+if ! ssh_run true 2>/dev/null; then
+  echo "antibox: cannot reach ssh host '$HOST'." >&2
+  exit 1
+fi
+
+# rsync needs a literal destination, so resolve the remote home once.
+REMOTE_BASE="$(ssh_run 'printf %s "$HOME"')/.cache/mooloop-remote"
+REMOTE_DIR="$REMOTE_BASE/checkouts/$SLUG"
+REMOTE_TARGET="$REMOTE_BASE/targets/$SLUG"
+
+if ! ssh_run 'PATH="$HOME/.cargo/bin:$PATH" command -v cargo >/dev/null'; then
+  echo "antibox: no cargo on '$HOST'. Install it there with rustup:" >&2
+  echo "  ssh $HOST 'curl --proto \"=https\" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'" >&2
+  exit 1
+fi
+
+if [[ $CLEAN -eq 1 ]]; then
+  echo "antibox: clearing $REMOTE_DIR and $REMOTE_TARGET" >&2
+  ssh_run "rm -rf \"$REMOTE_DIR\" \"$REMOTE_TARGET\""
+fi
+
+if [[ $SYNC -eq 1 ]]; then
+  ssh_run "mkdir -p \"$REMOTE_DIR\" \"$REMOTE_TARGET\""
+  # --filter=':- .gitignore' honours every .gitignore in the tree, so build
+  # output and scratch files stay local while untracked source does get sent.
+  rsync -az --delete \
+    -e "ssh ${SSH_OPTS[*]}" \
+    --filter=':- .gitignore' \
+    --exclude='.git' \
+    --exclude='/target/' \
+    "$ROOT/" "$HOST:$REMOTE_DIR/"
+fi
+
+if [[ $# -eq 0 ]]; then
+  set -- cargo test --workspace
+fi
+
+QUOTED=""
+for arg in "$@"; do
+  QUOTED+=" $(printf '%q' "$arg")"
+done
+
+# The remote box is not the laptop: it has cores and memory to spare, so lift
+# the tree's `jobs = 3` guard. An explicit -j in the command still wins, since
+# Cargo's CLI outranks CARGO_BUILD_JOBS.
+STATUS=0
+ssh_run "
+  set -euo pipefail
+  export PATH=\"\$HOME/.cargo/bin:\$PATH\"
+  export CARGO_TARGET_DIR=\"$REMOTE_TARGET\"
+  export CARGO_BUILD_JOBS=\"\$(nproc)\"
+  export CARGO_TERM_COLOR=never
+  cd \"$REMOTE_DIR\"
+  exec$QUOTED
+" || STATUS=$?
+
+for path in ${PULL+"${PULL[@]}"}; do
+  if [[ "$path" = /* ]]; then
+    dest="$path"
+  else
+    dest="$ROOT/$path"
+    path="$REMOTE_DIR/$path"
+  fi
+  mkdir -p "$(dirname "$dest")"
+  if rsync -az -e "ssh ${SSH_OPTS[*]}" "$HOST:$path" "$dest"; then
+    echo "antibox: pulled $dest" >&2
+  else
+    echo "antibox: failed to pull $path" >&2
+    [[ $STATUS -eq 0 ]] && STATUS=1
+  fi
+done
+
+exit $STATUS

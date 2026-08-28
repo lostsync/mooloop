@@ -62,4 +62,5 @@ for documentation, the affected Rust test/check for isolated code, and the
 specific software-rendered UI snapshot for UI work. Do not run Cargo commands
 concurrently. Read [docs/AGENT_OPERATIONS.md](docs/AGENT_OPERATIONS.md) before
 running Cargo, UI snapshots, or the live application; it contains this
-machine's memory limits and rendering procedures.
+machine's memory limits and rendering procedures; heavier runs belong on the
+remote build box via `scripts/antibox`.

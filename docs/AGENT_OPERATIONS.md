@@ -19,6 +19,38 @@ cargo test -p mooloop-ui -j 2
 limit. When several worktrees need a shared cache, use the machine-local
 `CARGO_TARGET_DIR` described in the README.
 
+## Remote builds and tests
+
+The laptop's Cargo limits exist because of its memory. `scripts/antibox` sends
+the work to the build box instead, where those limits do not apply: it rsyncs
+the current working tree (uncommitted edits included, gitignored paths
+excluded), runs the command there, streams the output back, and exits with the
+remote status. Prefer it for anything heavier than a single small crate, and
+especially for `--workspace` runs and `mooloop-ui`.
+
+```sh
+scripts/antibox                             # cargo test --workspace
+scripts/antibox cargo test -p mooloop-ui
+scripts/antibox cargo clippy --workspace --all-targets
+```
+
+Each local checkout gets its own remote directory and Cargo target cache keyed
+by absolute path, so worktrees do not fight over one cache and the "no
+concurrent Cargo" rule stays a local rule -- two worktrees may run remotely at
+the same time. Cargo's job cap is lifted to the remote core count.
+
+Pull artifacts back with `--pull`, which is how remote UI snapshots work:
+
+```sh
+scripts/antibox --pull /tmp/window.ppm \
+  env SLINT_BACKEND=winit-software MOOLOOP_PLAYLIST_SNAPSHOT=/tmp/window.ppm \
+  cargo test -p mooloop-ui --test playlist_snapshot
+```
+
+`--clean` discards the remote checkout and its target cache; `--host` and
+`$MOOLOOP_REMOTE_HOST` point at a different ssh host. Anything needing JACK, a
+real audio device, or the live compositor still belongs on this machine.
+
 ## Software-rendered UI checks
 
 Prefer headless software rendering: it is deterministic, does not need a
