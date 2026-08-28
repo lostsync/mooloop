@@ -47,7 +47,10 @@ Fixed for v2, not open for reinterpretation inside a step:
   that is exactly why it is tempting. A mode menu turns Mono into the generic
   multimode synth that Poly is supposed to be. Model choice changes
   *character*, not response shape.
-- No modulation matrix. One LFO with a depth per destination, as today.
+- No device-local modulation matrix or LFO. General LFOs and other control
+  sources belong to the channel rack; Mono declares destinations and may later
+  publish named outlets. Voice-local envelopes, keytracking, and Accent remain
+  part of Mono because they are its synthesis behavior, not general sources.
 - No unison stack. That is Poly's.
 - No oscillator sync or cross-mod. Also Poly's.
 - Noise or a sub oscillator is *optional*; if it lands, it is one global Noise
@@ -62,7 +65,7 @@ OSC 3 --/                          ^         ^
                                    |         |
                               FILTER ADSR  AMP ADSR
 
-LFO / KEYTRACK / ACCENT -> FILTER
+CHANNEL MODULATION ROUTES / KEYTRACK / ACCENT -> FILTER
 ```
 
 The move of saturation from after the filter to before it is the defining
@@ -73,8 +76,8 @@ filter's character and not merely the gain.
 
 ## Control surface
 
-Three pages, as today. The MOD page becomes MOD/PERF rather than growing a
-fourth page.
+Three source pages, as today. The MOD page becomes PERF rather than growing a
+fourth page; the common device frame exposes the channel modulation shelf.
 
 | Page       | Section         | Controls                                              |
 |------------|-----------------|-------------------------------------------------------|
@@ -82,8 +85,7 @@ fourth page.
 | AMP/FILTER | Amplitude       | Amp ADSR                                              |
 | AMP/FILTER | Filter          | Model, Cutoff, Resonance, Env Amount, Keytrack, Drive |
 | AMP/FILTER | Filter Envelope | Filter ADSR                                           |
-| MOD/PERF   | LFO             | Wave, Rate, Retrigger, Pitch, Cutoff, Width, Tremolo  |
-| MOD/PERF   | Performance     | Glide, Glide Mode, Env Trigger, Priority, Accent      |
+| PERF       | Performance     | Glide, Glide Mode, Env Trigger, Priority, Accent      |
 
 The AMP/FILTER page is already two full panels at 5 knobs and 4 knobs
 (`crates/mooloop-ui/ui/mono-device.slint:129`). It has to hold a second
@@ -100,12 +102,16 @@ These apply to every step and are not restated in each one.
 
 - **`MonoSynthParams` is the fragile one.** `PolySynthParams` carries
   `#[serde(default)]` at the struct level
-  (`crates/mooloop-core/src/synth.rs:414`); `MonoSynthParams` does not — only
-  its `lfo` field has a field-level default. Any field added without fixing
-  that makes every pre-v2 project unreadable. **Step 02 adds
+  (`crates/mooloop-core/src/synth.rs:414`); `MonoSynthParams` does not. Any
+  field added without fixing that makes every pre-v2 project unreadable. **Step 02 adds
   `#[serde(default)]` to the struct before adding any field**, and
   `crates/mooloop-project/src/lib.rs:1763` already has the round-trip test
   shape to extend.
+- **The present device-local LFO is legacy state.** The migration that removes
+  it must create an equivalent channel LFO source and routes from old patches
+  before deleting the source field or its descriptor IDs. A loaded old patch
+  must keep its intended motion; a new Mono patch gets modulation from the
+  channel shelf, not from a hidden Mono-owned LFO.
 - **Never renumber an existing parameter ID.** The IDs in
   `crates/mooloop-core/src/generator.rs:166-183` are automation lane
   addresses. `SYNTH_PARAM_POLYPHONY = 15` and `SPREAD = 16` are Poly-only, so
@@ -115,7 +121,9 @@ These apply to every step and are not restated in each one.
   currently built by copying `MONO_DESCRIPTORS` and appending two entries
   (`crates/mooloop-core/src/generator.rs:295`). Once Mono has Accent and Poly
   has Unison, that relationship is false. Step 02 splits them into two
-  independent const tables sharing only `osc_descriptors` and the LFO block.
+  independent const tables sharing only `osc_descriptors` and genuinely
+  shared source-parameter entries. Channel modulator descriptors do not belong
+  to either synth table.
 - **Old projects must open and play.** Exact pre-v2 timbre is desirable and
   secondary; broken deserialization or a dead automation lane is not
   acceptable. Adam has not waived compatibility here the way he did for gain.

@@ -39,6 +39,12 @@ controls sit beside the source selector, not detached at the far edge of the
 editor. Channel presets remain in the channel header because they include the
 generator and channel-level state.
 
+The modulation rack and its routes are channel state. A common device frame
+may expose that system because it is where the user reads the channel's signal
+flow, but the frame does not make a modulation source belong to that device.
+Device faces own their parameters; the channel owns the control signals that
+can reach them.
+
 ## Module Grid
 
 An instrument body is a row or grid of modules, not a free canvas.
@@ -173,7 +179,10 @@ alignment, and height contract as effects.
   a device face must not add a second copy. Effect faces inherit the shared
   `EffectDeviceShell`, which owns that header and the drag-to-reorder handle;
   a face file contains only its working controls. Controls unique to that device
-  begin below the header.
+  begin below the header. The common frame also owns a compact `MOD n` route
+  summary for routes terminating in the device. It can show source pills where
+  a count is too opaque and opens the channel's modulation shelf or a
+  device-filtered route inspector; it never creates a device-local modulator.
 - Signal direction and insertion points remain visible between devices.
 - A device with more controls than one face can hold uses stable internal
   pages. Switching pages never changes device dimensions or moves neighboring
@@ -197,6 +206,26 @@ The device-chain row directly below it owns source type and generator presets:
 
 `[DEVICE CHAIN] [source type] [generator preset browser/actions]`
 
+### Channel modulation shelf
+
+The channel's modulation shelf lives immediately below the device rack and is
+collapsed by default. Its header is a small `MOD` affordance; opening it shows
+existing source chips and an add-source action. It is one shelf for the whole
+channel, so a source can target a source parameter, any insert, and the strip
+at the same time. Do not place four permanent empty slots in the rack or a
+separate modulation page inside every device.
+
+Selecting a chip arms that source. Legal destination controls receive a subtle
+assignable state, and dragging a normal control creates or changes route depth
+without changing that control's base value. Its normal value display remains
+the base; an overlay or second arc communicates modulation excursion. A small
+marker on a parameter opens its incoming-route inspector. The inspector is
+destination-first and should be sufficient for ordinary review and removal.
+
+This interaction has no drawn patch cords. A full route matrix or zoomed-out
+graph is deferred expert tooling, not a replacement for the rack and not a
+requirement for the first modulation UI.
+
 ### Sampler
 
 - `Sample` keeps file navigation, waveform, trim/loop markers, root note,
@@ -219,7 +248,10 @@ The device-chain row directly below it owns source type and generator presets:
 
 - `Osc` uses three repeated oscillator strips with identical geometry.
 - `Amp/Filter` pairs the graphical amplitude envelope with filter and drive.
-- `Mod` keeps LFO shape, retrigger, rate, and destination depths together.
+- A Mono face does not own a general LFO page. Its common frame exposes the
+  channel modulation shelf and the routes that terminate in Mono parameters.
+  Any existing device-local LFO controls are transitional and must migrate to
+  the channel rack rather than grow into a second modulation system.
 - Waveforms remain visible selector banks rather than dropdowns.
 - Oscillator plots respond to waveform, tuning, level, and pulse width.
 
@@ -253,6 +285,9 @@ columns with tiny `+` and `-` glyphs.
 ## Interaction And Wording
 
 - A knob's label and value drag the same parameter as its knob face.
+- When a modulation source is armed, parameter dragging edits that source's
+  route depth while preserving the parameter's base value; the affordance and
+  resulting overlay must make this mode obvious.
 - Familiar icon buttons receive tooltips; visible prose does not explain the
   interface.
 - Tooltips name the musical result or action. They do not narrate the code.
@@ -276,6 +311,9 @@ Before committing UI work, answer all of these:
 - Does the narrow view wrap or scroll without overlap or clipped text?
 - Does every device retain the fixed rack height and an intentional unit width?
 - Is signal order legible without opening a menu or inspector?
+- Can a reader tell which devices receive modulation, open the channel shelf,
+  and inspect a destination's incoming routes without treating a source as a
+  property of one device?
 - Was the result inspected from a software-rendered screenshot rather than
   accepted from code alone?
 

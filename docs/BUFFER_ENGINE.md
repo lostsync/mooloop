@@ -121,6 +121,20 @@ rate, direction, repeat, hold, return-live, freeze, and possibly write feedback
 or overwrite behavior. Buffer-specific lanes must not become a second
 automation engine.
 
+## Future Control Outlets
+
+The first Buffer spike does not require modulation outlets. Once its read-head
+behavior is musically proven, it may publish named, normalized channel control
+signals such as playhead position, distance from the write head, window phase,
+amplitude, transient state, or slice state. These are inputs to the
+channel-owned modulation rack described in `MODULATION_PLAN.md`, not
+device-local LFOs and not values sampled back out of the display.
+
+Every outlet must declare its signal semantics, control rate, and latency; a
+consumer reads it through the ordinary source-to-`ParamAddr` route path.
+Waveforms, collision indicators, and other UI telemetry remain observation
+only. Do not expand the first Buffer spike to implement this list.
+
 ## Realtime And Memory Constraints
 
 - Allocate and resize buffers only off the audio thread.

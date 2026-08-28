@@ -43,6 +43,12 @@ the chorus. Three full oscillators per voice is already that architecture, so
 **do not reduce the oscillator section to chase a Juno.** No UI text or docs
 copy may claim emulation of any specific instrument.
 
+General modulation is channel state, not a Poly subsystem. Poly declares
+parameters that the channel's sources may target and keeps only genuinely
+voice-local synthesis behavior — envelopes, keytracking, drift, and unison —
+inside its voice pool. Its internal chorus may retain an algorithmic LFO
+because that is part of the sound processor, not a routable control source.
+
 ## What Poly does not get
 
 Fixed for v2:
@@ -52,7 +58,9 @@ Fixed for v2:
   pool.
 - No Mono character filter models. Poly's filter is the clean SVF, expanded.
   Drive stays a gentle *color* control, not the centre of the instrument.
-- No modulation matrix and no second LFO in the initial scope.
+- No device-local modulation matrix or LFO. The shared channel modulation rack
+  is outside Poly's initial voice-feature scope; it reaches Poly through its
+  descriptors and the common device frame.
 - No per-voice user editing of drift offsets. Drift is one knob; the offsets
   are hidden by design.
 - No arbitrary oscillator routing matrix. Sync is one fixed pair (step 06).
@@ -89,8 +97,6 @@ Four pages, as today — Poly already has the VOICE page Mono lacks.
 | AMP/FILTER | Amplitude       | Amp ADSR                                                       |
 | AMP/FILTER | Filter          | Mode, Cutoff, Resonance, Env Amount, Keytrack, Drive/Color     |
 | AMP/FILTER | Filter Envelope | Filter ADSR                                                    |
-| MOD        | LFO             | Wave, Rate, Retrigger, Pitch, Cutoff, Width, Tremolo           |
-| MOD        | Expression      | Velocity → Filter; Velocity → Amp amount only if needed        |
 | VOICE      | Allocation      | Polyphony, Unison, Detune                                      |
 | VOICE      | Character       | Drift, Spread, Chorus mode (Amount only if needed)             |
 
@@ -98,6 +104,11 @@ The VOICE page is currently two controls floating in a `space-around` layout
 (`crates/mooloop-ui/ui/poly-device.slint:233`). It becomes a real page with
 two sections. Step 02 makes that layout call and later steps add into the
 shape it establishes.
+
+The common device frame's `MOD` affordance opens the channel shelf; Poly has
+no device-local MOD page. Velocity remains native note behavior and may later
+be published as a named channel outlet, rather than becoming a competing
+device-local expression panel.
 
 Per the project tooltip convention, every new control's tooltip carries the
 value only; explanatory text goes to the status bar.

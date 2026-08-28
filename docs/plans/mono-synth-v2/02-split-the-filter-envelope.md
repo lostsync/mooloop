@@ -18,6 +18,9 @@ let sample = apply_drive(filtered, drive) * voice.env.level() * velocity * tremo
 (`crates/mooloop-dsp/src/monosynth.rs:276` and `:284`; `polysynth.rs:347` and
 `:355` are the same two lines.)
 
+That snippet records the current device-local LFO path, not the v2 target.
+The channel-owned replacement is specified in section 4 below.
+
 A pluck is a fast filter decay under a sustained amplitude. A pad is a slow
 filter opening under a fast attack. Neither is reachable. This is the single
 biggest limitation in the current architecture and everything else in both
@@ -69,10 +72,11 @@ an **old** patch is different — see 4.
 `POLY_DESCRIPTORS` currently copies `MONO_DESCRIPTORS` wholesale
 (`crates/mooloop-core/src/generator.rs:295`). Break that now, while the two
 tables are still nearly identical and the change is mechanical: keep
-`osc_descriptors()` and a shared const block for the ADSR/filter/LFO entries
-both devices genuinely share, and build `MONO_DESCRIPTORS` and
-`POLY_DESCRIPTORS` independently from it. Later steps add Mono-only Accent and
-Poly-only Unison entries into tables that are already separate.
+`osc_descriptors()` and a shared const block for the ADSR/filter entries both
+devices genuinely share, and build `MONO_DESCRIPTORS` and `POLY_DESCRIPTORS`
+independently from it. LFO descriptors belong to the channel `ModRack`, not a
+synth table. Later steps add Mono-only Accent and Poly-only Unison entries into
+tables that are already separate.
 
 Both tables stay `static` and const-constructed — the engine must not allocate
 to enumerate them.
@@ -97,10 +101,13 @@ Keytrack adds to the same `octaves` expression, referenced to middle C:
 
 ```rust
 let keytrack_oct = keytrack * (note as f32 - 60.0) / 12.0;
-let octaves = filter_env.level() * env_amount * 6.0
-            + lfo_value * to_filter
-            + keytrack_oct;
+let octaves = filter_env.level() * env_amount * 6.0 + keytrack_oct;
 ```
+
+Channel modulation routes change the addressable filter parameters through the
+ordinary descriptor event path; they do not add a second device-local LFO term
+inside every voice. This keeps the LFO channel-owned while leaving the
+per-voice envelope and keytrack calculation where it belongs.
 
 `MonoVoice` does not currently store the note number (only `current_freq`) —
 add it, or derive the offset from `current_freq` against middle C so glide
@@ -109,9 +116,10 @@ glide sweep the cutoff along with the pitch, which is the musically expected
 result and is free.
 
 The existing filter-bypass fast path
-(`cutoff >= 0.999 && env_amount == 0 && resonance == 0 && to_filter == 0`)
-must also require `keytrack == 0`, or a keytracked patch with the cutoff wide
-open silently ignores it.
+(`cutoff >= 0.999 && env_amount == 0 && resonance == 0`) must also require
+`keytrack == 0`. Channel routes have already resolved Cutoff before the source
+receives its parameter event, so the path must not retain a separate
+device-local LFO-depth exception.
 
 ### 5. Migrate old patches
 
@@ -142,9 +150,9 @@ above the knobs.
 
 Give the filter panel its own `EnvelopeEditor` and its own knob row. Mono's
 filter panel will later need Model and Poly's will need Mode, so leave a slot
-for a selector in the panel header rather than assuming four knobs is the
-maximum. Glide currently sits in the AMPLITUDE knob row on both faces; on Mono
-it moves to MOD/PERF in step 03, so leaving it where it is for now is fine.
+  for a selector in the panel header rather than assuming four knobs is the
+  maximum. Glide currently sits in the AMPLITUDE knob row on both faces; on Mono
+  it moves to PERF in step 03, so leaving it where it is for now is fine.
 
 Verify with the software-rendered UI snapshot for both device faces per
 `docs/AGENT_OPERATIONS.md`.

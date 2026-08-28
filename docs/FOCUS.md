@@ -74,13 +74,14 @@ that is a bigger gap than the prefs dialog.
 re-litigate it. Take it at its word.
 
 Order within the step: one modulator driving one destination end to end —
-LFO to filter cutoff, knob to ear — before the general parameter-lane
-editor. `ParamAddr` lands here, because this is where it finally gets its
-second and third target.
+LFO to filter cutoff, knob to ear — before broadening the source taxonomy or
+building expert views. `ParamAddr` and the channel-local rack already exist;
+finish their audible path and the source-selection interaction rather than
+inventing a second address system.
 
 Done when: a modulator visibly and audibly moves a parameter, the knob and
-the modulator do not fight over the value, and the result survives save and
-reload.
+the modulator do not fight over the value, the channel shelf makes a source
+available to more than one device, and the result survives save and reload.
 
 ### 4. The buffer device
 
@@ -117,6 +118,12 @@ modulator rack — nearly free after step 3. Pattern mutation needs a
 selection model and undo to be usable at all — nearly free after step 1, and
 miserable before it. That both fall out cheaply from the sequence is
 evidence the sequence is right; neither justifies reordering it.
+
+**A modulation matrix or zoomed-out graph editor.** The routes need the data
+to support that view now, but the view itself is not the next payoff. The
+ordinary channel shelf, source selection, direct manipulation, and
+destination-first inspection come first. Do not turn the modulation vertical
+slice into a six-month graph-editor project.
 
 **Everything else in `ROADMAP.md`.** Still true, still ordered, still not
 now.

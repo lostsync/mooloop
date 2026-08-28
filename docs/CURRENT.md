@@ -344,12 +344,15 @@ boundary.
   ring primitive with cubic-Hermite fractional reads and crossfaded head
   jumps. The delay effect is its first consumer; the retained-audio buffer
   device is meant to be the second rather than growing its own ring.
-- `ParamAddr` addresses any effect parameter, and both the modulator rack
-  and clip automation resolve through it. They compose rather than compete:
-  a lane supplies the base a knob would otherwise supply, and the matrix adds
-  its offsets on top, so an LFO wobbles around a drawn curve. Both resolve at
-  the 32-frame control rate into the destination slot's existing event list,
-  and no effect needed a change to receive them.
+- `ParamAddr` addresses parameters owned by a source, effect slot, modulator
+  slot, or strip within its channel-or-bus scope. The per-channel `ModRack` and clip
+  automation resolve through it. They compose rather than compete: a lane
+  supplies the base a knob would otherwise supply, and the matrix adds its
+  offsets on top, so an LFO wobbles around a drawn curve. Both resolve at the
+  32-frame control rate into the destination's existing event path, and no
+  effect needed a change to receive them. The current runtime source is an
+  LFO; the channel-level modulation-shelf UI and broader source taxonomy are
+  still planned rather than shipped.
 - The retained-audio buffer is descriptor-addressed: `Offset` places the read
   head behind the writer in beats and `Crossfade` sets the declick length.
   Offset is position mode, the same as a hand scrub — the head chases the

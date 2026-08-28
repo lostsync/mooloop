@@ -26,7 +26,7 @@ test.
 | Acid Line      | Acid model, Accent, legato slide, fast filter decay               |
 | 101 Pluck      | Fast filter decay, keytrack, focused mono response                |
 | Porta Lead     | Held-note stack, priority, both glide modes, legato env trigger   |
-| Sequence Bleep | S&H LFO, PWM, and the LFO still being useful in a simple architecture |
+| Sequence Bleep | S&H channel LFO, PWM, and a simple source-to-destination route |
 
 Each patch has to be reachable *quickly* — a few knob moves from the default
 saw, per the definition of done. If a patch needs fifteen precise settings to

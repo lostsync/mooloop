@@ -59,6 +59,34 @@ Queue overflow must be observable to the sender; silent divergence between
 the visible project and audible engine is not an acceptable steady-state
 contract.
 
+## Control Graph Within A Channel
+
+The normal audio topology of a channel remains an ordered source-and-insert
+rack. Its modulation topology is explicit channel state: a `ModRack` owns
+control sources and routes, while sources, inserts, and the strip own their
+parameters. A device must not hold a private copy of the channel's LFOs or
+know which external control signals currently target it.
+
+Each route joins a stable source or outlet reference to a stable `ParamAddr`
+destination through a bounded transform (depth, polarity, and later shaping).
+Source metadata declares value semantics, control rate, and latency; parameter
+metadata declares range, curve, and modulation eligibility. The current
+runtime may use fixed arrays and a small source taxonomy to retain predictable
+work, but those implementation capacities are not the persistent or product
+meaning of "four modulation slots."
+
+At each declared control tick, the executor evaluates a source, applies each
+route transform, adds offsets to the destination's base value, and puts the
+resolved natural-unit value on the existing sample-timed parameter path. A
+device outlet consumed across a device boundary is read on the following block
+unless a future contract explicitly compiles a different declared latency.
+Display telemetry is never a control input.
+
+This is graph-capable data, not a second audio graph or a mandate to build a
+graph editor. A later zoomed-out view may visualize the same routes and the
+ordered audio chain. It must edit the same prepared channel state and preserve
+the rack as the normal interaction.
+
 ## Graph Compiler
 
 The project mixer is editable data, not an execution plan. Compilation turns

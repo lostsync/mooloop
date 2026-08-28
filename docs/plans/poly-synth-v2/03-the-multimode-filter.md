@@ -53,14 +53,15 @@ acceptable substitution; the requirement is the response, not the topology.
 Note that the Mono plan's step 04 builds a nonlinear ladder — **do not reuse
 it here.** Poly's LP24 is clean by design; that difference is the point.
 
-### 3. Stability under per-sample modulation
+### 3. Stability under changing cutoff
 
-This is the real risk. Cutoff already moves every sample from the filter
-envelope, the LFO, and now keytrack and drift. `Svf` is topology-preserving
+This is the real risk. Cutoff moves every sample from the per-voice filter
+envelope and keytracking/drift, while channel modulation changes the
+descriptor value at its declared control rate. `Svf` is topology-preserving
 specifically so that it stays well behaved when cutoff moves per sample (see
 the comment at `crates/mooloop-dsp/src/filter.rs:19`) — a cascade of two must
 keep that property, and the HP output in particular is the one that blows up
-if resonance and cutoff modulation are handled carelessly.
+if resonance and cutoff changes are handled carelessly.
 
 Switching mode mid-note must not click. Do not reset stage state on a live
 switch; let the 5 ms parameter smoothing cover it, and cross-fade only if a
@@ -102,7 +103,7 @@ four shapes and extend it if not.
 - LP12 and LP24 at the same Cutoff knob position have comparable corner
   frequencies.
 - All four stay finite and bounded at maximum resonance with the cutoff swept
-  every sample by envelope and LFO together. Extend
+  by the per-voice envelope and a rapid channel LFO route. Extend
   `resonant_filter_and_drive_stay_bounded` to run per mode.
 - Switching mode on a sounding voice produces no step. Reuse the `max_step`
   helper from `parameter_changes_mid_note_do_not_step`.

@@ -125,20 +125,18 @@ held entries that resurrect the voice on the next NoteOff retarget. Same for
 
 ### 6. UI
 
-The MOD page becomes **MOD/PERF**. Rename the page button and add a
-Performance section beside the LFO block
-(`crates/mooloop-ui/ui/mono-device.slint:186`). It holds Glide (moved off the
-AMP/FILTER knob row), Glide Mode, Env Trigger, Priority, and — once step 06
-lands — Accent.
+The MOD page becomes **PERF**. It holds Glide (moved off the AMP/FILTER knob
+row), Glide Mode, Env Trigger, Priority, and — once step 06 lands — Accent.
+The common device frame's `MOD` affordance opens the channel modulation shelf;
+it is not a column on this source face.
 
-Three `SelectorBank`s, matching the LFO wave selector: `ALWAYS`/`LEGATO`,
-`RETRIG`/`LEGATO`, `LAST`/`LOW`/`HIGH`. The page currently has a fixed 214px
-LFO column and a stretchy knob row; the Performance section is a third column
-or a second row depending on what fits — the LFO knob row is five knobs at
-default width, so a second row is more likely.
+Three `SelectorBank`s provide `ALWAYS`/`LEGATO`, `RETRIG`/`LEGATO`, and
+`LAST`/`LOW`/`HIGH`. The page currently has a fixed 214px LFO column and a
+stretchy knob row; remove the LFO column and let Performance use the complete
+intentional module area rather than preserving a blank placeholder.
 
-Poly's face keeps its MOD page name and its Glide knob where it is. These are
-now different files in behaviour as well as content.
+Poly's face keeps no device-local MOD page either. These are now different
+files in behaviour as well as content.
 
 ## Done when
 

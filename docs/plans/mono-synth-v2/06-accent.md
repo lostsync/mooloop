@@ -66,7 +66,7 @@ Mono only. `unit(SYNTH_PARAM_ACCENT, "Accent", 0.0)` in `MONO_DESCRIPTORS`.
 
 ### 4. UI
 
-One knob in the Performance section of MOD/PERF, beside Glide / Glide Mode /
+One knob in the Performance section of PERF, beside Glide / Glide Mode /
 Env Trigger / Priority from step 03. `Theme.warning` fill, matching Drive and
 the other character controls. Tooltip is the value only.
 

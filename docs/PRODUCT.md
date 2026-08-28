@@ -75,6 +75,22 @@ This is the proposed differentiator. It is still a product hypothesis and must
 pass the insert-device spike in `BUFFER_ENGINE.md` before the buffer contract
 is treated as permanent.
 
+### Channel-Owned Modulation
+
+A channel also owns a modulation rack and its routes. That control system is
+not a property of the source, an insert, or the mixer strip even though it can
+address parameters in all of them. Devices declare their addressable
+parameters; the channel supplies bounded control signals and connects them to
+those parameters. One channel source can therefore affect its source, several
+inserts, and strip controls at once without being visually or architecturally
+attached to one device.
+
+For a musician, a modulation source is simply something that produces a
+bounded control signal over time. LFOs and step sequences are the first
+examples, not the definition. Note-derived values, macros, named device
+outlets, and later Buffer-derived signals may use the same routing language
+when they earn a musical use case.
+
 ### Sample-Centric, Not Sample-Only
 
 The sampler is a first-class instrument, not a file player. It needs the voice,
@@ -121,6 +137,8 @@ Mooloop should include:
 - A capable sampler and a small set of authored synthesis sources.
 - Insertable retained-audio buffer devices with sequencable capture and playback.
 - Parameter automation, channel inserts, sends, groups, and useful routing.
+- A channel-owned modulation rack with direct manipulation on ordinary device
+  controls, rather than a separate patching mode for routine use.
 - Project and kit persistence with ordinary audio assets.
 - Offline WAV rendering and JACK output. Compressed export can be added through
   a proven encoder after WAV rendering is correct.
@@ -134,6 +152,8 @@ Mooloop is not trying to be:
 - A clone of FruityLoops, Reason, Maschine, Bitwig, or any one reference UI.
 - A plugin host before its own instrument and sequencing model is coherent.
 - A modular patching environment as broad as Max/MSP.
+- A mandatory graph editor or an exposed patch-cord view for ordinary
+  modulation work.
 - A collection of unrelated effects and synths added to satisfy a checklist.
 - A machine that calls random timing jitter "humanization."
 
@@ -164,6 +184,12 @@ These are firm enough to build against:
   routable, insertable strip rather than fixed banks of unrelated objects.
 - Buffer capture position is determined by where its device is inserted; it
   does not require a separate fixed channel tap point.
+- **Rack semantics, graph-capable model.** Mooloop normally presents a channel
+  as an ordered source-and-insert rack. Its modulation sources, typed
+  destinations, and explicit routes are nevertheless represented clearly
+  enough that a future zoomed-out graph view can render and edit the same
+  state. That view is deferred; it must not dictate the initial rack UI or
+  require an engine rewrite when it is eventually added.
 
 ## Open Product Questions
 

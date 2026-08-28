@@ -63,8 +63,10 @@ Two implementation notes that are not negotiable:
   sustained chord sit at different volumes, which reads as a bug. Vary
   attack/decay/release only.
 - Cutoff drift is an octave offset added to the same `octaves` expression that
-  the filter envelope, LFO, and keytrack already feed — not a separate filter
-  coefficient path.
+  the filter envelope and keytrack already feed — not a separate filter
+  coefficient path. Channel modulation reaches the addressable filter
+  parameters through the descriptor event path, not through a Poly-owned LFO
+  term in each voice.
 
 Envelope-time drift means `Adsr::configure` gets per-voice values, so
 `apply_params_to_voices` (`polysynth.rs:147`) computes them per slot rather

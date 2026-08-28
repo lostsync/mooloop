@@ -18,12 +18,15 @@ either device is written against a structure that is quietly lying.
 
 Check each and record the verdict here:
 
-- `OscParams`, `LfoParams`, `OscWave`, `LfoWave` — **shared, correct.** Both
-  instruments genuinely have the same three-oscillator front end and the same
-  one LFO. Do not split these.
+- `OscParams`, `OscWave` — **shared, correct.** Both instruments genuinely
+  have the same three-oscillator front end. The present device-local
+  `LfoParams`/`LfoWave` state is migrated to the channel `ModRack`; it must
+  not remain a shared synth feature.
 - `Adsr`, `Osc`, `Svf`, `Smoothed`, `Lfo`, `pan_gains`, event types —
-  **shared, correct.** Primitives are the whole point.
-- `osc_descriptors()` and the LFO descriptor block — **shared, correct.**
+  **shared, correct.** `Lfo` remains a shared primitive for channel modulator
+  sources, not synth-owned state. Primitives are the whole point.
+- `osc_descriptors()` and genuinely shared source-descriptor entries —
+  **shared, correct.** Modulator descriptors belong to `ModRack` instead.
 - The ADSR/cutoff/resonance/env-amount descriptor entries — shared today.
   Confirm the ranges and defaults are still right for both, since Mono's are
   now voiced against nonlinear filters.
@@ -52,9 +55,10 @@ about to be genuinely different — but do make sure neither has gone stale.
 
 `mono-device.slint` and `poly-device.slint` share `OscillatorDeviceStrip` by
 copy, not by import — the same component is defined in both files. Extract it
-to `controls.slint` or a shared device module. The AMP/FILTER and MOD pages
-are now genuinely different between the two faces and should stay separate
-files.
+  to `controls.slint` or a shared device module. The AMP/FILTER and
+  performance pages are now genuinely different between the two faces and
+  should stay separate files; both expose channel modulation through the
+  common frame.
 
 Confirm no docs copy, tooltip, or status-bar string claims Moog, Roland,
 SH-101, or TB-303 emulation, per 01.

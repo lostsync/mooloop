@@ -189,6 +189,10 @@ routing, groups, sends, and resampling-source selection.
 
 ## Later, Not Scheduled
 
+- A modulation matrix or zoomed-out control-graph editor. The underlying
+  source, destination, route, rate, and latency model must remain capable of
+  this view, but the normal ordered rack and direct-manipulation modulation UI
+  come first.
 - MIDI input/output and controller mapping.
 - Plugin hosting.
 - Multiple time signatures and tempo maps.

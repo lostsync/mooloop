@@ -62,8 +62,9 @@ Three things it has to get right, in priority order:
    in, and voice it by ear on the Round Bass patch (step 08).
 
 Cutoff mapping stays `hz_from_normalized(cutoff, max_hz)` so the Cutoff knob
-means the same thing across models, and the envelope/LFO/keytrack octave
-offsets from step 02 apply unchanged.
+means the same thing across models, and the envelope/keytrack octave offsets
+from step 02 apply unchanged. Channel modulation reaches Cutoff through its
+descriptor path rather than a Mono-owned LFO term.
 
 Put it in `crates/mooloop-dsp/src/filter.rs` next to `Svf`, not in
 `monosynth.rs` — it is a primitive, and `filter.rs` is where the next person

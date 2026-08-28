@@ -36,21 +36,20 @@ finding, not the patch's fault.
 If step 06 was skipped, Sync Stab is deferred with it — note that here rather
 than substituting a different patch.
 
-## The Expression section
+## Velocity as a channel source
 
-Poly's control surface (01) lists a MOD page **Expression** section:
-Velocity → Filter, and Velocity → Amp amount "if needed". Nothing earlier in
-this plan implements it, because whether it is needed is a listening question
-and Brass is the patch that answers it.
+Poly's control surface has no device-local MOD page. Velocity continues to
+scale amplitude natively through `velocity_amp` (`polysynth.rs:234`). If Brass
+needs velocity to open the filter to be playable, publish the generator's
+reduced velocity as a named channel outlet and route it to Cutoff through the
+channel modulation shelf. Its trim, smoothing, and depth then use the ordinary
+source-to-`ParamAddr` contract rather than adding a Poly-only parameter ID or
+expression panel.
 
-Velocity currently scales amplitude only, through `velocity_amp`
-(`polysynth.rs:234`). If Brass needs velocity to open the filter to be
-playable — and brass patches usually do — add Velocity → Filter as a 0-1 depth
-at **ID 46** and put it on the MOD page. This is Poly's counterpart to Mono's
-Accent and it is deliberately the milder, expression-shaped version: no drive
-push, no per-note character change, just filter depth.
-
-If Brass plays well without it, do not add it. Record which, and why, here.
+This is the milder, expression-shaped counterpart to Mono's native Accent: no
+drive push, no per-note character change, just a channel control signal
+derived from velocity. If Brass plays well without it, do not publish the
+outlet. Record which, and why, here.
 
 ## Checks against the whole instrument
 

@@ -164,9 +164,11 @@ resizing the ring reallocates off-thread.
 
 Still open here:
 
-- **The modulator source chip.** The plan's gesture is unchanged: no patch
-  cords, a labeled source chip on each modulator, click it and assignable
-  knobs light up, drag one to set depth.
+- **The modulation shelf and source chip.** The plan's gesture is unchanged:
+  no patch cords. The channel-level shelf presents source chips and an
+  add-source action; selecting one lights assignable knobs, and dragging one
+  sets depth. The source is not a control owned by the device it happens to
+  modulate.
 - **Drawing the modulation arc on a knob.** The engine keeps base and offset
   separate precisely so the UI can draw both, and nothing draws it yet.
 - **Multiple lanes at once.** Storage holds up to eight per channel-pattern
@@ -212,6 +214,9 @@ proves the general path, not before.
   install/reclaim plumbing. No modulator kind allocates, so that machinery
   buys nothing and would put a `Box` drop on the path of every rack edit.
   Reverse it if a future modulator kind needs heap state.
+- **The fixed runtime rack is not four visible product slots.** The current
+  bounded array is a realtime capacity; the UI presents a collection of
+  channel sources and must not make four empty bays the user model.
 
 ## Gotchas found the hard way
 

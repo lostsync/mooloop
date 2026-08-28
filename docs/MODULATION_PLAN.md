@@ -19,7 +19,8 @@ These decisions are made. Implement them; don't re-litigate them.
 
 ## Parameter descriptors
 
-Every effect kind publishes a static table of `ParamDescriptor`:
+Every addressable device kind and strip publishes a static table of
+`ParamDescriptor`:
 
 ```rust
 pub struct ParamDescriptor {
@@ -47,38 +48,64 @@ ignorant of curves; the engine converts. This keeps `Event::ParamValue`
 readable in tests and means a descriptor change can't silently reinterpret an
 effect's internal state.
 
-### Deferred: `ParamAddr`
+### Stable destinations: `ParamAddr`
 
-An earlier sketch of this work introduced a general
-`ParamAddr { channel, target, param }` type. It is **not** being built yet.
-Today only effect slots consume `Event::ParamValue`, and
-`EngineCommand::SetEffectParam { channel, slot, id, value }` already *is* that
-address. A general address type with exactly one inhabited variant is the
-speculative generality `EFFECTS_PLAN.md` warns against.
+`ParamAddr` is the stable destination address used by automation and
+modulation. It combines a channel-or-bus scope, an owning surface (source,
+effect slot, modulator slot, or strip), and that owner's stable descriptor id.
+It is persisted and must never be retyped merely because a new routing surface
+is added.
 
-Introduce it in the modulation-rack pass, when modulators and strip parameters
-give it a second and third target. The descriptor table is the part with value
-now, and it is forward-compatible with the address type.
+This is deliberately a destination address, not a claim that every parameter
+is already a legal modulation target. Descriptors declare range and curve;
+destination metadata declares whether modulation is meaningful and how its
+control signal is interpreted. A source, effect, Buffer, or strip should not
+need to know which LFOs or other signals are currently connected to it.
 
 ## Modulation architecture
 
 ### Modulator rack
 
-Each channel gets a small fixed rack of modulator slots (4), each holding one
-of `Lfo | StepSeq | EnvFollower | SampleAndHold | Macro`. This reuses the
-install/reclaim/reorder plumbing already built for the effect chain — a
-modulator is a node with no audio output, not a new subsystem.
+Each channel owns one modulation rack and routing matrix. Neither belongs to
+an individual source or insert. A device supplies parameters and may publish
+named control outlets; the channel owns the source collection that can use
+those outlets and the routes that terminate in devices or the strip.
+
+The realtime implementation may use a fixed, bounded array (currently four
+local source positions) because it makes the callback predictable. That is an
+engine protocol boundary, not the product abstraction: the UI presents a
+collection of existing sources plus an add action, never four permanent empty
+bays. Increasing capacity or admitting a new source type must not change the
+persisted route vocabulary or the ordinary interaction.
 
 Per-channel, not project-global. It matches the rack UI and keeps a channel a
 self-contained instrument. Project-global modulators can be added later as a
 distinct source kind; nothing here blocks them.
 
+A source is something that produces a normalized bounded control signal over
+time, conventionally `-1..1` before route transformation. The initial source
+is an LFO. The taxonomy is intentionally broader: step and random generators,
+macros, note-derived values, envelopes, named device outlets, and eventually
+external control or audio-derived signals can all participate if they declare
+their timing and value semantics. Do not make a type or UI that assumes a
+modulator is only a little waveform generator.
+
 ### Mod matrix
 
-Entries are `(source_slot, destination, depth, polarity)`. The engine ticks the
-modulator rack *before* the channel's effect chain, evaluates the matrix, and
-emits `Event::ParamValue` into the destination slot's existing per-slot
-`EventList`.
+Each explicit route is `(source_ref, ParamAddr, transform)`, where the
+transform includes depth, polarity, and any later bounded shaping or offset.
+Source references are stable source or outlet identities, not merely a
+hard-coded slot number. Source metadata declares its label, signal shape
+(bipolar, unipolar, gate, or stepped), control rate, and latency; destination
+metadata declares that the parameter is legal to modulate.
+
+The engine evaluates sources before their destinations at the declared control
+rate, resolves the routes, and emits `Event::ParamValue` into the
+destination's existing event path. The conceptual path is:
+
+```text
+source -> normalized control signal -> route transform -> ParamAddr
+```
 
 **No effect changes to support modulation. Ever.** Effects already split their
 block at `ParamValue` offsets. That contract is the whole design; keep it.
@@ -104,6 +131,20 @@ This means no audio-rate FM of a filter cutoff. That is a deliberate limit.
 Stepped, sequenced modulation is stylistically correct for the music this
 instrument targets, and audio-rate modulation is a much larger engine change
 that can come later if it earns its way in.
+
+### Rack semantics, graph-capable model
+
+The ordered device rack remains the normal presentation and audio workflow.
+The modulation model is graph-capable only in the useful, narrow sense that
+sources, destinations, routes, timing, and latency are explicit data rather
+than hidden device-local behavior. A future zoomed-out graph view can
+visualize and edit that same data alongside the audio chain; it must not
+introduce a parallel modulation engine or redefine the rack model.
+
+Do not build that graph editor in this pass. Routine modulation is a
+source-selection and direct-manipulation interaction, not a matrix or a field
+of patch cords. A full matrix may later serve inspection and expert editing,
+but it is not the ordinary workflow.
 
 ## Note-triggered effects
 
@@ -132,8 +173,9 @@ Generators also publish named, channel-rate outlets. This is how note-derived
 data reaches an effect without pretending a shared channel effect can own
 per-voice state: a generator reduces its voices to one musical control signal,
 then a downstream effect consumes ordinary CV. A sampler or synth may, for
-example, assign velocity to an outlet; an effect adds a `DeviceIn` modulator,
-chooses that named outlet, and supplies trim and smoothing.
+example, assign velocity to an outlet; the channel adds a `DeviceIn` source,
+chooses that named outlet, and supplies trim and smoothing for routes to any
+legal destination.
 
 An outlet address is `(channel, outlet index)` plus its user-facing name.
 The first reduction is last-note; a later explicit outlet mode can add highest
@@ -148,9 +190,16 @@ not add a same-block exception. These outlets remain distinct from the display
 telemetry bank below, which is observation-only and has no audio timing
 contract.
 
-**Across channels: deferred, by decision.** Not in this pass. `ParamAddr` will
-carry `channel` from the day it is introduced so that enabling it later is a
-routing change rather than a retyping of every engine command.
+Buffer outlets follow the same rule if and when the Buffer earns them. Useful
+candidates include normalized playhead position, distance from the write head,
+window or loop phase, amplitude, transient state, and slice state. They are
+musical control signals only when declared with a rate and latency; the UI
+must never infer them by sampling a waveform display or telemetry snapshot.
+
+**Across channels: deferred, by decision.** Not in this pass. `ParamAddr`
+already carries a channel-or-bus scope, so enabling cross-channel control
+later is a routing-policy change rather than a retyping of every engine
+command.
 
 **True audio sidechain: still deferred.** The mixer supplied the first
 compiled audio graph, but not the complete sidechain contract. A sidechain is
@@ -189,9 +238,31 @@ give it a declared rate, latency, and destination semantics. This preserves a
 single display path that any device can use without preempting the future
 typed control graph.
 
-**UI:** no patch cords. The assignment gesture is a labeled source chip on
-each modulator: click it, assignable knobs light up, drag one to set depth.
-Inlets and outlets exist in the data model without being drawn as wires.
+## Modulation UI
+
+The channel has one collapsed-by-default modulation shelf beneath its device
+rack. It lists the channel's existing source chips and an add-source action;
+it is not a page inside Mono, Poly, Buffer, or an effect. The common device
+frame exposes the shelf where users are already reading signal order.
+
+Every device header shows a compact `MOD n` summary for the number of routes
+that terminate in that device, with optional source pills when that is clearer
+than a count. Activating the summary opens an inspector filtered to that
+device; it does not move or duplicate the modulation sources. The inspector
+is destination-first, for example `LFO 1 -> Cutoff +28%`, and is where a route
+can be reviewed or removed without opening a general matrix.
+
+Selecting a source chip arms it. Every legal ordinary control becomes visibly
+assignable; dragging that control establishes or adjusts the selected source's
+route depth. The control retains its base value. A modulation marker or
+overlay shows the resulting excursion, and a parameter inspector can list its
+base value and all incoming routes. Deselecting the source returns ordinary
+control manipulation to normal.
+
+There are no patch cords in this workflow. Inlets and outlets are explicit in
+the model, but their routine presentation is source selection, destination
+markers, overlays, and inspectors. The future matrix/graph view is an expert
+view of the same routes, not a prerequisite for using them.
 
 ## Effect build order
 
