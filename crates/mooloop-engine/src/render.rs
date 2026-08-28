@@ -7,7 +7,7 @@ use mooloop_core::{
     compile_bus_graph, AutomationLane, ChannelSource, GeneratorParams, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
     EngineCommand, ModRack, MonoSynthParams, ParamAddr, ParamOwner, PolySynthParams, Project,
     SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
-    MAX_MODULATORS_PER_CHANNEL,
+    MAX_MODULATORS_PER_CHANNEL, MAX_LINEAR_GAIN,
 };
 #[cfg(test)]
 use mooloop_dsp::build_effect;
@@ -54,11 +54,6 @@ const MAX_PENDING_EFFECT_PARAMS: usize = 8;
 /// advancing the source more than once.
 const MAX_CONTROL_TICKS_PER_BLOCK: usize = MAX_BLOCK_SIZE / CONTROL_RATE_FRAMES;
 type ControlOutputs = [[f32; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK];
-
-/// Maximum linear gain of a container input/output trim: +12 dB. The UI
-/// works in dB and clamps there; this bounds what a hand-edited song file or
-/// a stale command can do.
-const MAX_TRIM_GAIN: f32 = 4.0;
 
 fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
     match kind {
@@ -541,8 +536,8 @@ impl EffectChain {
             self.base_params[slot] = Some(effect.params);
             self.bypassed[slot] = effect.bypassed;
             self.wet_dry[slot] = effect.wet_dry.clamp(0.0, 1.0);
-            self.input_trim[slot] = effect.input_trim.clamp(0.0, MAX_TRIM_GAIN);
-            self.output_trim[slot] = effect.output_trim.clamp(0.0, MAX_TRIM_GAIN);
+            self.input_trim[slot] = effect.input_trim.clamp(0.0, MAX_LINEAR_GAIN);
+            self.output_trim[slot] = effect.output_trim.clamp(0.0, MAX_LINEAR_GAIN);
         }
     }
 
@@ -657,7 +652,7 @@ impl OutputStage {
     fn set_volume(&mut self, volume: f32) {
         // Channels and buses gain up to +12 dB, same headroom as the effect
         // container's trims.
-        self.gain = volume.clamp(0.0, MAX_TRIM_GAIN);
+        self.gain = volume.clamp(0.0, MAX_LINEAR_GAIN);
     }
 
     fn set_pan(&mut self, pan: f32) {
@@ -1506,7 +1501,7 @@ impl RenderState {
             } => {
                 if let Some(chain) = self.chain_mut(target) {
                     if let Some(value) = chain.input_trim.get_mut(slot as usize) {
-                        *value = input_trim.clamp(0.0, MAX_TRIM_GAIN);
+                        *value = input_trim.clamp(0.0, MAX_LINEAR_GAIN);
                     }
                 }
             }
@@ -1517,7 +1512,7 @@ impl RenderState {
             } => {
                 if let Some(chain) = self.chain_mut(target) {
                     if let Some(value) = chain.output_trim.get_mut(slot as usize) {
-                        *value = output_trim.clamp(0.0, MAX_TRIM_GAIN);
+                        *value = output_trim.clamp(0.0, MAX_LINEAR_GAIN);
                     }
                 }
             }
@@ -1904,9 +1899,9 @@ mod tests {
     #[test]
     fn channel_output_controls_are_bounded() {
         let mut strip = test_strip();
-        strip.output.set_volume(MAX_TRIM_GAIN + 1.0);
+        strip.output.set_volume(MAX_LINEAR_GAIN + 1.0);
         strip.output.set_pan(-2.0);
-        assert_eq!(strip.output.gain, MAX_TRIM_GAIN);
+        assert_eq!(strip.output.gain, MAX_LINEAR_GAIN);
         assert_eq!(strip.output.pan, -1.0);
         strip.output.set_volume(-1.0);
         strip.output.set_pan(2.0);

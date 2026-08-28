@@ -1,5 +1,6 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
 export { DisplayPrefs } from "theme.slint";
 import {
     AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
@@ -1519,7 +1520,7 @@ export component MainWindow inherits Window {
                             TrimKnob {
                                 label: "Volume";
                                 value: row.volume-db;
-                                changed(v) => { root.channel-volume-changed(ch, v <= -59.9 ? 0.0 : pow(10, v / 20)); }
+                                changed(v) => { root.channel-volume-changed(ch, GainMath.db-to-linear(v)); }
                             }
 
                             MiniKnob {
@@ -2168,7 +2169,7 @@ export component MainWindow inherits Window {
                                                 output-trim-enabled: !root.editing-bus;
                                                 output-trim: root.selected-channel-volume-db;
                                                 output-trim-changed(v) => {
-                                                    root.channel-volume-changed(root.selected-channel, v <= -59.9 ? 0.0 : pow(10, v / 20));
+                                                    root.channel-volume-changed(root.selected-channel, GainMath.db-to-linear(v));
                                                 }
                                                 effect-kind-selected(kind) => { root.add-effect-clicked(kind, 0); }
 

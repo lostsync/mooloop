@@ -1,0 +1,60 @@
+// The Slint half of the shared gain vocabulary. `mooloop-core/src/gain.rs`
+// is the authority: these functions mirror it, and an agreement test in
+// `crates/mooloop-ui/tests/gain_slint_agreement.rs` fails when the fader
+// breakpoint lists below drift from `gain.rs::FADER_BREAKPOINTS`.
+//
+// Slint has no infinity literal: -99999.0 stands in for -inf dB and
+// `format-db` spells it "-inf" like any other floor value.
+export global GainMath {
+    // The mixer fader taper, (travel, dB) pairs, linear in dB between
+    // breakpoints. Unity at three-quarter travel, +6 dB at full throw.
+    property <[float]> fader-travel: [1.0, 0.75, 0.5, 0.3, 0.15, 0.05, 0.0];
+    property <[float]> fader-db: [6.0, 0.0, -12.0, -24.0, -40.0, -60.0, -99999.0];
+
+    // At or below -60 dB is silence, not residual gain.
+    public pure function db-to-linear(db: float) -> float {
+        return db <= -60.0 ? 0.0 : pow(10, db / 20);
+    }
+
+    public pure function linear-to-db(linear: float) -> float {
+        return linear <= 0.0 ? -60.0 : max(20 * log(linear, 10), -60.0);
+    }
+
+    public pure function fader-position-to-db(position: float) -> float {
+        if (position <= 0.0) { return -99999.0; }
+        if (position >= 1.0) { return 6.0; }
+        if (position <= 0.05) { return -60.0; }
+        if (position <= 0.15) { return between(position, 0.15, -40.0, 0.05, -60.0); }
+        if (position <= 0.3) { return between(position, 0.3, -24.0, 0.15, -40.0); }
+        if (position <= 0.5) { return between(position, 0.5, -12.0, 0.3, -24.0); }
+        if (position <= 0.75) { return between(position, 0.75, 0.0, 0.5, -12.0); }
+        return between(position, 1.0, 6.0, 0.75, 0.0);
+    }
+
+    public pure function fader-db-to-position(db: float) -> float {
+        if (db <= -99998.0) { return 0.0; }
+        if (db >= 6.0) { return 1.0; }
+        if (db <= -60.0) { return 0.05; }
+        if (db <= -40.0) { return inverse(db, 0.15, -40.0, 0.05, -60.0); }
+        if (db <= -24.0) { return inverse(db, 0.3, -24.0, 0.15, -40.0); }
+        if (db <= -12.0) { return inverse(db, 0.5, -12.0, 0.3, -24.0); }
+        if (db <= 0.0) { return inverse(db, 0.75, 0.0, 0.5, -12.0); }
+        return inverse(db, 1.0, 6.0, 0.75, 0.0);
+    }
+
+    // Linear interpolation in dB between a segment's endpoints.
+    pure function between(p: float, top-travel: float, top-db: float, bottom-travel: float, bottom-db: float) -> float {
+        return bottom-db + (p - bottom-travel) / (top-travel - bottom-travel) * (top-db - bottom-db);
+    }
+
+    pure function inverse(db: float, top-travel: float, top-db: float, bottom-travel: float, bottom-db: float) -> float {
+        return bottom-travel + (db - bottom-db) / (top-db - bottom-db) * (top-travel - bottom-travel);
+    }
+
+    // The one dB readout format: "-inf", "±0.0 dB", "+3.0 dB", "-12.4 dB".
+    public pure function format-db(db: float) -> string {
+        if (db <= -59.95) { return "-inf"; }
+        if (abs(db) < 0.05) { return "±0.0 dB"; }
+        return (db > 0 ? "+" : "") + (round(db * 10) / 10) + " dB";
+    }
+}

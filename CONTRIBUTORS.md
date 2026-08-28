@@ -114,7 +114,10 @@ work session you can recall being part of, and don't stress over precision.
   picker through the pump, VS Code-style tree with expand/collapse,
   wav-only listing, and right-click location removal. Started the
   gain-structure plan: characterization tests pinning today's source
-  peaks, summing, reverb wet-path gain, and fader travel identity.
+  peaks, summing, reverb wet-path gain, and fader travel identity, then
+  the shared gain module (`mooloop-core/src/gain.rs` + `GainMath` in
+  `gain.slint`) with the fader taper and its cross-boundary agreement
+  test.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21

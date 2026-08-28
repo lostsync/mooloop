@@ -14,7 +14,8 @@ mod settings;
 slint::include_modules!();
 
 use history::{Entry as HistoryEntry, History};
-use meter::{db_to_linear, linear_to_db, MeterBallistics, MIN_DB as METER_FLOOR_DB};
+use mooloop_core::gain::{db_to_linear, linear_to_db, MIN_DB as METER_FLOOR_DB};
+use meter::MeterBallistics;
 use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, AutomationLane,
     AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup, ChannelSource,

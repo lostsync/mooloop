@@ -8,6 +8,7 @@ pub mod bridge;
 pub mod buffer;
 pub mod channel;
 pub mod effect;
+pub mod gain;
 pub mod generator;
 pub mod midi;
 pub mod modulation;
@@ -46,9 +47,8 @@ pub use generator::{
     SYNTH_PARAM_POLYPHONY, SYNTH_PARAM_RELEASE, SYNTH_PARAM_SPREAD, SYNTH_PARAM_SUSTAIN,
     synth_osc_param,
 };
-pub use channel::{
-    Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_PATTERNS,
-};
+pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS};
+pub use gain::{db_to_linear, format_db, linear_to_db, MAX_DB, MAX_LINEAR_GAIN, MIN_DB};
 pub use effect::{
     BitcrushParams, BufferParams, CompressorParams, DelayMode, DelayParams, DelayTimeDivision, DriveCurve,
     DriveParams, EffectKind, EffectParams, EffectSlotState, EqBand, EqBandKind, EqParams,

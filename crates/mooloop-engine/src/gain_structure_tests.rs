@@ -10,7 +10,7 @@
 
 use crate::render::RenderState;
 use mooloop_core::{
-    DeviceKind, DrumMode, DrumSynthParams, EffectKind, EffectParams, EffectSlotState, MonoSynthParams,
+    DeviceKind, DrumMode, EffectKind, EffectParams, EffectSlotState, MonoSynthParams,
     NoteEvent, OscParams, PlateParams, PolySynthParams, Project, ProjectChannel, ReverbParams,
     SampleReference,
 };

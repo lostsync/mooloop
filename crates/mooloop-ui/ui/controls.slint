@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
 
 export enum ValueScale { linear, logarithmic }
 export enum AudioOrientation { horizontal, vertical }
@@ -984,9 +985,7 @@ export component TrimKnob inherits MiniKnob {
     minimum: -60;
     maximum: 12;
     default-value: 0;
-    value-text: root.value <= root.minimum + 0.05 ? "-∞"
-        : abs(root.value) < 0.05 ? "±0.0 dB"
-        : (root.value > 0 ? "+" : "") + (round(root.value * 10) / 10) + " dB";
+    value-text: GainMath.format-db(root.value);
 }
 
 // Small round status light. Not interactive - use it for activity, sync, and
