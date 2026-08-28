@@ -499,7 +499,9 @@ mod tests {
         let late_peak = bus.l[24000..]
             .iter()
             .fold(0.0_f32, |peak, s| peak.max(s.abs()));
-        assert!(first_peak > 0.5);
+        // Calibrated: the default kick peaks near the device's output
+        // reference, not near full scale.
+        assert!(first_peak > OUTPUT_REFERENCE * 0.6);
         assert!(late_peak < first_peak * 0.2);
     }
 

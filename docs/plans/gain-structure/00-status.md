@@ -122,3 +122,32 @@ step 02):
 
 Adam: this is the step to **listen** to — defaults are now 12 dB quieter
 and the test suite can only confirm the numbers, not the musicality.
+
+## Step 06 — oscillator summing (done, same branch)
+
+- **Per-osc unity reference decided and documented** in
+  `docs/GAIN_STRUCTURE.md`: an oscillator's 0 dB knob position *is* the
+  device reference (the contract's preferred option). Verified against
+  the three-oscillator case in step 05: one at full **-12.0**, three at
+  full **-2.5** on both synths. No normalization by enabled-oscillator
+  count; enabling osc 2 never moves osc 1.
+- **Drive compensated**: `apply_drive` was peak-normalizing
+  (`1/tanh(G)`), so a -12 dBFS oscillator got up to +24 dB louder as
+  drive rose. It now normalizes by the shaper's own response at the
+  operating level (`tanh(R·G)` with R = 0.251): a reference-level signal
+  keeps its peak exactly at any drive setting, harmonics grow instead,
+  and a full-scale peak saturates to the reference rather than to
+  clipping. The sampler's inline copy of the old formula was replaced by
+  the shared function. Drive defaults are 0 (bypass) everywhere, so
+  nothing at rest changed — verified by the step-05 measurements
+  re-running unchanged.
+- **Device output trim**: already exists — the source `DeviceFrame` rail
+  opts in (`output-trim-enabled: !editing-bus`) and binds it to channel
+  volume, so every generator face has the knob. No code needed; noted
+  here so the plan's question is answered.
+- Tests: the plan's drive-compensation test added
+  (`drive_changes_character_not_level_at_the_reference` — peak fixed,
+  harmonic share grows); stale absolute-amplitude thresholds updated
+  (`kick_decays_after_the_hit`, `drive_saturates_without_boosting_level`
+  — the latter replaces a test that asserted the old +16x boost).
+  mooloop-dsp 202, mooloop-engine 76+34, all green.

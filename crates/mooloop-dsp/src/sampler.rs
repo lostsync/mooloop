@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
+use crate::filter::apply_drive;
 use crate::node::{AudioNode, ProcessContext};
 use crate::scale::hz_from_normalized;
 use mooloop_core::{
@@ -468,12 +469,9 @@ impl Sampler {
 
         let drive = clamp01(params.drive);
         if drive > f32::EPSILON {
-            let input_gain = 1.0 + drive * 15.0;
-            let compensation = input_gain.tanh().recip();
-            frame = [
-                (frame[0] * input_gain).tanh() * compensation,
-                (frame[1] * input_gain).tanh() * compensation,
-            ];
+            let shaped = apply_drive(frame[0], drive);
+            let shaped_r = apply_drive(frame[1], drive);
+            frame = [shaped, shaped_r];
         }
 
         let cutoff = clamp01(params.filter_cutoff);
@@ -1136,7 +1134,10 @@ mod tests {
     }
 
     #[test]
-    fn drive_adds_soft_saturation() {
+    fn drive_saturates_without_boosting_level() {
+        // Compensated saturation: at full drive a 0.2 input comes out
+        // richer (compressed toward the reference ceiling), not four times
+        // louder.
         let sr = 48_000;
         let params = SamplerParams {
             drive: 1.0,
@@ -1144,9 +1145,10 @@ mod tests {
         };
         let mut sampler = sampler_with_frames(sr, 64, params);
         let driven = sampler.shape_first_voice([0.2, -0.2]);
-        assert!(driven[0] > 0.9);
-        assert!(driven[1] < -0.9);
-        assert!(driven[0] <= 1.0 && driven[1] >= -1.0);
+        assert!(driven[0] > 0.2);
+        assert!(driven[0] < 0.26);
+        assert!(driven[1] < -0.2);
+        assert!(driven[1] > -0.26);
     }
 
     #[test]

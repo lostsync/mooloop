@@ -36,6 +36,16 @@ unity (`MixerBus::new`), buses sum into the master at unity. With the
 operating level, eight identical channels peak near +6 dBFS — inside the
 +12 dB clamp, audible, and the user's problem, not the engine's.
 
+**Per-oscillator unity reference.** A synth oscillator's 0 dB knob position
+*is* the device reference: one oscillator at full peaks at
+`REFERENCE_PEAK_DBFS`, three at full sum honestly to about -2.4 dBFS. The
+alternative — scaling each oscillator to a third so three at 0 dB land at
+unity — was rejected: it makes one oscillator quiet and its level dependent
+on a design decision about oscillators the user is not using. Enabling a
+second oscillator never changes the first one's level. The oscillator mix
+is followed by compensated saturation (`apply_drive`), anchored at the
+operating level, so raising drive changes character, not level.
+
 ## Fader taper
 
 `MixerFader` travel is **linear in dB**, piecewise between breakpoints held

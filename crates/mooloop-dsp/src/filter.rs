@@ -224,15 +224,26 @@ impl AllPass {
     }
 }
 
-/// Soft saturation matching the sampler's drive stage: pre-gain into `tanh`
-/// with output compensation so low drive settings stay near unity gain.
+/// Signal level (linear) the drive compensation anchors to: the operating
+/// level, `10^(REFERENCE_PEAK_DBFS/20)`. Written as a literal because this
+/// runs per sample.
+const DRIVE_REFERENCE_LINEAR: f32 = 0.251;
+
+/// Compensated soft saturation shared by the sampler, drum synth, both
+/// synths, and the filter effect: pre-gain into `tanh`, normalized by the
+/// shaper's own response to a reference-level signal, so raising drive
+/// changes character, not level. A static nonlinearity cannot be level-flat
+/// at every input; anchoring at the operating level
+/// (`mooloop_core::gain::REFERENCE_PEAK_DBFS`) is the compromise, and it
+/// also caps a full-scale peak at the reference rather than at clipping.
 pub fn apply_drive(input: f32, drive: f32) -> f32 {
     let drive = drive.clamp(0.0, 1.0);
     if drive <= f32::EPSILON {
         return input;
     }
     let input_gain = 1.0 + drive * 15.0;
-    let compensation = input_gain.tanh().recip();
+    let compensation =
+        DRIVE_REFERENCE_LINEAR / (DRIVE_REFERENCE_LINEAR * input_gain).tanh();
     (input * input_gain).tanh() * compensation
 }
 
@@ -282,11 +293,61 @@ mod tests {
     }
 
     #[test]
-    fn drive_bypasses_at_zero_and_saturates_at_max() {
+    fn drive_bypasses_at_zero() {
         assert_eq!(apply_drive(0.25, 0.0), 0.25);
-        let driven = apply_drive(0.25, 1.0);
-        assert!(driven > 0.9);
-        assert!(driven <= 1.0);
+    }
+
+    /// The whole point of the compensation: sweeping drive at a
+    /// reference-level input keeps the peak where it was while harmonic
+    /// content grows. A drive control changes character, not level.
+    #[test]
+    fn drive_changes_character_not_level_at_the_reference() {
+        const SR: f32 = 48_000.0;
+        const FREQ: f32 = 100.0;
+        const FRAMES: usize = 4_800;
+        const REFERENCE: f32 = DRIVE_REFERENCE_LINEAR;
+
+        let input: Vec<f32> = (0..FRAMES)
+            .map(|i| (core::f32::consts::TAU * FREQ * i as f32 / SR).sin() * REFERENCE)
+            .collect();
+
+        let mut previous_harmonic_share = 0.0f32;
+        for drive in [0.2f32, 0.5, 0.9] {
+            let out: Vec<f32> = input.iter().map(|&x| apply_drive(x, drive)).collect();
+
+            let peak = out.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+            assert!(
+                (peak - REFERENCE).abs() < REFERENCE * 0.02,
+                "drive {drive} moved the peak to {peak}"
+            );
+
+            // DFT bins report A/2 for a sine of amplitude A; true RMS is
+            // amplitude/√2. Put both in amplitude terms before comparing.
+            let total_rms = (out.iter().map(|s| s * s).sum::<f32>() / FRAMES as f32).sqrt();
+            let fundamental = 2.0 * tone_energy(&out, SR, FREQ);
+            let total_amplitude = core::f32::consts::SQRT_2 * total_rms;
+            let harmonic = (total_amplitude * total_amplitude - fundamental * fundamental)
+                .max(0.0)
+                .sqrt();
+            let harmonic_share = harmonic / fundamental;
+            assert!(
+                harmonic_share > previous_harmonic_share,
+                "harmonic content did not grow with drive: {drive} -> {harmonic_share}"
+            );
+            previous_harmonic_share = harmonic_share;
+        }
+    }
+
+    /// Single-bin DFT magnitude, normalized by length.
+    fn tone_energy(samples: &[f32], sample_rate: f32, freq: f32) -> f32 {
+        use core::f32::consts::TAU;
+        let (mut re, mut im) = (0.0f32, 0.0f32);
+        for (index, sample) in samples.iter().enumerate() {
+            let phase = TAU * freq * index as f32 / sample_rate;
+            re += sample * phase.cos();
+            im -= sample * phase.sin();
+        }
+        (re * re + im * im).sqrt() / samples.len() as f32
     }
 
     #[test]

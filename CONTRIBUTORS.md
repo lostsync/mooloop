@@ -121,7 +121,9 @@ work session you can recall being part of, and don't stress over precision.
   bus output stage, and oscillator level knobs, then the -12 dBFS
   operating level: calibrated every generator against it, set channels
   genuinely at unity, and wrote docs/GAIN_STRUCTURE.md as the standing
-  reference.
+  reference, then pinned the per-oscillator unity reference and made
+  drive level-compensated (reference-anchored saturation shared by every
+  drive stage).
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21
