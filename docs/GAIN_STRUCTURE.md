@@ -74,6 +74,24 @@ over its own range (`TrimKnob`, -60 to +12, unity default).
 - Blend controls (wet/dry, per-effect `mix`) are ratios, stay in percent,
   and are deliberately not gains.
 
+## Wet/dry and return effects
+
+**Wet paths are level-matched to dry.** The convolution reverb energy-
+normalizes its IR (`IR_ENERGY_TARGET` in `reverb.rs`); the plate sits
+behind a calibrated output reference (`OUTPUT_REFERENCE` in `plate.rs`).
+At 100% wet, broadband and percussive material lands within a few dB of
+the dry signal. Sustained low-heavy tones can read hotter: a diffuse
+tail's spectrum tilts low, so tonal partials sample a hotter point of the
+response than the broadband average.
+
+**The host blend is equal-power** (`render.rs`): `dry·cos(θ) + wet·sin(θ)`,
+θ = wet·π/2. Correct for the decorrelated paths people actually blend
+(reverb, chorus, delay); correlated ones — a filter or EQ at 50% mix —
+sum up to ~3 dB hot where a linear fade was right. That trade-off is
+accepted rather than adding a per-effect switch. Default blends in
+`EffectSlotState::of_kind` are picked against the level-matched wet path:
+reverb and plate open at 0.25, modulation at 0.5.
+
 ## Metering
 
 Peak metering in dBFS, floor -60 dBFS (`gain::MIN_DB`). Green below -10,

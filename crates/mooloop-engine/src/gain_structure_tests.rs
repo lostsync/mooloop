@@ -175,36 +175,101 @@ fn oscillator_summing_gain_matches_today() {
 }
 
 #[test]
-fn reverb_wet_path_is_loud_relative_to_dry_today() {
-    // Step 07 exists because the IR is peak-normalized to 0.42
-    // (crates/mooloop-dsp/src/effects/reverb.rs:210). Measure how far above
-    // unity the 100% wet path sits against the effect-less render.
+fn reverb_wet_path_is_level_matched_now() {
+    // Step 07 energy-normalized the IR and level-matched the plate. Wet at
+    // 100% should sit within a few dB of the dry signal. Two probes: the
+    // broadband kick (transient, whole-spectrum) and the synth patch
+    // (narrowband — each partial samples the IR response at one point, so
+    // its wet/dry ratio legitimately swings both ways; it is a sanity bound
+    // here, not a loudness meter).
     for effect in [
         (EffectKind::Reverb, EffectParams::Reverb(ReverbParams::default())),
         (EffectKind::Plate, EffectParams::Plate(PlateParams::default())),
     ] {
-        let with_effect = |wet_dry: f32| {
-            let mut channel = one_note_channel(DeviceKind::MonoSynth);
-            let mut slot = EffectSlotState::new(effect.1);
-            slot.wet_dry = wet_dry;
-            channel.setup.effects.push(slot);
-            single_channel_project(channel)
-        };
-        let bypass = peak_dbfs(&single_channel_project(one_note_channel(DeviceKind::MonoSynth)), 3.0);
-        let dry_only = peak_dbfs(&with_effect(0.0), 3.0);
-        let wet_only = peak_dbfs(&with_effect(1.0), 3.0);
-        println!(
-            "{:?}: bypass {bypass:.1} dBFS, 0% wet {dry_only:.1} dBFS, 100% wet {wet_only:.1} dBFS, wet/bypass {:.1} dB",
-            effect.0,
-            wet_only - bypass
-        );
-        assert!(
-            wet_only > bypass + 3.0,
-            "{:?} wet path only {:.1} dB above bypass; peak-normalized IR not confirmed?",
-            effect.0,
-            wet_only - bypass
-        );
+        for kind in [DeviceKind::DrumSynth, DeviceKind::MonoSynth] {
+            let with_effect = |wet_dry: f32| {
+                let mut channel = one_note_channel(kind);
+                let mut slot = EffectSlotState::new(effect.1);
+                slot.wet_dry = wet_dry;
+                channel.setup.effects.push(slot);
+                single_channel_project(channel)
+            };
+            let bypass = peak_dbfs(&single_channel_project(one_note_channel(kind)), 3.0);
+            let dry_only = peak_dbfs(&with_effect(0.0), 3.0);
+            let wet_only = peak_dbfs(&with_effect(1.0), 3.0);
+            println!(
+                "{:?} on {kind:?}: bypass {bypass:.1} dBFS, 0% wet {dry_only:.1}, 100% wet {wet_only:.1}, wet/dry {:.1} dB",
+                effect.0,
+                wet_only - bypass
+            );
+            let bound = if kind == DeviceKind::MonoSynth {
+                // Narrowband probe: each partial samples the IR's low-heavy
+                // tail spectrum at one point, so it legitimately reads a
+                // long way hotter than broadband material. Bound it, but
+                // wide — see the reverb's IR_ENERGY_TARGET note.
+                15.0
+            } else {
+                4.0
+            };
+            assert!(
+                (wet_only - bypass).abs() < bound,
+                "{:?} on {kind:?}: wet path {:.1} dB off dry; level matching lost?",
+                effect.0,
+                wet_only - bypass
+            );
+        }
     }
+}
+
+#[test]
+fn equal_power_blend_preserves_energy_when_decorrelated() {
+    // What equal-power buys: at 50% the blend of a wet path decorrelated
+    // from dry carries the average of the two energies, where a linear
+    // fade would dip ~3 dB. The kick's delayed copy barely overlaps its
+    // own decay, so delay at 375 ms makes a decorrelated pair.
+    let mut channel = one_note_channel(DeviceKind::DrumSynth);
+    let mut slot = EffectSlotState::new(EffectParams::Delay(
+        mooloop_core::DelayParams {
+            time_ms: 375.0,
+            mix: 1.0,
+            feedback: 0.0,
+            ..mooloop_core::DelayParams::default()
+        },
+    ));
+    slot.wet_dry = 1.0;
+    channel.setup.effects.push(slot);
+    let energy = |wet_dry: f32| {
+        let mut channel = channel.clone();
+        channel.setup.effects[0].wet_dry = wet_dry;
+        let mut render = RenderState::from_project(SAMPLE_RATE, &single_channel_project(channel), &[]);
+        render.play();
+        let mut remaining = (SAMPLE_RATE as f32 * 2.0) as usize;
+        let mut energy = 0.0f64;
+        while remaining > 0 {
+            let frames = remaining.min(1024);
+            render.process_once_block(frames);
+            let master = render.master();
+            energy += master.l[..frames]
+                .iter()
+                .chain(master.r[..frames].iter())
+                .map(|s| (*s as f64) * (*s as f64))
+                .sum::<f64>();
+            remaining -= frames;
+        }
+        energy
+    };
+    let dry = energy(0.0);
+    let wet = energy(1.0);
+    let mid = energy(0.5);
+    println!(
+        "equal-power 50%: dry {dry:.1}, wet {wet:.1}, mid {mid:.1} (want ~{})",
+        (dry + wet) / 2.0
+    );
+    let expected = (dry + wet) / 2.0;
+    assert!(
+        (mid - expected).abs() < expected * 0.2,
+        "50% blend carried {mid:.1}, expected ~{expected:.1}"
+    );
 }
 
 #[test]

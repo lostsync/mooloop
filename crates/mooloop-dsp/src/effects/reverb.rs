@@ -32,6 +32,17 @@ const FFT_FRAMES: usize = CONVOLUTION_BLOCK_FRAMES * 2;
 const MAX_IR_SECONDS: f32 = 2.0;
 const SOUND_SPEED_MPS: f32 = 343.0;
 
+/// Target L2 norm of the generated stereo IR. A strictly unit norm leaves
+/// each output channel about 3 dB under its input for broadband material
+/// (the two channels share the budget); the margin here lands a 100% wet
+/// blend level-matched with the dry path for percussive and broadband
+/// material, verified against the engine's wet/dry measurement in
+/// `gain_structure_tests.rs`. Sustained low-heavy tones still read several
+/// dB louder: the diffuse tail's spectrum tilts low, so a partial samples
+/// a hotter point of the response than its broadband average — a property
+/// of the room's spectrum, not of the normalization.
+const IR_ENERGY_TARGET: f32 = 1.2;
+
 #[derive(Clone, Copy, Default)]
 struct Complex {
     re: f32,
@@ -202,16 +213,29 @@ pub fn generate_room_ir(params: ReverbParams, sample_rate: u32) -> StereoIr {
         right[frame] += low_r * gain;
     }
 
-    // A predictable peak keeps default wet level musical across room sizes.
-    let peak = left
+    // Energy normalization targets equal wet/dry loudness. The IR's peak is
+    // dominated by its single early reflection while its energy is dominated
+    // by the tail, so constraining the peak said almost nothing about how
+    // loud sustained material comes out — that was why 1% wet was audible.
+    // Convolution with a unit-L2 IR is approximately level-preserving for
+    // broadband input, and every room arrives at the same wet level because
+    // tails differ far less in energy than direct impulses do in peak. The
+    // target sits above unity so a 100% wet blend lands level-matched with
+    // the dry path, verified against the engine's wet/dry measurement in
+    // `gain_structure_tests.rs`.
+    let energy = left
         .iter()
         .chain(right.iter())
-        .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
-    if peak > 0.42 {
-        let gain = 0.42 / peak;
-        for sample in left.iter_mut().chain(right.iter_mut()) {
-            *sample *= gain;
-        }
+        .map(|sample| sample * sample)
+        .sum::<f32>()
+        .sqrt();
+    let gain = if energy > 1.0e-9 {
+        IR_ENERGY_TARGET / energy
+    } else {
+        1.0
+    };
+    for sample in left.iter_mut().chain(right.iter_mut()) {
+        *sample *= gain;
     }
 
     StereoIr { left, right }

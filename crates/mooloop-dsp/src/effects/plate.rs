@@ -63,6 +63,15 @@ const WIDTH_SMOOTH_S: f32 = 0.02;
 /// comb sum so the combined output isn't inherently 8x hot.
 const INPUT_GAIN: f32 = 1.0 / NUM_COMBS as f32;
 
+/// The plate's absolute output reference. The comb sum's resonant buildup
+/// depends on decay, size, and where the input's energy sits against the
+/// comb poles, so the network has no single unity; this pins typical
+/// material within a few dB of level-matched, like the convolution
+/// reverb's IR energy target. Calibrated against the engine's wet/dry
+/// measurement in `gain_structure_tests.rs` (broadband kick lands ~2 dB
+/// under dry, sustained tones a few dB over).
+const OUTPUT_REFERENCE: f32 = 0.45;
+
 fn size_multiplier(size: f32) -> f32 {
     SIZE_MIN_MULTIPLIER + size.clamp(0.0, 1.0) * (SIZE_MAX_MULTIPLIER - SIZE_MIN_MULTIPLIER)
 }
@@ -289,8 +298,8 @@ impl PlateEffect {
 
             let wet1 = self.wet1.advance();
             let wet2 = self.wet2.advance();
-            bus.l[i] = wet_l * wet1 + wet_r * wet2;
-            bus.r[i] = wet_r * wet1 + wet_l * wet2;
+            bus.l[i] = (wet_l * wet1 + wet_r * wet2) * OUTPUT_REFERENCE;
+            bus.r[i] = (wet_r * wet1 + wet_l * wet2) * OUTPUT_REFERENCE;
         }
     }
 }

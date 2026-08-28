@@ -123,7 +123,8 @@ work session you can recall being part of, and don't stress over precision.
   genuinely at unity, and wrote docs/GAIN_STRUCTURE.md as the standing
   reference, then pinned the per-oscillator unity reference and made
   drive level-compensated (reference-anchored saturation shared by every
-  drive stage).
+  drive stage), then energy-normalized the reverb IR, level-matched the
+  plate, and switched the host wet/dry blend to equal-power.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21

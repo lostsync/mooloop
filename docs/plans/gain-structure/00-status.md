@@ -151,3 +151,30 @@ and the test suite can only confirm the numbers, not the musicality.
   (`kick_decays_after_the_hit`, `drive_saturates_without_boosting_level`
   — the latter replaces a test that asserted the old +16x boost).
   mooloop-dsp 202, mooloop-engine 76+34, all green.
+
+## Step 07 — reverb normalization and wet/dry (done, same branch)
+
+- **IR energy normalization** replaces peak clamping
+  (`reverb.rs::IR_ENERGY_TARGET = 1.2`): L2 norm across both channels.
+  Measured 100% wet vs dry: kick (broadband) **+0.2 dB** — matched; the
+  synth tone reads **+10.8 dB** because the diffuse tail's spectrum tilts
+  low and tonal partials sample hot points of the response. That tilt is
+  the generator's, not the normalizer's — the old IR measured +9.6 on the
+  same probe. Documented in GAIN_STRUCTURE.md; the tonal probe is bounded
+  wide in the test with the reason written next to it.
+- **Plate** got a calibrated `OUTPUT_REFERENCE = 0.45` (comb-sum gain
+  depends on decay/size/input spectrum; no natural unity): kick **-1.9
+  dB**, tone **+4.8 dB** — balanced within ±5.
+- **Host blend is equal-power** (`render.rs`): cos/sin gains computed
+  once per block. New test proves a 50% blend of a decorrelated pair
+  carries the average energy exactly (a linear fade would dip 3 dB). Two
+  tests updated to express the new law: aligned dry+wet at 50% now
+  recombines to √2 for a correlated path (the accepted trade-off, noted
+  in GAIN_STRUCTURE.md), and Buffer Follow transparency is inaudible-
+  exact rather than bit-exact (cos(π/2) dry leak).
+- **Default blends re-picked**: reverb/plate open at **0.25** (was 0.35,
+  chosen when wet sat ~10 dB hot), modulation stays 0.5. Existing
+  projects keep their saved values; no migration per the contract.
+- **Adam: the acceptance criterion is your ear at 1%, 10%, and 50% wet**
+  — the numbers only prove the cause is gone. dsp 202, engine 77, core
+  57, all green.

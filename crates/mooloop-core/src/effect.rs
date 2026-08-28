@@ -2197,11 +2197,13 @@ impl EffectSlotState {
     /// A slot holding this kind's defaults.
     pub fn of_kind(kind: EffectKind) -> Self {
         let mut slot = Self::new(kind.default_params());
-        // Return-only processors need an intentional blend when added: an IR
-        // should begin send-like, while a chorus needs enough dry signal to
-        // preserve its combing and stereo movement.
+        // Chosen against the level-matched wet path (step 07 of the gain
+        // plan): a blend is a *ratio*, and 0.35 was picked when the reverb's
+        // wet output sat ~10 dB hot, making it near-full wet in practice.
+        // At parity, 0.25 is a clear but background space; modulation keeps
+        // 0.5 because a chorus wants equal standing to do its combing.
         if kind == EffectKind::Reverb || kind == EffectKind::Plate {
-            slot.wet_dry = 0.35;
+            slot.wet_dry = 0.25;
         } else if kind == EffectKind::Modulation {
             slot.wet_dry = 0.5;
         }

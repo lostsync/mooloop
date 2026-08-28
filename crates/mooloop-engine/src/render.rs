@@ -610,11 +610,19 @@ impl EffectChain {
                 let node = self.nodes[slot].as_mut().expect("checked above");
                 node.process(context, bus, &self.event_scratch, None);
                 let wet = self.wet_dry[slot];
-                let dry = 1.0 - wet;
+                // Equal-power crossfade. The wet paths people actually blend
+                // (reverb, chorus, delay) are decorrelated from dry, where a
+                // linear fade dips ~3 dB at the midpoint; correlated paths
+                // (filters, EQ) now sum slightly hot at 50%. Trade-off noted
+                // in docs/GAIN_STRUCTURE.md.
+                let blend = wet * core::f32::consts::FRAC_PI_2;
+                let (dry_gain, wet_gain) = (blend.cos(), blend.sin());
                 let trim = self.output_trim[slot];
                 for frame in 0..context.frames {
-                    bus.l[frame] = (self.dry.l[frame] * dry + bus.l[frame] * wet) * trim;
-                    bus.r[frame] = (self.dry.r[frame] * dry + bus.r[frame] * wet) * trim;
+                    bus.l[frame] =
+                        (self.dry.l[frame] * dry_gain + bus.l[frame] * wet_gain) * trim;
+                    bus.r[frame] =
+                        (self.dry.r[frame] * dry_gain + bus.r[frame] * wet_gain) * trim;
                 }
                 if let Some((meters, telemetry, target)) = device_display {
                     let (left, right) = bus.peak(context.frames);
@@ -2652,7 +2660,13 @@ mod tests {
                 ));
             });
             if kind == mooloop_core::EffectKind::Buffer {
-                assert_eq!(wet, dry, "buffer Follow must be transparent");
+                // Follow passes audio through untouched; equal-power leaks a
+                // cos(pi/2) ~ 6e-8 of the aligned dry alongside it, which is
+                // inaudible but not bit-exact.
+                assert!(
+                    (wet - dry).abs() < dry * 1.0e-5,
+                    "buffer Follow must be transparent: dry {dry}, wet {wet}"
+                );
             } else {
                 assert!(
                     (wet - dry).abs() > dry * 0.01,
@@ -3028,8 +3042,9 @@ mod tests {
             &bus.l[..LATENCY]
         );
         assert!(
-            (bus.l[LATENCY] - 1.0).abs() < 1e-6,
-            "aligned dry + wet recombine to unity, got {}",
+            (bus.l[LATENCY] - core::f32::consts::SQRT_2).abs() < 1e-5,
+            "aligned dry + wet recombine to equal-power unity (sqrt(2) for a \
+             correlated path at 50%), got {}",
             bus.l[LATENCY]
         );
         assert!(
