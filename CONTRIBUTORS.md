@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-29
-- Sessions: 11
+- Sessions: 12
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -73,7 +73,14 @@ work session you can recall being part of, and don't stress over precision.
   and reverted it: same-named workspace packages collided, so a branch linked
   against another checkout's stale `mooloop-core` and failed to compile code
   that was correct on disk. Dependencies are shared through sccache instead,
-  where a differing source is a miss rather than a wrong artifact.
+  where a differing source is a miss rather than a wrong artifact. Ran down
+  the "reverb is still too loud at 1-4% mix" report that an earlier round of
+  fixes had measured clean: the mechanism was right but `IR_TONAL_CEILING`
+  allowed +4.9 dB, and every existing probe (whole-render peak and RMS)
+  structurally flatters a reverb, so a wet branch +4.7 dB hot through the
+  sustain passed. Measured mid-sustain instead, tightened the reverb ceiling
+  and the plate's output reference, and moved the broadband assertions off
+  peak onto energy.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

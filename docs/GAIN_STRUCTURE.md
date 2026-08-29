@@ -106,19 +106,31 @@ over its own range (`TrimKnob`, -60 to +12, unity default).
 
 ## Wet/dry and return effects
 
-**Wet paths are level-matched to dry.** The convolution reverb calibrates
-its IR across spectral probes (`IR_ENERGY_TARGET` and
-`IR_TONAL_CEILING` in `reverb.rs`); the plate sits behind a calibrated
-output reference (`OUTPUT_REFERENCE` in `plate.rs`). At 100% wet,
-broadband material is energy-matched with the dry signal within a few dB
-(a smeared transient peaks lower at equal energy — that is dispersion, not
-a level drop), and sustained tones are peak-bounded to no more than a few
-dB over dry. Pure total-L2 normalization could not do both: the diffuse
-tail's spectrum tilts low, so a tonal partial sampled a hotter point of
-the response than the broadband average and read ~11 dB hot. The reverb
-tail now carries a tilt-bounding air component and the IR gain is the
-tighter of a probe-average and a single-frequency bound, measured across
-log-spaced probes of the IR's own spectrum.
+**Wet paths are level-matched to dry, and the match is anchored on
+sustained material.** The convolution reverb calibrates its IR across
+spectral probes (`IR_ENERGY_TARGET` and `IR_TONAL_CEILING` in `reverb.rs`);
+the plate sits behind a calibrated output reference (`OUTPUT_REFERENCE` in
+`plate.rs`). At 100% wet, a held note measured mid-sustain sits within
+~1 dB of dry, enforced by `steady_state_wet_path_is_level_matched`.
+
+One scalar cannot match tonal and broadband material at once. The diffuse
+tail's spectrum tilts low, so a narrowband partial samples a hotter point
+of the response than the broadband average; whichever case the calibration
+centers, the other lands several dB away. **We center the tonal case**,
+because that is what sets perceived reverb level on the sustained material
+a mix knob is usually ridden against. Broadband transients consequently
+read a few dB under dry at 100% wet — correct, and unsurprising: a reverb
+spreads a transient's energy across its tail rather than keeping it at the
+onset.
+
+Measure this on *steady-state energy*, never on whole-render peak or RMS.
+Both flatter a reverb. Peak flatters it because a diffuse wet output has a
+far lower crest factor than the dry transient it is compared against; a
+plate that reads -5.7 dB on peak can sit at +1.3 dB on energy. Whole-render
+RMS flatters it because the buildup and tail sit inside the window and pull
+the average down. A wet branch several dB hot through the sustain passes
+both — which is exactly how the reverb shipped at +4.7 dB over dry, making
+1% wet audible and putting the mix knob at reverb/dry parity by 30%.
 
 **The host blend is equal-power** (`render.rs`): `dry·cos(θ) + wet·sin(θ)`,
 θ = wet·π/2. Correct for the decorrelated paths people actually blend

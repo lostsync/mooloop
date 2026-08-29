@@ -244,23 +244,37 @@ fn reverb_wet_path_is_level_matched_now() {
                     effect.0,
                     wet_only - bypass,
                 );
-            } else if effect.0 == EffectKind::Reverb {
-                // Impulsive broadband probe: energy matched, within a few dB.
+            } else {
+                // Impulsive broadband probe, measured as energy for both
+                // effects. This window used to be symmetric and centered on
+                // 0 for the reverb, on the theory that one scalar could
+                // match tonal and broadband material at once. It cannot: a
+                // diffuse tail's spectrum tilts, so a narrowband partial
+                // samples a hotter point of the response than the broadband
+                // average, and whichever of the two the calibration centers,
+                // the other lands several dB away.
+                //
+                // Centering broadband was the wrong choice — it is the
+                // *tonal* case that sets perceived reverb level on the
+                // sustained material a mix knob is usually ridden against,
+                // and letting it run +4.7 dB hot is what made 1% wet
+                // audible. The tonal calibration now binds, which lands this
+                // probe a few dB under dry: correct, and unsurprising to the
+                // ear, since a reverb spreads a transient's energy across
+                // its tail rather than keeping it at the onset. The bound
+                // stays tight upward, where the clipping hazard is.
+                //
+                // The plate was previously held to a *peak* window here,
+                // which flatters it for the same reason peak flatters any
+                // reverb: its diffuse output has a far lower crest factor
+                // than the dry kick transient it is compared against, so it
+                // reads -5.7 dB on peak while its energy sits at +1.3 dB.
+                // Energy is the honest metric, so both effects use it.
                 assert!(
-                    (wet_rms - bypass_rms).abs() < 4.0,
+                    (-6.0..2.0).contains(&(wet_rms - bypass_rms)),
                     "{:?} on {kind:?}: wet energy {:.1} dB off dry; level matching lost?",
                     effect.0,
                     wet_rms - bypass_rms,
-                );
-            } else {
-                // The plate sits behind a calibrated output reference tuned
-                // for peak matching; hold it to the same few-dB peak window
-                // it has always passed.
-                assert!(
-                    (wet_only - bypass).abs() < 4.0,
-                    "{:?} on {kind:?}: wet path {:.1} dB off dry; level matching lost?",
-                    effect.0,
-                    wet_only - bypass,
                 );
             }
         }
@@ -569,5 +583,85 @@ fn a_shared_saturation_stage_is_what_ducks_one_track_under_another() {
             "a filter on the pad's own channel moved the drums by \
              {on_the_channel:+.2} dB at pad fader {pad_volume}"
         );
+    }
+}
+
+/// RMS over a mid-render window only, so a reverb's buildup and its tail
+/// smear both fall outside the measurement and what is left is steady-state
+/// level: the honest "is the wet branch louder than the dry branch" number.
+fn window_rms_dbfs(project: &Project, from_s: f32, to_s: f32) -> f32 {
+    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
+    render.play();
+    let from = (SAMPLE_RATE as f32 * from_s) as usize;
+    let to = (SAMPLE_RATE as f32 * to_s) as usize;
+    let mut position = 0usize;
+    let mut sum = 0.0f64;
+    let mut count = 0usize;
+    while position < to {
+        let frames = (to - position).min(1024);
+        render.process_once_block(frames);
+        let master = render.master();
+        for index in 0..frames {
+            if position + index >= from {
+                let (l, r) = (master.l[index], master.r[index]);
+                sum += (l as f64) * (l as f64) + (r as f64) * (r as f64);
+                count += 2;
+            }
+        }
+        position += frames;
+    }
+    (10.0 * (sum / count.max(1) as f64).max(1e-12).log10()) as f32
+}
+
+#[test]
+fn steady_state_wet_path_is_level_matched() {
+    // The test that would have caught the original "reverb is audible at 1%
+    // wet" report, and the reason the earlier round of fixes measured clean
+    // while the sound did not change.
+    //
+    // `reverb_wet_path_is_level_matched_now` compares whole-render peak and
+    // RMS. Both flatter a reverb: peak, because a diffuse wet output has a
+    // much lower crest factor than the dry transient it is measured against,
+    // and whole-render RMS, because the buildup and the tail sit inside the
+    // window and pull the average back down. A wet branch running several dB
+    // hot in the part a listener actually judges -- the sustain -- passes
+    // both, and did, inside windows wide enough (-12..+7 dB tonal, 4 dB
+    // broadband) to admit it.
+    //
+    // So measure the sustain directly: hold a note and read 1.0..2.0 s in,
+    // past the buildup and before the release. That leaves steady-state
+    // level and nothing else, and the window here is tight because at this
+    // point there is nothing left for it to be forgiving of. The user-facing
+    // stake is the mix knob's feel: every dB of excess here shifts the whole
+    // control, and at +4.7 dB a 30% mix sat at reverb/dry parity instead of
+    // the ~6 dB under dry that reads as "verby but still a mix".
+    for (kind, params) in [
+        (EffectKind::Reverb, EffectParams::Reverb(ReverbParams::default())),
+        (EffectKind::Plate, EffectParams::Plate(PlateParams::default())),
+    ] {
+        for source in [DeviceKind::MonoSynth, DeviceKind::PolySynth] {
+            let build = |mix: f32| {
+                let mut channel = one_note_channel(source);
+                // Hold the note across the whole measurement window.
+                channel.notes[0].clear();
+                channel.notes[0].push(NoteEvent::new(1, 0, 96 * 8, 60, 127));
+                let mut slot = EffectSlotState::new(params);
+                slot.wet_dry = mix;
+                channel.setup.effects.push(slot);
+                single_channel_project(channel)
+            };
+            let dry = window_rms_dbfs(&build(0.0), 1.0, 2.0);
+            let wet = window_rms_dbfs(&build(1.0), 1.0, 2.0);
+            let excess = wet - dry;
+            println!(
+                "{kind:?} on {source:?}: steady dry {dry:.1} dB, wet {wet:.1} dB, \
+                 wet excess {excess:.1} dB"
+            );
+            assert!(
+                excess.abs() < 2.0,
+                "{kind:?} on {source:?}: wet branch runs {excess:.1} dB off dry in \
+                 steady state; the mix knob's whole range shifts with this"
+            );
+        }
     }
 }

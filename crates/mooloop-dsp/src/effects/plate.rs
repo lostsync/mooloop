@@ -67,10 +67,16 @@ const INPUT_GAIN: f32 = 1.0 / NUM_COMBS as f32;
 /// depends on decay, size, and where the input's energy sits against the
 /// comb poles, so the network has no single unity; this pins typical
 /// material within a few dB of level-matched, like the convolution
-/// reverb's IR energy target. Calibrated against the engine's wet/dry
-/// measurement in `gain_structure_tests.rs` (broadband kick lands ~2 dB
-/// under dry, sustained tones a few dB over).
-const OUTPUT_REFERENCE: f32 = 0.45;
+/// reverb's IR energy target.
+///
+/// This was 0.45, calibrated against a *peak* comparison -- which a plate
+/// passes easily, because its diffuse output has a far lower crest factor
+/// than the dry transient it is matched against. Measured on steady-state
+/// sustain instead, that reference ran +3.8 dB hot, so the mix knob was
+/// already near reverb/dry parity by 30%. Scaled down by that 3.8 dB.
+/// Enforced by `steady_state_wet_path_is_level_matched` in
+/// `gain_structure_tests.rs`.
+const OUTPUT_REFERENCE: f32 = 0.29;
 
 fn size_multiplier(size: f32) -> f32 {
     SIZE_MIN_MULTIPLIER + size.clamp(0.0, 1.0) * (SIZE_MAX_MULTIPLIER - SIZE_MIN_MULTIPLIER)

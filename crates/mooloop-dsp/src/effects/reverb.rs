@@ -40,14 +40,21 @@ const SOUND_SPEED_MPS: f32 = 343.0;
 const IR_ENERGY_TARGET: f32 = 1.5;
 
 /// Worst-case steady-tone gain any single frequency may see through the
-/// normalized IR, as a multiple of [`IR_ENERGY_TARGET`] (about +5 dB).
-/// Constraining the peak as well as the probe average is what stops the
-/// diffuse tail from handing a sustained low partial far over the dry path
-/// while the broadband average still matches; combined with the tail's
-/// tilt-bounding air component it keeps tonal material within a few dB of
-/// the target. The tonal peak is measured against the engine's wet/dry
-/// characterization in `gain_structure_tests.rs`.
-const IR_TONAL_CEILING: f32 = 1.75;
+/// normalized IR, as a multiple of [`IR_ENERGY_TARGET`]. Constraining the
+/// peak as well as the probe average is what stops the diffuse tail from
+/// handing a sustained low partial far over the dry path while the
+/// broadband average still matches.
+///
+/// This was 1.75 (+4.9 dB), and that headroom -- not the mechanism around
+/// it -- was the whole of the "reverb is audible at 1% wet" complaint: the
+/// ceiling is the binding constraint for a diffuse tail, so sustained
+/// material came out a full +4.7 dB over dry and the mix knob reached
+/// reverb/dry parity by 30%. At 1.0 no frequency may exceed the energy
+/// target, which is what "level-matched" was always supposed to mean.
+/// Enforced by `steady_state_wet_path_is_level_matched` in
+/// `gain_structure_tests.rs`, which measures a held note mid-sustain so
+/// neither the buildup nor the tail smear can disguise the excess.
+const IR_TONAL_CEILING: f32 = 1.0;
 
 #[derive(Clone, Copy, Default)]
 struct Complex {
