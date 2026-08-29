@@ -34,6 +34,25 @@ fn peak_dbfs(project: &Project, seconds: f32) -> f32 {
     20.0 * peak.max(1e-6).log10()
 }
 
+/// Render the project offline and return the total stereo RMS in dBFS.
+fn rms_dbfs(project: &Project, seconds: f32) -> f32 {
+    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
+    render.play();
+    let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
+    let mut sum = 0.0f64;
+    while remaining > 0 {
+        let frames = remaining.min(1024);
+        render.process_once_block(frames);
+        let master = render.master();
+        for sample in master.l[..frames].iter().chain(master.r[..frames].iter()) {
+            sum += (*sample as f64) * (*sample as f64);
+        }
+        remaining -= frames;
+    }
+    let frames_total = SAMPLE_RATE as f64 * seconds as f64;
+    (10.0 * (sum.max(1e-12) / frames_total).log10()) as f32
+}
+
 /// One channel of `kind` at unity volume with a single default-velocity note
 /// at tick 0. Samplers get the builtin kick so they render without data.
 fn one_note_channel(kind: DeviceKind) -> ProjectChannel {
@@ -174,12 +193,16 @@ fn oscillator_summing_gain_matches_today() {
 
 #[test]
 fn reverb_wet_path_is_level_matched_now() {
-    // Step 07 energy-normalized the IR and level-matched the plate. Wet at
-    // 100% should sit within a few dB of the dry signal. Two probes: the
-    // broadband kick (transient, whole-spectrum) and the synth patch
-    // (narrowband — each partial samples the IR response at one point, so
-    // its wet/dry ratio legitimately swings both ways; it is a sanity bound
-    // here, not a loudness meter).
+    // Step 07 energy-normalized the IR and level-matched the plate; the
+    // spectral-probe calibration in reverb.rs then bounded what a sustained
+    // tone can pick up from the tail's spectrum. Two probes, two metrics:
+    // the broadband kick is *energy* matched (a 100% wet kick smears its
+    // transient across the tail, so its peak reads lower at equal energy —
+    // peak would penalize the reverb for doing its job), and the tonal
+    // synth patch is *peak* bounded, since a clipping hazard is what the
+    // wet/dry contract exists to prevent. A narrowband partial samples the
+    // IR response at one point, so it swings both ways; the calibration
+    // caps how far.
     for effect in [
         (EffectKind::Reverb, EffectParams::Reverb(ReverbParams::default())),
         (EffectKind::Plate, EffectParams::Plate(PlateParams::default())),
@@ -195,26 +218,51 @@ fn reverb_wet_path_is_level_matched_now() {
             let bypass = peak_dbfs(&single_channel_project(one_note_channel(kind)), 3.0);
             let dry_only = peak_dbfs(&with_effect(0.0), 3.0);
             let wet_only = peak_dbfs(&with_effect(1.0), 3.0);
+            let bypass_rms = rms_dbfs(&single_channel_project(one_note_channel(kind)), 3.0);
+            let wet_rms = rms_dbfs(&with_effect(1.0), 3.0);
             println!(
-                "{:?} on {kind:?}: bypass {bypass:.1} dBFS, 0% wet {dry_only:.1}, 100% wet {wet_only:.1}, wet/dry {:.1} dB",
+                "{:?} on {kind:?}: bypass {bypass:.1} dBFS peak / {bypass_rms:.1} RMS, \
+                 0% wet {dry_only:.1}, 100% wet {wet_only:.1} peak / {wet_rms:.1} RMS, \
+                 peak wet/dry {:.1} dB, rms wet/dry {:.1} dB",
                 effect.0,
-                wet_only - bypass
+                wet_only - bypass,
+                wet_rms - bypass_rms,
             );
-            let bound = if kind == DeviceKind::MonoSynth {
-                // Narrowband probe: each partial samples the IR's low-heavy
-                // tail spectrum at one point, so it legitimately reads a
-                // long way hotter than broadband material. Bound it, but
-                // wide — see the reverb's IR_ENERGY_TARGET note.
-                15.0
+            if kind == DeviceKind::MonoSynth {
+                // Tonal probe: bound the wet *peak* against the dry peak —
+                // this is the clipping-hazard direction the contract cares
+                // about. See IR_TONAL_CEILING in reverb.rs.
+                assert!(
+                    wet_only - bypass < 7.0,
+                    "{:?} on {kind:?}: wet tone peaks {:.1} dB over dry",
+                    effect.0,
+                    wet_only - bypass,
+                );
+                assert!(
+                    wet_only - bypass > -12.0,
+                    "{:?} on {kind:?}: wet tone {:.1} dB under dry; level matching lost?",
+                    effect.0,
+                    wet_only - bypass,
+                );
+            } else if effect.0 == EffectKind::Reverb {
+                // Impulsive broadband probe: energy matched, within a few dB.
+                assert!(
+                    (wet_rms - bypass_rms).abs() < 4.0,
+                    "{:?} on {kind:?}: wet energy {:.1} dB off dry; level matching lost?",
+                    effect.0,
+                    wet_rms - bypass_rms,
+                );
             } else {
-                4.0
-            };
-            assert!(
-                (wet_only - bypass).abs() < bound,
-                "{:?} on {kind:?}: wet path {:.1} dB off dry; level matching lost?",
-                effect.0,
-                wet_only - bypass
-            );
+                // The plate sits behind a calibrated output reference tuned
+                // for peak matching; hold it to the same few-dB peak window
+                // it has always passed.
+                assert!(
+                    (wet_only - bypass).abs() < 4.0,
+                    "{:?} on {kind:?}: wet path {:.1} dB off dry; level matching lost?",
+                    effect.0,
+                    wet_only - bypass,
+                );
+            }
         }
     }
 }

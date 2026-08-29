@@ -106,13 +106,19 @@ over its own range (`TrimKnob`, -60 to +12, unity default).
 
 ## Wet/dry and return effects
 
-**Wet paths are level-matched to dry.** The convolution reverb energy-
-normalizes its IR (`IR_ENERGY_TARGET` in `reverb.rs`); the plate sits
-behind a calibrated output reference (`OUTPUT_REFERENCE` in `plate.rs`).
-At 100% wet, broadband and percussive material lands within a few dB of
-the dry signal. Sustained low-heavy tones can read hotter: a diffuse
-tail's spectrum tilts low, so tonal partials sample a hotter point of the
-response than the broadband average.
+**Wet paths are level-matched to dry.** The convolution reverb calibrates
+its IR across spectral probes (`IR_ENERGY_TARGET` and
+`IR_TONAL_CEILING` in `reverb.rs`); the plate sits behind a calibrated
+output reference (`OUTPUT_REFERENCE` in `plate.rs`). At 100% wet,
+broadband material is energy-matched with the dry signal within a few dB
+(a smeared transient peaks lower at equal energy — that is dispersion, not
+a level drop), and sustained tones are peak-bounded to no more than a few
+dB over dry. Pure total-L2 normalization could not do both: the diffuse
+tail's spectrum tilts low, so a tonal partial sampled a hotter point of
+the response than the broadband average and read ~11 dB hot. The reverb
+tail now carries a tilt-bounding air component and the IR gain is the
+tighter of a probe-average and a single-frequency bound, measured across
+log-spaced probes of the IR's own spectrum.
 
 **The host blend is equal-power** (`render.rs`): `dry·cos(θ) + wet·sin(θ)`,
 θ = wet·π/2. Correct for the decorrelated paths people actually blend

@@ -32,16 +32,22 @@ const FFT_FRAMES: usize = CONVOLUTION_BLOCK_FRAMES * 2;
 const MAX_IR_SECONDS: f32 = 2.0;
 const SOUND_SPEED_MPS: f32 = 343.0;
 
-/// Target L2 norm of the generated stereo IR. A strictly unit norm leaves
+/// Target gain for the generated stereo IR. A strictly unit norm leaves
 /// each output channel about 3 dB under its input for broadband material
 /// (the two channels share the budget); the margin here lands a 100% wet
-/// blend level-matched with the dry path for percussive and broadband
-/// material, verified against the engine's wet/dry measurement in
-/// `gain_structure_tests.rs`. Sustained low-heavy tones still read several
-/// dB louder: the diffuse tail's spectrum tilts low, so a partial samples
-/// a hotter point of the response than its broadband average — a property
-/// of the room's spectrum, not of the normalization.
-const IR_ENERGY_TARGET: f32 = 1.2;
+/// blend level-matched with the dry path, verified against the engine's
+/// wet/dry measurement in `gain_structure_tests.rs`.
+const IR_ENERGY_TARGET: f32 = 1.5;
+
+/// Worst-case steady-tone gain any single frequency may see through the
+/// normalized IR, as a multiple of [`IR_ENERGY_TARGET`] (about +5 dB).
+/// Constraining the peak as well as the probe average is what stops the
+/// diffuse tail from handing a sustained low partial far over the dry path
+/// while the broadband average still matches; combined with the tail's
+/// tilt-bounding air component it keeps tonal material within a few dB of
+/// the target. The tonal peak is measured against the engine's wet/dry
+/// characterization in `gain_structure_tests.rs`.
+const IR_TONAL_CEILING: f32 = 1.75;
 
 #[derive(Clone, Copy, Default)]
 struct Complex {
@@ -200,6 +206,14 @@ pub fn generate_room_ir(params: ReverbParams, sample_rate: u32) -> StereoIr {
     let mut low_r = 0.0;
     let tail_start = (sample_rate as f32 * 0.017) as usize;
     let lowpass = 0.035 + brightness * 0.22;
+    // Cap the tail's spectral tilt. The one-pole alone is up to ~29 dB
+    // darker at the top of the band, so a narrowband tone sampled a far
+    // hotter point of the response than the broadband average and no single
+    // scalar gain could level-match both. Mixing in a white component sized
+    // to hold the top of the band within ~12 dB of the low bound the tilt;
+    // the calibration below then places every frequency within a few dB of
+    // the target.
+    let air = (1.0 / (32.0 * lowpass)).sqrt();
     for frame in tail_start..frames {
         let seconds = frame as f32 / sample_rate as f32;
         let onset = ((seconds - 0.017) / 0.11).clamp(0.0, 1.0);
@@ -209,20 +223,25 @@ pub fn generate_room_ir(params: ReverbParams, sample_rate: u32) -> StereoIr {
         low_l += (noise_l - low_l) * lowpass;
         low_r += (noise_r - low_r) * lowpass;
         let gain = tail_level * onset * envelope;
-        left[frame] += low_l * gain;
-        right[frame] += low_r * gain;
+        left[frame] += (low_l + air * noise_l) * gain;
+        right[frame] += (low_r + air * noise_r) * gain;
     }
 
-    // Energy normalization targets equal wet/dry loudness. The IR's peak is
-    // dominated by its single early reflection while its energy is dominated
-    // by the tail, so constraining the peak said almost nothing about how
-    // loud sustained material comes out — that was why 1% wet was audible.
-    // Convolution with a unit-L2 IR is approximately level-preserving for
-    // broadband input, and every room arrives at the same wet level because
-    // tails differ far less in energy than direct impulses do in peak. The
-    // target sits above unity so a 100% wet blend lands level-matched with
-    // the dry path, verified against the engine's wet/dry measurement in
-    // `gain_structure_tests.rs`.
+    // Gain calibration targets equal wet/dry loudness for *tonal* as well as
+    // broadband material. The IR's peak is dominated by its single early
+    // reflection while its energy is dominated by the tail, so constraining
+    // the peak said almost nothing about how loud sustained material comes
+    // out — that was why 1% wet was audible. A pure total-L2 normalization
+    // then matched broadband probes but let sustained low partials read up
+    // to ~11 dB over dry: the diffuse tail's spectrum tilts low, so a
+    // narrowband tone samples a hotter point of the response than the
+    // broadband average. Instead the IR is unit-normalized and the final
+    // gain is measured across representative spectral probes: steady tones
+    // at bin k emerge with gain |H(f_k)|, and the bin-average of |H|² over
+    // all bins equals the IR's L2 energy (Parseval), so the probe average
+    // recovers the old broadband calibration while the peak bound caps the
+    // worst single frequency. Both bounds are control-side; the audio path
+    // is untouched.
     let energy = left
         .iter()
         .chain(right.iter())
@@ -230,7 +249,11 @@ pub fn generate_room_ir(params: ReverbParams, sample_rate: u32) -> StereoIr {
         .sum::<f32>()
         .sqrt();
     let gain = if energy > 1.0e-9 {
-        IR_ENERGY_TARGET / energy
+        let inv = 1.0 / energy;
+        for sample in left.iter_mut().chain(right.iter_mut()) {
+            *sample *= inv;
+        }
+        ir_calibration_gain(&left, &right, sample_rate)
     } else {
         1.0
     };
@@ -239,6 +262,65 @@ pub fn generate_room_ir(params: ReverbParams, sample_rate: u32) -> StereoIr {
     }
 
     StereoIr { left, right }
+}
+
+/// Final scalar for an IR with total stereo L2 norm of one: the tighter of
+/// the broadband-probe average gain and the single-frequency ceiling, both
+/// expressed against [`IR_ENERGY_TARGET`].
+fn ir_calibration_gain(left: &[f32], right: &[f32], sample_rate: u32) -> f32 {
+    let powers = probe_powers(left, right, sample_rate);
+    if powers.is_empty() {
+        return IR_ENERGY_TARGET;
+    }
+    let count = powers.len() as f32;
+    let mean_power = powers.iter().sum::<f32>() / count;
+    let peak_power = powers.iter().cloned().fold(0.0, f32::max);
+    if mean_power <= 1.0e-12 || peak_power <= 1.0e-12 {
+        return IR_ENERGY_TARGET;
+    }
+    let broadband = IR_ENERGY_TARGET / mean_power.sqrt();
+    let tonal = IR_ENERGY_TARGET * IR_TONAL_CEILING / peak_power.sqrt();
+    broadband.min(tonal)
+}
+
+/// |H(f)|² summed over both channels at log-spaced probe frequencies
+/// spanning the musically relevant band. For a unit-L2 stereo IR the
+/// bin-average of this quantity is one, so its probe-average plays the role
+/// the total L2 norm used to play — without ignoring where in the spectrum
+/// the energy sits. The response comes from one zero-padded FFT per
+/// channel, so probes read the true response rather than sampling past it.
+fn probe_powers(left: &[f32], right: &[f32], sample_rate: u32) -> Vec<f32> {
+    const PROBES: usize = 96;
+    const F_MIN_HZ: f32 = 50.0;
+    const F_MAX_HZ: f32 = 16_000.0;
+    let frames = left.len().max(right.len());
+    if frames == 0 {
+        return Vec::new();
+    }
+    let mut spectrum = vec![Complex::ZERO; frames.next_power_of_two()];
+    let mut left_powers = vec![0.0; PROBES];
+    let mut right_powers = vec![0.0; PROBES];
+    for (channel_powers, samples) in [(&mut left_powers, left), (&mut right_powers, right)] {
+        spectrum.fill(Complex::ZERO);
+        for (bin, sample) in spectrum.iter_mut().zip(samples) {
+            bin.re = *sample;
+        }
+        fft(&mut spectrum, false);
+        let bin_hz = sample_rate as f32 / spectrum.len() as f32;
+        let ratio = F_MAX_HZ / F_MIN_HZ;
+        for (probe, power) in channel_powers.iter_mut().enumerate() {
+            let frequency = F_MIN_HZ * ratio.powf(probe as f32 / (PROBES - 1) as f32);
+            let bin = (frequency / bin_hz).round() as usize;
+            if let Some(value) = spectrum.get(bin) {
+                *power = value.re * value.re + value.im * value.im;
+            }
+        }
+    }
+    left_powers
+        .iter()
+        .zip(right_powers)
+        .map(|(l, r)| l + r)
+        .collect()
 }
 
 fn room_character(shape: ReverbShape, material: ReverbMaterial) -> (f32, f32, f32, i32) {
@@ -288,7 +370,7 @@ fn next_noise(seed: &mut u32) -> f32 {
 
 /// In-place radix-2 complex FFT. The `inverse` form includes 1/N scaling.
 fn fft(values: &mut [Complex], inverse: bool) {
-    debug_assert_eq!(values.len(), FFT_FRAMES);
+    debug_assert!(values.len().is_power_of_two());
     let n = values.len();
     let mut j = 0usize;
     for i in 1..n {
@@ -508,6 +590,37 @@ mod tests {
             .all(|sample| sample.abs() < 1e-5));
         assert!((bus.l[CONVOLUTION_BLOCK_FRAMES] - 1.0).abs() < 1e-4);
         assert!((bus.r[CONVOLUTION_BLOCK_FRAMES] - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn generated_room_tonal_gain_stays_under_ceiling() {
+        let rooms = [
+            ReverbParams::default(),
+            ReverbParams {
+                shape: ReverbShape::Hall,
+                material: ReverbMaterial::Brick,
+                decay_s: 2.0,
+                ..ReverbParams::default()
+            },
+            ReverbParams {
+                shape: ReverbShape::Studio,
+                material: ReverbMaterial::Curtain,
+                decay_s: 0.4,
+                ..ReverbParams::default()
+            },
+        ];
+        for params in rooms {
+            let ir = generate_room_ir(params, 48_000);
+            let peak = probe_powers(&ir.left, &ir.right, 48_000)
+                .iter()
+                .cloned()
+                .fold(0.0, f32::max)
+                .sqrt();
+            assert!(
+                peak <= IR_ENERGY_TARGET * IR_TONAL_CEILING * 1.02,
+                "room {params:?}: worst single-frequency gain {peak:.2} exceeds ceiling",
+            );
+        }
     }
 
     #[test]
