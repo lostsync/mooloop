@@ -491,8 +491,9 @@ export component MainWindow inherits Window {
     // ---- lower editor ----
     in-out property <int> editor-page;      // 0=Source, 1=Notes, 2=Playlist
     // Dock height the piano roll restores. Only the notes page drives the
-    // splitter today. Source keeps 430px so a fixed device face and the
-    // compact modulation shelf fit without an initial vertical scroll;
+    // splitter today. Source starts at 430px so a fixed device face and the
+    // compact modulation shelf fit without an initial vertical scroll, and
+    // grows by the shelf's open delta while the shelf is expanded;
     // Playlist retains the established 410px geometry.
     in-out property <length> piano-dock-height: 410px;
     // The whole lower dock (splitter included) can collapse to give the work
@@ -1837,7 +1838,16 @@ export component MainWindow inherits Window {
                 // ===== Bottom dock: sampler and note editors =====
                 if root.bottom-pane-visible : Rectangle {
                     height: root.editor-page == 1 ? root.piano-dock-height
-                        : root.editor-page == 0 ? 430px : 410px;
+                        // The Source page grows by the shelf's own open delta
+                        // when the modulation shelf expands, so the rack (284px
+                        // face + shelf) keeps fitting without a vertical scroll
+                        // clipping the shelf's bottom row.
+                        : root.editor-page == 0
+                            ? 430px + (root.modulation-shelf-open && !root.editing-bus
+                                ? ModulationShelfMetrics.open-height
+                                    - ModulationShelfMetrics.closed-height
+                                : 0px)
+                        : 410px;
                     background: Theme.panel;
 
                     VerticalLayout {
