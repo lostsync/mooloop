@@ -148,3 +148,51 @@ fn splitter_drag_clamps_at_minimum_and_restores_exactly() {
         "restore after a clamped drag must be exact"
     );
 }
+
+// The status bar's bottom-pane button (a 20px chip at the window's bottom
+// right, 26px from the edge) collapses the whole dock column, splitter
+// included, and toggling it back must restore the exact layout.
+const PANE_BUTTON: (f32, f32) = (936.0, 746.0);
+
+fn click(window: &slint::Window, at: (f32, f32)) {
+    let pos = LogicalPosition::new(at.0, at.1);
+    window.dispatch_event(WindowEvent::PointerMoved { position: pos });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: pos,
+        button: PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: pos,
+        button: PointerEventButton::Left,
+    });
+}
+
+#[test]
+fn bottom_pane_button_collapses_and_restores_exactly() {
+    let ui = harness();
+    hover_neutral(&ui);
+    let before = snapshot(&ui);
+    let dock_pixel = |bytes: &[u8]| -> Vec<u8> {
+        let x = GRIP_X as usize;
+        let y = (DOCK_TOP_Y + 20.0) as usize;
+        let offset = (y * 960 + x) * 4;
+        bytes[offset..offset + 3].to_vec()
+    };
+
+    click(ui.window(), PANE_BUTTON);
+    hover_neutral(&ui);
+    let collapsed = snapshot(&ui);
+    assert_ne!(
+        dock_pixel(&collapsed),
+        dock_pixel(&before),
+        "the dock must disappear when the bottom pane is toggled off"
+    );
+
+    click(ui.window(), PANE_BUTTON);
+    hover_neutral(&ui);
+    assert_eq!(
+        first_diff(&before, &snapshot(&ui)),
+        None,
+        "toggling the bottom pane back must restore the exact layout"
+    );
+}

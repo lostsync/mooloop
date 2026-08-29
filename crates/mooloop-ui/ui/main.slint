@@ -495,6 +495,9 @@ export component MainWindow inherits Window {
     // compact modulation shelf fit without an initial vertical scroll;
     // Playlist retains the established 410px geometry.
     in-out property <length> piano-dock-height: 410px;
+    // The whole lower dock (splitter included) can collapse to give the work
+    // surface the full column; the status bar's panel button restores it.
+    in-out property <bool> bottom-pane-visible: true;
     // The grip clamps while dragging, but only this catches the window
     // itself shrinking under a tall dock. Kept out of the dock's height
     // binding: reading root.height there loops through the layout.
@@ -504,7 +507,7 @@ export component MainWindow inherits Window {
                 min(root.piano-dock-height, root.height - 220px));
         }
     }
-    // Browser sidebar. Hidden by default; the status bar's Sidebar button
+    // Browser sidebar. Hidden by default; the status bar's panel icon
     // toggles it. Width bounds: a 180px floor, a 400px ceiling, and never
     // wider than the window minus room for the work surface.
     in-out property <bool> sidebar-visible;
@@ -1795,7 +1798,7 @@ export component MainWindow inherits Window {
                 // Dock splitter. The 1px line is the visual; the grab zone is 6px
                 // tall, reaching 5px up into the work surface and not at all into
                 // the dock's page tabs. Enabled on the piano roll page for now.
-                Rectangle {
+                if root.bottom-pane-visible : Rectangle {
                     height: 1px;
                     background: dock-grip.has-hover || dock-grip.pressed
                         ? Theme.focus : Theme.border;
@@ -1832,7 +1835,7 @@ export component MainWindow inherits Window {
                 }
 
                 // ===== Bottom dock: sampler and note editors =====
-                Rectangle {
+                if root.bottom-pane-visible : Rectangle {
                     height: root.editor-page == 1 ? root.piano-dock-height
                         : root.editor-page == 0 ? 430px : 410px;
                     background: Theme.panel;
@@ -3858,50 +3861,90 @@ export component MainWindow inherits Window {
         // the last status-message; permanent readouts can join the strip.
         Rectangle {
             height: 24px;
+            vertical-stretch: 0;
             background: Theme.surface-raised;
 
             Rectangle {
+                y: 0;
                 width: parent.width;
                 height: 1px;
                 background: Theme.border;
             }
 
             Text {
+                y: 0;
+                height: parent.height;
                 text: root.hover-hint != "" ? root.hover-hint : root.status-message;
                 color: Theme.text-muted;
                 font-size: 10px;
                 x: 8px;
-                width: parent.width - 16px - 64px - 12px;
+                width: parent.width - 16px - 72px;
                 vertical-alignment: center;
                 overflow: elide;
             }
 
-            // The sidebar toggle. The pinned ToolButton style exposes no
-            // checkable state, so this is a hand-rolled two-state chip:
-            // tinted while the sidebar is visible, plain while hidden.
+            // Panel toggles. The pinned ToolButton style exposes no checkable
+            // state, so these are hand-rolled two-state chips: tinted while
+            // their pane is visible, plain while hidden.
             Rectangle {
-                width: 64px;
-                height: 18px;
-                y: 3px;
+                width: 20px;
+                height: 20px;
+                y: 2px;
                 x: parent.width - self.width - 6px;
                 border-radius: Theme.radius-sm;
                 border-width: 1px;
-                border-color: Theme.border;
+                border-color: bottom-pane-toggle.has-hover ? Theme.border : transparent;
+                background: root.bottom-pane-visible ? Theme.accent-active
+                    : bottom-pane-toggle.pressed ? Theme.surface-active : Theme.surface;
+                Path {
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    viewbox-width: 16;
+                    viewbox-height: 16;
+                    commands: ToolIcons.panel-bottom;
+                    stroke: root.bottom-pane-visible ? Theme.text : Theme.text-muted;
+                    stroke-width: 1.3px;
+                    fill: transparent;
+                }
+                bottom-pane-toggle := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.bottom-pane-visible = !root.bottom-pane-visible; }
+                }
+                accessible-role: button;
+                accessible-label: "Toggle bottom pane";
+                accessible-checked: root.bottom-pane-visible;
+            }
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                y: 2px;
+                x: parent.width - self.width - 32px;
+                border-radius: Theme.radius-sm;
+                border-width: 1px;
+                border-color: sidebar-toggle.has-hover ? Theme.border : transparent;
                 background: root.sidebar-visible ? Theme.accent-active
-                    : sidebar-toggle.pressed || sidebar-toggle.has-hover
-                        ? Theme.surface-active : Theme.surface;
-                Text {
-                    width: parent.width;
-                    text: "Sidebar";
-                    color: root.sidebar-visible ? Theme.text : Theme.text-muted;
-                    font-size: 9px;
-                    vertical-alignment: center;
-                    horizontal-alignment: center;
+                    : sidebar-toggle.pressed ? Theme.surface-active : Theme.surface;
+                Path {
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    viewbox-width: 16;
+                    viewbox-height: 16;
+                    commands: ToolIcons.panel-left;
+                    stroke: root.sidebar-visible ? Theme.text : Theme.text-muted;
+                    stroke-width: 1.3px;
+                    fill: transparent;
                 }
                 sidebar-toggle := TouchArea {
                     mouse-cursor: pointer;
                     clicked => { root.sidebar-visible = !root.sidebar-visible; }
                 }
+                accessible-role: button;
+                accessible-label: "Toggle sidebar";
+                accessible-checked: root.sidebar-visible;
             }
         }
 
