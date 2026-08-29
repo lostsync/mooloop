@@ -139,8 +139,8 @@ struct PlaylistClip {
 }
 
 // One row of the sample browser's tree, flattened from the folder hierarchy
-// in Rust: folders first, then the WAVs beside them, children of an expanded
-// folder immediately following their parent.
+// in Rust: folders first, then the audio files beside them, children of an
+// expanded folder immediately following their parent.
 struct BrowserRow {
     depth: int,
     // 0 = folder, 1 = sample file.

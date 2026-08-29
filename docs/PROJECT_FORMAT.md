@@ -3,9 +3,9 @@
 Status: format version 1, August 2026.
 
 Mooloop songs are inspectable UTF-8 TOML files. When a song embeds samples,
-ordinary copied WAV files live in a sibling asset directory; samples are never
-encoded into TOML. Kits, channel documents, and preset-library entries remain
-directory bundles containing a TOML manifest and optional WAV assets.
+ordinary copied audio files live in a sibling asset directory; samples are
+never encoded into TOML. Kits, channel documents, and preset-library entries
+remain directory bundles containing a TOML manifest and optional audio assets.
 
 ## Bundle Layout
 
@@ -179,14 +179,15 @@ relative to their document container and checked for path traversal.
 
 Embedded paths must remain below the document's `samples/` directory or its
 matching song sidecar; absolute paths and `..` traversal are rejected. Embedded
-saves copy WAV files byte-for-byte and deduplicate channels that use the same
-source file. Referenced saves write paths relative
+saves copy audio files byte-for-byte, preserve their extensions, and deduplicate
+channels that use the same source file. Referenced saves write paths relative
 to the bundle when possible. Relative paths are resolved from the bundle
 directory when loading.
 
 Missing or undecodable samples produce warnings and load as silent slots. The
 rest of the song, kit, or channel is still installed, and the sampler editor
-shows the missing path so it can be relinked by loading another WAV.
+shows the missing path so it can be relinked by loading another supported
+audio file.
 
 ## Version 1 Limits
 

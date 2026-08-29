@@ -11,7 +11,11 @@ mooloop-dsp = { workspace = true }
 mooloop-engine = { workspace = true }
 mooloop-project = { workspace = true }
 slint = { workspace = true }
-hound = "3"
+symphonia = {
+    version = "0.6.1",
+    default-features = false,
+    features = ["aiff", "flac", "mp3", "ogg", "opt-simd", "pcm", "vorbis", "wav"]
+}
 serde = { workspace = true }
 toml = { workspace = true }
 
@@ -19,5 +23,6 @@ toml = { workspace = true }
 slint-build = { workspace = true }
 
 [dev-dependencies]
+hound = "3"
 tempfile = "3"
 i-slint-backend-testing = { version = "1.17", features = ["renderer-software"] }

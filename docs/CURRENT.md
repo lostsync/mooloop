@@ -57,8 +57,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   struck and dim where one is merely held, so a ratcheted step is
   distinguishable from a single sustained note; coverage alone renders both as
   a full cell.
-- A sampler editor with waveform, WAV loading and sibling navigation, trim,
-  reverse, root note, coarse/fine tune, loop region and mode, ADSR, low-pass
+- A sampler editor with waveform, WAV/AIFF/MP3/FLAC/Ogg Vorbis loading and
+  mixed-format sibling navigation, trim, reverse, root note, coarse/fine tune,
+  loop region and mode, ADSR, low-pass
   filter with envelope depth and resonance, drive, bit reduction, and rate
   reduction. Voice controls cover one-shot/gated playback, 1-16 voices,
   restart/layer retriggering, and 16 cross-channel choke groups.
@@ -262,10 +263,11 @@ boundary.
   `PROJECT_FORMAT.md`. Saves stage and replace bundles atomically; embedded and
   referenced asset policies are available per save.
 - Channel presets are instrument presets for sampler and generated sources;
-  sampler presets may carry a referenced or embedded WAV while synth presets
-  contain only inspectable parameter state.
-- Missing samples are recoverable by loading a replacement WAV, but there is no
-  dedicated path-search/relink dialog, undo, autosave, or crash recovery yet.
+  sampler presets may carry a referenced or embedded audio file while synth
+  presets contain only inspectable parameter state.
+- Missing samples are recoverable by loading a replacement audio file, but
+  there is no dedicated path-search/relink dialog, undo, autosave, or crash
+  recovery yet.
 
 ### Mixing, Routing, And Effects
 

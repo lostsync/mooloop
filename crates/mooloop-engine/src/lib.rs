@@ -165,7 +165,7 @@ impl Engine {
     /// Open the JACK client (works against pipewire-jack transparently) and
     /// start the realtime thread. All channel devices and the pattern bank are
     /// pre-allocated to pool size; every channel starts with an empty sample
-    /// slot until the user loads a WAV or a project assigns one.
+    /// slot until the user loads an audio file or a project assigns one.
     pub fn new(config: AudioConfig) -> Result<(Engine, EngineHandle), Error> {
         let (client, _status) = Client::new(CLIENT_NAME, ClientOptions::NO_START_SERVER)
             .map_err(|e| Error::ClientOpen(e.to_string()))?;

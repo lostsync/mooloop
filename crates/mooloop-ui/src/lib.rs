@@ -7,6 +7,7 @@
 //! via commands. The engine keeps its own pre-allocated copy.
 
 mod actions;
+mod audio_file;
 mod history;
 mod meter;
 mod settings;
@@ -486,7 +487,7 @@ struct ResolvedDocument {
 }
 
 /// In-memory channel clipboard. It intentionally keeps decoded sample data
-/// alongside the serializable channel so pasting never needs to re-read a WAV
+/// alongside the serializable channel so pasting never needs to re-read audio
 /// on the UI thread.
 #[derive(Clone)]
 struct ChannelClipboard {
@@ -495,7 +496,7 @@ struct ChannelClipboard {
 }
 
 /// A complete, UI-owned project snapshot. Samples stay beside the serializable
-/// project because restoring an edit must never decode a WAV on the UI thread.
+/// project because restoring an edit must never decode audio on the UI thread.
 #[derive(Clone)]
 struct ProjectSnapshot {
     project: Project,
@@ -1712,7 +1713,7 @@ impl UiState {
                     .map(|sample| sample_description(sample))
                     .unwrap_or_else(|| {
                         if missing {
-                            "Missing sample - load a WAV to relink".into()
+                            "Missing sample - load an audio file to relink".into()
                         } else if is_builtin {
                             self.default_sample_description.clone()
                         } else {
@@ -1733,7 +1734,11 @@ impl UiState {
                     });
                 let (can_previous, can_next) = sample_path
                     .as_ref()
-                    .and_then(|path| wav_files_in_directory(path).ok().map(|files| (path, files)))
+                    .and_then(|path| {
+                        sample_files_in_directory(path)
+                            .ok()
+                            .map(|files| (path, files))
+                    })
                     .map(|(path, files)| {
                         let index = sample_index(path, &files);
                         (
@@ -7466,7 +7471,7 @@ impl AppUi {
             });
         }
 
-        // --- Sample loading via zenity + hound (selected channel) ---
+        // --- Sample loading via zenity + Symphonia (selected channel) ---
         // The dialog + decode run on a worker thread so the UI stays
         // responsive (a blocking dialog makes the OS mark the app frozen and
         // offer to kill it). Results come back through `load_rx` and are
@@ -7483,7 +7488,7 @@ impl AppUi {
                 let tx = load_tx.clone();
                 dbg_log(&format!("UI: loading sample for channel {channel}"));
                 std::thread::spawn(move || {
-                    let result = pick_wav_via_zenity().map(|path| load_sample_at_path(&path));
+                    let result = pick_sample_via_zenity().map(|path| load_sample_at_path(&path));
                     let _ = tx.send(LoadResult {
                         channel,
                         source_revision,
@@ -7507,7 +7512,7 @@ impl AppUi {
                 let Some(path) = path else { return };
                 let tx = load_tx.clone();
                 std::thread::spawn(move || {
-                    let result = match adjacent_wav(&path, -1) {
+                    let result = match adjacent_sample(&path, -1) {
                         Ok(Some(path)) => Some(load_sample_at_path(&path)),
                         Ok(None) => None,
                         Err(error) => Some(Err(error)),
@@ -7535,7 +7540,7 @@ impl AppUi {
                 let Some(path) = path else { return };
                 let tx = load_tx.clone();
                 std::thread::spawn(move || {
-                    let result = match adjacent_wav(&path, 1) {
+                    let result = match adjacent_sample(&path, 1) {
                         Ok(Some(path)) => Some(load_sample_at_path(&path)),
                         Ok(None) => None,
                         Err(error) => Some(Err(error)),
@@ -8792,17 +8797,19 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
             None | Some(SampleReference::Builtin { .. } | SampleReference::Empty) => {
                 samples.push(None)
             }
-            Some(SampleReference::File { path, .. }) if path.is_file() => match decode_wav(&path) {
-                Ok(sample) => samples.push(Some(sample)),
-                Err(error) => {
-                    report.warnings.push(AssetWarning {
-                        channel,
-                        path,
-                        message: error,
-                    });
-                    samples.push(None);
+            Some(SampleReference::File { path, .. }) if path.is_file() => {
+                match audio_file::decode(&path) {
+                    Ok(decoded) => samples.push(Some(decoded.sample)),
+                    Err(error) => {
+                        report.warnings.push(AssetWarning {
+                            channel,
+                            path,
+                            message: error,
+                        });
+                        samples.push(None);
+                    }
                 }
-            },
+            }
             Some(SampleReference::File { .. }) => samples.push(None),
         }
     }
@@ -8894,12 +8901,22 @@ fn confirm_via_zenity(question: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// Spawn zenity to pick a WAV file. Returns `None` if cancelled or unavailable.
-fn pick_wav_via_zenity() -> Option<PathBuf> {
+/// Spawn zenity to pick a supported audio file. Returns `None` if cancelled
+/// or unavailable.
+fn pick_sample_via_zenity() -> Option<PathBuf> {
+    let patterns = audio_file::SUPPORTED_EXTENSIONS
+        .iter()
+        .flat_map(|extension| {
+            [
+                format!("*.{extension}"),
+                format!("*.{}", extension.to_uppercase()),
+            ]
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
     let out = std::process::Command::new("zenity")
         .arg("--file-selection")
-        .arg("--file-filter=*.wav")
-        .arg("--file-filter=*.WAV")
+        .arg(format!("--file-filter=Audio samples | {patterns}"))
         .arg("--title=Load sample")
         .output()
         .ok()?;
@@ -8914,20 +8931,14 @@ fn pick_wav_via_zenity() -> Option<PathBuf> {
     }
 }
 
-fn wav_files_in_directory(path: &Path) -> Result<Vec<PathBuf>, String> {
+fn sample_files_in_directory(path: &Path) -> Result<Vec<PathBuf>, String> {
     let directory = path
         .parent()
         .ok_or_else(|| "sample path has no parent directory".to_string())?;
     let mut files = std::fs::read_dir(directory)
         .map_err(|e| format!("could not read sample directory: {e}"))?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|entry| {
-            entry.is_file()
-                && entry
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
-        })
+        .filter(|entry| entry.is_file() && audio_file::is_supported_extension(entry))
         .collect::<Vec<_>>();
     files.sort_by_cached_key(|entry| {
         entry
@@ -8950,8 +8961,8 @@ fn sample_index(path: &Path, files: &[PathBuf]) -> Option<usize> {
         })
 }
 
-fn adjacent_wav(path: &Path, direction: isize) -> Result<Option<PathBuf>, String> {
-    let files = wav_files_in_directory(path)?;
+fn adjacent_sample(path: &Path, direction: isize) -> Result<Option<PathBuf>, String> {
+    let files = sample_files_in_directory(path)?;
     let Some(index) = sample_index(path, &files) else {
         return Ok(None);
     };
@@ -8962,9 +8973,9 @@ fn adjacent_wav(path: &Path, direction: isize) -> Result<Option<PathBuf>, String
 }
 
 fn load_sample_at_path(path: &Path) -> Result<LoadedSample, String> {
-    let files = wav_files_in_directory(path)?;
+    let files = sample_files_in_directory(path)?;
     let index = sample_index(path, &files);
-    let sample = decode_wav(path)?;
+    let sample = audio_file::decode(path)?.sample;
     Ok(LoadedSample {
         path: path.to_path_buf(),
         sample,
@@ -9057,79 +9068,10 @@ fn tune_label(params: SamplerParams) -> String {
     )
 }
 
-/// Decode a WAV/RIFF file into stereo f32 frames. hound's `samples::<f32>()`
-/// only works for IEEE-float files, so integer formats are read at their
-/// native width and normalised to [-1, 1] here. Errors propagate loudly —
-/// never silently drop samples (an empty buffer would silently mute the
-/// sampler).
-fn decode_wav(path: &Path) -> Result<Arc<SampleData>, String> {
-    let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
-    let spec = reader.spec();
-    let sample_rate = spec.sample_rate;
-    let channels = spec.channels.max(1) as usize;
-
-    let samples: Vec<f32> = match (spec.sample_format, spec.bits_per_sample) {
-        (hound::SampleFormat::Float, 32) => reader
-            .samples::<f32>()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("sample decode failed: {e}"))?,
-        (hound::SampleFormat::Int, 8) => reader
-            .samples::<i8>()
-            .map(|s| s.map(|v| f32::from(v) / 128.0))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("sample decode failed: {e}"))?,
-        (hound::SampleFormat::Int, 16) => reader
-            .samples::<i16>()
-            .map(|s| s.map(|v| f32::from(v) / 32_768.0))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("sample decode failed: {e}"))?,
-        (hound::SampleFormat::Int, 24) => reader
-            .samples::<i32>()
-            .map(|s| s.map(|v| v as f32 / 8_388_608.0))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("sample decode failed: {e}"))?,
-        (hound::SampleFormat::Int, 32) => reader
-            .samples::<i32>()
-            .map(|s| s.map(|v| v as f32 / 2_147_483_648.0))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("sample decode failed: {e}"))?,
-        (fmt, bits) => {
-            return Err(format!("unsupported WAV format ({fmt:?}, {bits}-bit)"));
-        }
-    };
-
-    if samples.is_empty() {
-        return Err("file contained no samples".into());
-    }
-
-    let frames: Vec<[f32; 2]> = samples
-        .chunks(channels)
-        .map(|ch| {
-            let l = ch.first().copied().unwrap_or(0.0);
-            let r = ch.get(1).copied().unwrap_or(l);
-            [l, r]
-        })
-        .collect();
-
-    Ok(Arc::new(SampleData {
-        frames,
-        sample_rate,
-        root_note: 60,
-    }))
-}
-
 /// Extensions the browser treats as playable. The decoder decides what we
-/// can actually open; this list decides what the tree shows, and grows with
-/// it (see `decode_wav`).
-const SUPPORTED_SAMPLE_EXTENSIONS: [&str; 1] = ["wav"];
-
-/// Anything the tree counts as playable, now and as formats are added.
+/// can actually open; this predicate decides what the tree shows.
 fn is_playable_sample(path: &Path) -> bool {
-    path.extension().is_some_and(|extension| {
-        SUPPORTED_SAMPLE_EXTENSIONS
-            .iter()
-            .any(|supported| extension.eq_ignore_ascii_case(supported))
-    })
+    audio_file::is_supported_extension(path)
 }
 
 /// Whether `path` contains a playable sample anywhere below it. Folders
@@ -9269,28 +9211,24 @@ struct SampleInspection {
     sample: Arc<SampleData>,
 }
 
-/// Reads a WAV's header and decodes it once for the pane's waveform, stats,
-/// and preview voice. The header numbers come straight from the format: the
-/// decoded stereo frames cannot answer "mono or 24-bit?" on their own.
+/// Decodes a sample once for the pane's waveform, source stats, and preview
+/// voice.
 fn inspect_sample(path: &Path) -> Result<SampleInspection, String> {
-    let spec = hound::WavReader::open(path)
-        .map_err(|error| error.to_string())?
-        .spec();
-    let sample = decode_wav(path)?;
-    let kind = match spec.sample_format {
-        hound::SampleFormat::Float => "float",
-        hound::SampleFormat::Int => "int",
-    };
-    let channels = match spec.channels {
+    let decoded = audio_file::decode(path)?;
+    let sample = decoded.sample;
+    let channels = match decoded.source_channels {
         1 => "mono".to_owned(),
         2 => "stereo".to_owned(),
         other => format!("{other}ch"),
     };
+    let format = decoded.bits_per_sample.map_or_else(
+        || decoded.codec_name.to_uppercase(),
+        |bits| format!("{bits}-bit {}", decoded.codec_name),
+    );
     let stats = format!(
-        "{} Hz · {}-bit {} · {}\n{} frames · {:.2} s",
-        spec.sample_rate,
-        spec.bits_per_sample,
-        kind,
+        "{} Hz · {} · {}\n{} frames · {:.2} s",
+        sample.sample_rate,
+        format,
         channels,
         sample.frames.len(),
         sample_duration(&sample)
@@ -9312,7 +9250,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         // `Empty` has nothing below it, `Deep` only earns its place through
-        // a wav two levels down, and `silent` holds nothing but text.
+        // an audio file two levels down, and `silent` holds nothing but text.
         std::fs::create_dir_all(root.join("Empty")).unwrap();
         std::fs::create_dir_all(root.join("Deep/Nested")).unwrap();
         std::fs::create_dir_all(root.join("silent")).unwrap();
@@ -9322,7 +9260,7 @@ mod tests {
         let rows = build_browser_rows(&[root.to_path_buf()], &HashSet::from([root.to_path_buf()]));
         let names: Vec<String> = rows.iter().map(|row| row.name.to_string()).collect();
         // The collapsed root hides its children, so expansion is required to
-        // prove `Deep` survives (via a wav two levels down) while `Empty` and
+        // prove `Deep` survives (via audio two levels down) while `Empty` and
         // `silent` — nothing playable below either — are hidden.
         assert_eq!(names, vec![browser_display_name(root), "Deep".to_owned()]);
 
@@ -9338,7 +9276,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_tree_lists_folders_first_and_only_wavs() {
+    fn browser_tree_lists_folders_first_and_only_supported_audio() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         std::fs::create_dir_all(root.join("Drums/Kicks")).unwrap();
@@ -9348,6 +9286,7 @@ mod tests {
         std::fs::write(root.join("zebra.WAV"), b"x").unwrap();
         std::fs::write(root.join(".hidden.wav"), b"x").unwrap();
         std::fs::write(root.join("apple.wav"), b"x").unwrap();
+        std::fs::write(root.join("middle.flac"), b"x").unwrap();
 
         // Root and Drums expanded; everything else starts collapsed.
         let expanded: HashSet<PathBuf> = [root.to_path_buf(), root.join("Drums")]
@@ -9375,6 +9314,7 @@ mod tests {
                 (1, 0, true, "Drums".into()),
                 (2, 0, false, "Kicks".into()),
                 (1, 1, false, "apple.wav".into()),
+                (1, 1, false, "middle.flac".into()),
                 (1, 1, false, "zebra.WAV".into()),
             ]
         );
@@ -9422,7 +9362,7 @@ mod tests {
             inspection.stats
         );
         assert!(
-            inspection.stats.contains("16-bit int"),
+            inspection.stats.contains("16-bit"),
             "{}",
             inspection.stats
         );
@@ -9532,9 +9472,6 @@ mod tests {
         assert_eq!(channel.notes[0][1].id, second.id);
     }
 
-    /// Regression test: hound's `samples::<f32>()` errors on integer-PCM
-    /// files; the decoder must decode them at native width instead (and
-    /// never silently return an empty buffer).
     #[test]
     fn decodes_16bit_stereo_wav() {
         let path = std::env::temp_dir().join("mooloop_decode_test_16bit.wav");
@@ -9552,7 +9489,7 @@ mod tests {
         }
         writer.finalize().unwrap();
 
-        let data = decode_wav(&path).unwrap();
+        let data = audio_file::decode(&path).unwrap().sample;
         assert_eq!(data.sample_rate, 44_100);
         assert_eq!(data.len(), 1000);
         assert!(data.frames.iter().any(|f| f[0] != 0.0));
@@ -9563,7 +9500,7 @@ mod tests {
     fn rejects_garbage_file() {
         let path = std::env::temp_dir().join("mooloop_decode_test_garbage.wav");
         std::fs::write(&path, b"not a wav at all").unwrap();
-        assert!(decode_wav(&path).is_err());
+        assert!(audio_file::decode(&path).is_err());
         let _ = std::fs::remove_file(&path);
     }
 
@@ -9581,24 +9518,24 @@ mod tests {
     }
 
     #[test]
-    fn adjacent_wav_walks_sorted_directory_without_wrapping() {
+    fn adjacent_sample_walks_mixed_formats_without_wrapping() {
         let directory = std::env::temp_dir().join(format!(
             "mooloop_sample_browser_test_{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&directory).unwrap();
         let a = directory.join("a-kick.wav");
-        let b = directory.join("B-snare.WAV");
-        let c = directory.join("c-hat.wav");
+        let b = directory.join("B-snare.FLAC");
+        let c = directory.join("c-hat.mp3");
         for path in [&a, &b, &c] {
             std::fs::write(path, []).unwrap();
         }
         std::fs::write(directory.join("ignore.txt"), []).unwrap();
 
-        assert_eq!(adjacent_wav(&a, -1).unwrap(), None);
-        assert_eq!(adjacent_wav(&a, 1).unwrap(), Some(b.clone()));
-        assert_eq!(adjacent_wav(&b, 1).unwrap(), Some(c.clone()));
-        assert_eq!(adjacent_wav(&c, 1).unwrap(), None);
+        assert_eq!(adjacent_sample(&a, -1).unwrap(), None);
+        assert_eq!(adjacent_sample(&a, 1).unwrap(), Some(b.clone()));
+        assert_eq!(adjacent_sample(&b, 1).unwrap(), Some(c.clone()));
+        assert_eq!(adjacent_sample(&c, 1).unwrap(), None);
 
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -89,7 +89,7 @@ Scope:
 Implemented foundation:
 
 - The canonical project snapshot, atomic v1 song/kit/channel bundles, optional
-  embedded WAV assets, missing-sample warnings, and transactional loading.
+  embedded audio assets, missing-sample warnings, and transactional loading.
 - A JACK-independent shared render state with one-pass WAV and MP3 export plus
   a fixed configurable release tail.
 - Persistent global sixteenth-note swing shared by realtime and offline
