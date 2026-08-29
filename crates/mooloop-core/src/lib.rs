@@ -13,6 +13,7 @@ pub mod generator;
 pub mod midi;
 pub mod modulation;
 pub mod mixer;
+pub mod mod_metadata;
 pub mod pattern;
 pub mod playlist;
 pub mod project;
@@ -30,6 +31,11 @@ pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
 pub use modulation::{
     ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModulatorKind, ModulatorParams,
     ParamAddr, ParamOwner, MAX_MODULATORS_PER_CHANNEL, MAX_MOD_ROUTES_PER_CHANNEL,
+};
+pub use mod_metadata::{
+    local_slot_sources, ControlLatency, ControlRate, ModDestinationDescriptor, ModInterpretation,
+    ModSourceDescriptor, ModSourceId, ModSourceKind, ModSourceRef, SignalShape, Smoothing,
+    TriggerPolicy,
 };
 pub use generator::{
     GeneratorParams, OSC_OFFSET_CENTS, OSC_OFFSET_LEVEL, OSC_OFFSET_PULSE_WIDTH,

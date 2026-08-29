@@ -102,7 +102,7 @@ work session you can recall being part of, and don't stress over precision.
 ### GLM 5.3 Flash (glm-5.3-flash) — opencode
 - First seen: 2026-08-23
 - Last seen: 2026-08-28
-- Sessions: 8
+- Sessions: 9
 - Notes: Effect-container refactor: latency-aligned dry path, one dB trim
   knob everywhere, bus-effect metering, and the shared effect-device shell.
   Extracted the shared DraggablePoint handle and gave the EQ band points
@@ -131,8 +131,13 @@ work session you can recall being part of, and don't stress over precision.
   drive level-compensated (reference-anchored saturation shared by every
   drive stage), then energy-normalized the reverb IR, level-matched the
   plate, and switched the host wet/dry blend to equal-power, then put
-  the meters on IEC 60268-18 with the warning threshold at -10 and
-  pixel-verified colour transitions, completing the gain-structure plan.
+   the meters on IEC 60268-18 with the warning threshold at -10 and
+   pixel-verified colour transitions, completing the gain-structure plan.
+   Opened the modulator-system branch and laid its metadata groundwork:
+   `mooloop-core/src/mod_metadata.rs` with durable `ModSourceId` refs and
+   source descriptors (shape, rate, latency, trigger), a legacy local-slot
+   LFO decode, and `ModDestinationDescriptor` defaults that derive from each
+   `ParamCurve` so stepped targets refuse modulation until they opt in.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21
