@@ -34,10 +34,11 @@ scripts/antibox cargo test -p mooloop-ui
 scripts/antibox cargo clippy --workspace --all-targets
 ```
 
-Each local checkout gets its own remote directory and Cargo target cache keyed
-by absolute path, so worktrees do not fight over one cache and the "no
-concurrent Cargo" rule stays a local rule -- two worktrees may run remotely at
-the same time. Cargo's job cap is lifted to the remote core count.
+Each local checkout gets its own remote directory keyed by absolute path, but
+all of them share one remote Cargo target directory, so a dependency is built
+once for the box rather than once per worktree. Cargo locks that directory, so
+two remote runs queue behind each other instead of colliding. Cargo's job cap
+is lifted to the remote core count.
 
 Pull artifacts back with `--pull`, which is how remote UI snapshots work:
 
@@ -47,9 +48,22 @@ scripts/antibox --pull /tmp/window.ppm \
   cargo test -p mooloop-ui --test playlist_snapshot
 ```
 
-`--clean` discards the remote checkout and its target cache; `--host` and
+`--clean` discards the remote checkout but keeps the shared target cache;
+`$MOOLOOP_REMOTE_TARGET` moves that cache elsewhere. `--host` and
 `$MOOLOOP_REMOTE_HOST` point at a different ssh host. Anything needing JACK, a
 real audio device, or the live compositor still belongs on this machine.
+
+For a runnable build of the current tree, `--release-bin` compiles the
+`mooloop` binary with `--release` on the box, strips it, and copies it to
+`./bin/mooloop-test`:
+
+```sh
+scripts/antibox --release-bin
+scripts/antibox --release-bin /tmp/mooloop-candidate   # somewhere else
+```
+
+The binary is stripped, so it has no backtrace symbols; use it for listening
+and interaction checks, not for diagnosing a crash.
 
 ## Software-rendered UI checks
 

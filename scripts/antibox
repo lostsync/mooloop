@@ -8,17 +8,22 @@
 #   scripts/antibox --pull /tmp/window.ppm \
 #     env MOOLOOP_PLAYLIST_SNAPSHOT=/tmp/window.ppm \
 #     cargo test -p mooloop-ui --test playlist_snapshot
+#   scripts/antibox --release-bin          # stripped release binary -> ./bin/mooloop-test
 #
 # The working tree is mirrored with rsync (gitignored paths excluded), so
 # uncommitted work is tested as-is and nothing needs pushing first. Each local
-# checkout gets its own remote directory and its own Cargo target directory,
-# keyed by absolute path, so parallel worktrees never fight over one cache.
+# checkout gets its own remote directory, keyed by absolute path, but every
+# checkout shares one Cargo target directory so a dependency is compiled once
+# for the whole machine rather than once per worktree. Cargo takes its own lock
+# on that directory, so two concurrent antibox runs queue instead of colliding.
 set -euo pipefail
 
 HOST="${MOOLOOP_REMOTE_HOST:-antibox}"
 SYNC=1
 CLEAN=0
 PULL=()
+RELEASE_BIN=""
+RELEASE_DEST="$PWD/bin/mooloop-test"
 
 usage() {
   awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
@@ -27,12 +32,20 @@ usage() {
 Options:
   --host NAME     Remote ssh host (default: antibox, or $MOOLOOP_REMOTE_HOST).
   --no-sync       Reuse the remote copy as-is; skip the rsync step.
-  --clean         Delete the remote checkout and target cache, then re-sync.
+  --clean         Delete the remote checkout, then re-sync. The shared
+                  target directory is left alone.
   --pull PATH     After the run, copy PATH back from the remote. Relative
                   paths resolve inside the remote checkout; the file lands in
                   the same relative spot locally, absolute paths land in the
                   same absolute spot. Repeatable.
+  --release-bin [PATH]
+                  Build the `mooloop` binary with --release, strip it, and
+                  copy it to PATH (default: ./bin/mooloop-test, relative to
+                  the current directory). Takes no trailing command.
   -h, --help      Show this help.
+
+$MOOLOOP_REMOTE_TARGET overrides the shared remote Cargo target directory;
+--clean then clears only this checkout, not that shared cache.
 
 Exits with the remote command's exit status.
 USAGE
@@ -44,12 +57,27 @@ while [[ $# -gt 0 ]]; do
     --no-sync) SYNC=0; shift ;;
     --clean) CLEAN=1; shift ;;
     --pull) PULL+=("${2:?--pull needs a path}"); shift 2 ;;
+    --release-bin)
+      RELEASE_BIN=1
+      # The path is optional, so only consume the next word when it is one.
+      if [[ $# -gt 1 && "$2" != -* ]]; then
+        RELEASE_DEST="$2"
+        [[ "$RELEASE_DEST" = /* ]] || RELEASE_DEST="$PWD/$RELEASE_DEST"
+        shift
+      fi
+      shift
+      ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     -*) echo "antibox: unknown option $1" >&2; usage >&2; exit 2 ;;
     *) break ;;
   esac
 done
+
+if [[ -n "$RELEASE_BIN" && $# -gt 0 ]]; then
+  echo "antibox: --release-bin runs its own build; drop the trailing command" >&2
+  exit 2
+fi
 
 ROOT="$(git rev-parse --show-toplevel)"
 # Keyed by absolute path so sibling worktrees with the same basename, and two
@@ -69,7 +97,10 @@ fi
 # rsync needs a literal destination, so resolve the remote home once.
 REMOTE_BASE="$(ssh_run 'printf %s "$HOME"')/.cache/mooloop-remote"
 REMOTE_DIR="$REMOTE_BASE/checkouts/$SLUG"
-REMOTE_TARGET="$REMOTE_BASE/targets/$SLUG"
+# One target directory for every checkout on this box. Worktrees of the same
+# workspace resolve to the same dependency graph, so sharing it turns each new
+# worktree's first build from a full dependency rebuild into a relink.
+REMOTE_TARGET="${MOOLOOP_REMOTE_TARGET:-$REMOTE_BASE/target}"
 
 if ! ssh_run 'PATH="$HOME/.cargo/bin:$PATH" command -v cargo >/dev/null'; then
   echo "antibox: no cargo on '$HOST'. Install it there with rustup:" >&2
@@ -78,8 +109,10 @@ if ! ssh_run 'PATH="$HOME/.cargo/bin:$PATH" command -v cargo >/dev/null'; then
 fi
 
 if [[ $CLEAN -eq 1 ]]; then
-  echo "antibox: clearing $REMOTE_DIR and $REMOTE_TARGET" >&2
-  ssh_run "rm -rf \"$REMOTE_DIR\" \"$REMOTE_TARGET\""
+  # The target directory is shared, so --clean only discards this checkout's
+  # own build output; wiping it would cost every other worktree its cache.
+  echo "antibox: clearing $REMOTE_DIR" >&2
+  ssh_run "rm -rf \"$REMOTE_DIR\""
 fi
 
 if [[ $SYNC -eq 1 ]]; then
@@ -94,7 +127,17 @@ if [[ $SYNC -eq 1 ]]; then
     "$ROOT/" "$HOST:$REMOTE_DIR/"
 fi
 
-if [[ $# -eq 0 ]]; then
+REMOTE_STAGE="$REMOTE_DIR/.tmp/mooloop-test"
+if [[ -n "$RELEASE_BIN" ]]; then
+  # Strip a copy rather than the artifact itself: Cargo would keep handing back
+  # the stripped binary on the next build, and `cargo run --release` on the box
+  # would lose its backtraces.
+  set -- sh -c "cargo build --release -p mooloop-app --bin mooloop \
+    && mkdir -p \"\$(dirname \"$REMOTE_STAGE\")\" \
+    && install -m 755 \"\$CARGO_TARGET_DIR/release/mooloop\" \"$REMOTE_STAGE\" \
+    && strip \"$REMOTE_STAGE\""
+  PULL+=("$REMOTE_STAGE")
+elif [[ $# -eq 0 ]]; then
   set -- cargo test --workspace
 fi
 
@@ -118,7 +161,12 @@ ssh_run "
 " || STATUS=$?
 
 for path in ${PULL+"${PULL[@]}"}; do
-  if [[ "$path" = /* ]]; then
+  if [[ -n "$RELEASE_BIN" && "$path" = "$REMOTE_STAGE" ]]; then
+    # A failed build leaves no binary to fetch, and the compiler error is the
+    # useful output; do not bury it under a pull failure.
+    [[ $STATUS -eq 0 ]] || continue
+    dest="$RELEASE_DEST"
+  elif [[ "$path" = /* ]]; then
     dest="$path"
   else
     dest="$ROOT/$path"
@@ -129,7 +177,7 @@ for path in ${PULL+"${PULL[@]}"}; do
     echo "antibox: pulled $dest" >&2
   else
     echo "antibox: failed to pull $path" >&2
-    [[ $STATUS -eq 0 ]] && STATUS=1
+    [[ $STATUS -ne 0 ]] || STATUS=1
   fi
 done
 
