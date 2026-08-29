@@ -215,12 +215,24 @@ channel, so a source can target a source parameter, any insert, and the strip
 at the same time. Do not place four permanent empty slots in the rack or a
 separate modulation page inside every device.
 
-Selecting a chip arms that source. Legal destination controls receive a subtle
-assignable state, and dragging a normal control creates or changes route depth
-without changing that control's base value. Its normal value display remains
-the base; an overlay or second arc communicates modulation excursion. A small
-marker on a parameter opens its incoming-route inspector. The inspector is
-destination-first and should be sufficient for ordinary review and removal.
+Selecting a source tile opens its larger control surface without changing what
+ordinary parameter gestures mean. A separate **Assign** switch arms the
+selected source. Legal destination controls then receive a subtle assignable
+state, and dragging a normal control creates or changes route depth without
+changing that control's base value. Its normal value display remains the base;
+an overlay or second arc communicates modulation excursion. Switching source
+tiles while Assign is active moves the assignment focus to the new source;
+turning Assign off restores base-value editing. A small marker on a parameter
+opens its incoming-route inspector. The inspector is destination-first and
+should be sufficient for ordinary review and removal.
+
+A source's own signal inputs belong on its expanded control surface. For an
+LFO this begins with `Reset: Free | Note On`; later, the same compact input
+picker can list compatible generator, device, Buffer, and cross-channel
+outlets such as `Kick / Gate`. This is selection over the channel control
+graph, not a second device-local modulation system. It is intentionally
+different from Assign: the input picker determines what drives the source,
+while Assign determines where that source's output goes.
 
 This interaction has no drawn patch cords. A full route matrix or zoomed-out
 graph is deferred expert tooling, not a replacement for the rack and not a
@@ -285,9 +297,10 @@ columns with tiny `+` and `-` glyphs.
 ## Interaction And Wording
 
 - A knob's label and value drag the same parameter as its knob face.
-- When a modulation source is armed, parameter dragging edits that source's
-  route depth while preserving the parameter's base value; the affordance and
-  resulting overlay must make this mode obvious.
+- Selecting a modulation source only opens its editor. When its explicit
+  Assign switch is armed, parameter dragging edits that source's route depth
+  while preserving the parameter's base value; the affordance and resulting
+  overlay must make this mode obvious.
 - Familiar icon buttons receive tooltips; visible prose does not explain the
   interface.
 - Tooltips name the musical result or action. They do not narrate the code.

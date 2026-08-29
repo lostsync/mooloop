@@ -1411,7 +1411,15 @@ struct UiState {
     modulation_source_model: Rc<VecModel<ModulationSourceRow>>,
     modulation_route_model: Rc<VecModel<ModulationRouteRow>>,
     modulation_shelf_open: bool,
+    /// Source whose editor is open in the shelf. Selection is intentionally
+    /// separate from assignment: looking at an LFO must not hijack knob
+    /// gestures throughout the rack.
+    modulation_selected_slot: Cell<Option<u8>>,
     modulation_armed_slot: Cell<Option<u8>>,
+    /// Channel that owns the transient selection/assignment state. Changing
+    /// channels clears both even when the new channel happens to occupy the
+    /// same runtime slot.
+    modulation_ui_channel: Cell<Option<usize>>,
     /// Snapshot captured at the start of a direct knob gesture. Intermediate
     /// control updates still reach audio immediately, while one release
     /// becomes one undoable route edit.
@@ -1774,6 +1782,10 @@ impl UiState {
         self.song_mode = project.playback_mode == PlaybackMode::Song;
         self.current_pattern = project.current_pattern as usize;
         self.selected = project.selected_channel as usize;
+        // Modulation source selection and assignment are session gestures,
+        // never document state. A newly loaded project must start unarmed
+        // even if it selects the same channel index as the previous one.
+        self.modulation_ui_channel.set(None);
         // A load points the device rack back at a channel; the bus the
         // previous document had open means nothing in this one.
         self.effect_target = EffectTarget::Channel(project.selected_channel);
@@ -2416,17 +2428,31 @@ impl UiState {
     }
 
     /// Rebuild the channel-owned source collection and destination inspector.
-    /// The selected source is transient UI state: project reloads and channel
-    /// changes never leave an invisible armed slot behind.
+    /// Selection and assignment are transient UI state: project reloads and
+    /// channel changes never leave an invisible armed slot behind.
     fn refresh_modulation(&self, window: &MainWindow) {
+        if self.modulation_ui_channel.get() != Some(self.selected) {
+            self.modulation_ui_channel.set(Some(self.selected));
+            self.modulation_selected_slot.set(None);
+            self.modulation_armed_slot.set(None);
+        }
         let Some(channel) = self.channels.get(self.selected) else {
             self.modulation_source_model.set_vec(Vec::new());
             self.modulation_route_model.set_vec(Vec::new());
+            self.modulation_selected_slot.set(None);
             self.modulation_armed_slot.set(None);
+            window.set_modulation_selected_slot(-1);
             window.set_modulation_armed_slot(-1);
             return;
         };
 
+        let selected = self.modulation_selected_slot.get().filter(|slot| {
+            channel
+                .modulation
+                .slots
+                .get(*slot as usize)
+                .is_some_and(Option::is_some)
+        });
         let armed = self.modulation_armed_slot.get().filter(|slot| {
             channel
                 .modulation
@@ -2434,6 +2460,7 @@ impl UiState {
                 .get(*slot as usize)
                 .is_some_and(Option::is_some)
         });
+        self.modulation_selected_slot.set(selected);
         self.modulation_armed_slot.set(armed);
         let sources: Vec<ModulationSourceRow> = channel
             .modulation
@@ -2453,7 +2480,7 @@ impl UiState {
                     depth: lfo.depth,
                     phase: lfo.phase,
                     retrigger: lfo.retrigger,
-                    selected: armed == Some(slot as u8),
+                    selected: selected == Some(slot as u8),
                 })
             })
             .collect();
@@ -2501,13 +2528,14 @@ impl UiState {
         self.modulation_source_model.set_vec(sources);
         self.modulation_route_model.set_vec(routes);
         window.set_modulation_shelf_open(self.modulation_shelf_open);
+        window.set_modulation_selected_slot(selected.map_or(-1, i32::from));
         window.set_modulation_armed_slot(armed.map_or(-1, i32::from));
         window.set_modulation_max_sources(MAX_MODULATORS_PER_CHANNEL as i32);
 
-        // The armed source's own controls. One editor is shown, so the shelf
+        // The selected source's own controls. One editor is shown, so the shelf
         // reads scalars rather than searching the source rows for the
         // selected one.
-        let armed_lfo = armed
+        let selected_lfo = selected
             .and_then(|slot| {
                 channel
                     .modulation
@@ -2519,13 +2547,13 @@ impl UiState {
             .map(|params| match params {
                 ModulatorParams::Lfo(lfo) => lfo,
             });
-        window.set_modulation_armed_waveform(
-            armed_lfo.map_or(0, |lfo| mod_lfo_waveform_to_int(lfo.waveform)),
+        window.set_modulation_selected_waveform(
+            selected_lfo.map_or(0, |lfo| mod_lfo_waveform_to_int(lfo.waveform)),
         );
-        window.set_modulation_armed_rate(armed_lfo.map_or(1.0, |lfo| lfo.rate_hz));
-        window.set_modulation_armed_depth(armed_lfo.map_or(1.0, |lfo| lfo.depth));
-        window.set_modulation_armed_phase(armed_lfo.map_or(0.0, |lfo| lfo.phase));
-        window.set_modulation_armed_retrigger(armed_lfo.is_some_and(|lfo| lfo.retrigger));
+        window.set_modulation_selected_rate(selected_lfo.map_or(1.0, |lfo| lfo.rate_hz));
+        window.set_modulation_selected_depth(selected_lfo.map_or(1.0, |lfo| lfo.depth));
+        window.set_modulation_selected_phase(selected_lfo.map_or(0.0, |lfo| lfo.phase));
+        window.set_modulation_selected_retrigger(selected_lfo.is_some_and(|lfo| lfo.retrigger));
 
         // Every described generator and strip parameter carries its own
         // overlay depth and legality, so which controls can be routed is
@@ -3009,7 +3037,9 @@ impl AppUi {
             modulation_source_model,
             modulation_route_model,
             modulation_shelf_open: false,
+            modulation_selected_slot: Cell::new(None),
             modulation_armed_slot: Cell::new(None),
+            modulation_ui_channel: Cell::new(None),
             modulation_edit_before: None,
             modulation_edit_changed: false,
             mixer_strip_model,
@@ -5920,11 +5950,40 @@ impl AppUi {
                 if !exists {
                     return;
                 }
-                state
-                    .modulation_armed_slot
-                    .set((state.modulation_armed_slot.get() != Some(slot)).then_some(slot));
+                // Selection opens an editor. If assignment is already active,
+                // it follows the newly selected source; otherwise this click
+                // has no effect on ordinary parameter gestures.
+                state.modulation_selected_slot.set(Some(slot));
+                if state.modulation_armed_slot.get().is_some() {
+                    state.modulation_armed_slot.set(Some(slot));
+                }
                 state.modulation_shelf_open = true;
                 state.refresh_modulation(&window);
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_modulation_assignment_toggled(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let mut state = st.borrow_mut();
+                let next = if state.modulation_armed_slot.get().is_some() {
+                    None
+                } else {
+                    state.modulation_selected_slot.get()
+                };
+                state.modulation_armed_slot.set(next);
+                state.modulation_shelf_open = true;
+                state.refresh_modulation(&window);
+                window.set_status_message(if let Some(slot) = next {
+                    format!(
+                        "Assigning LFO {} \u{2014} drag a highlighted control to set route depth",
+                        slot + 1
+                    )
+                    .into()
+                } else {
+                    "Modulation assignment off \u{2014} controls edit their base values".into()
+                });
             });
         }
         {
@@ -5950,7 +6009,8 @@ impl AppUi {
                     };
                     channel.modulation.slots[slot] =
                         Some(ModulatorParams::Lfo(ModLfoParams::default()));
-                    state.modulation_armed_slot.set(Some(slot as u8));
+                    state.modulation_selected_slot.set(Some(slot as u8));
+                    state.modulation_armed_slot.set(None);
                     state.modulation_shelf_open = true;
                     state.send_channel_modulation(&window, &tx);
                     true
@@ -5958,7 +6018,7 @@ impl AppUi {
                 if added {
                     record_project_history(&commands, before, &st, &window, "LFO added");
                     window.set_status_message(
-                        "LFO added \u{2014} drag any highlighted control to route it".into(),
+                        "LFO added \u{2014} choose Assign when you are ready to route it".into(),
                     );
                 }
             });

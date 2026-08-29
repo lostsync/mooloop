@@ -491,7 +491,9 @@ export component MainWindow inherits Window {
     // ---- lower editor ----
     in-out property <int> editor-page;      // 0=Source, 1=Notes, 2=Playlist
     // Dock height the piano roll restores. Only the notes page drives the
-    // splitter today; other pages stay at the 410px default.
+    // splitter today. Source keeps 430px so a fixed device face and the
+    // compact modulation shelf fit without an initial vertical scroll;
+    // Playlist retains the established 410px geometry.
     in-out property <length> piano-dock-height: 410px;
     // The grip clamps while dragging, but only this catches the window
     // itself shrinking under a tall dock. Kept out of the dock's height
@@ -567,17 +569,21 @@ export component MainWindow inherits Window {
     in property <[ModulationSourceRow]> modulation-sources;
     in property <[ModulationRouteRow]> modulation-routes;
     in-out property <bool> modulation-shelf-open;
+    in-out property <int> modulation-selected-slot: -1;
     in-out property <int> modulation-armed-slot: -1;
-    // The armed source's own values, and the rack capacity the engine
-    // enforces, both supplied by Rust rather than assumed by the shelf.
-    in property <int> modulation-armed-waveform;
-    in property <float> modulation-armed-rate;
-    in property <float> modulation-armed-depth;
-    in property <float> modulation-armed-phase;
-    in property <bool> modulation-armed-retrigger;
+    // Selection chooses the source editor. Arming is a separate, deliberate
+    // assignment mode, so inspecting an LFO never changes what a knob drag
+    // means. The selected source's values and the rack capacity come from
+    // Rust rather than being inferred by the shelf.
+    in property <int> modulation-selected-waveform;
+    in property <float> modulation-selected-rate;
+    in property <float> modulation-selected-depth;
+    in property <float> modulation-selected-phase;
+    in property <bool> modulation-selected-retrigger;
     in property <int> modulation-max-sources;
     callback modulation-shelf-toggled();
     callback modulation-source-selected(int);
+    callback modulation-assignment-toggled();
     callback modulation-lfo-added();
     callback modulation-lfo-wave-changed(int, int);
     callback modulation-lfo-rate-changed(int, float);
@@ -1827,7 +1833,8 @@ export component MainWindow inherits Window {
 
                 // ===== Bottom dock: sampler and note editors =====
                 Rectangle {
-                    height: root.editor-page == 1 ? root.piano-dock-height : 410px;
+                    height: root.editor-page == 1 ? root.piano-dock-height
+                        : root.editor-page == 0 ? 430px : 410px;
                     background: Theme.panel;
 
                     VerticalLayout {
@@ -2777,15 +2784,17 @@ export component MainWindow inherits Window {
                                             open: root.modulation-shelf-open;
                                             sources: root.modulation-sources;
                                             routes: root.modulation-routes;
+                                            selected-slot: root.modulation-selected-slot;
                                             armed-slot: root.modulation-armed-slot;
-                                            armed-waveform: root.modulation-armed-waveform;
-                                            armed-rate: root.modulation-armed-rate;
-                                            armed-depth: root.modulation-armed-depth;
-                                            armed-phase: root.modulation-armed-phase;
-                                            armed-retrigger: root.modulation-armed-retrigger;
+                                            selected-waveform: root.modulation-selected-waveform;
+                                            selected-rate: root.modulation-selected-rate;
+                                            selected-depth: root.modulation-selected-depth;
+                                            selected-phase: root.modulation-selected-phase;
+                                            selected-retrigger: root.modulation-selected-retrigger;
                                             max-sources: root.modulation-max-sources;
                                             toggled => { root.modulation-shelf-toggled(); }
                                             source-selected(slot) => { root.modulation-source-selected(slot); }
+                                            assignment-toggled => { root.modulation-assignment-toggled(); }
                                             lfo-added => { root.modulation-lfo-added(); }
                                             lfo-wave-changed(slot, value) => { root.modulation-lfo-wave-changed(slot, value); }
                                             lfo-rate-changed(slot, value) => { root.modulation-lfo-rate-changed(slot, value); }

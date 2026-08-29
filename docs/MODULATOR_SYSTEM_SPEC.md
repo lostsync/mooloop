@@ -232,10 +232,26 @@ same shelf focused on a destination-first route inspector. This is the UI
 entry point where signal order is visible without falsely making sources
 device-owned.
 
+Source tiles are iconified summaries. Selecting one expands its source-owned
+control surface without arming the rest of the rack. The expanded surface has
+a separate **Assign** switch and any declared source inputs. For an LFO the
+first input is reset/trigger: `Free` and channel `Note On` are current; a later
+compatible-signal picker may add named generator, effect, Buffer, and
+cross-channel outlets such as `Kick / Gate`. The picker binds a declared
+control signal to a declared source inlet. It does not create a device-local
+modulator or infer control data from telemetry.
+
+This makes a future chain such as `Kick / Gate → LFO / Reset → Sampler /
+Position` readable in the ordinary rack. The first edge configures the LFO's
+declared trigger inlet; the second is the existing explicit parameter route.
+Both use the same durable source identities and control-rate graph. Cross-
+channel policy and actual outlet publication remain later engine work.
+
 ### Direct assignment
 
-1. Open the MOD shelf and select a source chip.
-2. Legal controls across source, inserts, and strip acquire a subtle
+1. Open the MOD shelf and select a source tile to edit it.
+2. Activate **Assign** for that source. Legal controls across source, inserts,
+   and strip acquire a subtle
    assignable state; illegal controls do not.
 3. Drag a normal control to create or adjust the armed source's route depth.
    Preserve the ordinary control's base value.
@@ -243,7 +259,8 @@ device-owned.
    resolved excursion.
 5. Clicking the marker opens a destination-first inspector listing incoming
    routes, source, polarity, depth, and a remove action.
-6. Deselecting the source restores ordinary base-value editing.
+6. Turning **Assign** off restores ordinary base-value editing while keeping
+   the source selected for editing.
 
 The gesture is one undoable route edit, not a stream of unrelated parameter
 edits. Re-dragging the same pair retunes it. Zero depth is a valid parked route;
@@ -292,4 +309,3 @@ pages should migrate into channel sources rather than grow a parallel system.
 - The callback allocates nothing, locks nothing, performs no I/O, follows no
   implicit cross-channel edge, and never treats best-effort telemetry as
   modulation data.
-

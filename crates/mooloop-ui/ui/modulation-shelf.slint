@@ -1,5 +1,6 @@
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { ParameterKnob, SelectorBank, ToggleButton, ToolButton, ValueScale } from "controls.slint";
+import { MiniKnob, SelectorBank, ToggleButton, ToolButton, ValueScale } from "controls.slint";
 
 // The channel-owned source collection. `slot` is today's bounded runtime
 // locator; the UI deliberately presents only occupied entries, never four
@@ -31,30 +32,84 @@ export struct ModulationRouteRow {
 }
 
 // The rack reserves room for the shelf, so both files must agree on its
-// height. A global keeps that agreement in one place instead of two literals.
+// height. The expanded surface is one compact 104px module row beneath the
+// header; it does not steal height from the fixed device faces above it.
 export global ModulationShelfMetrics {
     out property <length> closed-height: 30px;
     out property <length> open-height: 104px;
 }
 
-component SourceChip inherits Rectangle {
+// A small source-shape view gives every collapsed source a recognizable face.
+// It is parameter-derived, not telemetry, and therefore makes no promise that
+// the line is phase-synchronized with the audio thread.
+component LfoShape inherits Rectangle {
+    in property <int> waveform;
+    in property <color> line-color: Theme.accent;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+
+    Rectangle {
+        x: 3px;
+        y: parent.height / 2;
+        width: parent.width - 6px;
+        height: 1px;
+        background: Theme.border;
+    }
+    for point in 40 : Rectangle {
+        private property <float> unit: point * 1.0 / 39.0;
+        private property <float> shaped: root.waveform == 0
+            ? sin(self.unit * 360deg)
+            : root.waveform == 1
+                ? 1 - 4 * abs(mod(self.unit + 0.25, 1) - 0.5)
+                : root.waveform == 2
+                    ? 2 * mod(self.unit + 0.5, 1) - 1
+                    : root.waveform == 3
+                        ? (self.unit < 0.5 ? 1 : -1)
+                        : (mod(point, 13) < 3 ? 0.65
+                            : mod(point, 13) < 7 ? -0.35
+                            : mod(point, 13) < 10 ? 0.2 : -0.72);
+        x: 3px + self.unit * (parent.width - 7px);
+        y: parent.height * 0.5 - self.shaped * (parent.height - 8px) * 0.38;
+        width: max(1px, (parent.width - 6px) / 39);
+        height: 2px;
+        background: root.line-color;
+    }
+}
+
+component SourceTile inherits Rectangle {
     in property <string> name;
+    in property <int> waveform;
     in property <bool> selected;
+    in property <bool> armed;
     callback clicked();
 
-    width: 64px;
-    height: 24px;
+    width: 46px;
+    height: 44px;
     border-radius: Theme.radius-md;
     border-width: root.selected ? 1px : 0px;
-    border-color: Theme.accent;
+    border-color: root.armed ? Theme.focus : Theme.accent;
     background: tap.pressed ? Theme.surface-active
         : root.selected ? Theme.surface-raised : Theme.surface;
-    Text {
-        text: root.name;
-        color: root.selected ? Theme.accent : Theme.text-muted;
-        font-size: 10px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+
+    VerticalLayout {
+        padding: 2px;
+        spacing: 2px;
+        LfoShape {
+            height: 22px;
+            waveform: root.waveform;
+            line-color: root.armed ? Theme.focus : Theme.accent;
+        }
+        Text {
+            height: 13px;
+            text: root.name;
+            color: root.selected ? Theme.text : Theme.text-muted;
+            font-size: 8px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
     tap := TouchArea {
         mouse-cursor: pointer;
@@ -70,34 +125,34 @@ component RouteRow inherits Rectangle {
     callback polarity-selected(int);
     callback removed();
 
-    height: 24px;
+    height: 25px;
     background: tap.has-hover ? Theme.surface-raised : transparent;
     HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 4px;
-        spacing: 4px;
+        padding-left: 5px;
+        padding-right: 3px;
+        spacing: 3px;
         Text {
-            width: 132px;
+            horizontal-stretch: 1;
             text: root.destination;
             color: root.allowed ? Theme.text : Theme.text-faint;
-            font-size: 10px;
+            font-size: 9px;
             vertical-alignment: center;
             overflow: elide;
         }
         Text {
-            width: 40px;
+            width: 38px;
             text: (root.depth > 0 ? "+" : "") + round(root.depth * 100) + "%";
             color: root.depth == 0 ? Theme.text-faint : Theme.accent;
             font-family: "monospace";
-            font-size: 10px;
+            font-size: 9px;
             horizontal-alignment: right;
             vertical-alignment: center;
         }
         ToolButton {
             text: root.polarity == 0 ? "±" : "↑";
             tooltip: root.polarity == 0 ? "Bipolar: swings around the base value" : "Unipolar: base value is the floor";
-            min-width: 26px;
-            max-width: 26px;
+            min-width: 24px;
+            max-width: 24px;
             min-height: 20px;
             max-height: 20px;
             clicked => { root.polarity-selected(root.polarity == 0 ? 1 : 0); }
@@ -105,8 +160,8 @@ component RouteRow inherits Rectangle {
         ToolButton {
             text: "×";
             tooltip: "Remove this modulation route";
-            min-width: 24px;
-            max-width: 24px;
+            min-width: 22px;
+            max-width: 22px;
             min-height: 20px;
             max-height: 20px;
             text-color: Theme.text-muted;
@@ -116,27 +171,28 @@ component RouteRow inherits Rectangle {
     tap := TouchArea { }
 }
 
-// The one modulation shelf belongs below the entire device rack. It holds
-// sources and the destination-first route inspector; device faces only expose
-// marked controls that enter this same collection.
+// The one modulation shelf belongs below the complete device rack. Its three
+// modules deliberately separate the collection, the selected source's own
+// control surface, and that channel's explicit destinations. This is the rack
+// view of a control graph; it does not introduce patch cords or a second route
+// language.
 export component ModulationShelf inherits Rectangle {
     in property <bool> open;
     in property <[ModulationSourceRow]> sources;
     in property <[ModulationRouteRow]> routes;
+    in property <int> selected-slot: -1;
     in property <int> armed-slot: -1;
-    // The armed source's own controls. Scalars rather than a row looked up
-    // from `sources`: exactly one source is armed, so the editor is one
-    // widget, not one per source with all but a single copy hidden.
-    in property <int> armed-waveform;
-    in property <float> armed-rate;
-    in property <float> armed-depth;
-    in property <float> armed-phase;
-    in property <bool> armed-retrigger;
+    in property <int> selected-waveform;
+    in property <float> selected-rate;
+    in property <float> selected-depth;
+    in property <float> selected-phase;
+    in property <bool> selected-retrigger;
     // Capacity is an engine protocol boundary, not a UI layout constant
     // (docs/MODULATOR_SYSTEM_SPEC.md), so Rust reports it.
     in property <int> max-sources: 0;
     callback toggled();
     callback source-selected(int);
+    callback assignment-toggled();
     callback lfo-added();
     callback lfo-wave-changed(int, int);
     callback lfo-rate-changed(int, float);
@@ -146,43 +202,54 @@ export component ModulationShelf inherits Rectangle {
     callback route-polarity-changed(int, int);
     callback route-removed(int);
 
-    // A source editor must not steal height from the rack's fixed 268 px
-    // device face. The open shelf is a chip row above one compact editor
-    // row. Keep OPEN-HEIGHT in step with the rack height in main.slint.
+    private property <bool> add-source-menu-open: false;
+    private property <bool> assigning: root.armed-slot >= 0;
+
     height: root.open ? ModulationShelfMetrics.open-height : ModulationShelfMetrics.closed-height;
     border-width: 1px;
-    border-color: Theme.border;
+    border-color: root.assigning ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
     background: Theme.surface;
     clip: true;
 
     VerticalLayout {
-        // An explicit layout, not manual `y` offsets: the body must always
-        // start below the header, whatever height the shelf is given.
         spacing: 0px;
 
         header := Rectangle {
             height: 29px;
             background: header-touch.has-hover ? Theme.surface-raised : Theme.panel;
             HorizontalLayout {
-                padding-left: 6px;
-                padding-right: 6px;
-                spacing: 6px;
+                padding-left: 7px;
+                padding-right: 7px;
+                spacing: 7px;
                 Text {
-                    width: 30px;
-                    text: "MOD";
-                    color: root.open ? Theme.accent : Theme.text-muted;
+                    width: 68px;
+                    text: "MODULATION";
+                    color: root.open || root.assigning ? Theme.accent : Theme.text-muted;
                     font-size: 9px;
                     vertical-alignment: center;
                 }
                 Text {
-                    text: root.sources.length == 0 ? "Add a source to begin"
-                        : root.routes.length + " route" + (root.routes.length == 1 ? "" : "s");
+                    text: root.sources.length + " source" + (root.sources.length == 1 ? "" : "s")
+                        + "  ·  " + root.routes.length + " route" + (root.routes.length == 1 ? "" : "s");
                     color: Theme.text-faint;
-                    font-size: 10px;
+                    font-size: 9px;
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }
+                if root.assigning : Rectangle {
+                    width: 108px;
+                    height: 18px;
+                    border-radius: Theme.radius-sm;
+                    background: Theme.accent-active;
+                    Text {
+                        text: "ASSIGN · LFO " + (root.armed-slot + 1);
+                        color: Theme.focus;
+                        font-size: 8px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
                 Text {
                     text: root.open ? "⌃" : "⌄";
                     color: Theme.text-muted;
@@ -200,153 +267,271 @@ export component ModulationShelf inherits Rectangle {
             vertical-stretch: 1;
             HorizontalLayout {
                 padding: 6px;
-                spacing: 8px;
+                spacing: 6px;
 
-                // Chips and the armed source's editor share one row: the
-                // rack's fixed 268px device face leaves the shelf about one
-                // control row, not two. No source is hard-coded into a device
-                // face; the first usable kind happens to be LFO.
-                HorizontalLayout {
-                    spacing: 4px;
-                    alignment: start;
+                // Source collection: compact/iconified until selected, in the
+                // spirit of Bitwig's modulator strip. The add action opens a
+                // kind chooser even though LFO is the sole implemented kind.
+                Rectangle {
+                    width: 272px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: Theme.panel;
                     VerticalLayout {
-                        alignment: center;
-                        Text {
-                            width: 46px;
-                            height: 24px;
-                            text: "SOURCES";
-                            color: Theme.text-faint;
-                            font-size: 9px;
-                            vertical-alignment: center;
+                        padding: 3px;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            height: 10px;
+                            Text { text: "CONTROL SOURCES"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text { text: root.sources.length + "/" + root.max-sources; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
                         }
-                    }
-                    for source in root.sources : VerticalLayout {
-                        alignment: center;
-                        SourceChip {
-                            name: source.name;
-                            selected: source.selected;
-                            clicked => { root.source-selected(source.slot); }
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        ToolButton {
-                            text: "+ LFO";
-                            tooltip: "Add an LFO to this channel";
-                            enabled: root.sources.length < root.max-sources;
-                            min-width: 50px;
-                            max-width: 50px;
-                            min-height: 24px;
-                            max-height: 24px;
-                            clicked => { root.lfo-added(); }
-                        }
-                    }
-
-                    if root.armed-slot < 0 : Text {
-                        width: 186px;
-                        height: 24px;
-                        text: root.sources.length == 0
-                            ? "Add an LFO, then select it to arm eligible controls."
-                            : "Select a source to arm eligible controls.";
-                        color: Theme.text-muted;
-                        font-size: 10px;
-                        vertical-alignment: center;
-                        wrap: word-wrap;
-                    }
-
-                    // One editor, for whichever source is armed.
-                    if root.armed-slot >= 0 : VerticalLayout {
-                        alignment: center;
-                        SelectorBank {
-                            options: ["SIN", "TRI", "SAW", "SQR", "RND"];
-                            selected-index: root.armed-waveform;
-                            segment-width: 30px;
-                            min-height: 24px;
-                            max-height: 24px;
-                            tooltip: "LFO waveform";
-                            selected(index) => { root.lfo-wave-changed(root.armed-slot, index); }
-                        }
-                    }
-                    if root.armed-slot >= 0 : ParameterKnob {
-                        width: 44px;
-                        diameter: 30px;
-                        label: "Rate";
-                        tooltip: "LFO rate";
-                        value: root.armed-rate;
-                        minimum: 0.05;
-                        maximum: 20;
-                        default-value: 1;
-                        scale: ValueScale.logarithmic;
-                        value-text: round(root.armed-rate * 10) / 10 + " Hz";
-                        changed(value) => { root.lfo-rate-changed(root.armed-slot, value); }
-                    }
-                    if root.armed-slot >= 0 : ParameterKnob {
-                        width: 44px;
-                        diameter: 30px;
-                        label: "Level";
-                        tooltip: "LFO source depth";
-                        value: root.armed-depth;
-                        default-value: 1;
-                        value-text: round(root.armed-depth * 100) + "%";
-                        changed(value) => { root.lfo-depth-changed(root.armed-slot, value); }
-                    }
-                    if root.armed-slot >= 0 : ParameterKnob {
-                        width: 44px;
-                        diameter: 30px;
-                        label: "Phase";
-                        tooltip: "LFO reset phase";
-                        value: root.armed-phase;
-                        default-value: 0;
-                        value-text: round(root.armed-phase * 360) + "\u{b0}";
-                        changed(value) => { root.lfo-phase-changed(root.armed-slot, value); }
-                    }
-                    if root.armed-slot >= 0 : VerticalLayout {
-                        alignment: center;
-                        ToggleButton {
-                            text: "RE";
-                            tooltip: "Restart the LFO on note-on";
-                            checked: root.armed-retrigger;
-                            min-width: 34px;
-                            max-width: 34px;
-                            min-height: 24px;
-                            max-height: 24px;
-                            toggled(value) => { root.lfo-retrigger-changed(root.armed-slot, value); }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            alignment: start;
+                            for source in root.sources : SourceTile {
+                                name: source.name;
+                                waveform: source.waveform;
+                                selected: source.selected;
+                                armed: root.armed-slot == source.slot;
+                                clicked => {
+                                    root.add-source-menu-open = false;
+                                    root.source-selected(source.slot);
+                                }
+                            }
+                            if !root.add-source-menu-open : ToolButton {
+                                text: "+";
+                                tooltip: "Add a control source";
+                                enabled: root.sources.length < root.max-sources;
+                                min-width: 46px;
+                                max-width: 46px;
+                                min-height: 44px;
+                                max-height: 44px;
+                                clicked => { root.add-source-menu-open = true; }
+                            }
+                            if root.add-source-menu-open : Rectangle {
+                                width: 82px;
+                                height: 44px;
+                                border-width: 1px;
+                                border-color: Theme.accent;
+                                background: Theme.surface-raised;
+                                VerticalLayout {
+                                    padding: 4px;
+                                    spacing: 2px;
+                                    Text { height: 8px; text: "ADD SOURCE"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                                    ToolButton {
+                                        text: "LFO";
+                                        tooltip: "Add a low-frequency oscillator";
+                                        min-height: 22px;
+                                        max-height: 22px;
+                                        clicked => {
+                                            root.add-source-menu-open = false;
+                                            root.lfo-added();
+                                        }
+                                    }
+                                    Rectangle { vertical-stretch: 1; }
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
                         }
                     }
                 }
 
-                Rectangle { width: 1px; background: Theme.border; }
-
-                // The compact destination-first inspector. A knob marker will
-                // focus this same list; there is no separate matrix editor.
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 1px;
-                    Text {
-                        text: "ROUTES";
-                        color: Theme.text-faint;
-                        font-size: 9px;
-                        height: 12px;
-                    }
-                    if root.routes.length == 0 : Text {
-                        text: root.armed-slot < 0
-                            ? "Select a source, then drag a highlighted control."
-                            : "Drag any highlighted control to create a route.";
+                // Selected source editor: a Thor-like compact control panel.
+                // Trigger is presented as an input signal, so future device
+                // and cross-channel outlets extend this chooser instead of
+                // becoming special LFO modes.
+                Rectangle {
+                    width: 400px;
+                    border-width: 1px;
+                    border-color: root.assigning ? Theme.accent : Theme.border;
+                    background: Theme.panel;
+                    if root.selected-slot < 0 : Text {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        text: root.sources.length == 0
+                            ? "Add a control source to begin."
+                            : "Select a source to open its controls.";
                         color: Theme.text-muted;
                         font-size: 10px;
-                        wrap: word-wrap;
+                        vertical-alignment: center;
                     }
-                    for route in root.routes : RouteRow {
-                        destination: route.destination;
-                        depth: route.depth;
-                        polarity: route.polarity;
-                        allowed: route.allowed;
-                        polarity-selected(value) => {
-                            root.route-polarity-changed(route.route-index, value);
+                    if root.selected-slot >= 0 : VerticalLayout {
+                        padding: 3px;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            height: 14px;
+                            spacing: 5px;
+                            Text {
+                                text: "LFO " + (root.selected-slot + 1);
+                                color: Theme.text;
+                                font-size: 9px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: "BIPOLAR  ·  32 FRAME";
+                                color: Theme.text-faint;
+                                font-size: 7px;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            ToggleButton {
+                                text: root.assigning ? "ASSIGNING" : "ASSIGN";
+                                tooltip: root.assigning
+                                    ? "Stop assigning routes and edit base values"
+                                    : "Assign this source to highlighted controls";
+                                checked: root.assigning;
+                                min-width: 76px;
+                                max-width: 76px;
+                                min-height: 14px;
+                                max-height: 14px;
+                                toggled(value) => { root.assignment-toggled(); }
+                            }
                         }
-                        removed => { root.route-removed(route.route-index); }
+                        HorizontalLayout {
+                            spacing: 5px;
+                            LfoShape {
+                                width: 68px;
+                                height: 40px;
+                                waveform: root.selected-waveform;
+                                line-color: root.assigning ? Theme.focus : Theme.accent;
+                            }
+                            VerticalLayout {
+                                width: 154px;
+                                spacing: 2px;
+                                HorizontalLayout {
+                                    height: 19px;
+                                    spacing: 3px;
+                                    Text { width: 30px; text: "SHAPE"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
+                                    SelectorBank {
+                                        options: ["SIN", "TRI", "SAW", "SQR", "RND"];
+                                        selected-index: root.selected-waveform;
+                                        segment-width: 24px;
+                                        min-height: 18px;
+                                        max-height: 18px;
+                                        tooltip: "LFO waveform";
+                                        selected(index) => { root.lfo-wave-changed(root.selected-slot, index); }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    height: 19px;
+                                    spacing: 3px;
+                                    Text { width: 30px; text: "RESET"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
+                                    SelectorBank {
+                                        options: ["FREE", "NOTE ON"];
+                                        selected-index: root.selected-retrigger ? 1 : 0;
+                                        segment-width: 59px;
+                                        min-height: 18px;
+                                        max-height: 18px;
+                                        tooltip: "Input signal that restarts this LFO";
+                                        selected(index) => { root.lfo-retrigger-changed(root.selected-slot, index == 1); }
+                                    }
+                                }
+                            }
+                            VerticalLayout {
+                                width: 40px;
+                                height: 40px;
+                                spacing: 1px;
+                                alignment: center;
+                                Text { height: 8px; text: "RATE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "LFO rate";
+                                    value: root.selected-rate;
+                                    minimum: 0.05;
+                                    maximum: 20;
+                                    default-value: 1;
+                                    scale: ValueScale.logarithmic;
+                                    value-text: round(root.selected-rate * 10) / 10 + " Hz";
+                                    diameter: 20px;
+                                    changed(value) => { root.lfo-rate-changed(root.selected-slot, value); }
+                                }
+                                Text { height: 8px; text: round(root.selected-rate * 10) / 10 + ""; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 40px;
+                                height: 40px;
+                                spacing: 1px;
+                                alignment: center;
+                                Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "LFO source amount";
+                                    value: root.selected-depth;
+                                    default-value: 1;
+                                    value-text: round(root.selected-depth * 100) + "%";
+                                    diameter: 20px;
+                                    changed(value) => { root.lfo-depth-changed(root.selected-slot, value); }
+                                }
+                                Text { height: 8px; text: round(root.selected-depth * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 40px;
+                                height: 40px;
+                                spacing: 1px;
+                                alignment: center;
+                                Text { height: 8px; text: "PHASE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "LFO reset phase";
+                                    value: root.selected-phase;
+                                    default-value: 0;
+                                    value-text: round(root.selected-phase * 360) + "\u{b0}";
+                                    diameter: 20px;
+                                    changed(value) => { root.lfo-phase-changed(root.selected-slot, value); }
+                                }
+                                Text { height: 8px; text: round(root.selected-phase * 360) + "\u{b0}"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
                     }
-                    Rectangle { vertical-stretch: 1; }
+                }
+
+                // Destination-first route inspector. More routes scroll in
+                // this same module; a matrix is not required for ordinary use.
+                Rectangle {
+                    horizontal-stretch: 1;
+                    min-width: 212px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding: 3px;
+                        spacing: 3px;
+                        HorizontalLayout {
+                            height: 10px;
+                            Text { text: "DESTINATIONS"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text { text: root.routes.length + " ROUTES"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        }
+                        if root.routes.length == 0 : Text {
+                            text: root.assigning
+                                ? "Drag a highlighted parameter to create a route."
+                                : root.selected-slot < 0
+                                    ? "Select a source to inspect or assign it."
+                                    : "Choose Assign, then drag a destination.";
+                            color: Theme.text-muted;
+                            font-size: 9px;
+                            wrap: word-wrap;
+                        }
+                        if root.routes.length > 0 : ScrollView {
+                            horizontal-stretch: 1;
+                            vertical-stretch: 1;
+                            viewport-width: self.visible-width;
+                            viewport-height: max(self.visible-height, root.routes.length * 25px);
+                            VerticalLayout {
+                                spacing: 1px;
+                                for route in root.routes : RouteRow {
+                                    destination: route.destination;
+                                    depth: route.depth;
+                                    polarity: route.polarity;
+                                    allowed: route.allowed;
+                                    polarity-selected(value) => {
+                                        root.route-polarity-changed(route.route-index, value);
+                                    }
+                                    removed => { root.route-removed(route.route-index); }
+                                }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
                 }
             }
         }

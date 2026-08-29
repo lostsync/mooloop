@@ -170,9 +170,13 @@ fn render_sampler_source_editor() {
     // The shelf is channel-owned rather than a page inside the sampler. Its
     // armed cutoff markers and destination-first route row are visible
     // together, so a screenshot catches a lost model binding or a collapsed
-    // layout before it reaches the application.
+    // layout before it reaches the application. Use the normal desktop size
+    // for this expanded rack surface; the 960x760 shot above still covers the
+    // compact-window composition and this one exposes the complete shelf.
+    ui.window().set_size(LogicalSize::new(1440.0, 900.0));
     ui.set_sampler_device_page(2);
     ui.set_modulation_shelf_open(true);
+    ui.set_modulation_selected_slot(0);
     ui.set_modulation_armed_slot(0);
     ui.set_modulation_sources(ModelRc::from(Rc::new(VecModel::from(vec![
         ModulationSourceRow {
@@ -199,17 +203,19 @@ fn render_sampler_source_editor() {
         },
     ]))));
     ui.set_modulation_max_sources(4);
-    ui.set_modulation_armed_rate(2.0);
-    ui.set_modulation_armed_depth(1.0);
+    ui.set_modulation_selected_rate(2.0);
+    ui.set_modulation_selected_depth(1.0);
     // Descriptor-id indexed, so the sampler's cutoff overlay sits at 12.
     let mut source_depths = vec![0.0f32; 22];
     source_depths[12] = 0.35;
     ui.set_source_modulation_depths(source_depths.as_slice().into());
     ui.set_source_modulation_allowed(vec![true; 22].as_slice().into());
     let modulation = ui.window().take_snapshot().unwrap();
+    assert_eq!((modulation.width(), modulation.height()), (1440, 900));
     assert_ne!(snapshot.as_bytes(), modulation.as_bytes());
     write_snapshot(&modulation, "MOOLOOP_MODULATION_SHELF_SNAPSHOT");
 
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_sampler_device_page(1);
     let voice = ui.window().take_snapshot().unwrap();
     assert_ne!(snapshot.as_bytes(), voice.as_bytes());
