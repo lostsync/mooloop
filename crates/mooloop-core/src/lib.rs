@@ -29,8 +29,9 @@ pub use bridge::{EngineCommand, EngineEvent};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
 pub use modulation::{
-    ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModulatorKind, ModulatorParams,
-    ParamAddr, ParamOwner, MAX_MODULATORS_PER_CHANNEL, MAX_MOD_ROUTES_PER_CHANNEL,
+    strip_descriptor, ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModulatorKind,
+    ModulatorParams, ParamAddr, ParamOwner, MAX_MODULATORS_PER_CHANNEL, MAX_MOD_ROUTES_PER_CHANNEL,
+    STRIP_DESCRIPTORS, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
 };
 pub use mod_metadata::{
     local_slot_sources, ControlLatency, ControlRate, ModDestinationDescriptor, ModInterpretation,

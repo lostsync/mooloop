@@ -10,6 +10,9 @@
 //!   and emits the resolved sum. Devices store only resolved values, so no
 //!   effect needs any change to support modulation.
 
+use crate::effect::{ParamCurve, ParamDescriptor};
+use crate::gain::MAX_LINEAR_GAIN;
+use crate::mod_metadata::ModDestinationDescriptor;
 use crate::EffectTarget;
 
 /// Which device inside a channel or bus owns the parameter.
@@ -50,6 +53,51 @@ impl ParamAddr {
             param,
         }
     }
+
+    pub const fn strip(scope: EffectTarget, param: u32) -> Self {
+        Self {
+            scope,
+            owner: ParamOwner::Strip,
+            param,
+        }
+    }
+}
+
+/// The strip's own parameters. The strip is addressed like any device, so its
+/// controls need stable descriptor ids too -- that is what lets a source
+/// target a fader without the mixer growing a modulation special case
+/// (`MODULATOR_SYSTEM_SPEC.md`, "Destinations and destination metadata").
+pub const STRIP_PARAM_VOLUME: u32 = 0;
+pub const STRIP_PARAM_PAN: u32 = 1;
+
+pub static STRIP_DESCRIPTORS: [ParamDescriptor; 2] = [
+    ParamDescriptor {
+        id: STRIP_PARAM_VOLUME,
+        name: "Volume",
+        // Linear rather than the fader's display taper: modulation depth is a
+        // fraction of the normalized range, and the taper belongs to the
+        // control surface, not to the destination's numeric truth.
+        unit: "x",
+        min: 0.0,
+        max: MAX_LINEAR_GAIN,
+        curve: ParamCurve::Linear,
+        default: 0.8,
+    },
+    ParamDescriptor {
+        id: STRIP_PARAM_PAN,
+        name: "Pan",
+        unit: "",
+        min: -1.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+];
+
+pub fn strip_descriptor(id: u32) -> Option<&'static ParamDescriptor> {
+    STRIP_DESCRIPTORS
+        .iter()
+        .find(|descriptor| descriptor.id == id)
 }
 
 /// Shape of a free-running LFO.
@@ -275,12 +323,23 @@ impl ModRack {
     }
 
     /// Total signed offset applied to `destination`, as a fraction of its
-    /// range, given each slot's current output.
+    /// range, given each slot's current output and the destination's declared
+    /// policy.
+    ///
+    /// The policy is the gate, not a suggestion: a destination that refuses
+    /// modulation contributes nothing however many routes name it, and each
+    /// route's depth is clamped into the declared limit before it sums. An
+    /// illegal route is therefore inert rather than deleted -- the spec keeps
+    /// it as inspectable authored work.
     pub fn offset_for(
         &self,
         destination: ParamAddr,
         outputs: &[f32; MAX_MODULATORS_PER_CHANNEL],
+        policy: &ModDestinationDescriptor,
     ) -> f32 {
+        if !policy.allowed {
+            return 0.0;
+        }
         let mut total = 0.0;
         for route in self.routes.iter().flatten() {
             if route.destination != destination {
@@ -295,13 +354,23 @@ impl ModRack {
                 // rather than the midpoint.
                 ModPolarity::Unipolar => (*output + 1.0) * 0.5,
             };
-            total += shaped * route.depth;
+            total += shaped * policy.clamp_depth(route.depth);
         }
         total
     }
 
+    /// Whether a control signal will actually resolve `destination` this
+    /// block. This must agree with [`ModRack::offset_for`]: the engine uses it
+    /// to decide whether to suppress a knob's base write, and a route parked
+    /// on a destination that refuses modulation must not hold that knob
+    /// hostage.
+    pub fn modulates(&self, destination: ParamAddr, policy: &ModDestinationDescriptor) -> bool {
+        policy.allowed && self.destinations().any(|address| address == destination)
+    }
+
     /// Every destination this rack drives, for the UI's "which knobs are
-    /// modulated" pass.
+    /// modulated" pass. Includes routes whose destination currently refuses
+    /// modulation, because the inspector still has to show them.
     pub fn destinations(&self) -> impl Iterator<Item = ParamAddr> + '_ {
         self.routes.iter().flatten().map(|route| route.destination)
     }
@@ -313,6 +382,10 @@ mod tests {
 
     fn addr(param: u32) -> ParamAddr {
         ParamAddr::effect(EffectTarget::Channel(0), 0, param)
+    }
+
+    fn open(param: u32) -> ModDestinationDescriptor {
+        ModDestinationDescriptor::unrestricted(param)
     }
 
     /// Re-assigning the same source to the same destination retunes the
@@ -396,15 +469,70 @@ mod tests {
         // on the base value.
         outputs[0] = -1.0;
         outputs[1] = -1.0;
-        assert_eq!(rack.offset_for(addr(1), &outputs), -0.5);
+        assert_eq!(rack.offset_for(addr(1), &outputs, &open(1)), -0.5);
 
         // Both at full positive.
         outputs[0] = 1.0;
         outputs[1] = 1.0;
-        assert_eq!(rack.offset_for(addr(1), &outputs), 1.5);
+        assert_eq!(rack.offset_for(addr(1), &outputs, &open(1)), 1.5);
 
         // An unrelated destination is untouched.
-        assert_eq!(rack.offset_for(addr(2), &outputs), 0.0);
+        assert_eq!(rack.offset_for(addr(2), &outputs, &open(2)), 0.0);
+    }
+
+    /// The destination's declaration is the gate. A route parked on a
+    /// parameter that refuses modulation resolves to nothing and does not
+    /// count as modulating it -- otherwise it would hold that knob hostage,
+    /// suppressing the base write while contributing no movement. A narrowed
+    /// depth limit clamps the route rather than trusting the stored depth.
+    #[test]
+    fn the_destination_policy_gates_and_clamps_its_routes() {
+        let mut rack = ModRack::default();
+        rack.add_route(ModRoute {
+            source_slot: 0,
+            destination: addr(1),
+            depth: 1.0,
+            polarity: ModPolarity::Bipolar,
+        });
+        let mut outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
+        outputs[0] = 1.0;
+
+        let refused = ModDestinationDescriptor {
+            allowed: false,
+            ..open(1)
+        };
+        assert_eq!(rack.offset_for(addr(1), &outputs, &refused), 0.0);
+        assert!(!rack.modulates(addr(1), &refused));
+        // The route is still authored work: the inspector must be able to
+        // show it, so it stays in the rack's destination list.
+        assert!(rack.destinations().any(|address| address == addr(1)));
+
+        let narrowed = ModDestinationDescriptor {
+            depth_limit: (-0.2, 0.2),
+            ..open(1)
+        };
+        assert_eq!(rack.offset_for(addr(1), &outputs, &narrowed), 0.2);
+        assert!(rack.modulates(addr(1), &narrowed));
+    }
+
+    /// The strip's own controls are described destinations like any device's,
+    /// which is what lets a source reach a fader without the mixer growing a
+    /// modulation special case.
+    #[test]
+    fn strip_parameters_are_ordinary_modulation_destinations() {
+        let volume = strip_descriptor(STRIP_PARAM_VOLUME).unwrap();
+        let pan = strip_descriptor(STRIP_PARAM_PAN).unwrap();
+        assert!(ModDestinationDescriptor::for_param(volume).allowed);
+        assert!(ModDestinationDescriptor::for_param(pan).allowed);
+        assert_eq!(volume.from_normalized(0.0), 0.0);
+        assert_eq!(volume.from_normalized(1.0), MAX_LINEAR_GAIN);
+        // Centre pan sits at the middle of the normalized range, so a bipolar
+        // route swings evenly to both sides of it.
+        assert_eq!(pan.to_normalized(0.0), 0.5);
+        assert_eq!(
+            ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_PAN).owner,
+            ParamOwner::Strip
+        );
     }
 
     #[test]

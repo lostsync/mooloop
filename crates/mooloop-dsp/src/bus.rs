@@ -53,7 +53,14 @@ impl StereoBus {
 
     /// Scale L and R by independent gains (used for gain/pan staging).
     pub fn apply_stereo_gain(&mut self, gain_l: f32, gain_r: f32, frames: usize) {
-        for i in 0..frames {
+        self.apply_stereo_gain_range(gain_l, gain_r, 0, frames);
+    }
+
+    /// Apply gain to `start..end` only. The strip's output stage uses this to
+    /// step gain and pan at the control rate when a source or a lane is
+    /// driving them, instead of stamping one value across the whole block.
+    pub fn apply_stereo_gain_range(&mut self, gain_l: f32, gain_r: f32, start: usize, end: usize) {
+        for i in start..end {
             self.l[i] *= gain_l;
             self.r[i] *= gain_r;
         }

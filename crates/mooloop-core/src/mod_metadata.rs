@@ -201,6 +201,20 @@ impl ModDestinationDescriptor {
         }
     }
 
+    /// A destination that accepts full-range modulation. For parameters that
+    /// have no authored declaration yet, and for tests that are exercising
+    /// route arithmetic rather than policy.
+    pub const fn unrestricted(param: u32) -> Self {
+        Self {
+            param,
+            allowed: true,
+            interpretation: ModInterpretation::NormalizedRange,
+            default_polarity: ModPolarity::Bipolar,
+            depth_limit: (-1.0, 1.0),
+            smoothing: None,
+        }
+    }
+
     /// Depth clamped into this destination's declared limit.
     pub fn clamp_depth(&self, depth: f32) -> f32 {
         depth.clamp(self.depth_limit.0, self.depth_limit.1)

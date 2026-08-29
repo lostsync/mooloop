@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-28
-- Sessions: 10
+- Sessions: 11
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -60,7 +60,10 @@ work session you can recall being part of, and don't stress over precision.
   on the remote build box instead of the laptop. Traced the reported
   level-dependent summing to a shared nonlinear stage rather than the mixer:
   added superposition and ducking tests to `gain_structure_tests.rs`, and
-  freed the bus faders' top +6 dB, which the UI was clamping at unity.
+  freed the bus faders' top +6 dB, which the UI was clamping at unity. Made
+  the modulator system's destination metadata load-bearing: the declared
+  policy now gates and clamps every route, and the channel strip's fader and
+  pan became real modulation destinations resolved in control-rate segments.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

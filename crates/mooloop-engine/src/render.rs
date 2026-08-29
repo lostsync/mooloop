@@ -1,14 +1,15 @@
 //! JACK-independent render state shared by realtime playback and file export.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    compile_bus_graph, AutomationLane, ChannelSource, GeneratorParams, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
-    EngineCommand, ModRack, MonoSynthParams, ParamAddr, ParamOwner, PolySynthParams, Project,
-    SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
-    MAX_MODULATORS_PER_CHANNEL, MAX_LINEAR_GAIN,
+    compile_bus_graph, AutomationLane, ChannelSource, CompiledBusGraph, DeviceKind,
+    DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams, ModDestinationDescriptor,
+    ModRack, MonoSynthParams, ParamAddr, ParamOwner, PolySynthParams, Project, SamplerParams,
+    DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
+    MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
 #[cfg(test)]
 use mooloop_dsp::build_effect;
@@ -443,12 +444,13 @@ impl EffectChain {
 
         for descriptor in kind.descriptors() {
             let destination = ParamAddr::effect(scope, slot as u8, descriptor.id);
-            let modulated = modulation.is_some_and(|modulation| {
-                modulation
-                    .rack
-                    .destinations()
-                    .any(|address| address == destination)
-            });
+            // The destination's own declaration decides whether modulation is
+            // legal here at all -- a stepped mode selector refuses it, so an
+            // LFO cannot flap an algorithm switch. Automation is unaffected: a
+            // lane is explicit authored intent, not a continuous signal.
+            let policy = ModDestinationDescriptor::for_param(descriptor);
+            let modulated = modulation
+                .is_some_and(|modulation| modulation.rack.modulates(destination, &policy));
             let curve = automation.and_then(|automation| automation.curve_for(destination));
             if !modulated && curve.is_none() {
                 continue;
@@ -465,9 +467,11 @@ impl EffectChain {
                     .and_then(|(curve, automation)| automation.value_at(curve, tick))
                     .unwrap_or(knob_normalized);
                 let offset_normalized = match (modulated, modulation) {
-                    (true, Some(modulation)) => modulation
-                        .rack
-                        .offset_for(destination, &modulation.outputs[tick]),
+                    (true, Some(modulation)) => {
+                        modulation
+                            .rack
+                            .offset_for(destination, &modulation.outputs[tick], &policy)
+                    }
                     _ => 0.0,
                 };
                 let value = descriptor
@@ -640,6 +644,85 @@ impl EffectChain {
     }
 }
 
+/// The strip's resolved `(gain, pan)` for each control subdivision of one
+/// block. Fixed-size and `Copy`: it is built on the audio thread.
+#[derive(Debug, Clone, Copy)]
+struct StripSegments {
+    values: [(f32, f32); MAX_CONTROL_TICKS_PER_BLOCK],
+    count: usize,
+}
+
+/// Resolve the strip's fader and pan for this block.
+///
+/// The strip is an ordinary destination -- `ParamOwner::Strip` with the
+/// descriptor ids in `STRIP_DESCRIPTORS` -- but unlike a device it keeps no
+/// parameter state between blocks: the output stage multiplies the bus by its
+/// knob value from scratch every time. So there is no base/resolved split to
+/// maintain here and nothing to restore when a route is removed; the knob is
+/// already the base, and a control signal simply resolves into per-subdivision
+/// gain segments on top of it.
+///
+/// Returns `None` when nothing drives either parameter, so the overwhelmingly
+/// common still-fader case stays one pass over the block.
+fn resolve_strip_segments(
+    base_gain: f32,
+    base_pan: f32,
+    scope: EffectTarget,
+    modulation: &ModulationBlock<'_>,
+    automation: Option<&AutomationBlock<'_>>,
+) -> Option<StripSegments> {
+    let ticks = modulation
+        .ticks
+        .max(automation.map_or(0, |automation| automation.ticks))
+        .min(MAX_CONTROL_TICKS_PER_BLOCK);
+    if ticks == 0 {
+        return None;
+    }
+    let mut segments = StripSegments {
+        values: [(base_gain, base_pan); MAX_CONTROL_TICKS_PER_BLOCK],
+        count: ticks,
+    };
+    let mut driven = false;
+    for descriptor in STRIP_DESCRIPTORS.iter() {
+        let destination = ParamAddr::strip(scope, descriptor.id);
+        let policy = ModDestinationDescriptor::for_param(descriptor);
+        let modulated = modulation.rack.modulates(destination, &policy);
+        let curve = automation.and_then(|automation| automation.curve_for(destination));
+        if !modulated && curve.is_none() {
+            continue;
+        }
+        driven = true;
+        let knob = if descriptor.id == STRIP_PARAM_VOLUME {
+            base_gain
+        } else {
+            base_pan
+        };
+        let knob_normalized = descriptor.to_normalized(knob);
+        for tick in 0..ticks {
+            let base_normalized = curve
+                .as_ref()
+                .zip(automation)
+                .and_then(|(curve, automation)| automation.value_at(curve, tick))
+                .unwrap_or(knob_normalized);
+            let offset_normalized = if modulated {
+                modulation
+                    .rack
+                    .offset_for(destination, &modulation.outputs[tick], &policy)
+            } else {
+                0.0
+            };
+            let value =
+                descriptor.from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
+            if descriptor.id == STRIP_PARAM_VOLUME {
+                segments.values[tick].0 = value;
+            } else {
+                segments.values[tick].1 = value;
+            }
+        }
+    }
+    driven.then_some(segments)
+}
+
 /// Shared output stage: linear gain, a source-pan or bus-balance application,
 /// and a mute that stops the strip contributing without stopping it processing
 /// (so effect tails on a muted strip still decay instead of freezing).
@@ -671,6 +754,30 @@ impl OutputStage {
     fn apply_pan(&self, bus: &mut StereoBus, frames: usize) {
         let (pan_l, pan_r) = pan_gains(self.pan);
         bus.apply_stereo_gain(self.gain * pan_l, self.gain * pan_r, frames);
+    }
+
+    /// Apply gain and pan, stepping them per control subdivision when a
+    /// source or a lane is driving them. `segments` is `None` for the ordinary
+    /// case of a still fader, which stays a single pass over the block.
+    fn apply_pan_segments(
+        &self,
+        bus: &mut StereoBus,
+        frames: usize,
+        segments: Option<&StripSegments>,
+    ) {
+        let Some(segments) = segments else {
+            self.apply_pan(bus, frames);
+            return;
+        };
+        for (tick, &(gain, pan)) in segments.values.iter().take(segments.count).enumerate() {
+            let start = tick * CONTROL_RATE_FRAMES;
+            if start >= frames {
+                break;
+            }
+            let end = (start + CONTROL_RATE_FRAMES).min(frames);
+            let (pan_l, pan_r) = pan_gains(pan);
+            bus.apply_stereo_gain_range(gain * pan_l, gain * pan_r, start, end);
+        }
     }
 
     fn apply_balance(&self, bus: &mut StereoBus, frames: usize) {
@@ -1159,6 +1266,13 @@ impl RenderState {
         Self::chain_for(&mut self.strips, &mut self.buses, target)
     }
 
+    fn chain(&self, target: EffectTarget) -> Option<&EffectChain> {
+        match target {
+            EffectTarget::Channel(index) => self.strips.get(index as usize).map(|s| &s.effects),
+            EffectTarget::Bus(index) => self.buses.get(index as usize).map(|b| &b.effects),
+        }
+    }
+
     /// Install a complete saved rack while retaining a same-kind LFO's phase.
     /// Copying the small matrix is realtime-safe; `ModulatorRack::set_slot`
     /// owns the phase-preserving detail.
@@ -1234,18 +1348,33 @@ impl RenderState {
                     GeneratorParams::DrumSynth => {}
                 }
             }
+            // Neither needs one. The strip's output stage keeps no parameter
+            // state between blocks -- it re-reads its knob every block -- and
+            // a modulator's own parameters are not modulation destinations
+            // yet, so there is nothing left holding a stale resolved value.
             ParamOwner::Modulator { .. } | ParamOwner::Strip => {}
         }
     }
 
+    /// Whether a source will overwrite this effect parameter this block, and
+    /// so whether writing the knob's base straight through would be undone.
+    /// A route aimed at a destination that refuses modulation does not count:
+    /// it resolves to nothing, so the knob must still reach the device.
     fn effect_is_modulated(&self, target: EffectTarget, slot: u8, id: u32) -> bool {
         let EffectTarget::Channel(channel) = target else {
             return false;
         };
-        self.modulation.get(channel as usize).is_some_and(|rack| {
-            rack.destinations()
-                .any(|destination| destination == ParamAddr::effect(target, slot, id))
-        })
+        let Some(descriptor) = self
+            .chain(target)
+            .and_then(|chain| chain.kinds.get(slot as usize).copied().flatten())
+            .and_then(|kind| kind.descriptor(id))
+        else {
+            return false;
+        };
+        let policy = ModDestinationDescriptor::for_param(descriptor);
+        self.modulation
+            .get(channel as usize)
+            .is_some_and(|rack| rack.modulates(ParamAddr::effect(target, slot, id), &policy))
     }
 
     /// Change the stored base, then immediately queue it only if a control
@@ -1825,10 +1954,8 @@ impl RenderState {
                         owner: ParamOwner::Source,
                         param: descriptor.id,
                     };
-                    let modulated = modulation
-                        .rack
-                        .destinations()
-                        .any(|address| address == destination);
+                    let policy = ModDestinationDescriptor::for_param(descriptor);
+                    let modulated = modulation.rack.modulates(destination, &policy);
                     let curve = automation
                         .as_ref()
                         .and_then(|automation| automation.curve_for(destination));
@@ -1846,9 +1973,11 @@ impl RenderState {
                             .and_then(|(curve, automation)| automation.value_at(curve, tick))
                             .unwrap_or(knob_normalized);
                         let offset_normalized = if modulated {
-                            modulation
-                                .rack
-                                .offset_for(destination, &modulation.outputs[tick])
+                            modulation.rack.offset_for(
+                                destination,
+                                &modulation.outputs[tick],
+                                &policy,
+                            )
                         } else {
                             0.0
                         };
@@ -1864,6 +1993,13 @@ impl RenderState {
                     }
                 }
             }
+            let strip_segments = resolve_strip_segments(
+                self.strips[index].output.gain,
+                self.strips[index].output.pan,
+                EffectTarget::Channel(index as u8),
+                &modulation,
+                automation.as_ref(),
+            );
             let strip = &mut self.strips[index];
             strip.bus.clear(frames);
             strip.process(&context, &self.events[index]);
@@ -1880,7 +2016,9 @@ impl RenderState {
                 Some(&modulation),
                 automation.as_ref(),
             );
-            strip.output.apply_pan(&mut strip.bus, frames);
+            strip
+                .output
+                .apply_pan_segments(&mut strip.bus, frames, strip_segments.as_ref());
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
                 destination.bus.add_from(&strip.bus, frames);
             }
@@ -2218,6 +2356,178 @@ mod tests {
         render.apply_command(EngineCommand::Stop);
         render.apply_command(EngineCommand::Play);
         assert_eq!(render.process_block(256).peak_l, 0.0);
+    }
+
+    fn strip_route(param: u32, depth: f32) -> ModRack {
+        let mut rack = ModRack::default();
+        rack.add_route(mooloop_core::ModRoute {
+            source_slot: 0,
+            destination: ParamAddr::strip(EffectTarget::Channel(0), param),
+            depth,
+            polarity: mooloop_core::ModPolarity::Bipolar,
+        })
+        .expect("route fits the matrix");
+        rack
+    }
+
+    /// The strip's fader is an ordinary destination: a source resolves it into
+    /// one gain per control subdivision, centred on the knob value, and leaves
+    /// pan untouched. The offset sums in normalized space and clamps there, so
+    /// a swing that would drive the fader below zero lands on silence rather
+    /// than a negative gain.
+    #[test]
+    fn a_source_resolves_the_strip_fader_into_control_rate_segments() {
+        let rack = strip_route(mooloop_core::STRIP_PARAM_VOLUME, 0.25);
+        let mut outputs: ControlOutputs =
+            [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK];
+        outputs[0][0] = 1.0;
+        outputs[1][0] = -1.0;
+        let modulation = ModulationBlock {
+            rack: &rack,
+            outputs: &outputs,
+            ticks: 2,
+        };
+
+        let segments =
+            resolve_strip_segments(0.8, 0.0, EffectTarget::Channel(0), &modulation, None)
+                .expect("a routed fader resolves");
+        assert_eq!(segments.count, 2);
+
+        // 0.8 of the 0..MAX_LINEAR_GAIN range is 0.2 normalized. +0.25 lands
+        // at 0.45; -0.25 would land at -0.05 and clamps to silence.
+        let volume = mooloop_core::strip_descriptor(mooloop_core::STRIP_PARAM_VOLUME).unwrap();
+        assert!((segments.values[0].0 - volume.from_normalized(0.45)).abs() < 1e-6);
+        assert_eq!(segments.values[1].0, 0.0);
+        assert_eq!(segments.values[0].1, 0.0);
+        assert_eq!(segments.values[1].1, 0.0);
+    }
+
+    /// A still fader resolves to no segments at all, so the ordinary block
+    /// stays a single pass over the bus rather than a per-subdivision walk.
+    #[test]
+    fn an_undriven_strip_resolves_to_no_segments() {
+        let outputs: ControlOutputs =
+            [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK];
+        let modulation = ModulationBlock {
+            rack: &ModRack::default(),
+            outputs: &outputs,
+            ticks: 2,
+        };
+        assert!(
+            resolve_strip_segments(0.8, 0.0, EffectTarget::Channel(0), &modulation, None).is_none()
+        );
+    }
+
+    /// A modulated fader must actually reach the audio. Two subdivisions with
+    /// opposite source outputs scale the same block by different gains, which
+    /// an unmodulated render does not do.
+    #[test]
+    fn strip_modulation_reaches_the_rendered_block() {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+            mooloop_core::ModLfoParams {
+                // A quarter-cycle per 32-frame subdivision at 48 kHz.
+                rate_hz: 375.0,
+                waveform: mooloop_core::ModLfoWaveform::Square,
+                ..mooloop_core::ModLfoParams::default()
+            },
+        ));
+        channel.setup.modulation = {
+            let mut rack = strip_route(mooloop_core::STRIP_PARAM_VOLUME, 0.5);
+            rack.slots = channel.setup.modulation.slots;
+            rack
+        };
+        let project = synth_project(channel);
+
+        let mut flat_project = project.clone();
+        flat_project.channels[0].setup.modulation.routes =
+            [None; mooloop_core::MAX_MOD_ROUTES_PER_CHANNEL];
+        let mut flat = RenderState::from_project(48_000, &flat_project, &[]);
+        flat.play();
+        flat.process_block(256);
+        let flat_master: Vec<f32> = flat.master().l[..256].to_vec();
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        render.process_block(256);
+        let modulated: Vec<f32> = render.master().l[..256].to_vec();
+
+        // Compare the two renders subdivision by subdivision. A square LFO
+        // alternates the fader between two gains, so the ratio to the
+        // unmodulated render must not be the same in every subdivision.
+        let ratio_at = |tick: usize| -> Option<f32> {
+            (tick * CONTROL_RATE_FRAMES..(tick + 1) * CONTROL_RATE_FRAMES)
+                .filter(|&i| flat_master[i].abs() > 1e-4)
+                .map(|i| modulated[i] / flat_master[i])
+                .next()
+        };
+        let first = ratio_at(0).expect("the first subdivision must carry audio");
+        let differs = (1..256 / CONTROL_RATE_FRAMES)
+            .filter_map(ratio_at)
+            .any(|ratio| (ratio - first).abs() > 1e-3);
+        assert!(
+            differs,
+            "a source on the fader must change gain across subdivisions"
+        );
+    }
+
+    /// A stepped parameter refuses modulation, so a route aimed at one is
+    /// inert -- and, just as importantly, does not suppress the knob. Without
+    /// the policy check the engine would treat the destination as modulated,
+    /// withhold the base write, and leave the mode stuck.
+    #[test]
+    fn a_route_on_a_stepped_parameter_neither_moves_nor_blocks_its_knob() {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        channel
+            .setup
+            .effects
+            .push(mooloop_core::EffectSlotState::of_kind(
+                mooloop_core::EffectKind::Eq,
+            ));
+        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+            mooloop_core::ModLfoParams {
+                rate_hz: 375.0,
+                ..mooloop_core::ModLfoParams::default()
+            },
+        ));
+        let stepped = ParamAddr::effect(EffectTarget::Channel(0), 0, mooloop_core::EQ_PARAM_TARGET);
+        assert!(channel
+            .setup
+            .modulation
+            .add_route(mooloop_core::ModRoute {
+                source_slot: 0,
+                destination: stepped,
+                depth: 1.0,
+                polarity: mooloop_core::ModPolarity::Bipolar,
+            })
+            .is_some());
+
+        let project = synth_project(channel);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        render.process_block(128);
+
+        // No control events are emitted for a destination that refuses
+        // modulation.
+        assert!(!render.strips[0]
+            .effects
+            .event_scratch
+            .iter()
+            .any(|event| matches!(
+                event.event,
+                Event::ParamValue {
+                    id: mooloop_core::EQ_PARAM_TARGET,
+                    ..
+                }
+            )));
+
+        // And the knob still reaches the device, because the parked route does
+        // not count as modulating it.
+        assert!(!render.effect_is_modulated(
+            EffectTarget::Channel(0),
+            0,
+            mooloop_core::EQ_PARAM_TARGET
+        ));
     }
 
     #[test]
