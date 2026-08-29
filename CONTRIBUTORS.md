@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-29
-- Sessions: 12
+- Sessions: 13
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -80,7 +80,11 @@ work session you can recall being part of, and don't stress over precision.
   structurally flatters a reverb, so a wet branch +4.7 dB hot through the
   sustain passed. Measured mid-sustain instead, tightened the reverb ceiling
   and the plate's output reference, and moved the broadband assertions off
-  peak onto energy.
+  peak onto energy. Finished the modulator destination surface: every eligible
+  knob on every effect and generator face is now assignable, with the
+  assignment contract declared once on `EffectDeviceShell` and the oscillator
+  strip deriving its ids from a `param-base` rather than repeating them per
+  oscillator.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

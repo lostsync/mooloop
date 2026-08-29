@@ -2542,6 +2542,12 @@ export component MainWindow inherits Window {
                                                     effect-kind-selected(kind) => { root.add-effect-clicked(kind, index); }
                                                     remove-requested => { root.remove-effect-clicked(index); }
                                                     if slot.kind == 0 : FilterDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2554,13 +2560,7 @@ export component MainWindow inherits Window {
                                                         mode: round(slot.p2 * 2);
                                                         slope: round(slot.p3);
                                                         drive: slot.p4;
-                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
-                                                        modulation-depths: slot.modulation-depths;
-                                                        modulation-allowed: slot.modulation-allowed;
                                                         cutoff-changed(v) => { root.effect-param-changed(index, 0, v); }
-                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
-                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
-                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         resonance-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         mode-changed(v) => { root.effect-param-changed(index, 2, v * 1.0 / 2.0); }
                                                         slope-changed(v) => { root.effect-param-changed(index, 3, v * 1.0); }
@@ -2568,6 +2568,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 1 : DriveDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2588,6 +2594,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 2 : BitcrushDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2604,6 +2616,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 3 : DelayDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2635,6 +2653,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 4 : GateDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2655,6 +2679,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 5 : CompressorDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2678,6 +2708,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 6 : LimiterDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2694,6 +2730,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 7 : EqDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2720,6 +2762,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 8 : ReverbDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2746,6 +2794,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 9 : ModulationDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2772,6 +2826,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 10 : PlateDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;
@@ -2790,6 +2850,12 @@ export component MainWindow inherits Window {
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 11 : BufferDeviceFace {
+                                                        modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         x: DeviceRackMetrics.rail-width;
                                                         y: 0px;
                                                         width: parent.content-width;

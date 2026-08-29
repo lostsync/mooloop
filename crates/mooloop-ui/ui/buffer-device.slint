@@ -122,7 +122,13 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 value-text: root.offset-beats < 0.05
                     ? "live"
                     : round(root.offset-beats * 100) / 100 + " beats";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[0];
+                modulation-depth: root.modulation-depths[0];
                 changed(v) => { root.offset-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                modulation-edit-started => { root.modulation-edit-started(0); }
+                modulation-edit-finished => { root.modulation-edit-finished(0); }
             }
             ParameterKnob {
                 width: 52px;
@@ -132,7 +138,13 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 value <=> root.crossfade;
                 default-value: 0.348;
                 value-text: round(root.crossfade-ms * 10) / 10 + " ms";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[1];
+                modulation-depth: root.modulation-depths[1];
                 changed(v) => { root.crossfade-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+                modulation-edit-started => { root.modulation-edit-started(1); }
+                modulation-edit-finished => { root.modulation-edit-finished(1); }
             }
             Rectangle { horizontal-stretch: 1; }
         }

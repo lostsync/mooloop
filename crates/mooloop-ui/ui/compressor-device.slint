@@ -61,11 +61,17 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 value <=> root.threshold;
                 default-value: 0.7;
                 value-text: round(root.threshold-db) + " dB";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[0];
+                modulation-depth: root.modulation-depths[0];
                 changed(v) => { root.threshold-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "Level compression starts at"
                         : root.hover-hint == "Level compression starts at" ? "" : root.hover-hint;
                 }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                modulation-edit-started => { root.modulation-edit-started(0); }
+                modulation-edit-finished => { root.modulation-edit-finished(0); }
             }
             ParameterKnob {
                 width: 71px;
@@ -75,11 +81,17 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 value <=> root.ratio;
                 default-value: 0.4627;
                 value-text: round(root.ratio-value * 10) / 10 + ":1";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[1];
+                modulation-depth: root.modulation-depths[1];
                 changed(v) => { root.ratio-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "How hard the signal is held above the threshold"
                         : root.hover-hint == "How hard the signal is held above the threshold" ? "" : root.hover-hint;
                 }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+                modulation-edit-started => { root.modulation-edit-started(1); }
+                modulation-edit-finished => { root.modulation-edit-finished(1); }
             }
             ParameterKnob {
                 width: 71px;
@@ -89,11 +101,17 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 value <=> root.attack;
                 default-value: 0.6388;
                 value-text: round(root.attack-ms * 100) / 100 + " ms";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[2];
+                modulation-depth: root.modulation-depths[2];
                 changed(v) => { root.attack-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "How fast the compressor responds"
                         : root.hover-hint == "How fast the compressor responds" ? "" : root.hover-hint;
                 }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+                modulation-edit-started => { root.modulation-edit-started(2); }
+                modulation-edit-finished => { root.modulation-edit-finished(2); }
             }
             ParameterKnob {
                 width: 71px;
@@ -103,11 +121,17 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 value <=> root.release;
                 default-value: 0.5304;
                 value-text: round(root.release-ms) + " ms";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[3];
+                modulation-depth: root.modulation-depths[3];
                 changed(v) => { root.release-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "How fast it lets go"
                         : root.hover-hint == "How fast it lets go" ? "" : root.hover-hint;
                 }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+                modulation-edit-started => { root.modulation-edit-started(3); }
+                modulation-edit-finished => { root.modulation-edit-finished(3); }
             }
             ParameterKnob {
                 width: 71px;
@@ -117,11 +141,17 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 value <=> root.knee;
                 default-value: 0.25;
                 value-text: round(root.knee-db * 10) / 10 + " dB";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[4];
+                modulation-depth: root.modulation-depths[4];
                 changed(v) => { root.knee-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "Width of the soft transition at the threshold"
                         : root.hover-hint == "Width of the soft transition at the threshold" ? "" : root.hover-hint;
                 }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
+                modulation-edit-started => { root.modulation-edit-started(4); }
+                modulation-edit-finished => { root.modulation-edit-finished(4); }
             }
             ParameterKnob {
                 width: 71px;
@@ -131,11 +161,17 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 value <=> root.makeup;
                 default-value: 0.0;
                 value-text: round(root.makeup-db * 10) / 10 + " dB";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[5];
+                modulation-depth: root.modulation-depths[5];
                 changed(v) => { root.makeup-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "Gain added after compression"
                         : root.hover-hint == "Gain added after compression" ? "" : root.hover-hint;
                 }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); }
+                modulation-edit-started => { root.modulation-edit-started(5); }
+                modulation-edit-finished => { root.modulation-edit-finished(5); }
             }
         }
     }

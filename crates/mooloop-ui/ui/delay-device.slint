@@ -84,7 +84,13 @@ export component DelayDeviceFace inherits EffectDeviceShell {
                 value <=> root.feedback;
                 default-value: 0.3571;
                 value-text: round(root.feedback-natural * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[1];
+                modulation-depth: root.modulation-depths[1];
                 changed(v) => { root.feedback-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+                modulation-edit-started => { root.modulation-edit-started(1); }
+                modulation-edit-finished => { root.modulation-edit-finished(1); }
             }
             ParameterKnob {
                 width: 85px;
@@ -94,7 +100,13 @@ export component DelayDeviceFace inherits EffectDeviceShell {
                 value <=> root.cross;
                 default-value: 0.0;
                 value-text: round(root.cross * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[3];
+                modulation-depth: root.modulation-depths[3];
                 changed(v) => { root.cross-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+                modulation-edit-started => { root.modulation-edit-started(3); }
+                modulation-edit-finished => { root.modulation-edit-finished(3); }
             }
             ParameterKnob {
                 width: 85px;
@@ -104,7 +116,13 @@ export component DelayDeviceFace inherits EffectDeviceShell {
                 value <=> root.tone;
                 default-value: 0.6;
                 value-text: round(root.tone * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[4];
+                modulation-depth: root.modulation-depths[4];
                 changed(v) => { root.tone-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
+                modulation-edit-started => { root.modulation-edit-started(4); }
+                modulation-edit-finished => { root.modulation-edit-finished(4); }
             }
             // Delay's own repeat blend is intentionally kept alongside the
             // generic host Wet/dry control for the rare but useful nested mix.
@@ -116,7 +134,13 @@ export component DelayDeviceFace inherits EffectDeviceShell {
                 value <=> root.mix;
                 default-value: 0.35;
                 value-text: round(root.mix * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[5];
+                modulation-depth: root.modulation-depths[5];
                 changed(v) => { root.mix-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); }
+                modulation-edit-started => { root.modulation-edit-started(5); }
+                modulation-edit-finished => { root.modulation-edit-finished(5); }
             }
         }
     }

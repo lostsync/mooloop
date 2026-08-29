@@ -140,7 +140,13 @@ export component PlateDeviceFace inherits EffectDeviceShell {
                     value <=> root.size;
                     default-value: 0.5;
                     value-text: round(root.size * 100) + "%";
+                    modulation-armed: root.modulation-armed;
+                    modulation-allowed: root.modulation-allowed[0];
+                    modulation-depth: root.modulation-depths[0];
                     changed(v) => { root.size-changed(v); }
+                    modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                    modulation-edit-started => { root.modulation-edit-started(0); }
+                    modulation-edit-finished => { root.modulation-edit-finished(0); }
                 }
                 ParameterKnob {
                     width: 69px;
@@ -152,7 +158,13 @@ export component PlateDeviceFace inherits EffectDeviceShell {
                     value-text: root.decay-natural >= 10
                         ? round(root.decay-natural) + " s"
                         : round(root.decay-natural * 10) / 10 + " s";
+                    modulation-armed: root.modulation-armed;
+                    modulation-allowed: root.modulation-allowed[1];
+                    modulation-depth: root.modulation-depths[1];
                     changed(v) => { root.decay-changed(v); }
+                    modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+                    modulation-edit-started => { root.modulation-edit-started(1); }
+                    modulation-edit-finished => { root.modulation-edit-finished(1); }
                 }
             }
             HorizontalLayout {
@@ -165,7 +177,13 @@ export component PlateDeviceFace inherits EffectDeviceShell {
                     value <=> root.damping;
                     default-value: 0.4;
                     value-text: round(root.damping * 100) + "%";
+                    modulation-armed: root.modulation-armed;
+                    modulation-allowed: root.modulation-allowed[2];
+                    modulation-depth: root.modulation-depths[2];
                     changed(v) => { root.damping-changed(v); }
+                    modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+                    modulation-edit-started => { root.modulation-edit-started(2); }
+                    modulation-edit-finished => { root.modulation-edit-finished(2); }
                 }
                 ParameterKnob {
                     width: 69px;
@@ -175,7 +193,13 @@ export component PlateDeviceFace inherits EffectDeviceShell {
                     value <=> root.width-value;
                     default-value: 1.0;
                     value-text: round(root.width-value * 100) + "%";
+                    modulation-armed: root.modulation-armed;
+                    modulation-allowed: root.modulation-allowed[3];
+                    modulation-depth: root.modulation-depths[3];
                     changed(v) => { root.width-changed(v); }
+                    modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+                    modulation-edit-started => { root.modulation-edit-started(3); }
+                    modulation-edit-finished => { root.modulation-edit-finished(3); }
                 }
             }
         }

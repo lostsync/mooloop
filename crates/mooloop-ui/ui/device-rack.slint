@@ -294,6 +294,18 @@ export component EffectDeviceShell inherits Rectangle {
     in property <bool> bypassed;
     callback reorder-requested(int);  // target slot index
 
+    // Modulation state for every effect face, indexed by descriptor id so a
+    // knob reads its own overlay with the same stable number it already uses
+    // to address the parameter. Declared once here rather than per face:
+    // every device in the rack answers the same assignment contract, and the
+    // ids mirror the `*_PARAM_*` constants in mooloop-core.
+    in property <bool> modulation-armed;
+    in property <[float]> modulation-depths;
+    in property <[bool]> modulation-allowed;
+    callback modulation-depth-changed(int, float);
+    callback modulation-edit-started(int);
+    callback modulation-edit-finished(int);
+
     @children
 
     DeviceHeader {

@@ -51,7 +51,13 @@ export component LimiterDeviceFace inherits EffectDeviceShell {
                 value <=> root.ceiling;
                 default-value: 0.9875;
                 value-text: round(root.ceiling-db * 10) / 10 + " dB";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[0];
+                modulation-depth: root.modulation-depths[0];
                 changed(v) => { root.ceiling-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                modulation-edit-started => { root.modulation-edit-started(0); }
+                modulation-edit-finished => { root.modulation-edit-finished(0); }
             }
             ParameterKnob {
                 width: 69px;
@@ -61,7 +67,13 @@ export component LimiterDeviceFace inherits EffectDeviceShell {
                 value <=> root.release;
                 default-value: 0.6294;
                 value-text: round(root.release-ms) + " ms";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[1];
+                modulation-depth: root.modulation-depths[1];
                 changed(v) => { root.release-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+                modulation-edit-started => { root.modulation-edit-started(1); }
+                modulation-edit-finished => { root.modulation-edit-finished(1); }
             }
             ParameterKnob {
                 width: 69px;
@@ -71,7 +83,13 @@ export component LimiterDeviceFace inherits EffectDeviceShell {
                 value <=> root.gain;
                 default-value: 0.0;
                 value-text: round(root.gain-db * 10) / 10 + " dB";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[2];
+                modulation-depth: root.modulation-depths[2];
                 changed(v) => { root.gain-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+                modulation-edit-started => { root.modulation-edit-started(2); }
+                modulation-edit-finished => { root.modulation-edit-finished(2); }
             }
         }
     }

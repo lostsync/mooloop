@@ -63,7 +63,13 @@ export component DriveDeviceFace inherits EffectDeviceShell {
                 value <=> root.drive;
                 default-value: 0.1667;
                 value-text: round(root.drive-natural * 10) / 10 + "x";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[0];
+                modulation-depth: root.modulation-depths[0];
                 changed(v) => { root.drive-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                modulation-edit-started => { root.modulation-edit-started(0); }
+                modulation-edit-finished => { root.modulation-edit-finished(0); }
             }
             ParameterKnob {
                 width: 69px;
@@ -73,7 +79,13 @@ export component DriveDeviceFace inherits EffectDeviceShell {
                 value <=> root.tone;
                 default-value: 0.5;
                 value-text: round((root.tone * 2 - 1) * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[2];
+                modulation-depth: root.modulation-depths[2];
                 changed(v) => { root.tone-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+                modulation-edit-started => { root.modulation-edit-started(2); }
+                modulation-edit-finished => { root.modulation-edit-finished(2); }
             }
             // This is Drive's own blend, inside its DSP.  The frame Wet/dry
             // control remains an outer, host-level parallel blend.
@@ -85,7 +97,13 @@ export component DriveDeviceFace inherits EffectDeviceShell {
                 value <=> root.mix;
                 default-value: 1.0;
                 value-text: round(root.mix * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[3];
+                modulation-depth: root.modulation-depths[3];
                 changed(v) => { root.mix-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+                modulation-edit-started => { root.modulation-edit-started(3); }
+                modulation-edit-finished => { root.modulation-edit-finished(3); }
             }
         }
     }

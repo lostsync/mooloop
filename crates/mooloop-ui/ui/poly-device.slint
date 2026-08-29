@@ -18,6 +18,17 @@ component OscillatorDeviceStrip inherits Rectangle {
     callback cents-changed(float);
     callback level-changed(float);
     callback pulse-width-changed(float);
+    // Oscillator parameter ids are `100 + oscillator * 10 + offset`
+    // (`synth_osc_param` in mooloop-core), so the strip takes its own base and
+    // derives each knob's destination from it rather than being written out
+    // three times.
+    in property <int> param-base;
+    in property <bool> modulation-armed;
+    in property <[float]> modulation-depths;
+    in property <[bool]> modulation-allowed;
+    callback modulation-depth-changed(int, float);
+    callback modulation-edit-started(int);
+    callback modulation-edit-finished(int);
 
     background: Theme.panel;
     border-radius: Theme.radius-sm;
@@ -54,13 +65,25 @@ component OscillatorDeviceStrip inherits Rectangle {
                 width: 48px; diameter: 36px; label: "Semi"; tooltip: "Coarse tuning";
                 value <=> root.semitones; minimum: -48; maximum: 48; default-value: 0; step: 1;
                 value-text: (root.semitones > 0 ? "+" : "") + round(root.semitones) + " st";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[root.param-base + 1];
+                modulation-depth: root.modulation-depths[root.param-base + 1];
                 changed(v) => { root.semitones-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(root.param-base + 1, v); }
+                modulation-edit-started => { root.modulation-edit-started(root.param-base + 1); }
+                modulation-edit-finished => { root.modulation-edit-finished(root.param-base + 1); }
             }
             ParameterKnob {
                 width: 48px; diameter: 36px; label: "Fine"; tooltip: "Fine tuning";
                 value <=> root.cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
                 value-text: (root.cents > 0 ? "+" : "") + round(root.cents) + " ct";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[root.param-base + 2];
+                modulation-depth: root.modulation-depths[root.param-base + 2];
                 changed(v) => { root.cents-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(root.param-base + 2, v); }
+                modulation-edit-started => { root.modulation-edit-started(root.param-base + 2); }
+                modulation-edit-finished => { root.modulation-edit-finished(root.param-base + 2); }
             }
             TrimKnob {
                 width: 48px; diameter: 36px; label: "Level";
@@ -81,7 +104,13 @@ component OscillatorDeviceStrip inherits Rectangle {
                 value <=> root.pulse-width; minimum: 0.05; maximum: 0.95; default-value: 0.5;
                 enabled: root.wave == 3;
                 value-text: round(root.pulse-width * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[root.param-base + 4];
+                modulation-depth: root.modulation-depths[root.param-base + 4];
                 changed(v) => { root.pulse-width-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(root.param-base + 4, v); }
+                modulation-edit-started => { root.modulation-edit-started(root.param-base + 4); }
+                modulation-edit-finished => { root.modulation-edit-finished(root.param-base + 4); }
             }
         }
     }
@@ -132,16 +161,37 @@ export component PolyDeviceFace inherits Rectangle {
             spacing: 5px;
             OscillatorDeviceStrip {
                 horizontal-stretch: 1; title: "OSC 1";
+                param-base: 100;
+                modulation-armed: root.modulation-armed;
+                modulation-depths: root.modulation-depths;
+                modulation-allowed: root.modulation-allowed;
+                modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                modulation-edit-started(p) => { root.modulation-edit-started(p); }
+                modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
                 wave <=> root.osc1-wave; semitones <=> root.osc1-semitones; cents <=> root.osc1-cents; level <=> root.osc1-level; pulse-width <=> root.osc1-pulse-width;
                 wave-changed(v) => { root.osc1-wave-changed(v); } semitones-changed(v) => { root.osc1-semitones-changed(v); } cents-changed(v) => { root.osc1-cents-changed(v); } level-changed(v) => { root.osc1-level-changed(v); } pulse-width-changed(v) => { root.osc1-pulse-width-changed(v); }
             }
             OscillatorDeviceStrip {
                 horizontal-stretch: 1; title: "OSC 2";
+                param-base: 110;
+                modulation-armed: root.modulation-armed;
+                modulation-depths: root.modulation-depths;
+                modulation-allowed: root.modulation-allowed;
+                modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                modulation-edit-started(p) => { root.modulation-edit-started(p); }
+                modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
                 wave <=> root.osc2-wave; semitones <=> root.osc2-semitones; cents <=> root.osc2-cents; level <=> root.osc2-level; pulse-width <=> root.osc2-pulse-width;
                 wave-changed(v) => { root.osc2-wave-changed(v); } semitones-changed(v) => { root.osc2-semitones-changed(v); } cents-changed(v) => { root.osc2-cents-changed(v); } level-changed(v) => { root.osc2-level-changed(v); } pulse-width-changed(v) => { root.osc2-pulse-width-changed(v); }
             }
             OscillatorDeviceStrip {
                 horizontal-stretch: 1; title: "OSC 3";
+                param-base: 120;
+                modulation-armed: root.modulation-armed;
+                modulation-depths: root.modulation-depths;
+                modulation-allowed: root.modulation-allowed;
+                modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                modulation-edit-started(p) => { root.modulation-edit-started(p); }
+                modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
                 wave <=> root.osc3-wave; semitones <=> root.osc3-semitones; cents <=> root.osc3-cents; level <=> root.osc3-level; pulse-width <=> root.osc3-pulse-width;
                 wave-changed(v) => { root.osc3-wave-changed(v); } semitones-changed(v) => { root.osc3-semitones-changed(v); } cents-changed(v) => { root.osc3-cents-changed(v); } level-changed(v) => { root.osc3-level-changed(v); } pulse-width-changed(v) => { root.osc3-pulse-width-changed(v); }
             }
@@ -170,11 +220,11 @@ export component PolyDeviceFace inherits Rectangle {
                     }
                     HorizontalLayout {
                         spacing: 0px;
-                        ParameterKnob { width: 52px; diameter: 36px; label: "Glide"; tooltip: "Portamento time"; value <=> root.glide; minimum: 0; maximum: 2; default-value: 0; value-text: round(root.glide * 1000) + " ms"; changed(v) => { root.glide-changed(v); } }
-                        ParameterKnob { width: 52px; diameter: 36px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; minimum: 0; maximum: 2; default-value: 0.005; value-text: round(root.attack * 1000) + " ms"; changed(v) => { root.attack-changed(v); } }
-                        ParameterKnob { width: 52px; diameter: 36px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; minimum: 0; maximum: 2; default-value: 0.2; value-text: round(root.decay * 1000) + " ms"; changed(v) => { root.decay-changed(v); } }
-                        ParameterKnob { width: 52px; diameter: 36px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 0.7; value-text: round(root.sustain * 100) + "%"; changed(v) => { root.sustain-changed(v); } }
-                        ParameterKnob { width: 52px; diameter: 36px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; minimum: 0; maximum: 2; default-value: 0.15; value-text: round(root.release * 1000) + " ms"; changed(v) => { root.release-changed(v); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Glide"; tooltip: "Portamento time"; value <=> root.glide; minimum: 0; maximum: 2; default-value: 0; value-text: round(root.glide * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[0]; modulation-depth: root.modulation-depths[0]; changed(v) => { root.glide-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); } modulation-edit-started => { root.modulation-edit-started(0); } modulation-edit-finished => { root.modulation-edit-finished(0); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; minimum: 0; maximum: 2; default-value: 0.005; value-text: round(root.attack * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[1]; modulation-depth: root.modulation-depths[1]; changed(v) => { root.attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); } modulation-edit-started => { root.modulation-edit-started(1); } modulation-edit-finished => { root.modulation-edit-finished(1); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; minimum: 0; maximum: 2; default-value: 0.2; value-text: round(root.decay * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; changed(v) => { root.decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 0.7; value-text: round(root.sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; changed(v) => { root.sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
+                        ParameterKnob { width: 52px; diameter: 36px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; minimum: 0; maximum: 2; default-value: 0.15; value-text: round(root.release * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; changed(v) => { root.release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }
                     }
                 }
             }
@@ -249,11 +299,11 @@ export component PolyDeviceFace inherits Rectangle {
                     horizontal-stretch: 1;
                     spacing: 6px;
                     alignment: space-around;
-                    ParameterKnob { label: "Rate"; tooltip: "LFO speed"; value <=> root.lfo-rate; minimum: 0.01; maximum: 20; default-value: 5; scale: ValueScale.logarithmic; value-text: root.lfo-rate < 1 ? round(root.lfo-rate * 100) / 100 + " Hz" : round(root.lfo-rate * 10) / 10 + " Hz"; changed(v) => { root.lfo-rate-changed(v); } }
-                    ParameterKnob { label: "Pitch"; tooltip: "Pitch modulation"; value <=> root.lfo-pitch; minimum: -24; maximum: 24; default-value: 0; bipolar: true; value-text: (root.lfo-pitch > 0 ? "+" : "") + round(root.lfo-pitch * 10) / 10 + " st"; changed(v) => { root.lfo-pitch-changed(v); } }
-                    ParameterKnob { label: "Cutoff"; tooltip: "Filter modulation"; value <=> root.lfo-filter; minimum: -4; maximum: 4; default-value: 0; bipolar: true; value-text: (root.lfo-filter > 0 ? "+" : "") + round(root.lfo-filter * 10) / 10 + " oct"; changed(v) => { root.lfo-filter-changed(v); } }
-                    ParameterKnob { label: "Width"; tooltip: "Pulse-width modulation"; value <=> root.lfo-pulse-width; minimum: -0.45; maximum: 0.45; default-value: 0; bipolar: true; value-text: (root.lfo-pulse-width > 0 ? "+" : "") + round(root.lfo-pulse-width * 100) + "%"; changed(v) => { root.lfo-pulse-width-changed(v); } }
-                    ParameterKnob { label: "Trem"; tooltip: "Amplitude modulation"; value <=> root.lfo-amp; default-value: 0; fill: Theme.warning; value-text: round(root.lfo-amp * 100) + "%"; changed(v) => { root.lfo-amp-changed(v); } }
+                    ParameterKnob { label: "Rate"; tooltip: "LFO speed"; value <=> root.lfo-rate; minimum: 0.01; maximum: 20; default-value: 5; scale: ValueScale.logarithmic; value-text: root.lfo-rate < 1 ? round(root.lfo-rate * 100) / 100 + " Hz" : round(root.lfo-rate * 10) / 10 + " Hz"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[10]; modulation-depth: root.modulation-depths[10]; changed(v) => { root.lfo-rate-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(10, v); } modulation-edit-started => { root.modulation-edit-started(10); } modulation-edit-finished => { root.modulation-edit-finished(10); } }
+                    ParameterKnob { label: "Pitch"; tooltip: "Pitch modulation"; value <=> root.lfo-pitch; minimum: -24; maximum: 24; default-value: 0; bipolar: true; value-text: (root.lfo-pitch > 0 ? "+" : "") + round(root.lfo-pitch * 10) / 10 + " st"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[11]; modulation-depth: root.modulation-depths[11]; changed(v) => { root.lfo-pitch-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(11, v); } modulation-edit-started => { root.modulation-edit-started(11); } modulation-edit-finished => { root.modulation-edit-finished(11); } }
+                    ParameterKnob { label: "Cutoff"; tooltip: "Filter modulation"; value <=> root.lfo-filter; minimum: -4; maximum: 4; default-value: 0; bipolar: true; value-text: (root.lfo-filter > 0 ? "+" : "") + round(root.lfo-filter * 10) / 10 + " oct"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[12]; modulation-depth: root.modulation-depths[12]; changed(v) => { root.lfo-filter-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(12, v); } modulation-edit-started => { root.modulation-edit-started(12); } modulation-edit-finished => { root.modulation-edit-finished(12); } }
+                    ParameterKnob { label: "Width"; tooltip: "Pulse-width modulation"; value <=> root.lfo-pulse-width; minimum: -0.45; maximum: 0.45; default-value: 0; bipolar: true; value-text: (root.lfo-pulse-width > 0 ? "+" : "") + round(root.lfo-pulse-width * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[13]; modulation-depth: root.modulation-depths[13]; changed(v) => { root.lfo-pulse-width-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(13, v); } modulation-edit-started => { root.modulation-edit-started(13); } modulation-edit-finished => { root.modulation-edit-finished(13); } }
+                    ParameterKnob { label: "Trem"; tooltip: "Amplitude modulation"; value <=> root.lfo-amp; default-value: 0; fill: Theme.warning; value-text: round(root.lfo-amp * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[14]; modulation-depth: root.modulation-depths[14]; changed(v) => { root.lfo-amp-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(14, v); } modulation-edit-started => { root.modulation-edit-started(14); } modulation-edit-finished => { root.modulation-edit-finished(14); } }
                 }
             }
         }
@@ -289,7 +339,13 @@ export component PolyDeviceFace inherits Rectangle {
                         value <=> root.spread;
                         default-value: 0;
                         value-text: round(root.spread * 100) + "%";
+                        modulation-armed: root.modulation-armed;
+                        modulation-allowed: root.modulation-allowed[16];
+                        modulation-depth: root.modulation-depths[16];
                         changed(v) => { root.spread-changed(v); }
+                        modulation-depth-changed(v) => { root.modulation-depth-changed(16, v); }
+                        modulation-edit-started => { root.modulation-edit-started(16); }
+                        modulation-edit-finished => { root.modulation-edit-finished(16); }
                     }
                 }
             }

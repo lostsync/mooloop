@@ -48,7 +48,13 @@ export component BitcrushDeviceFace inherits EffectDeviceShell {
                 value <=> root.bits;
                 default-value: 1.0;
                 value-text: round(root.bits-natural * 10) / 10 + " bit";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[0];
+                modulation-depth: root.modulation-depths[0];
                 changed(v) => { root.bits-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                modulation-edit-started => { root.modulation-edit-started(0); }
+                modulation-edit-finished => { root.modulation-edit-finished(0); }
             }
             ParameterKnob {
                 width: 69px;
@@ -58,7 +64,13 @@ export component BitcrushDeviceFace inherits EffectDeviceShell {
                 value <=> root.downsample;
                 default-value: 0.0;
                 value-text: round(root.rate-natural * 10) / 10 + "x";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[1];
+                modulation-depth: root.modulation-depths[1];
                 changed(v) => { root.downsample-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+                modulation-edit-started => { root.modulation-edit-started(1); }
+                modulation-edit-finished => { root.modulation-edit-finished(1); }
             }
             // Bitcrush's own DSP blend, distinct from the surrounding host's
             // generic Wet/dry control.
@@ -70,7 +82,13 @@ export component BitcrushDeviceFace inherits EffectDeviceShell {
                 value <=> root.mix;
                 default-value: 1.0;
                 value-text: round(root.mix * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[2];
+                modulation-depth: root.modulation-depths[2];
                 changed(v) => { root.mix-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+                modulation-edit-started => { root.modulation-edit-started(2); }
+                modulation-edit-finished => { root.modulation-edit-finished(2); }
             }
         }
     }

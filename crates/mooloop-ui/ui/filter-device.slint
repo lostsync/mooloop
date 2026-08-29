@@ -14,15 +14,6 @@ export component FilterDeviceFace inherits EffectDeviceShell {
     in-out property <float> resonance;  // 0..1
     in-out property <int> slope;        // 0 = 12 dB/oct, 1 = 24 dB/oct
     in-out property <float> drive;      // 0..1 compensated soft saturation
-    // Modulation state arrives indexed by descriptor id, so every continuous
-    // control on this face is routable without another callback per knob.
-    // Ids mirror `FILTER_PARAM_*` in mooloop-core.
-    in property <bool> modulation-armed;
-    in property <[float]> modulation-depths;
-    in property <[bool]> modulation-allowed;
-    callback modulation-depth-changed(int, float);
-    callback modulation-edit-started(int);
-    callback modulation-edit-finished(int);
     callback cutoff-changed(float);
     callback resonance-changed(float);
     callback mode-changed(int);
