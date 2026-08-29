@@ -34,11 +34,20 @@ scripts/antibox cargo test -p mooloop-ui
 scripts/antibox cargo clippy --workspace --all-targets
 ```
 
-Each local checkout gets its own remote directory keyed by absolute path, but
-all of them share one remote Cargo target directory, so a dependency is built
-once for the box rather than once per worktree. Cargo locks that directory, so
-two remote runs queue behind each other instead of colliding. Cargo's job cap
-is lifted to the remote core count.
+Each local checkout gets its own remote directory and Cargo target directory,
+keyed by absolute path, so worktrees do not fight over one cache and two of
+them may build remotely at the same time. Cargo's job cap is lifted to the
+remote core count.
+
+Dependencies are shared across checkouts by sccache rather than by a shared
+target directory. sccache caches individual `rustc` invocations under a hash
+of their inputs, so a checkout whose sources differ gets a cache miss and a
+recompile -- never another checkout's artifact. A shared `CARGO_TARGET_DIR`
+was tried and reverted for exactly that reason: two checkouts of this
+workspace share package names and versions, and the second linked against the
+first's stale `mooloop-core`, failing on code that was correct on disk. Use
+`--no-sccache` or `$MOOLOOP_NO_SCCACHE=1` to bypass the wrapper, and
+`$MOOLOOP_SCCACHE_SIZE` to change the 40G cap.
 
 Pull artifacts back with `--pull`, which is how remote UI snapshots work:
 
@@ -48,8 +57,9 @@ scripts/antibox --pull /tmp/window.ppm \
   cargo test -p mooloop-ui --test playlist_snapshot
 ```
 
-`--clean` discards the remote checkout but keeps the shared target cache;
-`$MOOLOOP_REMOTE_TARGET` moves that cache elsewhere. `--host` and
+`--clean` discards the remote checkout and its target cache but keeps the
+sccache dependency cache; `$MOOLOOP_REMOTE_TARGET` moves the target directory
+elsewhere. `--host` and
 `$MOOLOOP_REMOTE_HOST` point at a different ssh host. Anything needing JACK, a
 real audio device, or the live compositor still belongs on this machine.
 
