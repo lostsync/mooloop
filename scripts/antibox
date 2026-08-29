@@ -12,15 +12,20 @@
 #
 # The working tree is mirrored with rsync (gitignored paths excluded), so
 # uncommitted work is tested as-is and nothing needs pushing first. Each local
-# checkout gets its own remote directory, keyed by absolute path, but every
-# checkout shares one Cargo target directory so a dependency is compiled once
-# for the whole machine rather than once per worktree. Cargo takes its own lock
-# on that directory, so two concurrent antibox runs queue instead of colliding.
+# checkout gets its own remote directory and its own Cargo target directory,
+# keyed by absolute path, so parallel worktrees never fight over one cache.
+#
+# One shared target directory was tried instead and reverted: two checkouts of
+# this workspace have the same package names and versions, and the second one
+# linked against the first one's stale `mooloop-core`, failing to compile code
+# that was correct on disk. Sharing happens through sccache below, where a
+# source that hashes differently is a cache miss rather than a wrong answer.
 set -euo pipefail
 
 HOST="${MOOLOOP_REMOTE_HOST:-antibox}"
 SYNC=1
 CLEAN=0
+NO_SCCACHE=0
 PULL=()
 RELEASE_BIN=""
 RELEASE_DEST="$PWD/bin/mooloop-test"
@@ -32,8 +37,9 @@ usage() {
 Options:
   --host NAME     Remote ssh host (default: antibox, or $MOOLOOP_REMOTE_HOST).
   --no-sync       Reuse the remote copy as-is; skip the rsync step.
-  --clean         Delete the remote checkout, then re-sync. The shared
-                  target directory is left alone.
+  --clean         Delete the remote checkout and target cache, then re-sync.
+                  The sccache dependency cache is left alone.
+  --no-sccache    Do not wrap rustc with sccache for this run.
   --pull PATH     After the run, copy PATH back from the remote. Relative
                   paths resolve inside the remote checkout; the file lands in
                   the same relative spot locally, absolute paths land in the
@@ -44,8 +50,10 @@ Options:
                   the current directory). Takes no trailing command.
   -h, --help      Show this help.
 
-$MOOLOOP_REMOTE_TARGET overrides the shared remote Cargo target directory;
---clean then clears only this checkout, not that shared cache.
+$MOOLOOP_REMOTE_TARGET overrides this checkout's remote Cargo target
+directory. If sccache is on the remote PATH it wraps rustc, so dependencies
+compiled by one checkout are reused by every other; without it the script
+still works, just colder. $MOOLOOP_NO_SCCACHE=1 turns that off.
 
 Exits with the remote command's exit status.
 USAGE
@@ -56,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     --host) HOST="${2:?--host needs a value}"; shift 2 ;;
     --no-sync) SYNC=0; shift ;;
     --clean) CLEAN=1; shift ;;
+    --no-sccache) NO_SCCACHE=1; shift ;;
     --pull) PULL+=("${2:?--pull needs a path}"); shift 2 ;;
     --release-bin)
       RELEASE_BIN=1
@@ -97,10 +106,8 @@ fi
 # rsync needs a literal destination, so resolve the remote home once.
 REMOTE_BASE="$(ssh_run 'printf %s "$HOME"')/.cache/mooloop-remote"
 REMOTE_DIR="$REMOTE_BASE/checkouts/$SLUG"
-# One target directory for every checkout on this box. Worktrees of the same
-# workspace resolve to the same dependency graph, so sharing it turns each new
-# worktree's first build from a full dependency rebuild into a relink.
-REMOTE_TARGET="${MOOLOOP_REMOTE_TARGET:-$REMOTE_BASE/target}"
+REMOTE_TARGET="${MOOLOOP_REMOTE_TARGET:-$REMOTE_BASE/targets/$SLUG}"
+REMOTE_SCCACHE="$REMOTE_BASE/sccache"
 
 if ! ssh_run 'PATH="$HOME/.cargo/bin:$PATH" command -v cargo >/dev/null'; then
   echo "antibox: no cargo on '$HOST'. Install it there with rustup:" >&2
@@ -109,10 +116,26 @@ if ! ssh_run 'PATH="$HOME/.cargo/bin:$PATH" command -v cargo >/dev/null'; then
 fi
 
 if [[ $CLEAN -eq 1 ]]; then
-  # The target directory is shared, so --clean only discards this checkout's
-  # own build output; wiping it would cost every other worktree its cache.
-  echo "antibox: clearing $REMOTE_DIR" >&2
-  ssh_run "rm -rf \"$REMOTE_DIR\""
+  # sccache survives on purpose: the point of --clean is to rule out stale
+  # build state, and re-fetching every dependency from source is not part of
+  # that. Add --no-sccache to rule the dependency cache out too.
+  echo "antibox: clearing $REMOTE_DIR and $REMOTE_TARGET" >&2
+  ssh_run "rm -rf \"$REMOTE_DIR\" \"$REMOTE_TARGET\""
+fi
+
+# sccache caches individual rustc invocations keyed on hashed inputs, so it is
+# shared across checkouts safely: a miss costs a compile, never a wrong rlib.
+SCCACHE_SETUP=""
+if [[ -z "${MOOLOOP_NO_SCCACHE:-}" ]] && [[ $NO_SCCACHE -eq 0 ]] \
+  && ssh_run 'PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" command -v sccache >/dev/null'; then
+  SCCACHE_SETUP="
+  export RUSTC_WRAPPER=sccache
+  export SCCACHE_DIR=\"$REMOTE_SCCACHE\"
+  export SCCACHE_CACHE_SIZE=\"${MOOLOOP_SCCACHE_SIZE:-40G}\"
+  # rustc refuses to hand sccache an incremental compilation unit, so an
+  # incremental build would silently bypass the cache entirely.
+  export CARGO_INCREMENTAL=0
+"
 fi
 
 if [[ $SYNC -eq 1 ]]; then
@@ -152,7 +175,7 @@ done
 STATUS=0
 ssh_run "
   set -euo pipefail
-  export PATH=\"\$HOME/.cargo/bin:\$PATH\"
+  export PATH=\"\$HOME/.local/bin:\$HOME/.cargo/bin:\$PATH\"$SCCACHE_SETUP
   export CARGO_TARGET_DIR=\"$REMOTE_TARGET\"
   export CARGO_BUILD_JOBS=\"\$(nproc)\"
   export CARGO_TERM_COLOR=never

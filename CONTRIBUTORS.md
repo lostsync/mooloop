@@ -67,9 +67,13 @@ work session you can recall being part of, and don't stress over precision.
   Then fixed up the modulation shelf: gave it a real layout instead of
   overlapping manual offsets, and replaced its hardcoded filter-cutoff routing
   with descriptor-id-indexed depth and legality arrays, so every eligible knob
-  on a face is assignable through one addressed path. Gave `scripts/antibox`
-  one shared remote target directory across checkouts and a `--release-bin`
-  flag that strips a release build back to `bin/mooloop-test`.
+  on a face is assignable through one addressed path. Gave `scripts/antibox` a
+  `--release-bin` flag that strips a release build back to
+  `bin/mooloop-test`. Tried one shared remote target directory across checkouts
+  and reverted it: same-named workspace packages collided, so a branch linked
+  against another checkout's stale `mooloop-core` and failed to compile code
+  that was correct on disk. Dependencies are shared through sccache instead,
+  where a differing source is a miss rather than a wrong artifact.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
