@@ -19,7 +19,7 @@ use mooloop_dsp::{
     Sampler, SpectrumAnalyzer, StereoBus, TimedEvent, CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
 };
 
-use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, PlayheadMeters};
+use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
 use crate::{PreviewCommand, StructuralCommand};
@@ -1039,6 +1039,7 @@ pub(crate) struct RenderState {
     buffer_midi: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
     buffer_cc: BufferCcState,
     playhead_meters: Arc<PlayheadMeters>,
+    modulator_meters: Arc<ModulatorMeters>,
     /// The sample browser's audition voice, if something is playing. One at
     /// a time: a new preview replaces the old, and the retired sample's
     /// ownership returns to the UI thread through the reclaim ring.
@@ -1081,6 +1082,7 @@ impl RenderState {
             buffer_midi: Arc::new(ArcSwapOption::empty()),
             buffer_cc: BufferCcState::default(),
             playhead_meters: PlayheadMeters::new(),
+            modulator_meters: ModulatorMeters::new(),
             preview: None,
             preview_retired: Vec::new(),
             preview_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
@@ -1157,6 +1159,10 @@ impl RenderState {
 
     pub(crate) fn attach_playhead_meters(&mut self, meters: Arc<PlayheadMeters>) {
         self.playhead_meters = meters;
+    }
+
+    pub(crate) fn attach_modulator_meters(&mut self, meters: Arc<ModulatorMeters>) {
+        self.modulator_meters = meters;
     }
 
     pub fn from_project(
@@ -1949,6 +1955,13 @@ impl RenderState {
             strip.bus.clear(frames);
         }
         for (index, &ticks) in modulator_ticks.iter().take(active_channels).enumerate() {
+            // Published before the mute check: a muted channel's modulators
+            // still run, so its knobs should still animate rather than freeze
+            // on whatever the last audible block left behind.
+            if ticks > 0 {
+                self.modulator_meters
+                    .publish(index, &self.control_outputs[index][ticks - 1]);
+            }
             if self.strips[index].output.muted {
                 continue;
             }

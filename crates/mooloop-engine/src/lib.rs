@@ -18,6 +18,7 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use jack::{AudioOut, Client, ClientOptions, MidiIn};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
+    MAX_MODULATORS_PER_CHANNEL,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, DryAlign, SampleData,
@@ -40,7 +41,7 @@ use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
-pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, PlayheadMeters};
+pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 pub use offline::{
     ExportError, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, RenderSummary,
     WavEncoding,
@@ -212,6 +213,7 @@ impl Engine {
         let device_meters = DeviceMeters::new();
         let device_telemetry = DeviceTelemetry::new();
         let playhead_meters = PlayheadMeters::new();
+        let modulator_meters = ModulatorMeters::new();
         let preview_gain = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>> =
             Arc::new(ArcSwapOption::empty());
@@ -220,6 +222,7 @@ impl Engine {
         render.attach_device_meters(device_meters.clone());
         render.attach_device_telemetry(device_telemetry.clone());
         render.attach_playhead_meters(playhead_meters.clone());
+        render.attach_modulator_meters(modulator_meters.clone());
         render.attach_buffer_midi_map(buffer_midi_map.clone());
         render.attach_preview_gain(preview_gain.clone());
         let io = graph::GraphIo {
@@ -279,6 +282,7 @@ impl Engine {
                 device_telemetry,
                 buffer_midi_map,
                 playhead_meters,
+                modulator_meters,
                 sample_slots,
                 sample_rate,
                 install_generation: 0,
@@ -303,6 +307,7 @@ pub struct EngineHandle {
     device_telemetry: Arc<DeviceTelemetry>,
     buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
     playhead_meters: Arc<PlayheadMeters>,
+    modulator_meters: Arc<ModulatorMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     sample_rate: u32,
     install_generation: u64,
@@ -426,6 +431,7 @@ impl EngineHandle {
         render.attach_device_telemetry(self.device_telemetry.clone());
         render.attach_buffer_midi_map(self.buffer_midi_map.clone());
         render.attach_playhead_meters(self.playhead_meters.clone());
+        render.attach_modulator_meters(self.modulator_meters.clone());
         render.attach_preview_gain(self.preview_gain.clone());
         render.load_project(&project);
         let prepared = PreparedProject {
@@ -499,6 +505,15 @@ impl EngineHandle {
     /// is a plain array read rather than another event.
     pub fn playhead_positions(&self, channel: usize) -> Vec<f32> {
         self.playhead_meters.read(channel)
+    }
+
+    /// The channel's modulator outputs as of the last control tick the audio
+    /// thread ran. The UI resolves these against the channel's routes to draw
+    /// each destination's live offset, rather than the engine publishing a
+    /// value per parameter: a channel has at most
+    /// `MAX_MODULATORS_PER_CHANNEL` sources but many more destinations.
+    pub fn modulator_outputs(&self, channel: usize) -> [f32; MAX_MODULATORS_PER_CHANNEL] {
+        self.modulator_meters.read(channel)
     }
 
     pub fn sample_rate(&self) -> u32 {

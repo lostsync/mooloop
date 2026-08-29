@@ -1037,6 +1037,8 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         p7: p[7],
         modulation_depths: Vec::<f32>::new().as_slice().into(),
         modulation_allowed: Vec::<bool>::new().as_slice().into(),
+        modulation_offsets: Vec::<f32>::new().as_slice().into(),
+        modulation_route_counts: Vec::<i32>::new().as_slice().into(),
         eq_band_data: eq_band_data.as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: slot.params.eq().is_some_and(|eq| eq.analyzer_enabled),
@@ -1292,6 +1294,26 @@ fn descriptor_policies(descriptors: &[ParamDescriptor]) -> ModelRc<bool> {
     allowed.as_slice().into()
 }
 
+/// How many routes land on each parameter, indexed by descriptor id. Drawn as
+/// dots on the knob, so a control says how many sources reach it without the
+/// shelf being open. Counted from every route, including ones whose
+/// destination currently refuses modulation: the assignment is still authored
+/// work the user made and can remove.
+fn descriptor_route_counts(
+    rack: &ModRack,
+    descriptors: &[ParamDescriptor],
+    address: impl Fn(u32) -> ParamAddr,
+) -> ModelRc<i32> {
+    let mut counts = vec![0i32; descriptor_slots(descriptors)];
+    for descriptor in descriptors {
+        counts[descriptor.id as usize] = rack
+            .destinations()
+            .filter(|destination| *destination == address(descriptor.id))
+            .count() as i32;
+    }
+    counts.as_slice().into()
+}
+
 /// Env-gated diagnostic logging (MOOLOOP_DEBUG=1).
 fn dbg_log(msg: &str) {
     if std::env::var("MOOLOOP_DEBUG").is_ok() {
@@ -1427,6 +1449,10 @@ struct UiState {
     /// gestures throughout the rack.
     modulation_selected_slot: Cell<Option<u8>>,
     modulation_armed_slot: Cell<Option<u8>>,
+    /// The selected channel's latest modulator outputs, refreshed from the
+    /// engine on the pump tick. Held here rather than recomputed per knob
+    /// so one read of the audio thread's cells feeds every destination.
+    modulation_outputs: Cell<[f32; MAX_MODULATORS_PER_CHANNEL]>,
     /// Channel that owns the transient selection/assignment state. Changing
     /// channels clears both even when the new channel happens to occupy the
     /// same runtime slot.
@@ -2355,6 +2381,20 @@ impl UiState {
                                     )
                                 });
                             row.modulation_allowed = descriptor_policies(descriptors);
+                            row.modulation_offsets = self.destination_offsets(descriptors, |param| {
+                                ParamAddr::effect(EffectTarget::Channel(channel), slot as u8, param)
+                            });
+                            row.modulation_route_counts = descriptor_route_counts(
+                                &state.modulation,
+                                descriptors,
+                                |param| {
+                                    ParamAddr::effect(
+                                        EffectTarget::Channel(channel),
+                                        slot as u8,
+                                        param,
+                                    )
+                                },
+                            );
                             row
                         })
                         .collect()
@@ -2387,6 +2427,32 @@ impl UiState {
             });
         }
         depths.as_slice().into()
+    }
+
+    /// What the running modulators are adding to each described parameter
+    /// right now, indexed by descriptor id. Resolved here rather than
+    /// published per parameter by the engine: a channel has at most four
+    /// sources but many destinations, so the audio thread ships the four
+    /// outputs and the UI does the same sum `ModRack::offset_for` does on the
+    /// realtime side, against the same declared policy.
+    fn destination_offsets(
+        &self,
+        descriptors: &[ParamDescriptor],
+        address: impl Fn(u32) -> ParamAddr,
+    ) -> ModelRc<f32> {
+        let mut offsets = vec![0.0; descriptor_slots(descriptors)];
+        let Some(channel) = self.channels.get(self.selected) else {
+            return offsets.as_slice().into();
+        };
+        let outputs = self.modulation_outputs.get();
+        for descriptor in descriptors {
+            let policy = ModDestinationDescriptor::for_param(descriptor);
+            offsets[descriptor.id as usize] =
+                channel
+                    .modulation
+                    .offset_for(address(descriptor.id), &outputs, &policy);
+        }
+        offsets.as_slice().into()
     }
 
     fn modulation_depth_for(&self, source_slot: u8, destination: ParamAddr) -> f32 {
@@ -2453,6 +2519,40 @@ impl UiState {
                 .map(|descriptor| ("Channel strip".to_string(), descriptor)),
             // Modulators are sources in this first UI pass, not destinations.
             ParamOwner::Modulator { .. } => None,
+        }
+    }
+
+    /// Push the current live modulation offsets onto the generator face and
+    /// the effect rows. Called on the pump tick, so it touches only the
+    /// offsets: rebuilding the rows here would fight the meter and spectrum
+    /// updates landing on the same models.
+    fn refresh_modulation_offsets(&self, window: &MainWindow) {
+        let scope = EffectTarget::Channel(self.selected as u8);
+        let Some(channel) = self.channels.get(self.selected) else {
+            return;
+        };
+        window.set_source_modulation_offsets(self.destination_offsets(
+            channel.generator_params().kind().descriptors(),
+            |param| ParamAddr {
+                scope,
+                owner: ParamOwner::Source,
+                param,
+            },
+        ));
+        // The insert rack only carries this channel's overlays when it is
+        // pointed at this channel, exactly as `sync_effects` decides.
+        if self.effect_target != scope {
+            return;
+        }
+        for (slot, effect) in channel.effects.iter().enumerate() {
+            let Some(mut row) = self.effect_slot_model.row_data(slot) else {
+                continue;
+            };
+            row.modulation_offsets =
+                self.destination_offsets(effect.kind().descriptors(), |param| {
+                    ParamAddr::effect(scope, slot as u8, param)
+                });
+            self.effect_slot_model.set_row_data(slot, row);
         }
     }
 
@@ -2621,6 +2721,23 @@ impl UiState {
             },
         ));
         window.set_source_modulation_allowed(descriptor_policies(generator.descriptors()));
+        window.set_source_modulation_offsets(self.destination_offsets(
+            generator.descriptors(),
+            |param| ParamAddr {
+                scope,
+                owner: ParamOwner::Source,
+                param,
+            },
+        ));
+        window.set_source_modulation_route_counts(descriptor_route_counts(
+            &channel.modulation,
+            generator.descriptors(),
+            |param| ParamAddr {
+                scope,
+                owner: ParamOwner::Source,
+                param,
+            },
+        ));
         window.set_strip_modulation_depths(self.destination_depths(
             armed,
             &STRIP_DESCRIPTORS,
@@ -3090,6 +3207,7 @@ impl AppUi {
             modulation_shelf_open: false,
             modulation_selected_slot: Cell::new(None),
             modulation_armed_slot: Cell::new(None),
+            modulation_outputs: Cell::new([0.0; MAX_MODULATORS_PER_CHANNEL]),
             modulation_ui_channel: Cell::new(None),
             modulation_edit_before: None,
             modulation_edit_changed: false,
@@ -8449,6 +8567,28 @@ impl AppUi {
                     } else if playhead_was_nonempty {
                         playhead_was_nonempty = false;
                         state.playhead_model.set_vec(Vec::new());
+                    }
+                }
+                {
+                    // Live modulation on the knobs. The engine publishes the
+                    // channel's four modulator outputs; resolving those into a
+                    // per-destination offset is the UI's job, so this is a
+                    // read of four cells plus arithmetic over the visible
+                    // descriptors -- not a per-parameter feed.
+                    let state = st.borrow();
+                    let outputs = handle.modulator_outputs(selected_channel);
+                    let routed = state
+                        .channels
+                        .get(selected_channel)
+                        .is_some_and(|channel| {
+                            channel.modulation.routes.iter().flatten().next().is_some()
+                        });
+                    // An unrouted channel has nothing to animate, and once the
+                    // outputs stop moving the arcs are already where they
+                    // belong -- so neither case is worth a model write.
+                    if routed && !editing_bus && outputs != state.modulation_outputs.get() {
+                        state.modulation_outputs.set(outputs);
+                        state.refresh_modulation_offsets(&w);
                     }
                 }
 

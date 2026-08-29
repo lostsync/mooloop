@@ -66,6 +66,8 @@ export component DriveDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];
+                modulation-offset: root.modulation-offsets[0];
+                modulation-route-count: root.modulation-route-counts[0];
                 changed(v) => { root.drive-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
                 modulation-edit-started => { root.modulation-edit-started(0); }
@@ -82,6 +84,8 @@ export component DriveDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[2];
                 modulation-depth: root.modulation-depths[2];
+                modulation-offset: root.modulation-offsets[2];
+                modulation-route-count: root.modulation-route-counts[2];
                 changed(v) => { root.tone-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
                 modulation-edit-started => { root.modulation-edit-started(2); }
@@ -100,6 +104,8 @@ export component DriveDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[3];
                 modulation-depth: root.modulation-depths[3];
+                modulation-offset: root.modulation-offsets[3];
+                modulation-route-count: root.modulation-route-counts[3];
                 changed(v) => { root.mix-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
                 modulation-edit-started => { root.modulation-edit-started(3); }

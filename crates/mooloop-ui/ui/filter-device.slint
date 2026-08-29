@@ -76,6 +76,8 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];
+                modulation-offset: root.modulation-offsets[0];
+                modulation-route-count: root.modulation-route-counts[0];
                 value-text: round(20 * pow(1000, root.cutoff)) + " Hz";
                 changed(v) => { root.cutoff-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
@@ -92,6 +94,8 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[1];
                 modulation-depth: root.modulation-depths[1];
+                modulation-offset: root.modulation-offsets[1];
+                modulation-route-count: root.modulation-route-counts[1];
                 value-text: round(root.resonance * 100) + "%";
                 changed(v) => { root.resonance-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
@@ -108,6 +112,8 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[4];
                 modulation-depth: root.modulation-depths[4];
+                modulation-offset: root.modulation-offsets[4];
+                modulation-route-count: root.modulation-route-counts[4];
                 value-text: round(root.drive * 100) + "%";
                 changed(v) => { root.drive-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }

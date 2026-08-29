@@ -106,14 +106,12 @@ export component DrumDeviceFace inherits Rectangle {
             }
             ParameterKnob {
                 label: "Drive"; tooltip: "Soft saturation";
-                value <=> root.drive; default-value: 0; fill: Theme.warning;
-                value-text: round(root.drive * 100) + "%";
+                value <=> root.drive; default-value: 0;                value-text: round(root.drive * 100) + "%";
                 changed(v) => { root.drive-changed(v); }
             }
             ParameterKnob {
                 label: "Punch"; tooltip: "Transient emphasis";
-                value <=> root.punch; default-value: 0.35; fill: Theme.warning;
-                value-text: round(root.punch * 100) + "%";
+                value <=> root.punch; default-value: 0.35;                value-text: round(root.punch * 100) + "%";
                 changed(v) => { root.punch-changed(v); }
             }
             Rectangle {

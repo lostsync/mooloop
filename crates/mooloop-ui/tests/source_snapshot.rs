@@ -217,10 +217,28 @@ fn render_sampler_source_editor() {
     source_depths[12] = 0.35;
     ui.set_source_modulation_depths(source_depths.as_slice().into());
     ui.set_source_modulation_allowed(vec![true; 22].as_slice().into());
+    // Cutoff carries two routes, resonance one, so the dot row is exercised
+    // at more than a single dot.
+    let mut source_route_counts = vec![0i32; 22];
+    source_route_counts[12] = 2;
+    source_route_counts[13] = 1;
+    ui.set_source_modulation_route_counts(source_route_counts.as_slice().into());
     let modulation = ui.window().take_snapshot().unwrap();
     assert_eq!((modulation.width(), modulation.height()), (1440, 900));
     assert_ne!(snapshot.as_bytes(), modulation.as_bytes());
     write_snapshot(&modulation, "MOOLOOP_MODULATION_SHELF_SNAPSHOT");
+
+    // Out of assign mode the same knobs must read differently: the value arc
+    // returns, the dots appear, and a live offset displaces the arc's end.
+    ui.set_modulation_armed_slot(-1);
+    let mut source_offsets = vec![0.0f32; 22];
+    source_offsets[12] = 0.18;
+    source_offsets[13] = -0.12;
+    ui.set_source_modulation_offsets(source_offsets.as_slice().into());
+    let live = ui.window().take_snapshot().unwrap();
+    assert_ne!(modulation.as_bytes(), live.as_bytes());
+    write_snapshot(&live, "MOOLOOP_MODULATION_LIVE_SNAPSHOT");
+    ui.set_modulation_armed_slot(0);
 
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_sampler_device_page(1);
@@ -255,6 +273,8 @@ fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
         p7: 0.0,
         modulation_depths: Vec::<f32>::new().as_slice().into(),
         modulation_allowed: Vec::<bool>::new().as_slice().into(),
+        modulation_offsets: Vec::<f32>::new().as_slice().into(),
+        modulation_route_counts: Vec::<i32>::new().as_slice().into(),
         eq_band_data: Vec::<f32>::new().as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: false,

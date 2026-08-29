@@ -181,6 +181,8 @@ struct EffectSlotRow {
     // Indexed rather than named so a face exposes every eligible control.
     modulation-depths: [float],
     modulation-allowed: [bool],
+    modulation-offsets: [float],
+    modulation-route-counts: [int],
     // EQ-only: seven groups of freq/gain/q/enabled/kind plus HP and LP.
     eq-band-data: [float],
     eq-spectrum-data: [float],
@@ -614,6 +616,8 @@ export component MainWindow inherits Window {
     // same way `EffectSlotRow` indexes an insert's.
     in property <[float]> source-modulation-depths;
     in property <[bool]> source-modulation-allowed;
+    in property <[float]> source-modulation-offsets;
+    in property <[int]> source-modulation-route-counts;
     in property <[float]> strip-modulation-depths;
     in property <[bool]> strip-modulation-allowed;
     callback source-modulation-depth-changed(int, float);
@@ -2341,6 +2345,8 @@ export component MainWindow inherits Window {
                                                     modulation-armed: root.modulation-armed-slot >= 0;
                                                     modulation-depths: root.source-modulation-depths;
                                                     modulation-allowed: root.source-modulation-allowed;
+                                                    modulation-offsets: root.source-modulation-offsets;
+                                                    modulation-route-counts: root.source-modulation-route-counts;
                                                     bit-reduction <=> root.bit-reduction;
                                                     rate-reduction <=> root.rate-reduction;
                                                     loop-mode <=> root.loop-mode;
@@ -2454,6 +2460,8 @@ export component MainWindow inherits Window {
                                                     modulation-armed: root.modulation-armed-slot >= 0;
                                                     modulation-depths: root.source-modulation-depths;
                                                     modulation-allowed: root.source-modulation-allowed;
+                                                    modulation-offsets: root.source-modulation-offsets;
+                                                    modulation-route-counts: root.source-modulation-route-counts;
                                                     lfo-wave <=> root.mono-lfo-wave; lfo-rate <=> root.mono-lfo-rate; lfo-retrigger <=> root.mono-lfo-retrigger;
                                                     lfo-pitch <=> root.mono-lfo-pitch; lfo-filter <=> root.mono-lfo-filter; lfo-pulse-width <=> root.mono-lfo-pulse-width; lfo-amp <=> root.mono-lfo-amp;
                                                     osc1-wave-changed(v) => { root.mono-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.mono-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.mono-osc1-cents-changed(v); } osc1-level-changed(v) => { root.mono-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.mono-osc1-pulse-width-changed(v); }
@@ -2482,6 +2490,8 @@ export component MainWindow inherits Window {
                                                     modulation-armed: root.modulation-armed-slot >= 0;
                                                     modulation-depths: root.source-modulation-depths;
                                                     modulation-allowed: root.source-modulation-allowed;
+                                                    modulation-offsets: root.source-modulation-offsets;
+                                                    modulation-route-counts: root.source-modulation-route-counts;
                                                     lfo-wave <=> root.poly-lfo-wave; lfo-rate <=> root.poly-lfo-rate; lfo-retrigger <=> root.poly-lfo-retrigger;
                                                     lfo-pitch <=> root.poly-lfo-pitch; lfo-filter <=> root.poly-lfo-filter; lfo-pulse-width <=> root.poly-lfo-pulse-width; lfo-amp <=> root.poly-lfo-amp;
                                                     polyphony <=> root.poly-polyphony; spread <=> root.poly-spread;
@@ -2545,6 +2555,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2571,6 +2583,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2597,6 +2611,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2619,6 +2635,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2656,6 +2674,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2682,6 +2702,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2711,6 +2733,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2733,6 +2757,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2765,6 +2791,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2797,6 +2825,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2829,6 +2859,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
@@ -2853,6 +2885,8 @@ export component MainWindow inherits Window {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;
                                                         modulation-allowed: slot.modulation-allowed;
+                                                        modulation-offsets: slot.modulation-offsets;
+                                                        modulation-route-counts: slot.modulation-route-counts;
                                                         modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
                                                         modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
                                                         modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }

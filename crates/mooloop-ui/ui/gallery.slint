@@ -241,8 +241,7 @@ export component ControlGallery inherits Window {
                     ParameterKnob {
                         label: "ENV AMT"; tooltip: "Bipolar modulation depth";
                         value <=> root.bipolar-value; default-value: 0.5;
-                        bipolar: true; fill: Theme.warning;
-                        value-text: (round((root.bipolar-value * 2 - 1) * 100) > 0 ? "+" : "")
+                        bipolar: true;                        value-text: (round((root.bipolar-value * 2 - 1) * 100) > 0 ? "+" : "")
                             + round((root.bipolar-value * 2 - 1) * 100) + "%";
                     }
                     ParameterKnob {
@@ -271,8 +270,7 @@ export component ControlGallery inherits Window {
                             }
                             MiniKnob {
                                 label: "Send"; diameter: 28px;
-                                value <=> root.linear-value; fill: Theme.warning;
-                                value-text: round(root.linear-value * 100) + "%";
+                                value <=> root.linear-value;                                value-text: round(root.linear-value * 100) + "%";
                             }
                         }
                     }

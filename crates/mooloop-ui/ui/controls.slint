@@ -275,10 +275,17 @@ component KnobFace inherits Rectangle {
     in property <bool> hovered;
     in property <color> fill: Theme.accent;
     in property <length> diameter: 44px;
-    // The base stays on the primary arc. These endpoints show a route's
-    // excursion around it whenever an assignable source is armed.
+    // Assign mode for this control: an assignable source is armed and this
+    // destination accepts it.
     in property <bool> modulation-armed;
+    // The armed source's signed route depth, shown only while assigning.
     in property <float> modulation-depth;
+    // The live signed offset the running modulators are applying right now,
+    // in normalized units. Shown only outside assign mode, where it is the
+    // whole point: the arc has to move for modulation to read as modulation.
+    in property <float> modulation-offset;
+    // How many routes land here, drawn as dots in the track's bottom gap.
+    in property <int> modulation-route-count;
 
     // The arc sweeps 270 degrees, from 7:30 round to 4:30, matching the
     // pointer dot below. Geometry is expressed in a 100x100 viewbox so a
@@ -290,8 +297,20 @@ component KnobFace inherits Rectangle {
     private property <float> modulation-high: clamp(root.clamped + root.modulation-range, 0, 1);
     private property <angle> modulation-low-angle: -135deg + root.modulation-low * 270deg;
     private property <angle> modulation-high-angle: -135deg + root.modulation-high * 270deg;
+    // Where the arc actually sits once the running modulators are summed in.
+    private property <float> modulated: clamp(root.clamped + root.modulation-offset, 0, 1);
+    private property <angle> modulated-angle: -135deg + root.modulated * 270deg;
+    private property <bool> modulation-live: !root.modulation-armed
+        && abs(root.modulated - root.clamped) > 0.002;
+    // While assigning, the value arc is replaced by a short bar at the base,
+    // so the ring is free to show the route's excursion without the two
+    // readings competing. Centred on the value, which keeps it on the track
+    // at both ends of the sweep.
+    private property <angle> base-bar-from: -135deg + clamp(root.clamped - 0.022, 0, 1) * 270deg;
+    private property <angle> base-bar-to: -135deg + clamp(root.clamped + 0.022, 0, 1) * 270deg;
     private property <angle> origin-angle: root.bipolar ? 0deg : -135deg;
     private property <color> active-fill: root.enabled ? root.fill : Theme.text-faint;
+    private property <int> dots: min(root.modulation-route-count, 4);
 
     width: root.diameter;
     height: root.diameter;
@@ -299,13 +318,25 @@ component KnobFace inherits Rectangle {
     pure function arc-x(a: angle) -> float { return 50 + 40 * sin(a); }
     pure function arc-y(a: angle) -> float { return 50 - 40 * cos(a); }
 
+    // One arc of the track between two angles. The large-arc flag turns on
+    // past a half turn and the sweep flag carries the direction, so callers
+    // draw base-to-value, base-to-modulated, or an excursion span without
+    // restating the geometry -- and a backward span (a negative offset) comes
+    // out right instead of wrapping the long way round.
+    pure function arc-commands(from: angle, to: angle) -> string {
+        return "M \{root.arc-x(from)} \{root.arc-y(from)} A 40 40 0 "
+            + (abs(to / 1deg - from / 1deg) > 180 ? 1 : 0) + " "
+            + (to > from ? 1 : 0) + " "
+            + root.arc-x(to) + " " + root.arc-y(to);
+    }
+
     // Unswept track, so the control still reads as a knob at rest.
     Path {
         width: 100%;
         height: 100%;
         viewbox-width: 100;
         viewbox-height: 100;
-        commands: "M \{root.arc-x(-135deg)} \{root.arc-y(-135deg)} A 40 40 0 1 1 \{root.arc-x(135deg)} \{root.arc-y(135deg)}";
+        commands: root.arc-commands(-135deg, 135deg);
         stroke: Theme.border;
         stroke-width: root.diameter * 0.09;
         fill: transparent;
@@ -318,11 +349,49 @@ component KnobFace inherits Rectangle {
         height: 100%;
         viewbox-width: 100;
         viewbox-height: 100;
-        visible: root.bipolar ? abs(root.clamped - 0.5) > 0.002 : root.clamped > 0.002;
-        commands: "M \{root.arc-x(root.origin-angle)} \{root.arc-y(root.origin-angle)} A 40 40 0 "
-            + (!root.bipolar && root.clamped > 0.6667 ? 1 : 0) + " "
-            + (root.bipolar && root.clamped < 0.5 ? 0 : 1) + " "
-            + root.arc-x(root.value-angle) + " " + root.arc-y(root.value-angle);
+        visible: !root.modulation-armed
+            && (root.bipolar ? abs(root.clamped - 0.5) > 0.002 : root.clamped > 0.002);
+        commands: root.arc-commands(root.origin-angle, root.value-angle);
+        stroke: root.active-fill;
+        stroke-width: root.diameter * 0.09;
+        fill: transparent;
+    }
+
+    // Live modulation, drawn out of the value arc's end so the base stays
+    // readable underneath it. A negative offset runs back over the green.
+    if root.modulation-live : Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: root.arc-commands(root.value-angle, root.modulated-angle);
+        stroke: Theme.warning;
+        stroke-width: root.diameter * 0.09;
+        fill: transparent;
+    }
+
+    // The dialled-in depth, as the span the source will sweep around the
+    // base. A bipolar source swings both ways, so the span is symmetric.
+    if root.modulation-armed && root.modulation-range > 0.002 : Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: root.arc-commands(root.modulation-low-angle, root.modulation-high-angle);
+        stroke: Theme.warning;
+        stroke-width: root.diameter * 0.09;
+        fill: transparent;
+    }
+
+    // Assign mode: the authored value shrinks to a bar so the ring can carry
+    // the route's excursion instead. Drawn after the excursion, which
+    // otherwise buries the one mark saying where the base actually is.
+    if root.modulation-armed : Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: root.arc-commands(root.base-bar-from, root.base-bar-to);
         stroke: root.active-fill;
         stroke-width: root.diameter * 0.09;
         fill: transparent;
@@ -359,21 +428,28 @@ component KnobFace inherits Rectangle {
         background: Theme.text-faint;
     }
 
-    // A zero-depth route draws one endpoint at the base: it remains visibly
-    // assigned without hiding the control's authored centre value.
-    if root.modulation-armed : Rectangle {
+    // A zero-depth route still has to be visible while assigning: with no
+    // span to draw, one endpoint at the base is what says "assigned".
+    if root.modulation-armed && root.modulation-range <= 0.002 : Rectangle {
         width: root.diameter * 0.1;
         height: self.width;
-        x: parent.width * (50 + 43 * sin(root.modulation-low-angle)) / 100 - self.width / 2;
-        y: parent.height * (50 - 43 * cos(root.modulation-low-angle)) / 100 - self.height / 2;
+        x: parent.width * (50 + 43 * sin(root.value-angle)) / 100 - self.width / 2;
+        y: parent.height * (50 - 43 * cos(root.value-angle)) / 100 - self.height / 2;
         border-radius: self.width / 2;
         background: Theme.warning;
     }
-    if root.modulation-armed && root.modulation-range > 0.002 : Rectangle {
-        width: root.diameter * 0.1;
+
+    // Assigned-route count, in the 90-degree gap the track leaves at the
+    // bottom. One dot per route so the count is readable at a glance, capped
+    // at the per-channel modulator limit so the row cannot outgrow the knob.
+    for index in [0, 1, 2, 3] : Rectangle {
+        visible: !root.modulation-armed && index < root.dots;
+        width: root.diameter * 0.09;
         height: self.width;
-        x: parent.width * (50 + 43 * sin(root.modulation-high-angle)) / 100 - self.width / 2;
-        y: parent.height * (50 - 43 * cos(root.modulation-high-angle)) / 100 - self.height / 2;
+        x: parent.width / 2
+            + (index - (root.dots - 1) / 2) * root.diameter * 0.15
+            - self.width / 2;
+        y: parent.height * 0.85;
         border-radius: self.width / 2;
         background: Theme.warning;
     }
@@ -402,6 +478,10 @@ export component ParameterKnob inherits Rectangle {
     in property <bool> modulation-armed;
     in property <bool> modulation-allowed: true;
     in-out property <float> modulation-depth;
+    // Display-only: what the running modulators are doing to this parameter
+    // right now, and how many routes land on it.
+    in property <float> modulation-offset;
+    in property <int> modulation-route-count;
     callback changed(float);
     callback modulation-depth-changed(float);
     callback modulation-edit-started();
@@ -492,6 +572,8 @@ export component ParameterKnob inherits Rectangle {
                 fill: root.fill;
                 modulation-armed: root.modulation-active;
                 modulation-depth: root.modulation-depth;
+                modulation-offset: root.modulation-offset;
+                modulation-route-count: root.modulation-route-count;
                 focused: keyboard.has-focus;
                 hovered: knob-touch.has-hover;
             }
@@ -589,9 +671,20 @@ export component TimeDivisionKnob inherits Rectangle {
     // 0=1/2, 1=1/4, 2=1/8., 3=1/8T, 4=1/16.
     in-out property <int> division: 1;
     in property <float> default-value: 0.7815;
+    in property <bool> modulation-armed;
+    // Only the free-running millisecond value is a continuous destination:
+    // while tempo-synced the knob selects a division index, and sweeping that
+    // would step the delay between musical divisions rather than glide it.
+    in property <bool> modulation-allowed: true;
+    in-out property <float> modulation-depth;
+    in property <float> modulation-offset;
+    in property <int> modulation-route-count;
     callback changed(float);
     callback tempo-sync-changed(bool);
     callback division-changed(int);
+    callback modulation-depth-changed(float);
+    callback modulation-edit-started();
+    callback modulation-edit-finished();
 
     private property <float> division-beats: root.division == 0 ? 0.5
         : root.division == 1 ? 1.0 : root.division == 2 ? 0.75
@@ -649,6 +742,14 @@ export component TimeDivisionKnob inherits Rectangle {
             value-text: root.effective-ms >= 100
                 ? round(root.effective-ms) + " ms"
                 : round(root.effective-ms * 10) / 10 + " ms";
+            modulation-armed: root.modulation-armed;
+            modulation-allowed: root.modulation-allowed && !root.tempo-sync;
+            modulation-depth <=> root.modulation-depth;
+            modulation-offset: root.modulation-offset;
+            modulation-route-count: root.modulation-route-count;
+            modulation-depth-changed(v) => { root.modulation-depth-changed(v); }
+            modulation-edit-started => { root.modulation-edit-started(); }
+            modulation-edit-finished => { root.modulation-edit-finished(); }
             changed(v) => {
                 if (root.tempo-sync) {
                     root.set-division(round(v));
@@ -966,11 +1067,25 @@ export component MiniKnob inherits Rectangle {
     in property <bool> bipolar;
     in property <length> diameter: 22px;
     in property <color> fill: Theme.accent;
+    // The same destination contract ParameterKnob answers, so a trim or a
+    // level knob is assignable on equal terms with a device's other controls
+    // rather than being a second class of parameter.
+    in property <bool> modulation-armed;
+    in property <bool> modulation-allowed: true;
+    in-out property <float> modulation-depth;
+    in property <float> modulation-offset;
+    in property <int> modulation-route-count;
     callback changed(float);
+    callback modulation-depth-changed(float);
+    callback modulation-edit-started();
+    callback modulation-edit-finished();
 
     private property <float> pressed-normalized;
+    private property <float> pressed-modulation-depth;
     private property <bool> fine-drag;
+    private property <bool> modulation-edited;
     private property <float> normalized: root.normalized-value(root.value);
+    private property <bool> modulation-active: root.modulation-armed && root.modulation-allowed;
 
     width: root.diameter;
     height: root.diameter;
@@ -997,6 +1112,10 @@ export component MiniKnob inherits Rectangle {
     }
 
     function set-normalized(n: float) {
+        if (root.modulation-active) {
+            root.set-modulation-depth(root.modulation-depth + n - root.normalized);
+            return;
+        }
         let raw = root.value-at(n);
         let quantized = root.step > 0
             ? root.minimum + round((raw - root.minimum) / root.step) * root.step
@@ -1008,35 +1127,67 @@ export component MiniKnob inherits Rectangle {
         }
     }
 
+    function set-modulation-depth(depth: float) {
+        let next = clamp(depth, -1, 1);
+        if (next != root.modulation-depth) {
+            root.modulation-depth = next;
+            root.modulation-edited = true;
+            root.modulation-depth-changed(next);
+        }
+    }
+
     KnobFace {
         diameter: root.diameter;
         normalized: root.normalized;
         bipolar: root.bipolar;
         enabled: root.enabled;
         fill: root.fill;
+        modulation-armed: root.modulation-active;
+        modulation-depth: root.modulation-depth;
+        modulation-offset: root.modulation-offset;
+        modulation-route-count: root.modulation-route-count;
         focused: mini-keyboard.has-focus;
         hovered: mini-touch.has-hover;
 
         mini-touch := TouchArea {
             enabled: root.enabled;
-            mouse-cursor: ns-resize;
+            mouse-cursor: root.modulation-active ? crosshair : ns-resize;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) {
                     mini-keyboard.focus();
                     root.pressed-normalized = root.normalized;
+                    root.pressed-modulation-depth = root.modulation-depth;
+                    root.modulation-edited = false;
                     root.fine-drag = e.modifiers.control || e.modifiers.shift;
+                    if (root.modulation-active) { root.modulation-edit-started(); }
                 } else if (e.kind == PointerEventKind.move && self.pressed) {
-                    root.set-normalized(root.pressed-normalized
-                        + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                    if (root.modulation-active) {
+                        root.set-modulation-depth(root.pressed-modulation-depth
+                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                    } else {
+                        root.set-normalized(root.pressed-normalized
+                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                    }
+                } else if (e.kind == PointerEventKind.up && root.modulation-active && root.modulation-edited) {
+                    root.modulation-edit-finished();
                 }
             }
             double-clicked => {
-                root.value = clamp(root.default-value, root.minimum, root.maximum);
-                root.changed(root.value);
+                if (root.modulation-active) {
+                    root.modulation-edit-started();
+                    root.modulation-edited = false;
+                    root.set-modulation-depth(0);
+                    if (root.modulation-edited) { root.modulation-edit-finished(); }
+                } else {
+                    root.value = clamp(root.default-value, root.minimum, root.maximum);
+                    root.changed(root.value);
+                }
             }
             scroll-event(e) => {
+                if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
                 root.set-normalized(root.normalized
                     - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
+                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
                 accept
             }
         }
@@ -1047,11 +1198,17 @@ export component MiniKnob inherits Rectangle {
         focus-on-click: false;
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
+                if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
                 root.set-normalized(root.normalized
-                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
+                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+                accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
+                if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
                 root.set-normalized(root.normalized
-                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
+                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+                accept
             } else { reject }
         }
     }

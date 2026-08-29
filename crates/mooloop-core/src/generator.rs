@@ -189,8 +189,11 @@ const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
             id: synth_osc_param(n, OSC_OFFSET_SEMITONES),
             name: "Semis",
             unit: "st",
-            min: -24.0,
-            max: 24.0,
+            // Matches the knob's own travel. A depth is a fraction of this
+            // range, so a narrower declaration would make a full-depth route
+            // sweep less than the control visibly offers.
+            min: -48.0,
+            max: 48.0,
             curve: ParamCurve::Linear,
             default: 0.0,
         },

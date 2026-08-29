@@ -51,6 +51,8 @@ export component BitcrushDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];
+                modulation-offset: root.modulation-offsets[0];
+                modulation-route-count: root.modulation-route-counts[0];
                 changed(v) => { root.bits-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
                 modulation-edit-started => { root.modulation-edit-started(0); }
@@ -67,6 +69,8 @@ export component BitcrushDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[1];
                 modulation-depth: root.modulation-depths[1];
+                modulation-offset: root.modulation-offsets[1];
+                modulation-route-count: root.modulation-route-counts[1];
                 changed(v) => { root.downsample-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
                 modulation-edit-started => { root.modulation-edit-started(1); }
@@ -85,6 +89,8 @@ export component BitcrushDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[2];
                 modulation-depth: root.modulation-depths[2];
+                modulation-offset: root.modulation-offsets[2];
+                modulation-route-count: root.modulation-route-counts[2];
                 changed(v) => { root.mix-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
                 modulation-edit-started => { root.modulation-edit-started(2); }

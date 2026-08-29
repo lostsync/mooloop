@@ -64,6 +64,8 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];
+                modulation-offset: root.modulation-offsets[0];
+                modulation-route-count: root.modulation-route-counts[0];
                 changed(v) => { root.threshold-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "Level compression starts at"
@@ -84,6 +86,8 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[1];
                 modulation-depth: root.modulation-depths[1];
+                modulation-offset: root.modulation-offsets[1];
+                modulation-route-count: root.modulation-route-counts[1];
                 changed(v) => { root.ratio-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "How hard the signal is held above the threshold"
@@ -104,6 +108,8 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[2];
                 modulation-depth: root.modulation-depths[2];
+                modulation-offset: root.modulation-offsets[2];
+                modulation-route-count: root.modulation-route-counts[2];
                 changed(v) => { root.attack-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "How fast the compressor responds"
@@ -124,6 +130,8 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[3];
                 modulation-depth: root.modulation-depths[3];
+                modulation-offset: root.modulation-offsets[3];
+                modulation-route-count: root.modulation-route-counts[3];
                 changed(v) => { root.release-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "How fast it lets go"
@@ -144,6 +152,8 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[4];
                 modulation-depth: root.modulation-depths[4];
+                modulation-offset: root.modulation-offsets[4];
+                modulation-route-count: root.modulation-route-counts[4];
                 changed(v) => { root.knee-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "Width of the soft transition at the threshold"
@@ -164,6 +174,8 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[5];
                 modulation-depth: root.modulation-depths[5];
+                modulation-offset: root.modulation-offsets[5];
+                modulation-route-count: root.modulation-route-counts[5];
                 changed(v) => { root.makeup-changed(v); }
                 changed hovered => {
                     root.hover-hint = self.hovered ? "Gain added after compression"

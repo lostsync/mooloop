@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use mooloop_core::MAX_BUSES;
-use mooloop_core::{MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_SAMPLER_VOICES};
+use mooloop_core::{
+    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_MODULATORS_PER_CHANNEL, MAX_SAMPLER_VOICES,
+};
 use mooloop_dsp::SPECTRUM_BINS;
 
 /// Peak-hold cells for every bus, left and right interleaved.
@@ -283,6 +285,58 @@ impl PlayheadMeters {
             .map(|index| f32::from_bits(self.cells[index].load(Ordering::Relaxed)))
             .filter(|position| !position.is_nan())
             .collect()
+    }
+}
+
+/// Each channel's modulator outputs as of the last control tick of the most
+/// recent block, so the UI can draw what modulation is doing right now.
+///
+/// Latest-value rather than peak-held, for the same reason `PlayheadMeters`
+/// is: a moving LFO has no transient to protect, and a held peak would make
+/// every assigned knob's arc stick at its excursion instead of animating. The
+/// GUI publishes nothing back, so a plain relaxed store/load pair is enough.
+///
+/// Only the last tick is published. A block is a few milliseconds and the UI
+/// repaints far slower than that, so the intermediate ticks would be
+/// overwritten unseen -- the audio thread should not pay to store them.
+pub struct ModulatorMeters {
+    cells: Vec<AtomicU32>,
+}
+
+impl ModulatorMeters {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            cells: (0..MAX_CHANNELS * MAX_MODULATORS_PER_CHANNEL)
+                .map(|_| AtomicU32::new(0.0f32.to_bits()))
+                .collect(),
+        })
+    }
+
+    fn base(channel: usize) -> Option<usize> {
+        (channel < MAX_CHANNELS).then_some(channel * MAX_MODULATORS_PER_CHANNEL)
+    }
+
+    /// Publish `channel`'s modulator outputs. Called on the audio thread,
+    /// once per block.
+    pub fn publish(&self, channel: usize, outputs: &[f32; MAX_MODULATORS_PER_CHANNEL]) {
+        let Some(base) = Self::base(channel) else {
+            return;
+        };
+        for (offset, value) in outputs.iter().enumerate() {
+            self.cells[base + offset].store(value.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// `channel`'s latest modulator outputs. Called on the GUI thread.
+    pub fn read(&self, channel: usize) -> [f32; MAX_MODULATORS_PER_CHANNEL] {
+        let mut out = [0.0; MAX_MODULATORS_PER_CHANNEL];
+        let Some(base) = Self::base(channel) else {
+            return out;
+        };
+        for (offset, value) in out.iter_mut().enumerate() {
+            *value = f32::from_bits(self.cells[base + offset].load(Ordering::Relaxed));
+        }
+        out
     }
 }
 

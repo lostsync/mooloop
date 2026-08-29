@@ -302,6 +302,8 @@ export component EffectDeviceShell inherits Rectangle {
     in property <bool> modulation-armed;
     in property <[float]> modulation-depths;
     in property <[bool]> modulation-allowed;
+    in property <[float]> modulation-offsets;
+    in property <[int]> modulation-route-counts;
     callback modulation-depth-changed(int, float);
     callback modulation-edit-started(int);
     callback modulation-edit-finished(int);

@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-29
-- Sessions: 13
+- Sessions: 14
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -84,7 +84,11 @@ work session you can recall being part of, and don't stress over precision.
   knob on every effect and generator face is now assignable, with the
   assignment contract declared once on `EffectDeviceShell` and the oscillator
   strip deriving its ids from a `param-base` rather than repeating them per
-  oscillator.
+  oscillator. Then gave the knob a modulation indicator with four states --
+  value, assigning, dialled-in depth, and live -- backed by a new
+  `ModulatorMeters` that publishes each channel's four modulator outputs so
+  the UI can resolve per-destination offsets itself instead of the engine
+  shipping a value per parameter.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

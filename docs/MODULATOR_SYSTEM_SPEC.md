@@ -268,9 +268,9 @@ channel policy and actual outlet publication remain later engine work.
 ### Direct assignment
 
 1. Open the MOD shelf and select a source tile to edit it.
-2. Activate **Assign** for that source. Legal controls across source, inserts,
-   and strip acquire a subtle
-   assignable state; illegal controls do not.
+2. Activate **Assign** for that source. Legal controls on the channel's source
+   device and its inserts acquire a subtle assignable state; illegal controls
+   do not.
 3. Drag a normal control to create or adjust the armed source's route depth.
    Preserve the ordinary control's base value.
 4. Keep the base readout; add a marker and modulation arc/range overlay for
@@ -279,6 +279,28 @@ channel policy and actual outlet publication remain later engine work.
    routes, source, polarity, depth, and a remove action.
 6. Turning **Assign** off restores ordinary base-value editing while keeping
    the source selected for editing.
+
+**Modulation targets devices, not the channel strip.** The strip's volume and
+pan remain ordinary destinations in the engine and keep their descriptors, so
+existing routes resolve and nothing needs migrating -- but no strip control
+offers the assign gesture, and none is planned for now. "A modulator moves a
+device parameter" is a rule the user can hold without exceptions, and the
+mixer draws a strip per channel while routes belong to one channel, so an
+assignable fader would have to explain which channel it meant.
+
+The indicator carries four states, and each has to be legible at a glance
+without a legend:
+
+| State | Ring |
+| --- | --- |
+| Ordinary | Value arc in the accent colour |
+| Assigning, unassigned | Track empty but for a short accent bar at the base |
+| Assigning, assigned | The bar, plus the route's excursion span in the alert colour |
+| Assigned, running | Value arc, plus a live alert-coloured arc out of its end, and one dot per route below |
+
+Because the value arc and the modulation arc share a ring, a control may not
+draw its *value* in the alert colour -- that would make "orange" mean two
+things on the same knob.
 
 The gesture is one undoable route edit, not a stream of unrelated parameter
 edits. Re-dragging the same pair retunes it. Zero depth is a valid parked route;

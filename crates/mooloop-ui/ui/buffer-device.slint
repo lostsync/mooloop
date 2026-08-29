@@ -125,6 +125,8 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];
+                modulation-offset: root.modulation-offsets[0];
+                modulation-route-count: root.modulation-route-counts[0];
                 changed(v) => { root.offset-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
                 modulation-edit-started => { root.modulation-edit-started(0); }
@@ -141,6 +143,8 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[1];
                 modulation-depth: root.modulation-depths[1];
+                modulation-offset: root.modulation-offsets[1];
+                modulation-route-count: root.modulation-route-counts[1];
                 changed(v) => { root.crossfade-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
                 modulation-edit-started => { root.modulation-edit-started(1); }
