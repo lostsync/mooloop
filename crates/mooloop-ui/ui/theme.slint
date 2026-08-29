@@ -41,3 +41,27 @@ export global Theme {
 export global DisplayPrefs {
     in-out property <bool> smooth-curves: true;
 }
+
+// The one owner of UI motion: every hide/show or reflow animation in the
+// app draws its duration and easing from here, so Preferences > Appearance
+// retunes all of them at once. `speed`/`easing` are indices into the
+// option rows the Appearance page shows; Rust persists them by name.
+// Slint's default is Instant so tests and pre-settings startup are
+// deterministic; the application applies the stored preference on launch.
+export global Motion {
+    // 0=Instant, 1=Fast, 2=Normal, 3=Slow
+    in-out property <int> speed: 0;
+    // 0=Linear, 1=Ease out, 2=Ease in-out, 3=Overshoot
+    in-out property <int> easing: 2;
+    // Set while a pointer gesture owns the animated value (panel resize
+    // grips): the animation steps aside so the panel tracks the pointer.
+    in-out property <bool> gesture-active: false;
+
+    out property <duration> duration:
+        speed == 1 ? 120ms : speed == 2 ? 200ms : speed == 3 ? 320ms : 0ms;
+    out property <easing> curve:
+        easing == 1 ? ease-out
+        : easing == 2 ? ease-in-out
+        : easing == 3 ? cubic-bezier(0.34, 1.56, 0.64, 1)
+        : linear;
+}

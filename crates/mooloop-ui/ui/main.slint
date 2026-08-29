@@ -1,7 +1,7 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, Motion } from "theme.slint";
 import { GainMath } from "gain.slint";
-export { DisplayPrefs } from "theme.slint";
+export { DisplayPrefs, Motion } from "theme.slint";
 import {
     AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
     SegmentedControl, SelectorBank, StereoPeakMeter, ZoomScrollBar,
@@ -1813,6 +1813,7 @@ export component MainWindow inherits Window {
                         property <length> grab-y;
                         pointer-event(e) => {
                             if (e.kind == PointerEventKind.down) {
+                                Motion.gesture-active = true;
                                 self.grab-y = self.mouse-y;
                             } else if (e.kind == PointerEventKind.move && self.pressed) {
                                 // The grip itself travels with the dock edge, so
@@ -1830,14 +1831,23 @@ export component MainWindow inherits Window {
                                     self.grab-y = self.mouse-y;
                                 }
                                 root.piano-dock-height = clamped;
+                            } else if (e.kind == PointerEventKind.up
+                                    || e.kind == PointerEventKind.cancel) {
+                                Motion.gesture-active = false;
                             }
                         }
                     }
                 }
 
                 // ===== Bottom dock: sampler and note editors =====
-                if root.bottom-pane-visible : Rectangle {
-                    height: root.editor-page == 1 ? root.piano-dock-height
+                //
+                // Always in flow so hide/show can animate: the height eases to
+                // the page's dock height or to 0 (clipped), instead of the old
+                // instant `if`. The resize grip steps the animation aside
+                // while it owns the value.
+                Rectangle {
+                    height: !root.bottom-pane-visible ? 0px
+                        : root.editor-page == 1 ? root.piano-dock-height
                         // The Source page grows by the shelf's own open delta
                         // when the modulation shelf expands, so the rack (284px
                         // face + shelf) keeps fitting without a vertical scroll
@@ -1849,6 +1859,12 @@ export component MainWindow inherits Window {
                                 : 0px)
                         : 410px;
                     background: Theme.panel;
+                    clip: true;
+                    animate height {
+                        duration: Motion.duration;
+                        easing: Motion.curve;
+                        enabled: !Motion.gesture-active;
+                    }
 
                     VerticalLayout {
                         spacing: 0px;
@@ -3648,9 +3664,28 @@ export component MainWindow inherits Window {
             // into the current width. Dragging left widens. The tree itself
             // is flattened by Rust; rows toggle and top-level folders are
             // removed by path.
-            if root.sidebar-visible : Rectangle {
-                width: root.sidebar-width;
+            // Always in flow so hide/show can animate: the width eases to the
+            // stored sidebar-width or to 0 (clipped), instead of the old
+            // instant `if`. The resize grip steps the animation aside while
+            // it owns the value.
+            Rectangle {
+                width: root.sidebar-visible ? root.sidebar-width : 0px;
                 background: Theme.panel;
+                animate width {
+                    duration: Motion.duration;
+                    easing: Motion.curve;
+                    enabled: !Motion.gesture-active;
+                }
+
+                // Clipped content holder. The resize grip below stays
+                // outside this subtree on purpose: 5 of its 6px reach left
+                // of the sidebar's edge, and `clip` cuts pointer events
+                // along with pixels.
+                Rectangle {
+                    clip: true;
+                    x: 0;
+                    width: parent.width;
+                    height: parent.height;
 
                 VerticalLayout {
                     spacing: 0px;
@@ -3835,15 +3870,18 @@ export component MainWindow inherits Window {
                     background: sidebar-grip.has-hover || sidebar-grip.pressed
                         ? Theme.focus : Theme.border;
                 }
+                }
 
                 sidebar-grip := TouchArea {
                     x: -5px;
                     width: 6px;
                     height: parent.height;
+                    enabled: root.sidebar-visible;
                     mouse-cursor: ew-resize;
                     property <length> grab-x;
                     pointer-event(e) => {
                         if (e.kind == PointerEventKind.down) {
+                            Motion.gesture-active = true;
                             self.grab-x = self.mouse-x;
                         } else if (e.kind == PointerEventKind.move && self.pressed) {
                             let target = root.sidebar-width
@@ -3857,6 +3895,9 @@ export component MainWindow inherits Window {
                                 self.grab-x = self.mouse-x;
                             }
                             root.sidebar-width = clamped;
+                        } else if (e.kind == PointerEventKind.up
+                                || e.kind == PointerEventKind.cancel) {
+                            Motion.gesture-active = false;
                         }
                     }
                 }

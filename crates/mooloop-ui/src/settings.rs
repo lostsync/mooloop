@@ -86,9 +86,60 @@ pub(crate) struct AppearanceSettings {
     pub roundness: f32,
     #[serde(default = "default_true")]
     pub smooth_curves: bool,
+    /// UI-motion speed and easing, by option name as shown on the
+    /// Appearance page. Persisted as strings so settings.toml stays
+    /// readable; unknown names fall back to the defaults on load.
+    #[serde(default = "default_motion_speed")]
+    pub motion_speed: String,
+    #[serde(default = "default_motion_easing")]
+    pub motion_easing: String,
     /// Schemes saved from the Appearance page, listed after the built-ins.
     #[serde(default)]
     pub user_schemes: Vec<ThemeScheme>,
+}
+
+pub(crate) const MOTION_SPEEDS: [&str; 4] = ["instant", "fast", "normal", "slow"];
+pub(crate) const MOTION_EASINGS: [&str; 4] = ["linear", "ease-out", "ease-in-out", "overshoot"];
+
+fn default_motion_speed() -> String {
+    "fast".to_owned()
+}
+
+fn default_motion_easing() -> String {
+    "ease-in-out".to_owned()
+}
+
+/// Maps a persisted speed name onto the Motion global's option index.
+/// Unknown names (older or hand-edited configs) fall back to Fast.
+pub(crate) fn motion_speed_index(name: &str) -> i32 {
+    MOTION_SPEEDS
+        .iter()
+        .position(|&option| option == name)
+        .map(|index| index as i32)
+        .unwrap_or(1)
+}
+
+/// Maps a persisted easing name onto the Motion global's option index.
+pub(crate) fn motion_easing_index(name: &str) -> i32 {
+    MOTION_EASINGS
+        .iter()
+        .position(|&option| option == name)
+        .map(|index| index as i32)
+        .unwrap_or(2)
+}
+
+/// Inverse of [`motion_speed_index`], for persisting the global back.
+pub(crate) fn motion_speed_name(index: i32) -> &'static str {
+    MOTION_SPEEDS
+        .get(index.clamp(0, 3) as usize)
+        .unwrap_or(&MOTION_SPEEDS[1])
+}
+
+/// Inverse of [`motion_easing_index`], for persisting the global back.
+pub(crate) fn motion_easing_name(index: i32) -> &'static str {
+    MOTION_EASINGS
+        .get(index.clamp(0, 3) as usize)
+        .unwrap_or(&MOTION_EASINGS[2])
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -191,6 +242,8 @@ impl Default for AppearanceSettings {
             contrast: 1.0,
             roundness: 1.0,
             smooth_curves: true,
+            motion_speed: default_motion_speed(),
+            motion_easing: default_motion_easing(),
             user_schemes: Vec::new(),
         }
     }
@@ -217,6 +270,16 @@ impl AppearanceSettings {
             contrast,
             roundness,
             smooth_curves: self.smooth_curves,
+            motion_speed: if MOTION_SPEEDS.contains(&self.motion_speed.as_str()) {
+                self.motion_speed.clone()
+            } else {
+                default_motion_speed()
+            },
+            motion_easing: if MOTION_EASINGS.contains(&self.motion_easing.as_str()) {
+                self.motion_easing.clone()
+            } else {
+                default_motion_easing()
+            },
             user_schemes: self.user_schemes.clone(),
         })
     }
@@ -908,6 +971,33 @@ mod tests {
         )
         .unwrap();
         assert!(!UiSettings::load_from(&path).unwrap().general.developer_mode);
+    }
+
+    #[test]
+    fn motion_names_round_trip_through_indices() {
+        for (index, name) in MOTION_SPEEDS.iter().enumerate() {
+            assert_eq!(motion_speed_index(name), index as i32);
+            assert_eq!(motion_speed_name(index as i32), *name);
+        }
+        for (index, name) in MOTION_EASINGS.iter().enumerate() {
+            assert_eq!(motion_easing_index(name), index as i32);
+            assert_eq!(motion_easing_name(index as i32), *name);
+        }
+    }
+
+    #[test]
+    fn unknown_motion_names_fall_back_to_defaults() {
+        assert_eq!(motion_speed_index("snappy"), 1);
+        assert_eq!(motion_easing_index("bouncy"), 2);
+        let settings = AppearanceSettings {
+            motion_speed: "warp".to_owned(),
+            motion_easing: "swing".to_owned(),
+            ..AppearanceSettings::default()
+        }
+        .validated()
+        .unwrap();
+        assert_eq!(settings.motion_speed, "fast");
+        assert_eq!(settings.motion_easing, "ease-in-out");
     }
 
     #[test]

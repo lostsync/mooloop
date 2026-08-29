@@ -1,5 +1,5 @@
 import { HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, Motion } from "theme.slint";
 import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { JackControlSurface, OutputTargetRow } from "audio-preferences.slint";
 export { OutputTargetRow }
@@ -499,6 +499,44 @@ export component AppearancePage inherits VerticalLayout {
             tooltip: "Draw smooth antialiased curves";
             max-width: 72px;
             checked <=> root.smooth-curves;
+        }
+    }
+
+    // Motion writes straight into the shared Motion global, so every
+    // animated panel answers live; Apply persists the indices by name.
+    SectionLabel { text: "MOTION"; }
+    HorizontalBox {
+        height: 36px;
+        padding: 0px;
+        spacing: 8px;
+        VerticalBox {
+            spacing: 0px;
+            padding: 0px;
+            Text { text: "Speed"; color: Theme.text; font-size: 11px; }
+            Text { text: "How long panel hide/show moves take"; color: Theme.text-muted; font-size: 10px; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        SegmentedControl {
+            options: ["Instant", "Fast", "Normal", "Slow"];
+            max-width: 240px;
+            selected-index <=> Motion.speed;
+        }
+    }
+    HorizontalBox {
+        height: 36px;
+        padding: 0px;
+        spacing: 8px;
+        VerticalBox {
+            spacing: 0px;
+            padding: 0px;
+            Text { text: "Easing"; color: Theme.text; font-size: 11px; }
+            Text { text: "The curve the move follows"; color: Theme.text-muted; font-size: 10px; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        SegmentedControl {
+            options: ["Linear", "Ease out", "In-out", "Overshoot"];
+            max-width: 240px;
+            selected-index <=> Motion.easing;
         }
     }
 

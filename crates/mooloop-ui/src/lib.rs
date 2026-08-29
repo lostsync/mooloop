@@ -223,12 +223,17 @@ fn apply_appearance(window: &MainWindow, appearance: &AppearanceSettings) {
     window
         .global::<DisplayPrefs>()
         .set_smooth_curves(appearance.smooth_curves);
+    // Motion deliberately not applied here: this also runs on every live
+    // color preview, which would clobber the Appearance page's in-progress
+    // motion edits. Motion reaches the window through
+    // `sync_preferences_properties` (startup, cancel, and Apply) instead.
 }
 
 /// Reads back the Appearance page's live, uncommitted state. The dialog holds
 /// the edit in its properties until Apply, so this is what preview, scheme
 /// selection, and Save Scheme all have to work from.
 fn window_appearance(window: &MainWindow, stored: &AppearanceSettings) -> AppearanceSettings {
+    let motion = window.global::<Motion>();
     AppearanceSettings {
         scheme: window.get_preferences_appearance_scheme().into(),
         base: window.get_preferences_appearance_base().into(),
@@ -237,6 +242,8 @@ fn window_appearance(window: &MainWindow, stored: &AppearanceSettings) -> Appear
         contrast: window.get_preferences_appearance_contrast(),
         roundness: window.get_preferences_appearance_roundness(),
         smooth_curves: window.get_preferences_smooth_curves(),
+        motion_speed: settings::motion_speed_name(motion.get_speed()).to_owned(),
+        motion_easing: settings::motion_easing_name(motion.get_easing()).to_owned(),
         user_schemes: stored.user_schemes.clone(),
     }
 }
@@ -271,6 +278,9 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window
         .global::<DisplayPrefs>()
         .set_smooth_curves(appearance.smooth_curves);
+    let motion = window.global::<Motion>();
+    motion.set_speed(settings::motion_speed_index(&appearance.motion_speed));
+    motion.set_easing(settings::motion_easing_index(&appearance.motion_easing));
     window.set_preferences_error("".into());
     let buffer_index = settings
         .audio
@@ -3968,6 +3978,10 @@ impl AppUi {
                         return false;
                     };
                     let mut settings = settings.borrow_mut();
+                    // Motion reads straight out of the global the Appearance
+                    // page writes into, so its segment selections apply live
+                    // and persist together with the palette.
+                    let motion = window.global::<Motion>();
                     let candidate = AppearanceSettings {
                         base: base.into(),
                         accent: accent.into(),
@@ -3975,6 +3989,10 @@ impl AppUi {
                         contrast,
                         roundness,
                         smooth_curves,
+                        motion_speed: settings::motion_speed_name(motion.get_speed())
+                            .to_owned(),
+                        motion_easing: settings::motion_easing_name(motion.get_easing())
+                            .to_owned(),
                         ..settings.appearance.clone()
                     };
                     let mut appearance = match candidate.validated() {
