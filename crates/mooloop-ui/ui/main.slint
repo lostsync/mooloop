@@ -581,9 +581,16 @@ export component MainWindow inherits Window {
     // Rust rather than being inferred by the shelf.
     in property <int> modulation-selected-waveform;
     in property <float> modulation-selected-rate;
+    in property <bool> modulation-selected-rate-tempo-sync;
+    in property <int> modulation-selected-rate-division: 7;
     in property <float> modulation-selected-depth;
     in property <float> modulation-selected-phase;
     in property <bool> modulation-selected-retrigger;
+    in property <float> modulation-selected-fade-in;
+    in property <bool> modulation-selected-fade-tempo-sync;
+    in property <int> modulation-selected-fade-division: 7;
+    in property <float> modulation-selected-smoothing;
+    in property <float> modulation-selected-pulse-width: 0.5;
     in property <int> modulation-max-sources;
     callback modulation-shelf-toggled();
     callback modulation-source-selected(int);
@@ -591,9 +598,16 @@ export component MainWindow inherits Window {
     callback modulation-lfo-added();
     callback modulation-lfo-wave-changed(int, int);
     callback modulation-lfo-rate-changed(int, float);
+    callback modulation-lfo-rate-sync-changed(int, bool);
+    callback modulation-lfo-rate-division-changed(int, int);
     callback modulation-lfo-depth-changed(int, float);
     callback modulation-lfo-phase-changed(int, float);
     callback modulation-lfo-retrigger-changed(int, bool);
+    callback modulation-lfo-fade-in-changed(int, float);
+    callback modulation-lfo-fade-sync-changed(int, bool);
+    callback modulation-lfo-fade-division-changed(int, int);
+    callback modulation-lfo-smoothing-changed(int, float);
+    callback modulation-lfo-pulse-width-changed(int, float);
     callback modulation-route-polarity-changed(int, int);
     callback modulation-route-removed(int);
     // Generator and strip destinations, indexed by descriptor position the
@@ -2817,9 +2831,16 @@ export component MainWindow inherits Window {
                                             armed-slot: root.modulation-armed-slot;
                                             selected-waveform: root.modulation-selected-waveform;
                                             selected-rate: root.modulation-selected-rate;
+                                            selected-rate-tempo-sync: root.modulation-selected-rate-tempo-sync;
+                                            selected-rate-division: root.modulation-selected-rate-division;
                                             selected-depth: root.modulation-selected-depth;
                                             selected-phase: root.modulation-selected-phase;
                                             selected-retrigger: root.modulation-selected-retrigger;
+                                            selected-fade-in: root.modulation-selected-fade-in;
+                                            selected-fade-tempo-sync: root.modulation-selected-fade-tempo-sync;
+                                            selected-fade-division: root.modulation-selected-fade-division;
+                                            selected-smoothing: root.modulation-selected-smoothing;
+                                            selected-pulse-width: root.modulation-selected-pulse-width;
                                             max-sources: root.modulation-max-sources;
                                             toggled => { root.modulation-shelf-toggled(); }
                                             source-selected(slot) => { root.modulation-source-selected(slot); }
@@ -2827,9 +2848,16 @@ export component MainWindow inherits Window {
                                             lfo-added => { root.modulation-lfo-added(); }
                                             lfo-wave-changed(slot, value) => { root.modulation-lfo-wave-changed(slot, value); }
                                             lfo-rate-changed(slot, value) => { root.modulation-lfo-rate-changed(slot, value); }
+                                            lfo-rate-sync-changed(slot, value) => { root.modulation-lfo-rate-sync-changed(slot, value); }
+                                            lfo-rate-division-changed(slot, value) => { root.modulation-lfo-rate-division-changed(slot, value); }
                                             lfo-depth-changed(slot, value) => { root.modulation-lfo-depth-changed(slot, value); }
                                             lfo-phase-changed(slot, value) => { root.modulation-lfo-phase-changed(slot, value); }
                                             lfo-retrigger-changed(slot, value) => { root.modulation-lfo-retrigger-changed(slot, value); }
+                                            lfo-fade-in-changed(slot, value) => { root.modulation-lfo-fade-in-changed(slot, value); }
+                                            lfo-fade-sync-changed(slot, value) => { root.modulation-lfo-fade-sync-changed(slot, value); }
+                                            lfo-fade-division-changed(slot, value) => { root.modulation-lfo-fade-division-changed(slot, value); }
+                                            lfo-smoothing-changed(slot, value) => { root.modulation-lfo-smoothing-changed(slot, value); }
+                                            lfo-pulse-width-changed(slot, value) => { root.modulation-lfo-pulse-width-changed(slot, value); }
                                             route-polarity-changed(index, polarity) => {
                                                 root.modulation-route-polarity-changed(index, polarity);
                                             }

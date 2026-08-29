@@ -17,6 +17,9 @@ pub const CONTROL_RATE_FRAMES: usize = 32;
 struct Lfo {
     params: ModLfoParams,
     phase: f32,
+    fade_elapsed_seconds: f32,
+    smoothed: f32,
+    output_initialized: bool,
     /// Current value of the stepped random waveform, redrawn only when the
     /// phase wraps. Regenerating per evaluation would be white noise at
     /// control rate rather than sample-and-hold.
@@ -29,6 +32,9 @@ impl Lfo {
         let mut lfo = Self {
             params,
             phase: params.phase.fract(),
+            fade_elapsed_seconds: 0.0,
+            smoothed: 0.0,
+            output_initialized: false,
             held: 0.0,
             // Any odd constant; the sequence only has to be uncorrelated
             // between slots, not cryptographic.
@@ -49,14 +55,30 @@ impl Lfo {
         ((self.rng >> 8) as f32 / SCALE) * 2.0 - 1.0
     }
 
-    fn value(&mut self) -> f32 {
+    fn rate_hz(&self, bpm: f64) -> f32 {
+        if self.params.tempo_sync {
+            self.params.rate_division.rate_hz(bpm)
+        } else {
+            self.params.rate_hz
+        }
+    }
+
+    fn fade_seconds(&self, bpm: f64) -> f32 {
+        if self.params.fade_in_tempo_sync {
+            self.params.fade_in_division.seconds(bpm)
+        } else {
+            self.params.fade_in_seconds
+        }
+    }
+
+    fn value(&mut self, sample_rate: u32, frames: usize, bpm: f64) -> f32 {
         let phase = self.phase;
         let raw = match self.params.waveform {
             ModLfoWaveform::Sine => (phase * core::f32::consts::TAU).sin(),
             ModLfoWaveform::Triangle => 1.0 - 4.0 * (phase - 0.5).abs(),
             ModLfoWaveform::Saw => phase * 2.0 - 1.0,
             ModLfoWaveform::Square => {
-                if phase < 0.5 {
+                if phase < self.params.pulse_width.clamp(0.01, 0.99) {
                     1.0
                 } else {
                     -1.0
@@ -64,11 +86,29 @@ impl Lfo {
             }
             ModLfoWaveform::Random => self.held,
         };
-        raw * self.params.depth.clamp(0.0, 1.0)
+        let fade_seconds = self.fade_seconds(bpm).max(0.0);
+        let fade = if fade_seconds <= f32::EPSILON {
+            1.0
+        } else {
+            (self.fade_elapsed_seconds / fade_seconds).clamp(0.0, 1.0)
+        };
+        let target = raw * self.params.depth.clamp(0.0, 1.0) * fade;
+        let smoothing = self.params.smoothing_seconds.clamp(0.0, 2.0);
+        if smoothing <= f32::EPSILON || !self.output_initialized {
+            self.smoothed = target;
+            self.output_initialized = true;
+        } else {
+            let elapsed = frames as f32 / sample_rate.max(1) as f32;
+            let coefficient = 1.0 - (-elapsed / smoothing).exp();
+            self.smoothed += (target - self.smoothed) * coefficient;
+        }
+        self.smoothed
     }
 
-    fn advance(&mut self, sample_rate: u32, frames: usize) {
-        let increment = self.params.rate_hz.max(0.0) * frames as f32 / sample_rate as f32;
+    fn advance(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
+        let elapsed = frames as f32 / sample_rate.max(1) as f32;
+        self.fade_elapsed_seconds += elapsed;
+        let increment = self.rate_hz(bpm).max(0.0) * elapsed;
         let advanced = self.phase + increment;
         self.phase = advanced.fract();
         if self.phase < 0.0 {
@@ -83,6 +123,7 @@ impl Lfo {
     fn retrigger(&mut self) {
         if self.params.retrigger {
             self.phase = self.params.phase.fract();
+            self.fade_elapsed_seconds = 0.0;
             self.held = self.next_random();
         }
     }
@@ -126,7 +167,15 @@ impl ModulatorRack {
             return;
         };
         match (params, existing.as_mut()) {
-            (Some(ModulatorParams::Lfo(next)), Some(Source::Lfo(lfo))) => lfo.params = next,
+            (Some(ModulatorParams::Lfo(next)), Some(Source::Lfo(lfo))) => {
+                let fade_changed = lfo.params.fade_in_seconds != next.fade_in_seconds
+                    || lfo.params.fade_in_tempo_sync != next.fade_in_tempo_sync
+                    || lfo.params.fade_in_division != next.fade_in_division;
+                lfo.params = next;
+                if fade_changed {
+                    lfo.fade_elapsed_seconds = 0.0;
+                }
+            }
             (Some(ModulatorParams::Lfo(next)), _) => *existing = Some(Source::Lfo(Lfo::new(next))),
             (None, _) => {
                 *existing = None;
@@ -146,13 +195,13 @@ impl ModulatorRack {
     }
 
     /// Evaluate every slot for the coming `frames` and advance its phase.
-    pub fn tick(&mut self, sample_rate: u32, frames: usize) {
+    pub fn tick(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
         for (slot, source) in self.slots.iter_mut().enumerate() {
             let Some(Source::Lfo(lfo)) = source else {
                 continue;
             };
-            self.outputs[slot] = lfo.value();
-            lfo.advance(sample_rate, frames);
+            self.outputs[slot] = lfo.value(sample_rate, frames, bpm);
+            lfo.advance(sample_rate, frames, bpm);
         }
     }
 
@@ -184,16 +233,16 @@ mod tests {
         });
         // `tick` reports the value for the frames it is about to cover, then
         // advances, so each reading is the phase *before* that step.
-        rack.tick(48_000, 12_000);
+        rack.tick(48_000, 12_000, 120.0);
         assert!(rack.outputs()[0].abs() < 1e-6, "starts at zero");
         // A quarter second at 1 Hz is a quarter cycle: the sine peak.
-        rack.tick(48_000, 12_000);
+        rack.tick(48_000, 12_000, 120.0);
         assert!(
             (rack.outputs()[0] - 1.0).abs() < 1e-3,
             "{}",
             rack.outputs()[0]
         );
-        rack.tick(48_000, 12_000);
+        rack.tick(48_000, 12_000, 120.0);
         assert!(rack.outputs()[0].abs() < 1e-3, "back through zero");
     }
 
@@ -205,12 +254,12 @@ mod tests {
             waveform: ModLfoWaveform::Square,
             ..ModLfoParams::default()
         });
-        rack.tick(48_000, 0);
+        rack.tick(48_000, 0, 120.0);
         assert_eq!(rack.outputs()[0], 0.5);
         assert_eq!(rack.outputs()[1], 0.0);
 
         rack.set_slot(0, None);
-        rack.tick(48_000, 0);
+        rack.tick(48_000, 0, 120.0);
         assert_eq!(rack.outputs()[0], 0.0);
         assert!(rack.is_empty());
     }
@@ -224,7 +273,7 @@ mod tests {
             waveform: ModLfoWaveform::Saw,
             ..ModLfoParams::default()
         });
-        rack.tick(48_000, 12_000);
+        rack.tick(48_000, 12_000, 120.0);
         let advanced = rack.outputs()[0];
         rack.set_slot(
             0,
@@ -234,7 +283,7 @@ mod tests {
                 ..ModLfoParams::default()
             })),
         );
-        rack.tick(48_000, 0);
+        rack.tick(48_000, 0, 120.0);
         assert!(
             rack.outputs()[0] > advanced,
             "phase restarted on reconfigure"
@@ -250,17 +299,17 @@ mod tests {
             waveform: ModLfoWaveform::Random,
             ..ModLfoParams::default()
         });
-        rack.tick(48_000, 1_000);
+        rack.tick(48_000, 1_000, 120.0);
         let held = rack.outputs()[0];
         assert!((-1.0..=1.0).contains(&held), "out of range: {held}");
         // Ten more evaluations well inside the same cycle.
         for _ in 0..10 {
-            rack.tick(48_000, 1_000);
+            rack.tick(48_000, 1_000, 120.0);
             assert_eq!(rack.outputs()[0], held, "value changed mid-cycle");
         }
         // Crossing the wrap draws a new one.
-        rack.tick(48_000, 48_000);
-        rack.tick(48_000, 0);
+        rack.tick(48_000, 48_000, 120.0);
+        rack.tick(48_000, 0, 120.0);
         assert_ne!(rack.outputs()[0], held);
     }
 
@@ -272,10 +321,10 @@ mod tests {
             retrigger: false,
             ..ModLfoParams::default()
         });
-        free.tick(48_000, 12_000);
+        free.tick(48_000, 12_000, 120.0);
         assert_eq!(free.outputs()[0], -1.0, "a saw starts at its floor");
         free.retrigger();
-        free.tick(48_000, 0);
+        free.tick(48_000, 0, 120.0);
         assert_eq!(
             free.outputs()[0],
             -0.5,
@@ -288,9 +337,85 @@ mod tests {
             retrigger: true,
             ..ModLfoParams::default()
         });
-        played.tick(48_000, 12_000);
+        played.tick(48_000, 12_000, 120.0);
         played.retrigger();
-        played.tick(48_000, 0);
+        played.tick(48_000, 0, 120.0);
         assert_eq!(played.outputs()[0], -1.0, "saw must restart at its floor");
+    }
+
+    #[test]
+    fn tempo_synced_rate_follows_the_current_bpm() {
+        let mut rack = lfo(ModLfoParams {
+            tempo_sync: true,
+            rate_division: mooloop_core::ModTimeDivision::Quarter,
+            ..ModLfoParams::default()
+        });
+        // At 120 BPM a quarter-note cycle is 0.5 seconds. One eighth of a
+        // second advances to the sine peak.
+        rack.tick(48_000, 6_000, 120.0);
+        rack.tick(48_000, 0, 120.0);
+        assert!((rack.outputs()[0] - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn fade_in_scales_output_and_restarts_with_a_note_trigger() {
+        let mut rack = lfo(ModLfoParams {
+            waveform: ModLfoWaveform::Square,
+            retrigger: true,
+            fade_in_seconds: 1.0,
+            ..ModLfoParams::default()
+        });
+        rack.tick(48_000, 24_000, 120.0);
+        assert_eq!(rack.outputs()[0], 0.0);
+        rack.tick(48_000, 0, 120.0);
+        assert!((rack.outputs()[0].abs() - 0.5).abs() < 1e-6);
+        rack.retrigger();
+        rack.tick(48_000, 0, 120.0);
+        assert_eq!(rack.outputs()[0], 0.0);
+
+        rack.tick(48_000, 48_000, 120.0);
+        rack.set_slot(
+            0,
+            Some(ModulatorParams::Lfo(ModLfoParams {
+                waveform: ModLfoWaveform::Square,
+                retrigger: true,
+                fade_in_seconds: 2.0,
+                ..ModLfoParams::default()
+            })),
+        );
+        rack.tick(48_000, 0, 120.0);
+        assert_eq!(rack.outputs()[0], 0.0, "editing fade must audition a new ramp");
+    }
+
+    #[test]
+    fn pulse_width_moves_the_square_transition() {
+        let mut rack = lfo(ModLfoParams {
+            rate_hz: 1.0,
+            waveform: ModLfoWaveform::Square,
+            pulse_width: 0.2,
+            ..ModLfoParams::default()
+        });
+        rack.tick(48_000, 12_000, 120.0);
+        rack.tick(48_000, 0, 120.0);
+        assert_eq!(rack.outputs()[0], -1.0, "25% phase is past a 20% pulse");
+    }
+
+    #[test]
+    fn smoothing_slews_instead_of_stepping_between_levels() {
+        let mut rack = lfo(ModLfoParams {
+            rate_hz: 1.0,
+            waveform: ModLfoWaveform::Square,
+            pulse_width: 0.2,
+            smoothing_seconds: 0.5,
+            ..ModLfoParams::default()
+        });
+        rack.tick(48_000, 12_000, 120.0);
+        assert_eq!(rack.outputs()[0], 1.0);
+        rack.tick(48_000, 4_800, 120.0);
+        assert!(
+            (-1.0..1.0).contains(&rack.outputs()[0]),
+            "smoothed transition jumped to {}",
+            rack.outputs()[0]
+        );
     }
 }

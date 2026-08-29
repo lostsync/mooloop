@@ -182,10 +182,11 @@ fn render_sampler_source_editor() {
         ModulationSourceRow {
             slot: 0,
             name: SharedString::from("LFO 1"),
-            waveform: 0,
+            waveform: 3,
             rate: 2.0,
             depth: 1.0,
             phase: 0.0,
+            pulse_width: 0.3,
             retrigger: false,
             selected: true,
         },
@@ -203,8 +204,14 @@ fn render_sampler_source_editor() {
         },
     ]))));
     ui.set_modulation_max_sources(4);
+    ui.set_modulation_selected_waveform(3);
     ui.set_modulation_selected_rate(2.0);
+    ui.set_modulation_selected_rate_tempo_sync(true);
+    ui.set_modulation_selected_rate_division(13);
     ui.set_modulation_selected_depth(1.0);
+    ui.set_modulation_selected_fade_in(0.75);
+    ui.set_modulation_selected_smoothing(0.08);
+    ui.set_modulation_selected_pulse_width(0.3);
     // Descriptor-id indexed, so the sampler's cutoff overlay sits at 12.
     let mut source_depths = vec![0.0f32; 22];
     source_depths[12] = 0.35;

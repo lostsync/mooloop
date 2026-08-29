@@ -114,6 +114,111 @@ pub enum ModLfoWaveform {
     Random,
 }
 
+/// A transport-relative duration, ordered from the slowest useful LFO cycle
+/// to a 64th-note triplet. The same vocabulary drives both synced rate and
+/// synced fade-in, so their knobs never invent subtly different timing grids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModTimeDivision {
+    FourWhole,
+    DoubleWhole,
+    Whole,
+    DottedHalf,
+    Half,
+    HalfTriplet,
+    DottedQuarter,
+    #[default]
+    Quarter,
+    QuarterTriplet,
+    DottedEighth,
+    Eighth,
+    EighthTriplet,
+    DottedSixteenth,
+    Sixteenth,
+    SixteenthTriplet,
+    DottedThirtySecond,
+    ThirtySecond,
+    ThirtySecondTriplet,
+    DottedSixtyFourth,
+    SixtyFourth,
+    SixtyFourthTriplet,
+}
+
+impl ModTimeDivision {
+    pub const ALL: [Self; 21] = [
+        Self::FourWhole,
+        Self::DoubleWhole,
+        Self::Whole,
+        Self::DottedHalf,
+        Self::Half,
+        Self::HalfTriplet,
+        Self::DottedQuarter,
+        Self::Quarter,
+        Self::QuarterTriplet,
+        Self::DottedEighth,
+        Self::Eighth,
+        Self::EighthTriplet,
+        Self::DottedSixteenth,
+        Self::Sixteenth,
+        Self::SixteenthTriplet,
+        Self::DottedThirtySecond,
+        Self::ThirtySecond,
+        Self::ThirtySecondTriplet,
+        Self::DottedSixtyFourth,
+        Self::SixtyFourth,
+        Self::SixtyFourthTriplet,
+    ];
+
+    /// Duration in quarter-note beats.
+    pub fn beats(self) -> f32 {
+        match self {
+            Self::FourWhole => 16.0,
+            Self::DoubleWhole => 8.0,
+            Self::Whole => 4.0,
+            Self::DottedHalf => 3.0,
+            Self::Half => 2.0,
+            Self::HalfTriplet => 4.0 / 3.0,
+            Self::DottedQuarter => 1.5,
+            Self::Quarter => 1.0,
+            Self::QuarterTriplet => 2.0 / 3.0,
+            Self::DottedEighth => 0.75,
+            Self::Eighth => 0.5,
+            Self::EighthTriplet => 1.0 / 3.0,
+            Self::DottedSixteenth => 0.375,
+            Self::Sixteenth => 0.25,
+            Self::SixteenthTriplet => 1.0 / 6.0,
+            Self::DottedThirtySecond => 0.1875,
+            Self::ThirtySecond => 0.125,
+            Self::ThirtySecondTriplet => 1.0 / 12.0,
+            Self::DottedSixtyFourth => 0.09375,
+            Self::SixtyFourth => 0.0625,
+            Self::SixtyFourthTriplet => 1.0 / 24.0,
+        }
+    }
+
+    pub fn seconds(self, bpm: f64) -> f32 {
+        self.beats() * (60.0 / bpm.max(1.0)) as f32
+    }
+
+    pub fn rate_hz(self, bpm: f64) -> f32 {
+        self.seconds(bpm).recip()
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|division| *division == self)
+            .unwrap_or(7) as i32
+    }
+}
+
 /// A modulator's own parameters. Modulators are addressable like any other
 /// device, so these have descriptor ids too.
 pub const LFO_PARAM_RATE_HZ: u32 = 0;
@@ -122,8 +227,12 @@ pub const LFO_PARAM_WAVEFORM: u32 = 2;
 pub const LFO_PARAM_PHASE: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ModLfoParams {
     pub rate_hz: f32,
+    /// Follow a musical duration instead of `rate_hz`.
+    pub tempo_sync: bool,
+    pub rate_division: ModTimeDivision,
     /// Output scale, `0..1`. Per-destination depth is separate and lives in
     /// the matrix row; this is the modulator's own level.
     pub depth: f32,
@@ -133,16 +242,31 @@ pub struct ModLfoParams {
     /// Restart the phase on note-on. What makes an LFO feel played rather
     /// than merely running.
     pub retrigger: bool,
+    /// Free fade-in duration in seconds. A retrigger also restarts the fade.
+    pub fade_in_seconds: f32,
+    pub fade_in_tempo_sync: bool,
+    pub fade_in_division: ModTimeDivision,
+    /// One-pole output smoothing time in seconds.
+    pub smoothing_seconds: f32,
+    /// High portion of the square cycle, `0.01..0.99`.
+    pub pulse_width: f32,
 }
 
 impl Default for ModLfoParams {
     fn default() -> Self {
         Self {
             rate_hz: 1.0,
+            tempo_sync: false,
+            rate_division: ModTimeDivision::Quarter,
             depth: 1.0,
             waveform: ModLfoWaveform::Sine,
             phase: 0.0,
             retrigger: false,
+            fade_in_seconds: 0.0,
+            fade_in_tempo_sync: false,
+            fade_in_division: ModTimeDivision::Quarter,
+            smoothing_seconds: 0.0,
+            pulse_width: 0.5,
         }
     }
 }
@@ -386,6 +510,38 @@ mod tests {
 
     fn open(param: u32) -> ModDestinationDescriptor {
         ModDestinationDescriptor::unrestricted(param)
+    }
+
+    #[test]
+    fn modulation_divisions_span_four_whole_notes_to_a_64th_triplet() {
+        assert_eq!(ModTimeDivision::ALL.len(), 21);
+        assert_eq!(ModTimeDivision::FourWhole.beats(), 16.0);
+        assert_eq!(ModTimeDivision::Quarter.beats(), 1.0);
+        assert_eq!(ModTimeDivision::SixtyFourthTriplet.beats(), 1.0 / 24.0);
+        assert_eq!(ModTimeDivision::Quarter.rate_hz(120.0), 2.0);
+        assert_eq!(ModTimeDivision::FourWhole.seconds(120.0), 8.0);
+        for (index, division) in ModTimeDivision::ALL.iter().copied().enumerate() {
+            assert_eq!(ModTimeDivision::from_index(index as i32), division);
+            assert_eq!(division.to_index(), index as i32);
+        }
+    }
+
+    #[test]
+    fn legacy_lfo_params_receive_new_control_defaults() {
+        let legacy = r#"
+rate_hz = 3.5
+depth = 0.75
+waveform = "triangle"
+phase = 0.25
+retrigger = true
+"#;
+        let decoded: ModLfoParams = toml::from_str(legacy).unwrap();
+        assert_eq!(decoded.rate_hz, 3.5);
+        assert!(!decoded.tempo_sync);
+        assert_eq!(decoded.rate_division, ModTimeDivision::Quarter);
+        assert_eq!(decoded.fade_in_seconds, 0.0);
+        assert_eq!(decoded.smoothing_seconds, 0.0);
+        assert_eq!(decoded.pulse_width, 0.5);
     }
 
     /// Re-assigning the same source to the same destination retunes the

@@ -203,6 +203,16 @@ values. Reconfiguring a same-kind active source should preserve continuity (the
 LFO currently preserves phase); deliberate resets follow the source trigger
 policy.
 
+An LFO may store either a free rate in hertz or a transport-relative cycle
+duration. Musical divisions are durable values from `4/1` through `1/64T`, so
+tempo changes bend the running oscillator without replacing its authored
+setting or resetting phase. Fade-in uses the same free/synced timing
+vocabulary, begins when the source is installed, and restarts with a declared
+note trigger. Output smoothing is a bounded one-pole slew at control rate;
+square pulse width moves the high-to-low transition without changing the
+route language. Note triggers are observed on the containing 32-frame control
+subdivision, keeping the callback bounded and allocation-free.
+
 Generator and device outlets publish into a per-channel control table. Consumers
 read that table on the following block, with one declared block of latency.
 This rule is mandatory: it makes realtime/offline results identical, prevents
@@ -222,9 +232,11 @@ as an outlet is the correct first audio-derived-control form.
 
 The channel has one collapsed-by-default **MOD** shelf immediately beneath the
 device rack. It lists existing source chips and **Add source**. Selecting a chip
-arms it; its compact editor contains source-owned controls (for an LFO:
-waveform, rate, phase, depth, retrigger). There is one shelf per channel, not a
-`MOD` page copied into Mono, Poly, Buffer, and every effect.
+opens its compact editor without arming assignment. The editor contains
+source-owned controls (for an LFO: waveform, free/synced rate, free/synced
+fade-in, phase, depth, smoothing, square pulse width, and retrigger). There is
+one shelf per channel, not a `MOD` page copied into Mono, Poly, Buffer, and
+every effect.
 
 Every common device frame shows `MOD n`, the number of routes that terminate
 there, and may show source pills where more legible. Activating it opens the
@@ -240,6 +252,12 @@ compatible-signal picker may add named generator, effect, Buffer, and
 cross-channel outlets such as `Kick / Gate`. The picker binds a declared
 control signal to a declared source inlet. It does not create a device-local
 modulator or infer control data from telemetry.
+
+Rate and fade-in place a clickable sync LED directly beside the knob. A dark
+LED leaves the knob continuous; a lit LED turns that same gesture and readout
+into the shared `4/1` through `1/64T` musical-division range. This compact
+`O.` affordance is used consistently for source timing controls rather than
+adding a second selector row for each one.
 
 This makes a future chain such as `Kick / Gate → LFO / Reset → Sampler /
 Position` readable in the ordinary rack. The first edge configures the LFO's

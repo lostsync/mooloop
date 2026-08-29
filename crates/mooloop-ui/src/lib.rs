@@ -23,12 +23,12 @@ use mooloop_core::{
     ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectParams,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, GeneratorParams, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModLfoParams, ModLfoWaveform,
-    ModPolarity, ModRack, ModRoute, ModulatorParams, MonoSynthParams, MonoSynthState, NoteEvent,
-    NoteId, OscWave, ParamAddr, ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode,
-    PointId, PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode,
-    ReverbParams, SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
-    DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS,
-    MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    ModPolarity, ModRack, ModRoute, ModTimeDivision, ModulatorParams, MonoSynthParams,
+    MonoSynthState, NoteEvent, NoteId, OscWave, ParamAddr, ParamDescriptor, ParamOwner,
+    PatternPlacement, PlaybackMode, PointId, PolySynthParams, PolySynthState, Ppq, Project,
+    ProjectChannel, RetriggerMode, ReverbParams, SampleReference, SamplerParams, SamplerState,
+    SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT,
+    MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
     MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL, MAX_PATTERNS, MAX_PATTERN_STEPS,
     MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES,
     MAX_SWING_PERCENT, MIN_SWING_PERCENT, STRIP_DESCRIPTORS, TICKS_PER_64TH, TICKS_PER_BAR,
@@ -2400,6 +2400,20 @@ impl UiState {
             .map_or(0.0, |route| route.depth)
     }
 
+    fn modulation_lfo_mut(&mut self, slot: usize) -> Option<&mut ModLfoParams> {
+        let selected = self.selected;
+        let params = self
+            .channels
+            .get_mut(selected)?
+            .modulation
+            .slots
+            .get_mut(slot)?
+            .as_mut()?;
+        match params {
+            ModulatorParams::Lfo(lfo) => Some(lfo),
+        }
+    }
+
     /// The modulation shelf may address only the selected channel's own
     /// generator, inserts, and strip. Buses and another channel's controls
     /// stay deliberately outside this pass even though `ParamAddr` can name
@@ -2494,6 +2508,7 @@ impl UiState {
                     rate: lfo.rate_hz,
                     depth: lfo.depth,
                     phase: lfo.phase,
+                    pulse_width: lfo.pulse_width,
                     retrigger: lfo.retrigger,
                     selected: selected == Some(slot as u8),
                 })
@@ -2566,9 +2581,30 @@ impl UiState {
             selected_lfo.map_or(0, |lfo| mod_lfo_waveform_to_int(lfo.waveform)),
         );
         window.set_modulation_selected_rate(selected_lfo.map_or(1.0, |lfo| lfo.rate_hz));
+        window.set_modulation_selected_rate_tempo_sync(
+            selected_lfo.is_some_and(|lfo| lfo.tempo_sync),
+        );
+        window.set_modulation_selected_rate_division(
+            selected_lfo.map_or(ModTimeDivision::Quarter.to_index(), |lfo| {
+                lfo.rate_division.to_index()
+            }),
+        );
         window.set_modulation_selected_depth(selected_lfo.map_or(1.0, |lfo| lfo.depth));
         window.set_modulation_selected_phase(selected_lfo.map_or(0.0, |lfo| lfo.phase));
         window.set_modulation_selected_retrigger(selected_lfo.is_some_and(|lfo| lfo.retrigger));
+        window.set_modulation_selected_fade_in(selected_lfo.map_or(0.0, |lfo| lfo.fade_in_seconds));
+        window.set_modulation_selected_fade_tempo_sync(
+            selected_lfo.is_some_and(|lfo| lfo.fade_in_tempo_sync),
+        );
+        window.set_modulation_selected_fade_division(
+            selected_lfo.map_or(ModTimeDivision::Quarter.to_index(), |lfo| {
+                lfo.fade_in_division.to_index()
+            }),
+        );
+        window.set_modulation_selected_smoothing(
+            selected_lfo.map_or(0.0, |lfo| lfo.smoothing_seconds),
+        );
+        window.set_modulation_selected_pulse_width(selected_lfo.map_or(0.5, |lfo| lfo.pulse_width));
 
         // Every described generator and strip parameter carries its own
         // overlay depth and legality, so which controls can be routed is
@@ -6092,6 +6128,38 @@ impl AppUi {
             let st = state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
+            window.on_modulation_lfo_rate_sync_changed(move |slot, enabled| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let Some(lfo) = state.modulation_lfo_mut(slot) else {
+                    return;
+                };
+                lfo.tempo_sync = enabled;
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_rate_division_changed(move |slot, division| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let Some(lfo) = state.modulation_lfo_mut(slot) else {
+                    return;
+                };
+                lfo.rate_division = ModTimeDivision::from_index(division);
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
             window.on_modulation_lfo_depth_changed(move |slot, value| {
                 let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
                     return;
@@ -6148,6 +6216,86 @@ impl AppUi {
                     return;
                 };
                 lfo.retrigger = value;
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_fade_in_changed(move |slot, value| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let Some(lfo) = state.modulation_lfo_mut(slot) else {
+                    return;
+                };
+                lfo.fade_in_seconds = value.clamp(0.0, 16.0);
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_fade_sync_changed(move |slot, enabled| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let Some(lfo) = state.modulation_lfo_mut(slot) else {
+                    return;
+                };
+                lfo.fade_in_tempo_sync = enabled;
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_fade_division_changed(move |slot, division| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let Some(lfo) = state.modulation_lfo_mut(slot) else {
+                    return;
+                };
+                lfo.fade_in_division = ModTimeDivision::from_index(division);
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_smoothing_changed(move |slot, value| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let Some(lfo) = state.modulation_lfo_mut(slot) else {
+                    return;
+                };
+                lfo.smoothing_seconds = value.clamp(0.0, 2.0);
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_pulse_width_changed(move |slot, value| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let Some(lfo) = state.modulation_lfo_mut(slot) else {
+                    return;
+                };
+                lfo.pulse_width = value.clamp(0.01, 0.99);
                 state.send_channel_modulation(&window, &tx);
             });
         }

@@ -234,6 +234,14 @@ graph, not a second device-local modulation system. It is intentionally
 different from Assign: the input picker determines what drives the source,
 while Assign determines where that source's output goes.
 
+Sync-capable LFO timing knobs use the compact `O.` pattern: the knob is the
+circle and a clickable LED immediately to its right selects transport sync.
+When the LED is dark the knob reads continuous time or frequency; when lit it
+steps through musical divisions from `4/1` to `1/64T` and shows the division
+in the same value field. Rate and fade-in use this pattern. Smoothing and
+square-wave pulse width remain ordinary continuous controls; pulse width is
+visibly disabled when another waveform is selected.
+
 This interaction has no drawn patch cords. A full route matrix or zoomed-out
 graph is deferred expert tooling, not a replacement for the rack and not a
 requirement for the first modulation UI.

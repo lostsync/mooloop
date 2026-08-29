@@ -1396,7 +1396,14 @@ impl RenderState {
     /// Tick one channel's source rack for every 32-frame subdivision and
     /// capture each output before advancing it. The final subdivision can be
     /// shorter; its event still starts at its exact frame offset.
-    fn tick_channel_modulators(&mut self, channel: usize, frames: usize) -> usize {
+    fn tick_channel_modulators(
+        &mut self,
+        channel: usize,
+        frames: usize,
+        retrigger_ticks: &[bool; MAX_CONTROL_TICKS_PER_BLOCK],
+    ) -> usize {
+        let sample_rate = self.sample_rate;
+        let bpm = self.transport.bpm;
         let Some(runtime) = self.modulators.get_mut(channel) else {
             return 0;
         };
@@ -1406,7 +1413,10 @@ impl RenderState {
         let mut tick = 0;
         for offset in (0..frames).step_by(CONTROL_RATE_FRAMES) {
             let span = (frames - offset).min(CONTROL_RATE_FRAMES);
-            runtime.tick(self.sample_rate, span);
+            if retrigger_ticks[tick] {
+                runtime.retrigger();
+            }
+            runtime.tick(sample_rate, span, bpm);
             outputs[tick] = *runtime.outputs();
             tick += 1;
         }
@@ -1915,7 +1925,15 @@ impl RenderState {
         // coexist with a mutable borrow of the array being filled.
         #[allow(clippy::needless_range_loop)]
         for index in 0..active_channels {
-            modulator_ticks[index] = self.tick_channel_modulators(index, frames);
+            let mut retrigger_ticks = [false; MAX_CONTROL_TICKS_PER_BLOCK];
+            for event in self.events[index].iter() {
+                if matches!(event.event, Event::NoteOn { .. }) {
+                    let tick = (event.offset as usize / CONTROL_RATE_FRAMES)
+                        .min(MAX_CONTROL_TICKS_PER_BLOCK - 1);
+                    retrigger_ticks[tick] = true;
+                }
+            }
+            modulator_ticks[index] = self.tick_channel_modulators(index, frames, &retrigger_ticks);
         }
         // Lanes resolve whether or not the transport is running: stopped, the
         // playhead simply holds still and the destination sits at the value
@@ -2469,6 +2487,34 @@ mod tests {
             differs,
             "a source on the fader must change gain across subdivisions"
         );
+    }
+
+    #[test]
+    fn a_channel_note_trigger_restarts_its_played_lfo_on_the_control_tick() {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+            mooloop_core::ModLfoParams {
+                rate_hz: 375.0,
+                waveform: mooloop_core::ModLfoWaveform::Saw,
+                retrigger: true,
+                ..mooloop_core::ModLfoParams::default()
+            },
+        ));
+        let project = synth_project(channel);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let none = [false; MAX_CONTROL_TICKS_PER_BLOCK];
+        assert_eq!(render.tick_channel_modulators(0, 64, &none), 2);
+        assert_eq!(render.control_outputs[0][0][0], -1.0);
+        assert_eq!(render.control_outputs[0][1][0], -0.5);
+
+        // `process_block_inner` builds this fixed bitmap from scheduled
+        // NoteOn offsets. The tick method applies it before sampling, so the
+        // destination sees the reset phase on that subdivision rather than
+        // one control tick later.
+        let mut note_on = [false; MAX_CONTROL_TICKS_PER_BLOCK];
+        note_on[0] = true;
+        render.tick_channel_modulators(0, 32, &note_on);
+        assert_eq!(render.control_outputs[0][0][0], -1.0);
     }
 
     /// A stepped parameter refuses modulation, so a route aimed at one is

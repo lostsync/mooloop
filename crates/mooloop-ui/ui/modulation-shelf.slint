@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { MiniKnob, SelectorBank, ToggleButton, ToolButton, ValueScale } from "controls.slint";
+import { LedIndicator, MiniKnob, SelectorBank, ToggleButton, ToolButton, ValueScale } from "controls.slint";
 
 // The channel-owned source collection. `slot` is today's bounded runtime
 // locator; the UI deliberately presents only occupied entries, never four
@@ -12,6 +12,7 @@ export struct ModulationSourceRow {
     rate: float,
     depth: float,
     phase: float,
+    pulse-width: float,
     retrigger: bool,
     selected: bool,
 }
@@ -36,7 +37,7 @@ export struct ModulationRouteRow {
 // header; it does not steal height from the fixed device faces above it.
 export global ModulationShelfMetrics {
     out property <length> closed-height: 30px;
-    out property <length> open-height: 104px;
+    out property <length> open-height: 120px;
 }
 
 // A small source-shape view gives every collapsed source a recognizable face.
@@ -44,6 +45,7 @@ export global ModulationShelfMetrics {
 // the line is phase-synchronized with the audio thread.
 component LfoShape inherits Rectangle {
     in property <int> waveform;
+    in property <float> pulse-width: 0.5;
     in property <color> line-color: Theme.accent;
     background: Theme.panel;
     border-width: 1px;
@@ -66,7 +68,7 @@ component LfoShape inherits Rectangle {
                 : root.waveform == 2
                     ? 2 * mod(self.unit + 0.5, 1) - 1
                     : root.waveform == 3
-                        ? (self.unit < 0.5 ? 1 : -1)
+                        ? (self.unit < root.pulse-width ? 1 : -1)
                         : (mod(point, 13) < 3 ? 0.65
                             : mod(point, 13) < 7 ? -0.35
                             : mod(point, 13) < 10 ? 0.2 : -0.72);
@@ -81,6 +83,7 @@ component LfoShape inherits Rectangle {
 component SourceTile inherits Rectangle {
     in property <string> name;
     in property <int> waveform;
+    in property <float> pulse-width: 0.5;
     in property <bool> selected;
     in property <bool> armed;
     callback clicked();
@@ -99,6 +102,7 @@ component SourceTile inherits Rectangle {
         LfoShape {
             height: 22px;
             waveform: root.waveform;
+            pulse-width: root.pulse-width;
             line-color: root.armed ? Theme.focus : Theme.accent;
         }
         Text {
@@ -171,6 +175,99 @@ component RouteRow inherits Rectangle {
     tap := TouchArea { }
 }
 
+// A continuously draggable knob becomes a stepped musical-division knob when
+// its adjacent LED is lit. The tiny clickable lamp is intentionally the
+// "O." gesture: timing mode stays visible without spending a selector row on
+// every sync-capable control.
+component SyncMiniKnob inherits Rectangle {
+    in property <string> label;
+    in property <string> free-value-text;
+    in property <float> free-value;
+    in property <float> free-minimum;
+    in property <float> free-maximum;
+    in property <float> free-default;
+    in property <ValueScale> free-scale: ValueScale.linear;
+    in property <bool> synced;
+    in property <int> division: 7;
+    callback free-changed(float);
+    callback sync-changed(bool);
+    callback division-changed(int);
+
+    width: 46px;
+    height: 51px;
+
+    pure function division-label(index: int) -> string {
+        return index == 0 ? "4/1" : index == 1 ? "2/1" : index == 2 ? "1/1"
+            : index == 3 ? "1/2D" : index == 4 ? "1/2" : index == 5 ? "1/2T"
+            : index == 6 ? "1/4D" : index == 7 ? "1/4" : index == 8 ? "1/4T"
+            : index == 9 ? "1/8D" : index == 10 ? "1/8" : index == 11 ? "1/8T"
+            : index == 12 ? "1/16D" : index == 13 ? "1/16" : index == 14 ? "1/16T"
+            : index == 15 ? "1/32D" : index == 16 ? "1/32" : index == 17 ? "1/32T"
+            : index == 18 ? "1/64D" : index == 19 ? "1/64" : "1/64T";
+    }
+
+    Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 9px;
+        text: root.label;
+        color: Theme.text-muted;
+        font-size: 7px;
+        horizontal-alignment: center;
+    }
+    MiniKnob {
+        x: 9px;
+        y: 10px;
+        diameter: 22px;
+        label: root.label;
+        value: root.synced ? root.division * 1.0 : root.free-value;
+        minimum: root.synced ? 0 : root.free-minimum;
+        maximum: root.synced ? 20 : root.free-maximum;
+        default-value: root.synced ? 7 : root.free-default;
+        step: root.synced ? 1 : 0;
+        scale: root.synced ? ValueScale.linear : root.free-scale;
+        value-text: root.synced ? root.division-label(root.division) : root.free-value-text;
+        changed(value) => {
+            if (root.synced) {
+                root.division-changed(round(value));
+            } else {
+                root.free-changed(value);
+            }
+        }
+    }
+    sync-light := Rectangle {
+        x: 33px;
+        y: 17px;
+        width: 11px;
+        height: 11px;
+        accessible-role: button;
+        accessible-label: "Tempo sync " + root.label;
+        LedIndicator {
+            x: 1px;
+            y: 1px;
+            diameter: 9px;
+            on: root.synced;
+            tooltip: root.synced ? "Tempo sync on" : "Tempo sync off";
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.sync-changed(!root.synced); }
+        }
+    }
+    Text {
+        x: 0px;
+        y: 35px;
+        width: parent.width;
+        height: 12px;
+        text: root.synced ? root.division-label(root.division) : root.free-value-text;
+        color: root.synced ? Theme.focus : Theme.accent;
+        font-size: 7px;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+}
+
 // The one modulation shelf belongs below the complete device rack. Its three
 // modules deliberately separate the collection, the selected source's own
 // control surface, and that channel's explicit destinations. This is the rack
@@ -184,9 +281,16 @@ export component ModulationShelf inherits Rectangle {
     in property <int> armed-slot: -1;
     in property <int> selected-waveform;
     in property <float> selected-rate;
+    in property <bool> selected-rate-tempo-sync;
+    in property <int> selected-rate-division: 7;
     in property <float> selected-depth;
     in property <float> selected-phase;
     in property <bool> selected-retrigger;
+    in property <float> selected-fade-in;
+    in property <bool> selected-fade-tempo-sync;
+    in property <int> selected-fade-division: 7;
+    in property <float> selected-smoothing;
+    in property <float> selected-pulse-width: 0.5;
     // Capacity is an engine protocol boundary, not a UI layout constant
     // (docs/MODULATOR_SYSTEM_SPEC.md), so Rust reports it.
     in property <int> max-sources: 0;
@@ -196,9 +300,16 @@ export component ModulationShelf inherits Rectangle {
     callback lfo-added();
     callback lfo-wave-changed(int, int);
     callback lfo-rate-changed(int, float);
+    callback lfo-rate-sync-changed(int, bool);
+    callback lfo-rate-division-changed(int, int);
     callback lfo-depth-changed(int, float);
     callback lfo-phase-changed(int, float);
     callback lfo-retrigger-changed(int, bool);
+    callback lfo-fade-in-changed(int, float);
+    callback lfo-fade-sync-changed(int, bool);
+    callback lfo-fade-division-changed(int, int);
+    callback lfo-smoothing-changed(int, float);
+    callback lfo-pulse-width-changed(int, float);
     callback route-polarity-changed(int, int);
     callback route-removed(int);
 
@@ -273,7 +384,7 @@ export component ModulationShelf inherits Rectangle {
                 // spirit of Bitwig's modulator strip. The add action opens a
                 // kind chooser even though LFO is the sole implemented kind.
                 Rectangle {
-                    width: 272px;
+                    width: 220px;
                     border-width: 1px;
                     border-color: Theme.border;
                     background: Theme.panel;
@@ -292,6 +403,7 @@ export component ModulationShelf inherits Rectangle {
                             for source in root.sources : SourceTile {
                                 name: source.name;
                                 waveform: source.waveform;
+                                pulse-width: source.pulse-width;
                                 selected: source.selected;
                                 armed: root.armed-slot == source.slot;
                                 clicked => {
@@ -342,7 +454,7 @@ export component ModulationShelf inherits Rectangle {
                 // and cross-channel outlets extend this chooser instead of
                 // becoming special LFO modes.
                 Rectangle {
-                    width: 400px;
+                    width: 520px;
                     border-width: 1px;
                     border-color: root.assigning ? Theme.accent : Theme.border;
                     background: Theme.panel;
@@ -389,11 +501,12 @@ export component ModulationShelf inherits Rectangle {
                             }
                         }
                         HorizontalLayout {
-                            spacing: 5px;
+                            spacing: 4px;
                             LfoShape {
                                 width: 68px;
                                 height: 40px;
                                 waveform: root.selected-waveform;
+                                pulse-width: root.selected-pulse-width;
                                 line-color: root.assigning ? Theme.focus : Theme.accent;
                             }
                             VerticalLayout {
@@ -428,28 +541,38 @@ export component ModulationShelf inherits Rectangle {
                                     }
                                 }
                             }
-                            VerticalLayout {
-                                width: 40px;
-                                height: 40px;
-                                spacing: 1px;
-                                alignment: center;
-                                Text { height: 8px; text: "RATE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "LFO rate";
-                                    value: root.selected-rate;
-                                    minimum: 0.05;
-                                    maximum: 20;
-                                    default-value: 1;
-                                    scale: ValueScale.logarithmic;
-                                    value-text: round(root.selected-rate * 10) / 10 + " Hz";
-                                    diameter: 20px;
-                                    changed(value) => { root.lfo-rate-changed(root.selected-slot, value); }
-                                }
-                                Text { height: 8px; text: round(root.selected-rate * 10) / 10 + ""; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            SyncMiniKnob {
+                                label: "RATE";
+                                free-value: root.selected-rate;
+                                free-minimum: 0.05;
+                                free-maximum: 20;
+                                free-default: 1;
+                                free-scale: ValueScale.logarithmic;
+                                free-value-text: round(root.selected-rate * 10) / 10 + " Hz";
+                                synced: root.selected-rate-tempo-sync;
+                                division: root.selected-rate-division;
+                                free-changed(value) => { root.lfo-rate-changed(root.selected-slot, value); }
+                                sync-changed(value) => { root.lfo-rate-sync-changed(root.selected-slot, value); }
+                                division-changed(value) => { root.lfo-rate-division-changed(root.selected-slot, value); }
+                            }
+                            SyncMiniKnob {
+                                label: "FADE";
+                                free-value: root.selected-fade-in;
+                                free-minimum: 0;
+                                free-maximum: 16;
+                                free-default: 0;
+                                free-value-text: root.selected-fade-in < 1
+                                    ? round(root.selected-fade-in * 1000) + " ms"
+                                    : round(root.selected-fade-in * 10) / 10 + " s";
+                                synced: root.selected-fade-tempo-sync;
+                                division: root.selected-fade-division;
+                                free-changed(value) => { root.lfo-fade-in-changed(root.selected-slot, value); }
+                                sync-changed(value) => { root.lfo-fade-sync-changed(root.selected-slot, value); }
+                                division-changed(value) => { root.lfo-fade-division-changed(root.selected-slot, value); }
                             }
                             VerticalLayout {
                                 width: 40px;
-                                height: 40px;
+                                height: 51px;
                                 spacing: 1px;
                                 alignment: center;
                                 Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
@@ -465,7 +588,7 @@ export component ModulationShelf inherits Rectangle {
                             }
                             VerticalLayout {
                                 width: 40px;
-                                height: 40px;
+                                height: 51px;
                                 spacing: 1px;
                                 alignment: center;
                                 Text { height: 8px; text: "PHASE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
@@ -479,6 +602,44 @@ export component ModulationShelf inherits Rectangle {
                                 }
                                 Text { height: 8px; text: round(root.selected-phase * 360) + "\u{b0}"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                             }
+                            VerticalLayout {
+                                width: 40px;
+                                height: 51px;
+                                spacing: 1px;
+                                alignment: center;
+                                Text { height: 8px; text: "SMOOTH"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "LFO smoothing";
+                                    value: root.selected-smoothing;
+                                    minimum: 0;
+                                    maximum: 2;
+                                    default-value: 0;
+                                    value-text: root.selected-smoothing <= 0.0001 ? "OFF"
+                                        : round(root.selected-smoothing * 1000) + " ms";
+                                    diameter: 20px;
+                                    changed(value) => { root.lfo-smoothing-changed(root.selected-slot, value); }
+                                }
+                                Text { height: 8px; text: root.selected-smoothing <= 0.0001 ? "OFF" : round(root.selected-smoothing * 1000) + "ms"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 40px;
+                                height: 51px;
+                                spacing: 1px;
+                                alignment: center;
+                                Text { height: 8px; text: "P WIDTH"; color: root.selected-waveform == 3 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Square pulse width";
+                                    value: root.selected-pulse-width;
+                                    minimum: 0.01;
+                                    maximum: 0.99;
+                                    default-value: 0.5;
+                                    enabled: root.selected-waveform == 3;
+                                    value-text: round(root.selected-pulse-width * 100) + "%";
+                                    diameter: 20px;
+                                    changed(value) => { root.lfo-pulse-width-changed(root.selected-slot, value); }
+                                }
+                                Text { height: 8px; text: round(root.selected-pulse-width * 100) + "%"; color: root.selected-waveform == 3 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            }
                             Rectangle { horizontal-stretch: 1; }
                         }
                     }
@@ -488,7 +649,7 @@ export component ModulationShelf inherits Rectangle {
                 // this same module; a matrix is not required for ordinary use.
                 Rectangle {
                     horizontal-stretch: 1;
-                    min-width: 212px;
+                    min-width: 170px;
                     border-width: 1px;
                     border-color: Theme.border;
                     background: Theme.panel;
