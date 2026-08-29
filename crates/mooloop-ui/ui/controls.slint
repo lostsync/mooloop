@@ -275,12 +275,21 @@ component KnobFace inherits Rectangle {
     in property <bool> hovered;
     in property <color> fill: Theme.accent;
     in property <length> diameter: 44px;
+    // The base stays on the primary arc. These endpoints show a route's
+    // excursion around it whenever an assignable source is armed.
+    in property <bool> modulation-armed;
+    in property <float> modulation-depth;
 
     // The arc sweeps 270 degrees, from 7:30 round to 4:30, matching the
     // pointer dot below. Geometry is expressed in a 100x100 viewbox so a
     // single set of numbers works at every diameter.
     private property <float> clamped: clamp(root.normalized, 0, 1);
     private property <angle> value-angle: -135deg + root.clamped * 270deg;
+    private property <float> modulation-range: abs(root.modulation-depth);
+    private property <float> modulation-low: clamp(root.clamped - root.modulation-range, 0, 1);
+    private property <float> modulation-high: clamp(root.clamped + root.modulation-range, 0, 1);
+    private property <angle> modulation-low-angle: -135deg + root.modulation-low * 270deg;
+    private property <angle> modulation-high-angle: -135deg + root.modulation-high * 270deg;
     private property <angle> origin-angle: root.bipolar ? 0deg : -135deg;
     private property <color> active-fill: root.enabled ? root.fill : Theme.text-faint;
 
@@ -350,6 +359,25 @@ component KnobFace inherits Rectangle {
         background: Theme.text-faint;
     }
 
+    // A zero-depth route draws one endpoint at the base: it remains visibly
+    // assigned without hiding the control's authored centre value.
+    if root.modulation-armed : Rectangle {
+        width: root.diameter * 0.1;
+        height: self.width;
+        x: parent.width * (50 + 43 * sin(root.modulation-low-angle)) / 100 - self.width / 2;
+        y: parent.height * (50 - 43 * cos(root.modulation-low-angle)) / 100 - self.height / 2;
+        border-radius: self.width / 2;
+        background: Theme.warning;
+    }
+    if root.modulation-armed && root.modulation-range > 0.002 : Rectangle {
+        width: root.diameter * 0.1;
+        height: self.width;
+        x: parent.width * (50 + 43 * sin(root.modulation-high-angle)) / 100 - self.width / 2;
+        y: parent.height * (50 - 43 * cos(root.modulation-high-angle)) / 100 - self.height / 2;
+        border-radius: self.width / 2;
+        background: Theme.warning;
+    }
+
     @children
 }
 
@@ -368,11 +396,23 @@ export component ParameterKnob inherits Rectangle {
     in property <bool> bipolar;
     in property <length> diameter: 44px;
     in property <color> fill: Theme.accent;
+    // Callers opt only legal, continuous destinations into this mode. While
+    // active, every ordinary knob gesture adjusts this source's route depth
+    // and leaves `value` — the authored base — untouched.
+    in property <bool> modulation-armed;
+    in property <bool> modulation-allowed: true;
+    in-out property <float> modulation-depth;
     callback changed(float);
+    callback modulation-depth-changed(float);
+    callback modulation-edit-started();
+    callback modulation-edit-finished();
 
     private property <float> pressed-normalized;
+    private property <float> pressed-modulation-depth;
     private property <bool> fine-drag;
+    private property <bool> modulation-edited;
     private property <float> normalized: root.normalized-value(root.value);
+    private property <bool> modulation-active: root.modulation-armed && root.modulation-allowed;
 
     width: 56px;
     height: 80px;
@@ -399,6 +439,10 @@ export component ParameterKnob inherits Rectangle {
     }
 
     function set-normalized(n: float) {
+        if (root.modulation-active) {
+            root.set-modulation-depth(root.modulation-depth + n - root.normalized);
+            return;
+        }
         let raw = root.value-at(n);
         let quantized = root.step > 0
             ? root.minimum + round((raw - root.minimum) / root.step) * root.step
@@ -410,13 +454,23 @@ export component ParameterKnob inherits Rectangle {
         }
     }
 
+    function set-modulation-depth(depth: float) {
+        let next = clamp(depth, -1, 1);
+        if (next != root.modulation-depth) {
+            root.modulation-depth = next;
+            root.modulation-edited = true;
+            root.modulation-depth-changed(next);
+        }
+    }
+
     VerticalLayout {
         spacing: 3px;
         alignment: center;
 
         Text {
             text: root.label;
-            color: root.enabled ? Theme.text-muted : Theme.text-faint;
+            color: !root.enabled ? Theme.text-faint
+                : root.modulation-active ? Theme.warning : Theme.text-muted;
             font-size: 9px;
             height: 12px;
             horizontal-alignment: center;
@@ -436,6 +490,8 @@ export component ParameterKnob inherits Rectangle {
                 bipolar: root.bipolar;
                 enabled: root.enabled;
                 fill: root.fill;
+                modulation-armed: root.modulation-active;
+                modulation-depth: root.modulation-depth;
                 focused: keyboard.has-focus;
                 hovered: knob-touch.has-hover;
             }
@@ -456,21 +512,43 @@ export component ParameterKnob inherits Rectangle {
     // drag, reset, and wheel interaction instead of becoming dead pixels.
     knob-touch := TouchArea {
         enabled: root.enabled;
-        mouse-cursor: ns-resize;
+        mouse-cursor: root.modulation-active ? crosshair : ns-resize;
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
                 keyboard.focus();
                 root.pressed-normalized = root.normalized;
+                root.pressed-modulation-depth = root.modulation-depth;
+                root.modulation-edited = false;
                 root.fine-drag = e.modifiers.control || e.modifiers.shift;
+                if (root.modulation-active) { root.modulation-edit-started(); }
             } else if (e.kind == PointerEventKind.move && self.pressed) {
-                root.set-normalized(root.pressed-normalized
-                    + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                if (root.modulation-active) {
+                    root.set-modulation-depth(root.pressed-modulation-depth
+                        + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                } else {
+                    root.set-normalized(root.pressed-normalized
+                        + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                }
+            } else if (e.kind == PointerEventKind.up && root.modulation-active && root.modulation-edited) {
+                root.modulation-edit-finished();
             }
         }
-        double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
+        double-clicked => {
+            if (root.modulation-active) {
+                root.modulation-edit-started();
+                root.modulation-edited = false;
+                root.set-modulation-depth(0);
+                if (root.modulation-edited) { root.modulation-edit-finished(); }
+            } else {
+                root.value = clamp(root.default-value, root.minimum, root.maximum);
+                root.changed(root.value);
+            }
+        }
         scroll-event(e) => {
+            if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
             root.set-normalized(root.normalized
                 - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
+            if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
             accept
         }
     }
@@ -479,11 +557,17 @@ export component ParameterKnob inherits Rectangle {
         focus-on-click: false;
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
+                if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
                 root.set-normalized(root.normalized
-                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
+                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+                accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
+                if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
                 root.set-normalized(root.normalized
-                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
+                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+                accept
             } else { reject }
         }
     }

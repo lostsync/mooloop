@@ -1,0 +1,312 @@
+import { Theme } from "theme.slint";
+import { ParameterKnob, SelectorBank, ToggleButton, ToolButton, ValueScale } from "controls.slint";
+
+// The channel-owned source collection. `slot` is today's bounded runtime
+// locator; the UI deliberately presents only occupied entries, never four
+// permanent empty bays (docs/MODULATOR_SYSTEM_SPEC.md).
+export struct ModulationSourceRow {
+    slot: int,
+    name: string,
+    waveform: int,
+    rate: float,
+    depth: float,
+    phase: float,
+    retrigger: bool,
+    selected: bool,
+}
+
+// A route remains explicit even when it is currently parked at zero depth or
+// aimed at a destination that later becomes unavailable. The owner token is
+// an adapter for Slint: -1 means the source device, -2 the channel strip, and
+// a non-negative value is an effect slot.
+export struct ModulationRouteRow {
+    route-index: int,
+    source-slot: int,
+    owner: int,
+    param: int,
+    destination: string,
+    depth: float,
+    polarity: int, // 0 = bipolar, 1 = unipolar
+    allowed: bool,
+}
+
+component SourceChip inherits Rectangle {
+    in property <string> name;
+    in property <bool> selected;
+    callback clicked();
+
+    width: 64px;
+    height: 24px;
+    border-radius: Theme.radius-md;
+    border-width: root.selected ? 1px : 0px;
+    border-color: Theme.accent;
+    background: tap.pressed ? Theme.surface-active
+        : root.selected ? Theme.surface-raised : Theme.surface;
+    Text {
+        text: root.name;
+        color: root.selected ? Theme.accent : Theme.text-muted;
+        font-size: 10px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    tap := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component RouteRow inherits Rectangle {
+    in property <string> destination;
+    in property <float> depth;
+    in property <int> polarity;
+    in property <bool> allowed;
+    callback polarity-selected(int);
+    callback removed();
+
+    height: 24px;
+    background: tap.has-hover ? Theme.surface-raised : transparent;
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 4px;
+        spacing: 4px;
+        Text {
+            width: 132px;
+            text: root.destination;
+            color: root.allowed ? Theme.text : Theme.text-faint;
+            font-size: 10px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            width: 40px;
+            text: (root.depth > 0 ? "+" : "") + round(root.depth * 100) + "%";
+            color: root.depth == 0 ? Theme.text-faint : Theme.accent;
+            font-family: "monospace";
+            font-size: 10px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+        ToolButton {
+            text: root.polarity == 0 ? "±" : "↑";
+            tooltip: root.polarity == 0 ? "Bipolar: swings around the base value" : "Unipolar: base value is the floor";
+            min-width: 26px;
+            max-width: 26px;
+            min-height: 20px;
+            max-height: 20px;
+            clicked => { root.polarity-selected(root.polarity == 0 ? 1 : 0); }
+        }
+        ToolButton {
+            text: "×";
+            tooltip: "Remove this modulation route";
+            min-width: 24px;
+            max-width: 24px;
+            min-height: 20px;
+            max-height: 20px;
+            text-color: Theme.text-muted;
+            clicked => { root.removed(); }
+        }
+    }
+    tap := TouchArea { }
+}
+
+// The one modulation shelf belongs below the entire device rack. It holds
+// sources and the destination-first route inspector; device faces only expose
+// marked controls that enter this same collection.
+export component ModulationShelf inherits Rectangle {
+    in property <bool> open;
+    in property <[ModulationSourceRow]> sources;
+    in property <[ModulationRouteRow]> routes;
+    in property <int> armed-slot: -1;
+    callback toggled();
+    callback source-selected(int);
+    callback lfo-added();
+    callback lfo-wave-changed(int, int);
+    callback lfo-rate-changed(int, float);
+    callback lfo-depth-changed(int, float);
+    callback lfo-phase-changed(int, float);
+    callback lfo-retrigger-changed(int, bool);
+    callback route-polarity-changed(int, int);
+    callback route-removed(int);
+
+    // A source editor must not steal height from the rack's fixed 268 px
+    // device face. The open shelf is one compact control row beneath it.
+    height: root.open ? 116px : 30px;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: Theme.radius-md;
+    background: Theme.surface;
+    clip: true;
+
+    header := Rectangle {
+        width: parent.width;
+        height: 29px;
+        background: header-touch.has-hover ? Theme.surface-raised : Theme.panel;
+        HorizontalLayout {
+            padding-left: 6px;
+            padding-right: 6px;
+            spacing: 6px;
+            Text {
+                width: 30px;
+                text: "MOD";
+                color: root.open ? Theme.accent : Theme.text-muted;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.sources.length == 0 ? "Add a source to begin"
+                    : root.routes.length + " route" + (root.routes.length == 1 ? "" : "s");
+                color: Theme.text-faint;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.open ? "⌃" : "⌄";
+                color: Theme.text-muted;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+        }
+        header-touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.toggled(); }
+        }
+    }
+
+    if root.open : Rectangle {
+        y: header.height;
+        width: parent.width;
+        height: parent.height - header.height;
+        HorizontalLayout {
+            padding: 6px;
+            spacing: 8px;
+
+            // Source collection and editor. No source is hard-coded into a
+            // device face: the first usable kind happens to be LFO.
+            Rectangle {
+                width: 492px;
+                height: parent.height;
+                HorizontalLayout {
+                    spacing: 4px;
+                    Text {
+                        width: 42px;
+                        text: "SOURCES";
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                    }
+                    for source in root.sources : SourceChip {
+                        name: source.name;
+                        selected: source.selected;
+                        clicked => { root.source-selected(source.slot); }
+                    }
+                    ToolButton {
+                        text: "+ LFO";
+                        tooltip: "Add an LFO to this channel";
+                        enabled: root.sources.length < 4;
+                        min-width: 50px;
+                        max-width: 50px;
+                        min-height: 24px;
+                        max-height: 24px;
+                        clicked => { root.lfo-added(); }
+                    }
+                    if root.armed-slot < 0 : Text {
+                        width: 190px;
+                        text: root.sources.length == 0 ? "Add LFO, then select it to arm controls." : "Select a source to arm eligible controls.";
+                        color: Theme.text-muted;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    for source in root.sources : HorizontalLayout {
+                        visible: source.selected;
+                        spacing: 2px;
+                        SelectorBank {
+                            options: ["SIN", "TRI", "SAW", "SQR", "RND"];
+                            selected-index: source.waveform;
+                            segment-width: 30px;
+                            tooltip: "LFO waveform";
+                            selected(index) => { root.lfo-wave-changed(source.slot, index); }
+                        }
+                        ParameterKnob {
+                            width: 48px;
+                            diameter: 34px;
+                            label: "Rate";
+                            tooltip: "LFO rate";
+                            value: source.rate;
+                            minimum: 0.05;
+                            maximum: 20;
+                            default-value: 1;
+                            scale: ValueScale.logarithmic;
+                            value-text: round(source.rate * 10) / 10 + " Hz";
+                            changed(value) => { root.lfo-rate-changed(source.slot, value); }
+                        }
+                        ParameterKnob {
+                            width: 48px;
+                            diameter: 34px;
+                            label: "Level";
+                            tooltip: "LFO source depth";
+                            value: source.depth;
+                            default-value: 1;
+                            value-text: round(source.depth * 100) + "%";
+                            changed(value) => { root.lfo-depth-changed(source.slot, value); }
+                        }
+                        ParameterKnob {
+                            width: 48px;
+                            diameter: 34px;
+                            label: "Phase";
+                            tooltip: "LFO reset phase";
+                            value: source.phase;
+                            default-value: 0;
+                            value-text: round(source.phase * 360) + "°";
+                            changed(value) => { root.lfo-phase-changed(source.slot, value); }
+                        }
+                        ToggleButton {
+                            text: "RE";
+                            tooltip: "Restart the LFO on note-on";
+                            checked: source.retrigger;
+                            min-width: 34px;
+                            max-width: 34px;
+                            toggled(value) => { root.lfo-retrigger-changed(source.slot, value); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle { width: 1px; height: parent.height; background: Theme.border; }
+
+            // The compact destination-first inspector. A knob marker will
+            // focus this same list; there is no separate matrix editor.
+            Rectangle {
+                horizontal-stretch: 1;
+                height: parent.height;
+                VerticalLayout {
+                    spacing: 1px;
+                    Text {
+                        text: "ROUTES";
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        height: 14px;
+                    }
+                    if root.routes.length == 0 : Text {
+                        text: root.armed-slot < 0
+                            ? "Select a source, then drag a highlighted control."
+                            : "Drag a highlighted cutoff control to create a route.";
+                        color: Theme.text-muted;
+                        font-size: 10px;
+                    }
+                    for route in root.routes : RouteRow {
+                        destination: route.destination;
+                        depth: route.depth;
+                        polarity: route.polarity;
+                        allowed: route.allowed;
+                        polarity-selected(value) => {
+                            root.route-polarity-changed(route.route-index, value);
+                        }
+                        removed => { root.route-removed(route.route-index); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -93,6 +93,8 @@ export component MonoDeviceFace inherits Rectangle {
     in-out property <int> osc3-wave; in-out property <float> osc3-semitones; in-out property <float> osc3-cents; in-out property <float> osc3-level; in-out property <float> osc3-pulse-width;
     in-out property <float> glide; in-out property <float> attack; in-out property <float> decay; in-out property <float> sustain; in-out property <float> release;
     in-out property <float> filter-cutoff; in-out property <float> filter-resonance; in-out property <float> filter-env; in-out property <float> drive;
+    in property <bool> modulation-armed;
+    in property <float> filter-cutoff-modulation-depth;
     in-out property <int> lfo-wave; in-out property <float> lfo-rate; in-out property <bool> lfo-retrigger;
     in-out property <float> lfo-pitch; in-out property <float> lfo-filter; in-out property <float> lfo-pulse-width; in-out property <float> lfo-amp;
     callback osc1-wave-changed(int); callback osc1-semitones-changed(float); callback osc1-cents-changed(float); callback osc1-level-changed(float); callback osc1-pulse-width-changed(float);
@@ -100,6 +102,9 @@ export component MonoDeviceFace inherits Rectangle {
     callback osc3-wave-changed(int); callback osc3-semitones-changed(float); callback osc3-cents-changed(float); callback osc3-level-changed(float); callback osc3-pulse-width-changed(float);
     callback glide-changed(float); callback attack-changed(float); callback decay-changed(float); callback sustain-changed(float); callback release-changed(float);
     callback filter-cutoff-changed(float); callback filter-resonance-changed(float); callback filter-env-changed(float); callback drive-changed(float);
+    callback filter-cutoff-modulation-depth-changed(float);
+    callback filter-cutoff-modulation-edit-started();
+    callback filter-cutoff-modulation-edit-finished();
     callback lfo-wave-changed(int); callback lfo-rate-changed(float); callback lfo-retrigger-changed(bool);
     callback lfo-pitch-changed(float); callback lfo-filter-changed(float); callback lfo-pulse-width-changed(float); callback lfo-amp-changed(float);
 
@@ -183,7 +188,17 @@ export component MonoDeviceFace inherits Rectangle {
                     }
                     HorizontalLayout {
                         spacing: 0px;
-                        ParameterKnob { width: 52px; diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff"; value <=> root.filter-cutoff; default-value: 1; value-text: NoteFormat.frequency-value(20 * pow(1000, root.filter-cutoff)); changed(v) => { root.filter-cutoff-changed(v); } }
+                        ParameterKnob {
+                            width: 52px; diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff";
+                            value <=> root.filter-cutoff; default-value: 1;
+                            modulation-armed: root.modulation-armed;
+                            modulation-depth: root.filter-cutoff-modulation-depth;
+                            value-text: NoteFormat.frequency-value(20 * pow(1000, root.filter-cutoff));
+                            changed(v) => { root.filter-cutoff-changed(v); }
+                            modulation-depth-changed(v) => { root.filter-cutoff-modulation-depth-changed(v); }
+                            modulation-edit-started => { root.filter-cutoff-modulation-edit-started(); }
+                            modulation-edit-finished => { root.filter-cutoff-modulation-edit-finished(); }
+                        }
                         ParameterKnob { width: 52px; diameter: 36px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; changed(v) => { root.filter-resonance-changed(v); } }
                         ParameterKnob { width: 52px; diameter: 36px; label: "Env"; tooltip: "Envelope depth"; value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true; fill: Theme.warning; value-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%"; changed(v) => { root.filter-env-changed(v); } }
                         ParameterKnob { width: 52px; diameter: 36px; label: "Drive"; tooltip: "Soft saturation"; value <=> root.drive; default-value: 0; fill: Theme.warning; value-text: round(root.drive * 100) + "%"; changed(v) => { root.drive-changed(v); } }

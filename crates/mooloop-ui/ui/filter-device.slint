@@ -14,7 +14,12 @@ export component FilterDeviceFace inherits EffectDeviceShell {
     in-out property <float> resonance;  // 0..1
     in-out property <int> slope;        // 0 = 12 dB/oct, 1 = 24 dB/oct
     in-out property <float> drive;      // 0..1 compensated soft saturation
+    in property <bool> modulation-armed;
+    in property <float> cutoff-modulation-depth;
     callback cutoff-changed(float);
+    callback cutoff-modulation-depth-changed(float);
+    callback cutoff-modulation-edit-started();
+    callback cutoff-modulation-edit-finished();
     callback resonance-changed(float);
     callback mode-changed(int);
     callback slope-changed(int);
@@ -73,8 +78,13 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 tooltip: "Filter cutoff frequency: " + NoteFormat.name(20 * pow(1000, root.cutoff));
                 value <=> root.cutoff;
                 default-value: 0.9;
+                modulation-armed: root.modulation-armed;
+                modulation-depth: root.cutoff-modulation-depth;
                 value-text: round(20 * pow(1000, root.cutoff)) + " Hz";
                 changed(v) => { root.cutoff-changed(v); }
+                modulation-depth-changed(v) => { root.cutoff-modulation-depth-changed(v); }
+                modulation-edit-started => { root.cutoff-modulation-edit-started(); }
+                modulation-edit-finished => { root.cutoff-modulation-edit-finished(); }
             }
             ParameterKnob {
                 width: 52px;

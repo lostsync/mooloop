@@ -14,30 +14,32 @@ mod settings;
 slint::include_modules!();
 
 use history::{Entry as HistoryEntry, History};
-use mooloop_core::gain::{db_to_linear, linear_to_db, MIN_DB as METER_FLOOR_DB};
 use meter::MeterBallistics;
+use mooloop_core::gain::{db_to_linear, linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, AutomationLane,
-    AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup, ChannelSource,
-    DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectParams,
+    compile_bus_graph, default_buses, sanitize_route, strip_descriptor, would_create_cycle,
+    AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup,
+    ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectParams,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, GeneratorParams, HatCharacter,
-    KickCharacter, Kit, LfoWave, LoopMode, ModRack, MonoSynthParams, MonoSynthState, NoteEvent,
+    KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModLfoParams, ModLfoWaveform,
+    ModPolarity, ModRack, ModRoute, ModulatorParams, MonoSynthParams, MonoSynthState, NoteEvent,
     NoteId, OscWave, ParamAddr, ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode,
     PointId, PolySynthParams, PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode,
     ReverbParams, SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS,
     MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
     MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
-    MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_64TH,
-    TICKS_PER_BAR, TICKS_PER_STEP,
+    MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
+    SAMPLER_PARAM_FILTER_CUTOFF, SYNTH_PARAM_FILTER_CUTOFF, TICKS_PER_64TH, TICKS_PER_BAR,
+    TICKS_PER_STEP,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect, build_effect_at_tempo, DrumSynth, DryAlign, SampleData,
     SpectrumAnalyzer,
 };
 use mooloop_engine::{
-    EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, PreviewCommand, RenderScope,
-    StructuralCommand, WavEncoding,
+    EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, PreviewCommand,
+    RenderScope, StructuralCommand, WavEncoding,
 };
 use mooloop_project::{
     AssetMode, AssetWarning, LoadReport, LoadedDocument, PresetInfo, PresetSummary, SaveReport,
@@ -63,7 +65,9 @@ const MAX_TIME_S: f32 = 2.0;
 /// `.send(...)` call shape used by the callback wiring below.
 enum PendingEngineMessage {
     Command(EngineCommand),
-    ResizeBuffers { bpm: f64 },
+    ResizeBuffers {
+        bpm: f64,
+    },
     Structural(StructuralCommand),
     ProjectEdit(ProjectEdit),
     Audio(AudioAction),
@@ -1020,6 +1024,7 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         p5: p[5],
         p6: p[6],
         p7: p[7],
+        p0_modulation_depth: 0.0,
         eq_band_data: eq_band_data.as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: slot.params.eq().is_some_and(|eq| eq.analyzer_enabled),
@@ -1229,6 +1234,30 @@ fn lfo_wave_to_int(wave: LfoWave) -> i32 {
     }
 }
 
+/// The channel modulation LFO intentionally has its own type from the
+/// synth's legacy per-device LFO. Keeping the UI conversion here makes the
+/// shelf speak the current rack vocabulary rather than smuggling values
+/// through `LfoWave`.
+fn mod_lfo_waveform_from_int(value: i32) -> ModLfoWaveform {
+    match value {
+        1 => ModLfoWaveform::Triangle,
+        2 => ModLfoWaveform::Saw,
+        3 => ModLfoWaveform::Square,
+        4 => ModLfoWaveform::Random,
+        _ => ModLfoWaveform::Sine,
+    }
+}
+
+fn mod_lfo_waveform_to_int(waveform: ModLfoWaveform) -> i32 {
+    match waveform {
+        ModLfoWaveform::Sine => 0,
+        ModLfoWaveform::Triangle => 1,
+        ModLfoWaveform::Saw => 2,
+        ModLfoWaveform::Square => 3,
+        ModLfoWaveform::Random => 4,
+    }
+}
+
 /// Env-gated diagnostic logging (MOOLOOP_DEBUG=1).
 fn dbg_log(msg: &str) {
     if std::env::var("MOOLOOP_DEBUG").is_ok() {
@@ -1353,6 +1382,18 @@ struct UiState {
     /// different device kind is selected, or while editing a bus.
     playhead_model: Rc<VecModel<f32>>,
     effect_slot_model: Rc<VecModel<EffectSlotRow>>,
+    /// Existing modulation sources and routes for the selected channel. They
+    /// are models rather than fixed slot properties because the shelf must
+    /// show a collection, not four vacant bays.
+    modulation_source_model: Rc<VecModel<ModulationSourceRow>>,
+    modulation_route_model: Rc<VecModel<ModulationRouteRow>>,
+    modulation_shelf_open: bool,
+    modulation_armed_slot: Cell<Option<u8>>,
+    /// Snapshot captured at the start of a direct knob gesture. Intermediate
+    /// control updates still reach audio immediately, while one release
+    /// becomes one undoable route edit.
+    modulation_edit_before: Option<ProjectSnapshot>,
+    modulation_edit_changed: bool,
     mixer_strip_model: Rc<VecModel<MixerStripRow>>,
     /// Flattened sample-browser tree, rebuilt whenever locations or folder
     /// expansion change.
@@ -2239,11 +2280,291 @@ impl UiState {
     /// window once; this refreshes its contents after structural changes
     /// (add/remove/reorder) and after the rack is pointed somewhere else.
     fn sync_effects(&self) {
-        let rows: Vec<EffectSlotRow> = self
-            .effect_chain()
-            .map(|effects| effects.iter().map(effect_slot_row).collect())
-            .unwrap_or_default();
+        let armed = self.modulation_armed_slot.get();
+        let rows: Vec<EffectSlotRow> = match self.effect_target {
+            EffectTarget::Channel(channel) => self
+                .channels
+                .get(channel as usize)
+                .map(|state| {
+                    state
+                        .effects
+                        .iter()
+                        .enumerate()
+                        .map(|(slot, effect)| {
+                            let mut row = effect_slot_row(effect);
+                            if let (Some(source_slot), Some(descriptor)) =
+                                (armed, effect.kind().descriptors().first())
+                            {
+                                row.p0_modulation_depth = self.modulation_depth_for(
+                                    source_slot,
+                                    ParamAddr::effect(
+                                        EffectTarget::Channel(channel),
+                                        slot as u8,
+                                        descriptor.id,
+                                    ),
+                                );
+                            }
+                            row
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            EffectTarget::Bus(_) => self
+                .effect_chain()
+                .map(|effects| effects.iter().map(effect_slot_row).collect())
+                .unwrap_or_default(),
+        };
         self.effect_slot_model.set_vec(rows);
+    }
+
+    fn source_filter_cutoff_destination(&self) -> Option<ParamAddr> {
+        let channel = self.channels.get(self.selected)?;
+        let param = match channel.kind {
+            DeviceKind::Sampler => SAMPLER_PARAM_FILTER_CUTOFF,
+            DeviceKind::MonoSynth | DeviceKind::PolySynth => SYNTH_PARAM_FILTER_CUTOFF,
+            DeviceKind::DrumSynth => return None,
+        };
+        Some(ParamAddr {
+            scope: EffectTarget::Channel(self.selected as u8),
+            owner: ParamOwner::Source,
+            param,
+        })
+    }
+
+    fn modulation_depth_for(&self, source_slot: u8, destination: ParamAddr) -> f32 {
+        self.channels
+            .get(self.selected)
+            .and_then(|channel| {
+                channel.modulation.routes.iter().flatten().find(|route| {
+                    route.source_slot == source_slot && route.destination == destination
+                })
+            })
+            .map_or(0.0, |route| route.depth)
+    }
+
+    /// The modulation shelf may address only the selected channel's own
+    /// generator, inserts, and strip. Buses and another channel's controls
+    /// stay deliberately outside this pass even though `ParamAddr` can name
+    /// them, matching the per-channel routing policy.
+    fn channel_modulation_destination(
+        &self,
+        address: ParamAddr,
+    ) -> Option<(String, &'static ParamDescriptor)> {
+        let EffectTarget::Channel(channel) = address.scope else {
+            return None;
+        };
+        if channel as usize != self.selected {
+            return None;
+        }
+        let state = self.channels.get(self.selected)?;
+        match address.owner {
+            ParamOwner::Source => state
+                .generator_params()
+                .kind()
+                .descriptor(address.param)
+                .map(|descriptor| (state.name.clone(), descriptor)),
+            ParamOwner::Effect { slot } => state
+                .effects
+                .get(slot as usize)
+                .and_then(|effect| effect.kind().descriptor(address.param))
+                .map(|descriptor| {
+                    (
+                        format!(
+                            "{} {}",
+                            state.effects[slot as usize].kind().label(),
+                            slot + 1
+                        ),
+                        descriptor,
+                    )
+                }),
+            ParamOwner::Strip => strip_descriptor(address.param)
+                .map(|descriptor| ("Channel strip".to_string(), descriptor)),
+            // Modulators are sources in this first UI pass, not destinations.
+            ParamOwner::Modulator { .. } => None,
+        }
+    }
+
+    /// Rebuild the channel-owned source collection and destination inspector.
+    /// The selected source is transient UI state: project reloads and channel
+    /// changes never leave an invisible armed slot behind.
+    fn refresh_modulation(&self, window: &MainWindow) {
+        let Some(channel) = self.channels.get(self.selected) else {
+            self.modulation_source_model.set_vec(Vec::new());
+            self.modulation_route_model.set_vec(Vec::new());
+            self.modulation_armed_slot.set(None);
+            window.set_modulation_armed_slot(-1);
+            return;
+        };
+
+        let armed = self.modulation_armed_slot.get().filter(|slot| {
+            channel
+                .modulation
+                .slots
+                .get(*slot as usize)
+                .is_some_and(Option::is_some)
+        });
+        self.modulation_armed_slot.set(armed);
+        let sources: Vec<ModulationSourceRow> = channel
+            .modulation
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, params)| match params {
+                Some(ModulatorParams::Lfo(lfo)) => Some(ModulationSourceRow {
+                    slot: slot as i32,
+                    name: format!("LFO {}", slot + 1).into(),
+                    waveform: mod_lfo_waveform_to_int(lfo.waveform),
+                    rate: lfo.rate_hz,
+                    depth: lfo.depth,
+                    phase: lfo.phase,
+                    retrigger: lfo.retrigger,
+                    selected: armed == Some(slot as u8),
+                }),
+                None => None,
+            })
+            .collect();
+        let routes: Vec<ModulationRouteRow> = channel
+            .modulation
+            .routes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, route)| {
+                let route = route.as_ref()?;
+                let (destination, allowed) = self
+                    .channel_modulation_destination(route.destination)
+                    .map(|(device, descriptor)| {
+                        (
+                            format!(
+                                "LFO {} → {device} · {}",
+                                route.source_slot + 1,
+                                descriptor.name
+                            ),
+                            ModDestinationDescriptor::for_param(descriptor).allowed,
+                        )
+                    })
+                    .unwrap_or_else(|| ("LFO ? → unavailable destination".into(), false));
+                let owner = match route.destination.owner {
+                    ParamOwner::Source => -1,
+                    ParamOwner::Strip => -2,
+                    ParamOwner::Effect { slot } => slot as i32,
+                    ParamOwner::Modulator { slot } => -3 - slot as i32,
+                };
+                Some(ModulationRouteRow {
+                    route_index: index as i32,
+                    source_slot: route.source_slot as i32,
+                    owner,
+                    param: route.destination.param as i32,
+                    destination: destination.into(),
+                    depth: route.depth,
+                    polarity: match route.polarity {
+                        ModPolarity::Bipolar => 0,
+                        ModPolarity::Unipolar => 1,
+                    },
+                    allowed,
+                })
+            })
+            .collect();
+        self.modulation_source_model.set_vec(sources);
+        self.modulation_route_model.set_vec(routes);
+        window.set_modulation_shelf_open(self.modulation_shelf_open);
+        window.set_modulation_armed_slot(armed.map_or(-1, i32::from));
+        let source_cutoff_depth = armed
+            .zip(self.source_filter_cutoff_destination())
+            .map_or(0.0, |(source, destination)| {
+                self.modulation_depth_for(source, destination)
+            });
+        window.set_source_filter_cutoff_modulation_depth(source_cutoff_depth);
+        // The effect row carries the focused source's overlay amount, so a
+        // chip selection repaints markers without touching any base value.
+        self.sync_effects();
+    }
+
+    /// Mirror one updated rack to the engine, persist the UI-owned base state,
+    /// then re-render the shelf. This is intentionally a complete small `Copy`
+    /// rack command: the audio thread only installs it at a block boundary.
+    fn send_channel_modulation(&mut self, window: &MainWindow, tx: &EngineCommandSender) {
+        let channel_index = self.selected;
+        let Some(channel) = self.channels.get(channel_index) else {
+            return;
+        };
+        let modulation = channel.modulation;
+        let _ = tx.send(EngineCommand::SetChannelModulation {
+            channel: channel_index as u8,
+            modulation,
+        });
+        self.dirty = true;
+        self.revision = self.revision.wrapping_add(1);
+        self.update_document_title(window);
+        self.refresh_modulation(window);
+    }
+
+    fn begin_modulation_edit(&mut self, window: &MainWindow) {
+        if self.modulation_edit_before.is_none() {
+            self.modulation_edit_before = Some(project_snapshot(self, window));
+            self.modulation_edit_changed = false;
+        }
+    }
+
+    fn finish_modulation_edit(&mut self) -> Option<ProjectSnapshot> {
+        let before = self.modulation_edit_before.take();
+        let changed = std::mem::replace(&mut self.modulation_edit_changed, false);
+        if changed {
+            before
+        } else {
+            None
+        }
+    }
+
+    /// Retune (or first create) the armed source's one explicit route. The
+    /// base parameter is deliberately absent from this mutation: a normal
+    /// knob drag in armed mode moves only the depth, and the renderer keeps
+    /// resolving the same authored base underneath it.
+    fn set_armed_modulation_depth(
+        &mut self,
+        window: &MainWindow,
+        tx: &EngineCommandSender,
+        destination: ParamAddr,
+        depth: f32,
+    ) -> bool {
+        let Some(source_slot) = self.modulation_armed_slot.get() else {
+            return false;
+        };
+        let Some((_, descriptor)) = self.channel_modulation_destination(destination) else {
+            return false;
+        };
+        let policy = ModDestinationDescriptor::for_param(descriptor);
+        if !policy.allowed {
+            return false;
+        }
+        let depth = policy.clamp_depth(depth);
+        let Some(channel) = self.channels.get_mut(self.selected) else {
+            return false;
+        };
+        let current = channel
+            .modulation
+            .routes
+            .iter()
+            .flatten()
+            .find(|route| route.source_slot == source_slot && route.destination == destination)
+            .map(|route| route.depth);
+        if current.is_some_and(|current| (current - depth).abs() < f32::EPSILON) {
+            return false;
+        }
+        if channel
+            .modulation
+            .add_route(ModRoute {
+                source_slot,
+                destination,
+                depth,
+                polarity: policy.default_polarity,
+            })
+            .is_none()
+        {
+            return false;
+        }
+        self.modulation_edit_changed = true;
+        self.send_channel_modulation(window, tx);
+        true
     }
 
     /// Sequencer channels feeding `bus` directly. Buses routed into it are not
@@ -2367,6 +2688,7 @@ impl UiState {
         window.set_selected_channel_volume_db(linear_to_db(ch.volume));
         window.set_source_kind(device_kind_to_int(ch.kind));
         self.sync_effects();
+        self.refresh_modulation(window);
         // The lane's destination catalogue is built from the effect chains, so
         // it has to be rebuilt wherever the chains or the selection can have
         // moved -- which is exactly this function's job.
@@ -2583,6 +2905,8 @@ impl AppUi {
         let waveform_model = Rc::new(VecModel::from(first.waveform.clone()));
         let playhead_model = Rc::new(VecModel::from(Vec::<f32>::new()));
         let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
+        let modulation_source_model = Rc::new(VecModel::from(Vec::<ModulationSourceRow>::new()));
+        let modulation_route_model = Rc::new(VecModel::from(Vec::<ModulationRouteRow>::new()));
         let mixer_strip_model = Rc::new(VecModel::from(Vec::<MixerStripRow>::new()));
         let browser_row_model = Rc::new(VecModel::from(Vec::<BrowserRow>::new()));
         window.set_channels(ModelRc::from(rows_model.clone()));
@@ -2593,6 +2917,8 @@ impl AppUi {
         window.set_waveform(ModelRc::from(waveform_model.clone()));
         window.set_playhead_positions(ModelRc::from(playhead_model.clone()));
         window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
+        window.set_modulation_sources(ModelRc::from(modulation_source_model.clone()));
+        window.set_modulation_routes(ModelRc::from(modulation_route_model.clone()));
         window.set_mixer_strips(ModelRc::from(mixer_strip_model.clone()));
         window.set_browser_rows(ModelRc::from(browser_row_model.clone()));
         window.set_pattern_count(1);
@@ -2606,6 +2932,12 @@ impl AppUi {
             waveform_model,
             playhead_model,
             effect_slot_model,
+            modulation_source_model,
+            modulation_route_model,
+            modulation_shelf_open: false,
+            modulation_armed_slot: Cell::new(None),
+            modulation_edit_before: None,
+            modulation_edit_changed: false,
             mixer_strip_model,
             browser_rows: browser_row_model,
             browser_locations: Vec::new(),
@@ -5487,6 +5819,397 @@ impl AppUi {
             });
         }
 
+        // --- Channel modulation shelf -------------------------------------
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_modulation_shelf_toggled(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let mut state = st.borrow_mut();
+                state.modulation_shelf_open = !state.modulation_shelf_open;
+                state.refresh_modulation(&window);
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_modulation_source_selected(move |slot| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), u8::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let exists = state
+                    .channels
+                    .get(state.selected)
+                    .and_then(|channel| channel.modulation.slots.get(slot as usize))
+                    .is_some_and(Option::is_some);
+                if !exists {
+                    return;
+                }
+                state
+                    .modulation_armed_slot
+                    .set((state.modulation_armed_slot.get() != Some(slot)).then_some(slot));
+                state.modulation_shelf_open = true;
+                state.refresh_modulation(&window);
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_added(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = {
+                    let state = st.borrow();
+                    project_snapshot(&state, &window)
+                };
+                let added = {
+                    let mut state = st.borrow_mut();
+                    let selected = state.selected;
+                    let Some(channel) = state.channels.get_mut(selected) else {
+                        return;
+                    };
+                    let Some(slot) = channel.modulation.slots.iter().position(Option::is_none)
+                    else {
+                        return;
+                    };
+                    channel.modulation.slots[slot] =
+                        Some(ModulatorParams::Lfo(ModLfoParams::default()));
+                    state.modulation_armed_slot.set(Some(slot as u8));
+                    state.modulation_shelf_open = true;
+                    state.send_channel_modulation(&window, &tx);
+                    true
+                };
+                if added {
+                    record_project_history(&commands, before, &st, &window, "LFO added");
+                    window.set_status_message(
+                        "LFO added — drag a highlighted cutoff control to route it".into(),
+                    );
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_wave_changed(move |slot, waveform| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let selected = state.selected;
+                let Some(Some(ModulatorParams::Lfo(lfo))) = state
+                    .channels
+                    .get_mut(selected)
+                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
+                else {
+                    return;
+                };
+                lfo.waveform = mod_lfo_waveform_from_int(waveform);
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_rate_changed(move |slot, value| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let selected = state.selected;
+                let Some(Some(ModulatorParams::Lfo(lfo))) = state
+                    .channels
+                    .get_mut(selected)
+                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
+                else {
+                    return;
+                };
+                lfo.rate_hz = value.clamp(0.05, 20.0);
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_depth_changed(move |slot, value| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let selected = state.selected;
+                let Some(Some(ModulatorParams::Lfo(lfo))) = state
+                    .channels
+                    .get_mut(selected)
+                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
+                else {
+                    return;
+                };
+                lfo.depth = value.clamp(0.0, 1.0);
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_phase_changed(move |slot, value| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let selected = state.selected;
+                let Some(Some(ModulatorParams::Lfo(lfo))) = state
+                    .channels
+                    .get_mut(selected)
+                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
+                else {
+                    return;
+                };
+                lfo.phase = value.clamp(0.0, 1.0);
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_lfo_retrigger_changed(move |slot, value| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let selected = state.selected;
+                let Some(Some(ModulatorParams::Lfo(lfo))) = state
+                    .channels
+                    .get_mut(selected)
+                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
+                else {
+                    return;
+                };
+                lfo.retrigger = value;
+                state.send_channel_modulation(&window, &tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_route_polarity_changed(move |index, polarity| {
+                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                    return;
+                };
+                let before = {
+                    let state = st.borrow();
+                    project_snapshot(&state, &window)
+                };
+                let changed = {
+                    let mut state = st.borrow_mut();
+                    let selected = state.selected;
+                    let Some(route) = state
+                        .channels
+                        .get_mut(selected)
+                        .and_then(|channel| channel.modulation.routes.get_mut(index))
+                        .and_then(Option::as_mut)
+                    else {
+                        return;
+                    };
+                    let next = if polarity == 1 {
+                        ModPolarity::Unipolar
+                    } else {
+                        ModPolarity::Bipolar
+                    };
+                    if route.polarity == next {
+                        false
+                    } else {
+                        route.polarity = next;
+                        state.send_channel_modulation(&window, &tx);
+                        true
+                    }
+                };
+                if changed {
+                    record_project_history(
+                        &commands,
+                        before,
+                        &st,
+                        &window,
+                        "Modulation polarity changed",
+                    );
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_route_removed(move |index| {
+                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                    return;
+                };
+                let before = {
+                    let state = st.borrow();
+                    project_snapshot(&state, &window)
+                };
+                let removed = {
+                    let mut state = st.borrow_mut();
+                    let selected = state.selected;
+                    let Some(route) = state
+                        .channels
+                        .get_mut(selected)
+                        .and_then(|channel| channel.modulation.routes.get_mut(index))
+                    else {
+                        return;
+                    };
+                    if route.take().is_none() {
+                        false
+                    } else {
+                        state.send_channel_modulation(&window, &tx);
+                        true
+                    }
+                };
+                if removed {
+                    record_project_history(
+                        &commands,
+                        before,
+                        &st,
+                        &window,
+                        "Modulation route removed",
+                    );
+                }
+            });
+        }
+
+        // A direct parameter gesture begins, streams live route-depth
+        // updates, then records one history entry on release. The same path
+        // serves every source face that exposes an eligible cutoff.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_source_filter_cutoff_modulation_edit_started(move || {
+                let Some(window) = weak.upgrade() else { return };
+                st.borrow_mut().begin_modulation_edit(&window);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_source_filter_cutoff_modulation_depth_changed(move |depth| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut state = st.borrow_mut();
+                let Some(destination) = state.source_filter_cutoff_destination() else {
+                    return;
+                };
+                if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                    // A full matrix or invalid target must snap the transient
+                    // UI depth back to persisted truth rather than pretending
+                    // a parked route was written.
+                    state.refresh_modulation(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_source_filter_cutoff_modulation_edit_finished(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = st.borrow_mut().finish_modulation_edit();
+                if let Some(before) = before {
+                    record_project_history(
+                        &commands,
+                        before,
+                        &st,
+                        &window,
+                        "Modulation route changed",
+                    );
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_effect_modulation_edit_started(move |slot, param| {
+                let (Some(window), Ok(slot), Ok(param)) = (
+                    weak.upgrade(),
+                    usize::try_from(slot),
+                    usize::try_from(param),
+                ) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let valid = matches!(state.effect_target, EffectTarget::Channel(channel) if channel as usize == state.selected)
+                    && state
+                        .channels
+                        .get(state.selected)
+                        .and_then(|channel| channel.effects.get(slot))
+                        .and_then(|effect| effect.kind().descriptors().get(param))
+                        .is_some();
+                if valid {
+                    state.begin_modulation_edit(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_effect_modulation_depth_changed(move |slot, param, depth| {
+                let (Some(window), Ok(slot), Ok(param)) = (
+                    weak.upgrade(),
+                    usize::try_from(slot),
+                    usize::try_from(param),
+                ) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let destination = match state.effect_target {
+                    EffectTarget::Channel(channel) if channel as usize == state.selected => state
+                        .channels
+                        .get(state.selected)
+                        .and_then(|channel| channel.effects.get(slot))
+                        .and_then(|effect| effect.kind().descriptors().get(param))
+                        .map(|descriptor| {
+                            ParamAddr::effect(
+                                EffectTarget::Channel(channel),
+                                slot as u8,
+                                descriptor.id,
+                            )
+                        }),
+                    _ => None,
+                };
+                let Some(destination) = destination else {
+                    return;
+                };
+                if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                    state.refresh_modulation(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_effect_modulation_edit_finished(move |_, _| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = st.borrow_mut().finish_modulation_edit();
+                if let Some(before) = before {
+                    record_project_history(
+                        &commands,
+                        before,
+                        &st,
+                        &window,
+                        "Modulation route changed",
+                    );
+                }
+            });
+        }
+
         // --- Effect chain callbacks (edit whatever the rack is pointed at) ---
         {
             let tx = cmd_tx.clone();
@@ -6540,7 +7263,11 @@ impl AppUi {
                 };
                 // Only top-level rows offer removal, so anything the tree
                 // hands back that is not a location is a stale no-op.
-                settings.borrow_mut().browser.locations.retain(|p| p != &path);
+                settings
+                    .borrow_mut()
+                    .browser
+                    .locations
+                    .retain(|p| p != &path);
                 let saved = settings.borrow().save();
                 {
                     let mut st = st.borrow_mut();
@@ -6552,9 +7279,8 @@ impl AppUi {
                     Ok(()) => window.set_status_message(
                         format!("Removed sample folder {}", path.display()).into(),
                     ),
-                    Err(error) => window.set_status_message(
-                        format!("Could not save settings: {error}").into(),
-                    ),
+                    Err(error) => window
+                        .set_status_message(format!("Could not save settings: {error}").into()),
                 };
             });
         }
@@ -8412,10 +9138,7 @@ mod tests {
         std::fs::write(root.join("Deep/Nested/hit.wav"), b"x").unwrap();
         std::fs::write(root.join("silent/readme.txt"), b"x").unwrap();
 
-        let rows = build_browser_rows(
-            &[root.to_path_buf()],
-            &HashSet::from([root.to_path_buf()]),
-        );
+        let rows = build_browser_rows(&[root.to_path_buf()], &HashSet::from([root.to_path_buf()]));
         let names: Vec<String> = rows.iter().map(|row| row.name.to_string()).collect();
         // The collapsed root hides its children, so expansion is required to
         // prove `Deep` survives (via a wav two levels down) while `Empty` and
@@ -8475,9 +9198,18 @@ mod tests {
             ]
         );
         // The rows carry their paths so toggling and removal round-trip.
-        assert_eq!(rows[1].path, root.join("Drums").to_string_lossy().to_string());
-        assert_eq!(rows[2].path, root.join("Drums/Kicks").to_string_lossy().to_string());
-        assert_eq!(rows[3].path, root.join("apple.wav").to_string_lossy().to_string());
+        assert_eq!(
+            rows[1].path,
+            root.join("Drums").to_string_lossy().to_string()
+        );
+        assert_eq!(
+            rows[2].path,
+            root.join("Drums/Kicks").to_string_lossy().to_string()
+        );
+        assert_eq!(
+            rows[3].path,
+            root.join("apple.wav").to_string_lossy().to_string()
+        );
 
         // Collapsed locations list as a single row with no children.
         let rows = build_browser_rows(&[root.to_path_buf()], &HashSet::new());
@@ -8503,7 +9235,11 @@ mod tests {
 
         let inspection = inspect_sample(&path).unwrap();
         assert_eq!(inspection.name, "tone.wav");
-        assert!(inspection.stats.contains("44100 Hz"), "{}", inspection.stats);
+        assert!(
+            inspection.stats.contains("44100 Hz"),
+            "{}",
+            inspection.stats
+        );
         assert!(
             inspection.stats.contains("16-bit int"),
             "{}",

@@ -1,6 +1,8 @@
 use mooloop_core::{DrumMode, DrumSynthParams};
 use mooloop_dsp::DrumSynth;
-use mooloop_ui::{ChannelRow, EffectSlotRow, MainWindow, StepCell};
+use mooloop_ui::{
+    ChannelRow, EffectSlotRow, MainWindow, ModulationRouteRow, ModulationSourceRow, StepCell,
+};
 use slint::platform::WindowEvent;
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
@@ -165,6 +167,42 @@ fn render_sampler_source_editor() {
     assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&snapshot, "MOOLOOP_SAMPLER_SOURCE_SNAPSHOT");
 
+    // The shelf is channel-owned rather than a page inside the sampler. Its
+    // armed cutoff markers and destination-first route row are visible
+    // together, so a screenshot catches a lost model binding or a collapsed
+    // layout before it reaches the application.
+    ui.set_sampler_device_page(2);
+    ui.set_modulation_shelf_open(true);
+    ui.set_modulation_armed_slot(0);
+    ui.set_modulation_sources(ModelRc::from(Rc::new(VecModel::from(vec![
+        ModulationSourceRow {
+            slot: 0,
+            name: SharedString::from("LFO 1"),
+            waveform: 0,
+            rate: 2.0,
+            depth: 1.0,
+            phase: 0.0,
+            retrigger: false,
+            selected: true,
+        },
+    ]))));
+    ui.set_modulation_routes(ModelRc::from(Rc::new(VecModel::from(vec![
+        ModulationRouteRow {
+            route_index: 0,
+            source_slot: 0,
+            owner: -1,
+            param: 12,
+            destination: SharedString::from("LFO 1 → Kick · Cutoff"),
+            depth: 0.35,
+            polarity: 0,
+            allowed: true,
+        },
+    ]))));
+    ui.set_source_filter_cutoff_modulation_depth(0.35);
+    let modulation = ui.window().take_snapshot().unwrap();
+    assert_ne!(snapshot.as_bytes(), modulation.as_bytes());
+    write_snapshot(&modulation, "MOOLOOP_MODULATION_SHELF_SNAPSHOT");
+
     ui.set_sampler_device_page(1);
     let voice = ui.window().take_snapshot().unwrap();
     assert_ne!(snapshot.as_bytes(), voice.as_bytes());
@@ -195,6 +233,7 @@ fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
         p5: 0.5,
         p6: 0.0,
         p7: 0.0,
+        p0_modulation_depth: 0.0,
         eq_band_data: Vec::<f32>::new().as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: false,
