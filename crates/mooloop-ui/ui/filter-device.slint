@@ -14,12 +14,16 @@ export component FilterDeviceFace inherits EffectDeviceShell {
     in-out property <float> resonance;  // 0..1
     in-out property <int> slope;        // 0 = 12 dB/oct, 1 = 24 dB/oct
     in-out property <float> drive;      // 0..1 compensated soft saturation
+    // Modulation state arrives indexed by descriptor id, so every continuous
+    // control on this face is routable without another callback per knob.
+    // Ids mirror `FILTER_PARAM_*` in mooloop-core.
     in property <bool> modulation-armed;
-    in property <float> cutoff-modulation-depth;
+    in property <[float]> modulation-depths;
+    in property <[bool]> modulation-allowed;
+    callback modulation-depth-changed(int, float);
+    callback modulation-edit-started(int);
+    callback modulation-edit-finished(int);
     callback cutoff-changed(float);
-    callback cutoff-modulation-depth-changed(float);
-    callback cutoff-modulation-edit-started();
-    callback cutoff-modulation-edit-finished();
     callback resonance-changed(float);
     callback mode-changed(int);
     callback slope-changed(int);
@@ -79,12 +83,13 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 value <=> root.cutoff;
                 default-value: 0.9;
                 modulation-armed: root.modulation-armed;
-                modulation-depth: root.cutoff-modulation-depth;
+                modulation-allowed: root.modulation-allowed[0];
+                modulation-depth: root.modulation-depths[0];
                 value-text: round(20 * pow(1000, root.cutoff)) + " Hz";
                 changed(v) => { root.cutoff-changed(v); }
-                modulation-depth-changed(v) => { root.cutoff-modulation-depth-changed(v); }
-                modulation-edit-started => { root.cutoff-modulation-edit-started(); }
-                modulation-edit-finished => { root.cutoff-modulation-edit-finished(); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                modulation-edit-started => { root.modulation-edit-started(0); }
+                modulation-edit-finished => { root.modulation-edit-finished(0); }
             }
             ParameterKnob {
                 width: 52px;
@@ -93,8 +98,14 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 tooltip: "Filter resonance";
                 value <=> root.resonance;
                 default-value: 0;
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[1];
+                modulation-depth: root.modulation-depths[1];
                 value-text: round(root.resonance * 100) + "%";
                 changed(v) => { root.resonance-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+                modulation-edit-started => { root.modulation-edit-started(1); }
+                modulation-edit-finished => { root.modulation-edit-finished(1); }
             }
             ParameterKnob {
                 width: 52px;
@@ -103,8 +114,14 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 tooltip: "Soft saturation before the filter";
                 value <=> root.drive;
                 default-value: 0;
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[4];
+                modulation-depth: root.modulation-depths[4];
                 value-text: round(root.drive * 100) + "%";
                 changed(v) => { root.drive-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
+                modulation-edit-started => { root.modulation-edit-started(4); }
+                modulation-edit-finished => { root.modulation-edit-finished(4); }
             }
         }
     }

@@ -198,7 +198,14 @@ fn render_sampler_source_editor() {
             allowed: true,
         },
     ]))));
-    ui.set_source_filter_cutoff_modulation_depth(0.35);
+    ui.set_modulation_max_sources(4);
+    ui.set_modulation_armed_rate(2.0);
+    ui.set_modulation_armed_depth(1.0);
+    // Descriptor-id indexed, so the sampler's cutoff overlay sits at 12.
+    let mut source_depths = vec![0.0f32; 22];
+    source_depths[12] = 0.35;
+    ui.set_source_modulation_depths(source_depths.as_slice().into());
+    ui.set_source_modulation_allowed(vec![true; 22].as_slice().into());
     let modulation = ui.window().take_snapshot().unwrap();
     assert_ne!(snapshot.as_bytes(), modulation.as_bytes());
     write_snapshot(&modulation, "MOOLOOP_MODULATION_SHELF_SNAPSHOT");
@@ -233,7 +240,8 @@ fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
         p5: 0.5,
         p6: 0.0,
         p7: 0.0,
-        p0_modulation_depth: 0.0,
+        modulation_depths: Vec::<f32>::new().as_slice().into(),
+        modulation_allowed: Vec::<bool>::new().as_slice().into(),
         eq_band_data: Vec::<f32>::new().as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: false,

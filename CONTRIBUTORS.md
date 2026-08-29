@@ -64,6 +64,10 @@ work session you can recall being part of, and don't stress over precision.
   the modulator system's destination metadata load-bearing: the declared
   policy now gates and clamps every route, and the channel strip's fader and
   pan became real modulation destinations resolved in control-rate segments.
+  Then fixed up the modulation shelf: gave it a real layout instead of
+  overlapping manual offsets, and replaced its hardcoded filter-cutoff routing
+  with descriptor-id-indexed depth and legality arrays, so every eligible knob
+  on a face is assignable through one addressed path.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

@@ -35,7 +35,7 @@ import { EqDeviceFace } from "eq-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
 import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
-import { ModulationShelf, ModulationSourceRow, ModulationRouteRow } from "modulation-shelf.slint";
+import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, ModulationRouteRow } from "modulation-shelf.slint";
 import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
@@ -176,9 +176,11 @@ struct EffectSlotRow {
     p5: float,
     p6: float,
     p7: float,
-    // The first descriptor's incoming amount for the focused direct-routing
-    // control. The Filter face currently consumes this as its cutoff overlay.
-    p0-modulation-depth: float,
+    // One entry per descriptor, in descriptor order: the armed source's
+    // route depth, and whether that parameter accepts modulation at all.
+    // Indexed rather than named so a face exposes every eligible control.
+    modulation-depths: [float],
+    modulation-allowed: [bool],
     // EQ-only: seven groups of freq/gain/q/enabled/kind plus HP and LP.
     eq-band-data: [float],
     eq-spectrum-data: [float],
@@ -566,6 +568,14 @@ export component MainWindow inherits Window {
     in property <[ModulationRouteRow]> modulation-routes;
     in-out property <bool> modulation-shelf-open;
     in-out property <int> modulation-armed-slot: -1;
+    // The armed source's own values, and the rack capacity the engine
+    // enforces, both supplied by Rust rather than assumed by the shelf.
+    in property <int> modulation-armed-waveform;
+    in property <float> modulation-armed-rate;
+    in property <float> modulation-armed-depth;
+    in property <float> modulation-armed-phase;
+    in property <bool> modulation-armed-retrigger;
+    in property <int> modulation-max-sources;
     callback modulation-shelf-toggled();
     callback modulation-source-selected(int);
     callback modulation-lfo-added();
@@ -576,10 +586,18 @@ export component MainWindow inherits Window {
     callback modulation-lfo-retrigger-changed(int, bool);
     callback modulation-route-polarity-changed(int, int);
     callback modulation-route-removed(int);
-    in property <float> source-filter-cutoff-modulation-depth;
-    callback source-filter-cutoff-modulation-depth-changed(float);
-    callback source-filter-cutoff-modulation-edit-started();
-    callback source-filter-cutoff-modulation-edit-finished();
+    // Generator and strip destinations, indexed by descriptor position the
+    // same way `EffectSlotRow` indexes an insert's.
+    in property <[float]> source-modulation-depths;
+    in property <[bool]> source-modulation-allowed;
+    in property <[float]> strip-modulation-depths;
+    in property <[bool]> strip-modulation-allowed;
+    callback source-modulation-depth-changed(int, float);
+    callback source-modulation-edit-started(int);
+    callback source-modulation-edit-finished(int);
+    callback strip-modulation-depth-changed(int, float);
+    callback strip-modulation-edit-started(int);
+    callback strip-modulation-edit-finished(int);
     callback effect-modulation-depth-changed(int, int, float);
     callback effect-modulation-edit-started(int, int);
     callback effect-modulation-edit-finished(int, int);
@@ -2195,7 +2213,9 @@ export component MainWindow inherits Window {
                                         // scroll is preferable to clipped
                                         // controls on compact windows.
                                         height: root.editing-bus ? 284px
-                                            : 284px + (root.modulation-shelf-open ? 116px : 30px);
+                                            : 284px + (root.modulation-shelf-open
+                                                ? ModulationShelfMetrics.open-height
+                                                : ModulationShelfMetrics.closed-height);
                                         background: Theme.panel;
 
                                         rack-row := HorizontalLayout {
@@ -2269,7 +2289,8 @@ export component MainWindow inherits Window {
                                                     filter-env <=> root.filter-env;
                                                     drive <=> root.sampler-drive;
                                                     modulation-armed: root.modulation-armed-slot >= 0;
-                                                    filter-cutoff-modulation-depth: root.source-filter-cutoff-modulation-depth;
+                                                    modulation-depths: root.source-modulation-depths;
+                                                    modulation-allowed: root.source-modulation-allowed;
                                                     bit-reduction <=> root.bit-reduction;
                                                     rate-reduction <=> root.rate-reduction;
                                                     loop-mode <=> root.loop-mode;
@@ -2305,9 +2326,9 @@ export component MainWindow inherits Window {
                                                     retrigger-mode-changed(v) => { root.retrigger-mode-changed(v); }
                                                     choke-group-changed(v) => { root.choke-group-changed(v); }
                                                     filter-cutoff-changed(v) => { root.filter-cutoff-changed(v); }
-                                                    filter-cutoff-modulation-depth-changed(v) => { root.source-filter-cutoff-modulation-depth-changed(v); }
-                                                    filter-cutoff-modulation-edit-started => { root.source-filter-cutoff-modulation-edit-started(); }
-                                                    filter-cutoff-modulation-edit-finished => { root.source-filter-cutoff-modulation-edit-finished(); }
+                                                    modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
+                                                    modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
+                                                    modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
                                                     filter-resonance-changed(v) => { root.filter-resonance-changed(v); }
                                                     filter-env-changed(v) => { root.filter-env-changed(v); }
                                                     drive-changed(v) => { root.sampler-drive-changed(v); }
@@ -2381,7 +2402,8 @@ export component MainWindow inherits Window {
                                                     glide <=> root.mono-glide; attack <=> root.mono-attack; decay <=> root.mono-decay; sustain <=> root.mono-sustain; release <=> root.mono-release;
                                                     filter-cutoff <=> root.mono-filter-cutoff; filter-resonance <=> root.mono-filter-resonance; filter-env <=> root.mono-filter-env; drive <=> root.mono-drive;
                                                     modulation-armed: root.modulation-armed-slot >= 0;
-                                                    filter-cutoff-modulation-depth: root.source-filter-cutoff-modulation-depth;
+                                                    modulation-depths: root.source-modulation-depths;
+                                                    modulation-allowed: root.source-modulation-allowed;
                                                     lfo-wave <=> root.mono-lfo-wave; lfo-rate <=> root.mono-lfo-rate; lfo-retrigger <=> root.mono-lfo-retrigger;
                                                     lfo-pitch <=> root.mono-lfo-pitch; lfo-filter <=> root.mono-lfo-filter; lfo-pulse-width <=> root.mono-lfo-pulse-width; lfo-amp <=> root.mono-lfo-amp;
                                                     osc1-wave-changed(v) => { root.mono-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.mono-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.mono-osc1-cents-changed(v); } osc1-level-changed(v) => { root.mono-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.mono-osc1-pulse-width-changed(v); }
@@ -2389,9 +2411,9 @@ export component MainWindow inherits Window {
                                                     osc3-wave-changed(v) => { root.mono-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.mono-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.mono-osc3-cents-changed(v); } osc3-level-changed(v) => { root.mono-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.mono-osc3-pulse-width-changed(v); }
                                                     glide-changed(v) => { root.mono-glide-changed(v); } attack-changed(v) => { root.mono-attack-changed(v); } decay-changed(v) => { root.mono-decay-changed(v); } sustain-changed(v) => { root.mono-sustain-changed(v); } release-changed(v) => { root.mono-release-changed(v); }
                                                     filter-cutoff-changed(v) => { root.mono-filter-cutoff-changed(v); } filter-resonance-changed(v) => { root.mono-filter-resonance-changed(v); } filter-env-changed(v) => { root.mono-filter-env-changed(v); } drive-changed(v) => { root.mono-drive-changed(v); }
-                                                    filter-cutoff-modulation-depth-changed(v) => { root.source-filter-cutoff-modulation-depth-changed(v); }
-                                                    filter-cutoff-modulation-edit-started => { root.source-filter-cutoff-modulation-edit-started(); }
-                                                    filter-cutoff-modulation-edit-finished => { root.source-filter-cutoff-modulation-edit-finished(); }
+                                                    modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
+                                                    modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
+                                                    modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
                                                     lfo-wave-changed(v) => { root.mono-lfo-wave-changed(v); } lfo-rate-changed(v) => { root.mono-lfo-rate-changed(v); } lfo-retrigger-changed(v) => { root.mono-lfo-retrigger-changed(v); }
                                                     lfo-pitch-changed(v) => { root.mono-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.mono-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.mono-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.mono-lfo-amp-changed(v); }
                                                 }
@@ -2408,7 +2430,8 @@ export component MainWindow inherits Window {
                                                     glide <=> root.poly-glide; attack <=> root.poly-attack; decay <=> root.poly-decay; sustain <=> root.poly-sustain; release <=> root.poly-release;
                                                     filter-cutoff <=> root.poly-filter-cutoff; filter-resonance <=> root.poly-filter-resonance; filter-env <=> root.poly-filter-env; drive <=> root.poly-drive;
                                                     modulation-armed: root.modulation-armed-slot >= 0;
-                                                    filter-cutoff-modulation-depth: root.source-filter-cutoff-modulation-depth;
+                                                    modulation-depths: root.source-modulation-depths;
+                                                    modulation-allowed: root.source-modulation-allowed;
                                                     lfo-wave <=> root.poly-lfo-wave; lfo-rate <=> root.poly-lfo-rate; lfo-retrigger <=> root.poly-lfo-retrigger;
                                                     lfo-pitch <=> root.poly-lfo-pitch; lfo-filter <=> root.poly-lfo-filter; lfo-pulse-width <=> root.poly-lfo-pulse-width; lfo-amp <=> root.poly-lfo-amp;
                                                     polyphony <=> root.poly-polyphony; spread <=> root.poly-spread;
@@ -2417,9 +2440,9 @@ export component MainWindow inherits Window {
                                                     osc3-wave-changed(v) => { root.poly-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.poly-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.poly-osc3-cents-changed(v); } osc3-level-changed(v) => { root.poly-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.poly-osc3-pulse-width-changed(v); }
                                                     glide-changed(v) => { root.poly-glide-changed(v); } attack-changed(v) => { root.poly-attack-changed(v); } decay-changed(v) => { root.poly-decay-changed(v); } sustain-changed(v) => { root.poly-sustain-changed(v); } release-changed(v) => { root.poly-release-changed(v); }
                                                     filter-cutoff-changed(v) => { root.poly-filter-cutoff-changed(v); } filter-resonance-changed(v) => { root.poly-filter-resonance-changed(v); } filter-env-changed(v) => { root.poly-filter-env-changed(v); } drive-changed(v) => { root.poly-drive-changed(v); }
-                                                    filter-cutoff-modulation-depth-changed(v) => { root.source-filter-cutoff-modulation-depth-changed(v); }
-                                                    filter-cutoff-modulation-edit-started => { root.source-filter-cutoff-modulation-edit-started(); }
-                                                    filter-cutoff-modulation-edit-finished => { root.source-filter-cutoff-modulation-edit-finished(); }
+                                                    modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
+                                                    modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
+                                                    modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
                                                     lfo-wave-changed(v) => { root.poly-lfo-wave-changed(v); } lfo-rate-changed(v) => { root.poly-lfo-rate-changed(v); } lfo-retrigger-changed(v) => { root.poly-lfo-retrigger-changed(v); }
                                                     lfo-pitch-changed(v) => { root.poly-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.poly-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.poly-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.poly-lfo-amp-changed(v); }
                                                     polyphony-changed(v) => { root.poly-polyphony-changed(v); } spread-changed(v) => { root.poly-spread-changed(v); }
@@ -2482,11 +2505,12 @@ export component MainWindow inherits Window {
                                                         slope: round(slot.p3);
                                                         drive: slot.p4;
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
-                                                        cutoff-modulation-depth: slot.p0-modulation-depth;
+                                                        modulation-depths: slot.modulation-depths;
+                                                        modulation-allowed: slot.modulation-allowed;
                                                         cutoff-changed(v) => { root.effect-param-changed(index, 0, v); }
-                                                        cutoff-modulation-depth-changed(v) => { root.effect-modulation-depth-changed(index, 0, v); }
-                                                        cutoff-modulation-edit-started => { root.effect-modulation-edit-started(index, 0); }
-                                                        cutoff-modulation-edit-finished => { root.effect-modulation-edit-finished(index, 0); }
+                                                        modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                        modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                        modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                         resonance-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         mode-changed(v) => { root.effect-param-changed(index, 2, v * 1.0 / 2.0); }
                                                         slope-changed(v) => { root.effect-param-changed(index, 3, v * 1.0); }
@@ -2754,6 +2778,12 @@ export component MainWindow inherits Window {
                                             sources: root.modulation-sources;
                                             routes: root.modulation-routes;
                                             armed-slot: root.modulation-armed-slot;
+                                            armed-waveform: root.modulation-armed-waveform;
+                                            armed-rate: root.modulation-armed-rate;
+                                            armed-depth: root.modulation-armed-depth;
+                                            armed-phase: root.modulation-armed-phase;
+                                            armed-retrigger: root.modulation-armed-retrigger;
+                                            max-sources: root.modulation-max-sources;
                                             toggled => { root.modulation-shelf-toggled(); }
                                             source-selected(slot) => { root.modulation-source-selected(slot); }
                                             lfo-added => { root.modulation-lfo-added(); }

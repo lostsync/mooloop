@@ -133,7 +133,10 @@ export component SamplerDeviceFace inherits Rectangle {
     in-out property <float> filter-resonance;
     in-out property <float> filter-env;
     in property <bool> modulation-armed;
-    in property <float> filter-cutoff-modulation-depth;
+    // Indexed by descriptor id, mirroring `SAMPLER_PARAM_*` in mooloop-core, so
+    // every eligible control on this face routes through one path.
+    in property <[float]> modulation-depths;
+    in property <[bool]> modulation-allowed;
     in-out property <float> drive;
     in-out property <float> bit-reduction;
     in-out property <float> rate-reduction;
@@ -172,9 +175,9 @@ export component SamplerDeviceFace inherits Rectangle {
     callback retrigger-mode-changed(int);
     callback choke-group-changed(int);
     callback filter-cutoff-changed(float);
-    callback filter-cutoff-modulation-depth-changed(float);
-    callback filter-cutoff-modulation-edit-started();
-    callback filter-cutoff-modulation-edit-finished();
+    callback modulation-depth-changed(int, float);
+    callback modulation-edit-started(int);
+    callback modulation-edit-finished(int);
     callback filter-resonance-changed(float);
     callback filter-env-changed(float);
     callback drive-changed(float);
@@ -489,16 +492,17 @@ export component SamplerDeviceFace inherits Rectangle {
                             diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff";
                             value <=> root.filter-cutoff; default-value: 1;
                             modulation-armed: root.modulation-armed;
-                            modulation-depth: root.filter-cutoff-modulation-depth;
+                            modulation-allowed: root.modulation-allowed[12];
+                            modulation-depth: root.modulation-depths[12];
                             value-text: NoteFormat.frequency-value(20 * pow(1000, root.filter-cutoff));
                             changed(v) => { root.filter-cutoff-changed(v); }
-                            modulation-depth-changed(v) => { root.filter-cutoff-modulation-depth-changed(v); }
-                            modulation-edit-started => { root.filter-cutoff-modulation-edit-started(); }
-                            modulation-edit-finished => { root.filter-cutoff-modulation-edit-finished(); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(12, v); }
+                            modulation-edit-started => { root.modulation-edit-started(12); }
+                            modulation-edit-finished => { root.modulation-edit-finished(12); }
                         }
-                        ParameterKnob { diameter: 36px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; changed(v) => { root.filter-resonance-changed(v); } }
-                        ParameterKnob { diameter: 36px; label: "Env"; tooltip: "Envelope modulation"; value <=> root.filter-env; default-value: 0.5; bipolar: true; fill: Theme.warning; value-text: (round((root.filter-env * 2 - 1) * 100) > 0 ? "+" : "") + round((root.filter-env * 2 - 1) * 100) + "%"; changed(v) => { root.filter-env-changed(v); } }
-                        ParameterKnob { diameter: 36px; label: "Drive"; tooltip: "Pre-filter saturation"; value <=> root.drive; default-value: 0; fill: Theme.warning; value-text: round(root.drive * 100) + "%"; changed(v) => { root.drive-changed(v); } }
+                        ParameterKnob { diameter: 36px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[13]; modulation-depth: root.modulation-depths[13]; changed(v) => { root.filter-resonance-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(13, v); } modulation-edit-started => { root.modulation-edit-started(13); } modulation-edit-finished => { root.modulation-edit-finished(13); } }
+                        ParameterKnob { diameter: 36px; label: "Env"; tooltip: "Envelope modulation"; value <=> root.filter-env; default-value: 0.5; bipolar: true; fill: Theme.warning; value-text: (round((root.filter-env * 2 - 1) * 100) > 0 ? "+" : "") + round((root.filter-env * 2 - 1) * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[14]; modulation-depth: root.modulation-depths[14]; changed(v) => { root.filter-env-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(14, v); } modulation-edit-started => { root.modulation-edit-started(14); } modulation-edit-finished => { root.modulation-edit-finished(14); } }
+                        ParameterKnob { diameter: 36px; label: "Drive"; tooltip: "Pre-filter saturation"; value <=> root.drive; default-value: 0; fill: Theme.warning; value-text: round(root.drive * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[15]; modulation-depth: root.modulation-depths[15]; changed(v) => { root.drive-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(15, v); } modulation-edit-started => { root.modulation-edit-started(15); } modulation-edit-finished => { root.modulation-edit-finished(15); } }
                     }
                 }
             }

@@ -28,9 +28,9 @@ use mooloop_core::{
     ReverbParams, SampleReference, SamplerParams, SamplerState, SnareCharacter, VoiceMode,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS,
     MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
-    MAX_LINEAR_GAIN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
-    MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
-    SAMPLER_PARAM_FILTER_CUTOFF, SYNTH_PARAM_FILTER_CUTOFF, TICKS_PER_64TH, TICKS_PER_BAR,
+    MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL, MAX_PATTERNS, MAX_PATTERN_STEPS,
+    MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_POLY_VOICES,
+    MAX_SWING_PERCENT, MIN_SWING_PERCENT, STRIP_DESCRIPTORS, TICKS_PER_64TH, TICKS_PER_BAR,
     TICKS_PER_STEP,
 };
 use mooloop_dsp::{
@@ -1024,7 +1024,8 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         p5: p[5],
         p6: p[6],
         p7: p[7],
-        p0_modulation_depth: 0.0,
+        modulation_depths: Vec::<f32>::new().as_slice().into(),
+        modulation_allowed: Vec::<bool>::new().as_slice().into(),
         eq_band_data: eq_band_data.as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: slot.params.eq().is_some_and(|eq| eq.analyzer_enabled),
@@ -1256,6 +1257,28 @@ fn mod_lfo_waveform_to_int(waveform: ModLfoWaveform) -> i32 {
         ModLfoWaveform::Square => 3,
         ModLfoWaveform::Random => 4,
     }
+}
+
+/// Length of an id-indexed parameter array. Ids are dense and small in
+/// practice, but a gap costs one unused entry rather than a wrong lookup.
+fn descriptor_slots(descriptors: &[ParamDescriptor]) -> usize {
+    descriptors
+        .iter()
+        .map(|descriptor| descriptor.id as usize + 1)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Which parameters accept modulation, indexed by descriptor id. The policy
+/// lives in `ModDestinationDescriptor`, so a device opts a control in or out
+/// through its own descriptor rather than through a UI special case. An id
+/// with no descriptor stays `false`, which is the safe answer.
+fn descriptor_policies(descriptors: &[ParamDescriptor]) -> ModelRc<bool> {
+    let mut allowed = vec![false; descriptor_slots(descriptors)];
+    for descriptor in descriptors {
+        allowed[descriptor.id as usize] = ModDestinationDescriptor::for_param(descriptor).allowed;
+    }
+    allowed.as_slice().into()
 }
 
 /// Env-gated diagnostic logging (MOOLOOP_DEBUG=1).
@@ -2282,7 +2305,10 @@ impl UiState {
     fn sync_effects(&self) {
         let armed = self.modulation_armed_slot.get();
         let rows: Vec<EffectSlotRow> = match self.effect_target {
-            EffectTarget::Channel(channel) => self
+            // Modulation state belongs to the selected channel, so an insert
+            // rack pointed at a bus -- or at another channel -- renders its
+            // rows without overlays rather than borrowing this channel's.
+            EffectTarget::Channel(channel) if channel as usize == self.selected => self
                 .channels
                 .get(channel as usize)
                 .map(|state| {
@@ -2292,24 +2318,22 @@ impl UiState {
                         .enumerate()
                         .map(|(slot, effect)| {
                             let mut row = effect_slot_row(effect);
-                            if let (Some(source_slot), Some(descriptor)) =
-                                (armed, effect.kind().descriptors().first())
-                            {
-                                row.p0_modulation_depth = self.modulation_depth_for(
-                                    source_slot,
+                            let descriptors = effect.kind().descriptors();
+                            row.modulation_depths =
+                                self.destination_depths(armed, descriptors, |param| {
                                     ParamAddr::effect(
                                         EffectTarget::Channel(channel),
                                         slot as u8,
-                                        descriptor.id,
-                                    ),
-                                );
-                            }
+                                        param,
+                                    )
+                                });
+                            row.modulation_allowed = descriptor_policies(descriptors);
                             row
                         })
                         .collect()
                 })
                 .unwrap_or_default(),
-            EffectTarget::Bus(_) => self
+            _ => self
                 .effect_chain()
                 .map(|effects| effects.iter().map(effect_slot_row).collect())
                 .unwrap_or_default(),
@@ -2317,18 +2341,25 @@ impl UiState {
         self.effect_slot_model.set_vec(rows);
     }
 
-    fn source_filter_cutoff_destination(&self) -> Option<ParamAddr> {
-        let channel = self.channels.get(self.selected)?;
-        let param = match channel.kind {
-            DeviceKind::Sampler => SAMPLER_PARAM_FILTER_CUTOFF,
-            DeviceKind::MonoSynth | DeviceKind::PolySynth => SYNTH_PARAM_FILTER_CUTOFF,
-            DeviceKind::DrumSynth => return None,
-        };
-        Some(ParamAddr {
-            scope: EffectTarget::Channel(self.selected as u8),
-            owner: ParamOwner::Source,
-            param,
-        })
+    /// The armed source's depth for each described parameter, indexed by
+    /// **descriptor id** so a knob reads its own overlay with the same stable
+    /// number it already uses to address the parameter. Ids are contractually
+    /// never renumbered, whereas a descriptor's position in the list is not a
+    /// promise. Zero where no route exists, which is also what the overlay
+    /// draws at the base value.
+    fn destination_depths(
+        &self,
+        armed: Option<u8>,
+        descriptors: &[ParamDescriptor],
+        address: impl Fn(u32) -> ParamAddr,
+    ) -> ModelRc<f32> {
+        let mut depths = vec![0.0; descriptor_slots(descriptors)];
+        for descriptor in descriptors {
+            depths[descriptor.id as usize] = armed.map_or(0.0, |slot| {
+                self.modulation_depth_for(slot, address(descriptor.id))
+            });
+        }
+        depths.as_slice().into()
     }
 
     fn modulation_depth_for(&self, source_slot: u8, destination: ParamAddr) -> f32 {
@@ -2409,8 +2440,12 @@ impl UiState {
             .slots
             .iter()
             .enumerate()
-            .filter_map(|(slot, params)| match params {
-                Some(ModulatorParams::Lfo(lfo)) => Some(ModulationSourceRow {
+            .filter_map(|(slot, params)| {
+                // Irrefutable today, and deliberately so: a second source
+                // kind makes this a compile error at the one place that has
+                // to learn how to name and edit it.
+                let ModulatorParams::Lfo(lfo) = (*params)?;
+                Some(ModulationSourceRow {
                     slot: slot as i32,
                     name: format!("LFO {}", slot + 1).into(),
                     waveform: mod_lfo_waveform_to_int(lfo.waveform),
@@ -2419,8 +2454,7 @@ impl UiState {
                     phase: lfo.phase,
                     retrigger: lfo.retrigger,
                     selected: armed == Some(slot as u8),
-                }),
-                None => None,
+                })
             })
             .collect();
         let routes: Vec<ModulationRouteRow> = channel
@@ -2468,13 +2502,53 @@ impl UiState {
         self.modulation_route_model.set_vec(routes);
         window.set_modulation_shelf_open(self.modulation_shelf_open);
         window.set_modulation_armed_slot(armed.map_or(-1, i32::from));
-        let source_cutoff_depth = armed
-            .zip(self.source_filter_cutoff_destination())
-            .map_or(0.0, |(source, destination)| {
-                self.modulation_depth_for(source, destination)
+        window.set_modulation_max_sources(MAX_MODULATORS_PER_CHANNEL as i32);
+
+        // The armed source's own controls. One editor is shown, so the shelf
+        // reads scalars rather than searching the source rows for the
+        // selected one.
+        let armed_lfo = armed
+            .and_then(|slot| {
+                channel
+                    .modulation
+                    .slots
+                    .get(slot as usize)
+                    .copied()
+                    .flatten()
+            })
+            .map(|params| match params {
+                ModulatorParams::Lfo(lfo) => lfo,
             });
-        window.set_source_filter_cutoff_modulation_depth(source_cutoff_depth);
-        // The effect row carries the focused source's overlay amount, so a
+        window.set_modulation_armed_waveform(
+            armed_lfo.map_or(0, |lfo| mod_lfo_waveform_to_int(lfo.waveform)),
+        );
+        window.set_modulation_armed_rate(armed_lfo.map_or(1.0, |lfo| lfo.rate_hz));
+        window.set_modulation_armed_depth(armed_lfo.map_or(1.0, |lfo| lfo.depth));
+        window.set_modulation_armed_phase(armed_lfo.map_or(0.0, |lfo| lfo.phase));
+        window.set_modulation_armed_retrigger(armed_lfo.is_some_and(|lfo| lfo.retrigger));
+
+        // Every described generator and strip parameter carries its own
+        // overlay depth and legality, so which controls can be routed is
+        // decided by descriptor metadata rather than by the UI naming them.
+        let scope = EffectTarget::Channel(self.selected as u8);
+        let generator = channel.generator_params().kind();
+        window.set_source_modulation_depths(self.destination_depths(
+            armed,
+            generator.descriptors(),
+            |param| ParamAddr {
+                scope,
+                owner: ParamOwner::Source,
+                param,
+            },
+        ));
+        window.set_source_modulation_allowed(descriptor_policies(generator.descriptors()));
+        window.set_strip_modulation_depths(self.destination_depths(
+            armed,
+            &STRIP_DESCRIPTORS,
+            |param| ParamAddr::strip(scope, param),
+        ));
+        window.set_strip_modulation_allowed(descriptor_policies(&STRIP_DESCRIPTORS));
+        // The effect rows carry the focused source's overlay amounts, so a
         // chip selection repaints markers without touching any base value.
         self.sync_effects();
     }
@@ -5884,7 +5958,7 @@ impl AppUi {
                 if added {
                     record_project_history(&commands, before, &st, &window, "LFO added");
                     window.set_status_message(
-                        "LFO added — drag a highlighted cutoff control to route it".into(),
+                        "LFO added \u{2014} drag any highlighted control to route it".into(),
                     );
                 }
             });
@@ -6087,10 +6161,13 @@ impl AppUi {
         // A direct parameter gesture begins, streams live route-depth
         // updates, then records one history entry on release. The same path
         // serves every source face that exposes an eligible cutoff.
+        // Generator and strip destinations share one addressed path: the
+        // control names its own parameter id, so adding a routable knob is a
+        // binding on that knob rather than another callback triple here.
         {
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_source_filter_cutoff_modulation_edit_started(move || {
+            window.on_source_modulation_edit_started(move |_| {
                 let Some(window) = weak.upgrade() else { return };
                 st.borrow_mut().begin_modulation_edit(&window);
             });
@@ -6099,11 +6176,15 @@ impl AppUi {
             let st = state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
-            window.on_source_filter_cutoff_modulation_depth_changed(move |depth| {
-                let Some(window) = weak.upgrade() else { return };
-                let mut state = st.borrow_mut();
-                let Some(destination) = state.source_filter_cutoff_destination() else {
+            window.on_source_modulation_depth_changed(move |param, depth| {
+                let (Some(window), Ok(param)) = (weak.upgrade(), u32::try_from(param)) else {
                     return;
+                };
+                let mut state = st.borrow_mut();
+                let destination = ParamAddr {
+                    scope: EffectTarget::Channel(state.selected as u8),
+                    owner: ParamOwner::Source,
+                    param,
                 };
                 if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
                     // A full matrix or invalid target must snap the transient
@@ -6117,7 +6198,49 @@ impl AppUi {
             let st = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
-            window.on_source_filter_cutoff_modulation_edit_finished(move || {
+            window.on_source_modulation_edit_finished(move |_| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = st.borrow_mut().finish_modulation_edit();
+                if let Some(before) = before {
+                    record_project_history(
+                        &commands,
+                        before,
+                        &st,
+                        &window,
+                        "Modulation route changed",
+                    );
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_strip_modulation_edit_started(move |_| {
+                let Some(window) = weak.upgrade() else { return };
+                st.borrow_mut().begin_modulation_edit(&window);
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_strip_modulation_depth_changed(move |param, depth| {
+                let (Some(window), Ok(param)) = (weak.upgrade(), u32::try_from(param)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let destination =
+                    ParamAddr::strip(EffectTarget::Channel(state.selected as u8), param);
+                if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                    state.refresh_modulation(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_strip_modulation_edit_finished(move |_| {
                 let Some(window) = weak.upgrade() else { return };
                 let before = st.borrow_mut().finish_modulation_edit();
                 if let Some(before) = before {
@@ -6138,7 +6261,7 @@ impl AppUi {
                 let (Some(window), Ok(slot), Ok(param)) = (
                     weak.upgrade(),
                     usize::try_from(slot),
-                    usize::try_from(param),
+                    u32::try_from(param),
                 ) else {
                     return;
                 };
@@ -6148,7 +6271,7 @@ impl AppUi {
                         .channels
                         .get(state.selected)
                         .and_then(|channel| channel.effects.get(slot))
-                        .and_then(|effect| effect.kind().descriptors().get(param))
+                        .and_then(|effect| effect.kind().descriptor(param))
                         .is_some();
                 if valid {
                     state.begin_modulation_edit(&window);
@@ -6160,11 +6283,9 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_effect_modulation_depth_changed(move |slot, param, depth| {
-                let (Some(window), Ok(slot), Ok(param)) = (
-                    weak.upgrade(),
-                    usize::try_from(slot),
-                    usize::try_from(param),
-                ) else {
+                let (Some(window), Ok(slot), Ok(param)) =
+                    (weak.upgrade(), usize::try_from(slot), u32::try_from(param))
+                else {
                     return;
                 };
                 let mut state = st.borrow_mut();
@@ -6173,7 +6294,7 @@ impl AppUi {
                         .channels
                         .get(state.selected)
                         .and_then(|channel| channel.effects.get(slot))
-                        .and_then(|effect| effect.kind().descriptors().get(param))
+                        .and_then(|effect| effect.kind().descriptor(param))
                         .map(|descriptor| {
                             ParamAddr::effect(
                                 EffectTarget::Channel(channel),
