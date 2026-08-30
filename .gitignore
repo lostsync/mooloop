@@ -7,3 +7,4 @@ Cargo.lock.bak
 .DS_Store
 /reference/
 /bin/
+/opencode.json
