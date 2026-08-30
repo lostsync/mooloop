@@ -17,6 +17,7 @@ export component Ml1DeviceFace inherits Rectangle {
     in-out property <float> glide; in-out property <float> attack; in-out property <float> decay; in-out property <float> sustain; in-out property <float> release;
     in-out property <float> filter-cutoff; in-out property <float> filter-resonance; in-out property <float> filter-env; in-out property <float> drive;
     in-out property <float> filter-attack; in-out property <float> filter-decay; in-out property <float> filter-sustain; in-out property <float> filter-release; in-out property <float> filter-keytrack;
+    in-out property <float> accent;
     in-out property <int> glide-mode; in-out property <int> env-trigger; in-out property <int> priority;
     in-out property <int> filter-model;
     in property <bool> modulation-armed;
@@ -32,6 +33,7 @@ export component Ml1DeviceFace inherits Rectangle {
     callback glide-changed(float); callback attack-changed(float); callback decay-changed(float); callback sustain-changed(float); callback release-changed(float);
     callback filter-cutoff-changed(float); callback filter-resonance-changed(float); callback filter-env-changed(float); callback drive-changed(float);
     callback filter-attack-changed(float); callback filter-decay-changed(float); callback filter-sustain-changed(float); callback filter-release-changed(float); callback filter-keytrack-changed(float);
+    callback accent-changed(float);
     callback glide-mode-changed(int); callback env-trigger-changed(int); callback priority-changed(int);
     callback filter-model-changed(int);
     callback modulation-depth-changed(int, float);
@@ -214,6 +216,7 @@ export component Ml1DeviceFace inherits Rectangle {
                     spacing: 12px;
                     VerticalLayout {
                         alignment: center;
+                        spacing: 10px;
                         ParameterKnob {
                             width: 60px; diameter: 44px; label: "Glide"; tooltip: "Portamento time";
                             value <=> root.glide; minimum: 0; maximum: 2; default-value: 0;
@@ -227,6 +230,23 @@ export component Ml1DeviceFace inherits Rectangle {
                             modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
                             modulation-edit-started => { root.modulation-edit-started(0); }
                             modulation-edit-finished => { root.modulation-edit-finished(0); }
+                        }
+                        // Accent is a performance control in the same sense
+                        // glide is: it changes what playing harder does, not
+                        // what the patch is.
+                        ParameterKnob {
+                            width: 60px; diameter: 44px; label: "Accent"; tooltip: "Velocity depth into filter and drive";
+                            value <=> root.accent; default-value: 0;
+                            value-text: round(root.accent * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[29];
+                            modulation-depth: root.modulation-depths[29];
+                            modulation-offset: root.modulation-offsets[29];
+                            modulation-route-count: root.modulation-route-counts[29];
+                            changed(v) => { root.accent-changed(v); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(29, v); }
+                            modulation-edit-started => { root.modulation-edit-started(29); }
+                            modulation-edit-finished => { root.modulation-edit-finished(29); }
                         }
                     }
                     Rectangle { width: 1px; background: Theme.border; }

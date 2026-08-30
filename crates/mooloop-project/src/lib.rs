@@ -1090,6 +1090,7 @@ fn validate_ml1(channel: usize, params: Ml1Params) -> Result<(), Error> {
         ("filter sustain", params.filter_sustain, 0.0, 1.0),
         ("filter release", params.filter_release, 0.0, 10.0),
         ("filter keytrack", params.filter_keytrack, 0.0, 1.0),
+        ("accent", params.accent, 0.0, 1.0),
     ] {
         validate_range(channel, &format!("{KIND} {field}"), value, min, max)?;
     }

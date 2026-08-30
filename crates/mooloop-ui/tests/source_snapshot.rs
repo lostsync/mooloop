@@ -200,6 +200,13 @@ fn render_ml1_source_editor() {
     let high_priority = ui.window().take_snapshot().unwrap();
     assert_ne!(perf.as_bytes(), high_priority.as_bytes());
 
+    // Accent shares the column with Glide, so this also proves the two knobs
+    // are laid out as two knobs rather than drawn over each other.
+    ui.set_ml1_accent(1.0);
+    let accented = ui.window().take_snapshot().unwrap();
+    assert_ne!(high_priority.as_bytes(), accented.as_bytes());
+    write_snapshot(&accented, "MOOLOOP_ML1_ACCENT_SOURCE_SNAPSHOT");
+
     ui.window().set_size(LogicalSize::new(720.0, 760.0));
     let narrow = ui.window().take_snapshot().unwrap();
     assert_eq!((narrow.width(), narrow.height()), (720, 760));

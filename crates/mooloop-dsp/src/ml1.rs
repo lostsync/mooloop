@@ -56,6 +56,17 @@ const PARAM_SMOOTH_S: f32 = 0.005;
 /// around the middle of the keyboard keeps its cutoff where it was set.
 const KEYTRACK_REFERENCE_HZ: f32 = 261.625_58;
 
+/// How much a full-accent, full-velocity note multiplies the filter envelope
+/// amount. A third of the knob's six octaves is two more octaves of sweep,
+/// which is the difference between a note and an accented note rather than
+/// between two instruments.
+const ACCENT_ENV_SCALE: f32 = 1.0 / 3.0;
+
+/// How much a full-accent, full-velocity note adds to the drive knob. Chosen
+/// to be clearly audible while leaving headroom at the top of the knob, so an
+/// accented patch never asks for the channel fader back.
+const ACCENT_DRIVE_PUSH: f32 = 0.35;
+
 /// MIDI note number to frequency in Hz (A4 = 69 = 440 Hz).
 fn note_to_freq(note: u8) -> f32 {
     440.0 * 2.0_f32.powf((f32::from(note.min(127)) - 69.0) / 12.0)
@@ -383,6 +394,7 @@ impl Ml1 {
         voice.drive.set_target(params.drive.clamp(0.0, 1.0));
 
         let env_amount = params.filter_env_amount.clamp(-1.0, 1.0);
+        let accent = params.accent.clamp(0.0, 1.0);
         let resonance = params.filter_resonance.clamp(0.0, 1.0);
         let keytrack = params.filter_keytrack.clamp(0.0, 1.0);
         let model = params.filter_model;
@@ -400,6 +412,12 @@ impl Ml1 {
             }
 
             let velocity = voice.velocity_amp.advance();
+            // Accent rides the same smoothed velocity the VCA uses. That is
+            // not a shortcut: it gives per-note capture, the priority
+            // fallback's winning-note velocity, and the legato slide for free,
+            // because `velocity_amp` already carries all three. At `accent`
+            // zero this is exactly zero and everything below is untouched.
+            let accent_depth = accent * velocity;
 
             let mut mix = 0.0;
             for (index, osc) in voice.oscs.iter_mut().enumerate() {
@@ -418,7 +436,10 @@ impl Ml1 {
             }
 
             let cutoff = voice.cutoff.advance();
-            let drive = voice.drive.advance();
+            // Added to the *smoothed* drive rather than applied as a stage of
+            // its own, so it inherits click-safety instead of needing its own.
+            let drive =
+                (voice.drive.advance() + accent_depth * ACCENT_DRIVE_PUSH).clamp(0.0, 1.0);
 
             // Saturate, then filter. The pre-drive stage keeps its own level
             // estimate, so it has to see every sample even when the filter is
@@ -446,7 +467,13 @@ impl Ml1 {
                 } else {
                     keytrack * (voice.current_freq / KEYTRACK_REFERENCE_HZ).log2()
                 };
-                let octaves = voice.filter_env.level() * env_amount * 6.0 + keytrack_oct;
+                // Accent scales the knob rather than adding to it, which is
+                // what keeps the bypass test above honest: an effective
+                // amount of zero stays zero however hard the note was hit.
+                // It also preserves a negative amount's direction — accent
+                // deepens whatever the patch already does.
+                let accented_amount = env_amount * (1.0 + accent_depth * ACCENT_ENV_SCALE);
+                let octaves = voice.filter_env.level() * accented_amount * 6.0 + keytrack_oct;
                 let cutoff_hz = (base_hz * octaves.exp2()).clamp(20.0, max_hz);
                 voice
                     .filter
@@ -540,11 +567,26 @@ mod tests {
         params
     }
 
+    fn note_on_at(offset: u32, id: u64, note: u8, velocity: u8) -> TimedEvent {
+        TimedEvent {
+            offset,
+            event: Event::NoteOn {
+                id,
+                note,
+                velocity,
+            },
+        }
+    }
+
     fn render(params: Ml1Params, note: u8, frames: usize) -> Vec<f32> {
+        render_at(params, note, 127, frames)
+    }
+
+    fn render_at(params: Ml1Params, note: u8, velocity: u8, frames: usize) -> Vec<f32> {
         let mut synth = Ml1::new(params, SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
-        events.push(note_on(0, 1, note));
+        events.push(note_on_at(0, 1, note, velocity));
         synth.process(&ctx(frames), &mut bus, &events, None);
         bus.l[..frames].to_vec()
     }
@@ -1091,6 +1133,10 @@ mod tests {
             params.filter_sustain = 0.0;
             params.filter_keytrack = 1.0;
             params.drive = 1.0;
+            // Accent belongs in the worst case, not beside it: the bound has
+            // to hold for a full-velocity note in a fully accented patch, or
+            // Accent is a gain-staging trap rather than a control.
+            params.accent = 1.0;
 
             let frames = SR as usize;
             let rendered = render(params, 36, frames);
@@ -1175,5 +1221,190 @@ mod tests {
                 "switching to {model:?} stepped {stepped:.4} against a settled {settled:.4}"
             );
         }
+    }
+
+    /// Accent's migration promise. At zero the synth must be exactly what it
+    /// was before the knob existed, which means velocity scales amplitude and
+    /// touches nothing else — so two velocities render the *same waveform* at
+    /// two gains, sample for sample.
+    #[test]
+    fn accent_at_zero_leaves_velocity_scaling_amplitude_and_nothing_else() {
+        let mut params = saw_patch();
+        params.accent = 0.0;
+        params.filter_cutoff = 0.4;
+        params.filter_resonance = 0.6;
+        params.filter_env_amount = 0.8;
+        params.drive = 0.6;
+        params.sustain = 1.0;
+
+        let frames = SR as usize / 4;
+        let loud = render_at(params, 45, 127, frames);
+        let soft = render_at(params, 45, 40, frames);
+        let ratio = 40.0 / 127.0;
+
+        let worst = loud
+            .iter()
+            .zip(soft.iter())
+            .map(|(l, s)| (l * ratio - s).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            worst < 1.0e-6,
+            "velocity changed more than the gain: worst sample differs by {worst:e}"
+        );
+    }
+
+    /// And the other side of it: with Accent up, the same two velocities must
+    /// differ in *shape*, not only in level. Brightness is scale-invariant, so
+    /// it cannot be satisfied by the amplitude scaling that is there anyway.
+    ///
+    /// The filter half. Held at a sustained envelope level and a low base
+    /// cutoff so the extra sweep lands well inside the audible range instead
+    /// of against the Nyquist clamp, where two different amounts of "wide
+    /// open" measure the same.
+    #[test]
+    fn accent_opens_the_filter_further_for_a_harder_note() {
+        let frames = SR as usize / 4;
+        let window = SR as usize / 20..frames;
+
+        let shape_gap = |accent: f32| {
+            let mut params = saw_patch();
+            params.accent = accent;
+            params.filter_cutoff = 0.05;
+            params.filter_env_amount = 1.0;
+            params.filter_sustain = 1.0;
+            params.sustain = 1.0;
+            let loud = render_at(params, 45, 127, frames);
+            let soft = render_at(params, 45, 40, frames);
+            brightness(&loud[window.clone()]) / brightness(&soft[window.clone()])
+        };
+
+        let flat = shape_gap(0.0);
+        let accented = shape_gap(1.0);
+        assert!(
+            (flat - 1.0).abs() < 0.02,
+            "velocity changed the timbre with Accent at zero: {flat:.3}"
+        );
+        assert!(
+            accented > 1.15,
+            "Accent did not open the filter harder for the harder note: \
+             {flat:.3} -> {accented:.3}"
+        );
+    }
+
+    /// The drive half, isolated: the filter is out of the picture entirely, so
+    /// the only thing left that velocity can move is the saturation.
+    #[test]
+    fn accent_drives_harder_for_a_harder_note() {
+        let frames = SR as usize / 4;
+        let window = SR as usize / 20..frames;
+
+        let shape_gap = |accent: f32| {
+            let mut params = sine_patch();
+            params.accent = accent;
+            params.filter_env_amount = 0.0;
+            params.drive = 0.3;
+            let loud = render_at(params, 45, 127, frames);
+            let soft = render_at(params, 45, 40, frames);
+            brightness(&loud[window.clone()]) / brightness(&soft[window.clone()])
+        };
+
+        let flat = shape_gap(0.0);
+        let accented = shape_gap(1.0);
+        assert!(
+            (flat - 1.0).abs() < 0.02,
+            "velocity changed the timbre with Accent at zero: {flat:.3}"
+        );
+        assert!(
+            accented > 1.1,
+            "Accent did not push the drive harder for the harder note: \
+             {flat:.3} -> {accented:.3}"
+        );
+    }
+
+    /// Accent is captured per note, so falling back to a still-held note has
+    /// to restore *that* note's accent, not keep the released note's. Both
+    /// notes are the same pitch so nothing but velocity can move the timbre.
+    #[test]
+    fn the_priority_fallback_restores_the_winning_notes_accent() {
+        let mut params = saw_patch();
+        params.accent = 1.0;
+        params.env_trigger = EnvTrigger::Legato;
+        params.filter_cutoff = 0.25;
+        params.filter_env_amount = 0.6;
+        params.sustain = 1.0;
+        params.filter_sustain = 1.0;
+        params.attack = 0.001;
+        params.filter_attack = 0.001;
+
+        let frames = SR as usize * 3 / 4;
+        let segment = SR as usize / 4;
+        let mut synth = Ml1::new(params, SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on_at(0, 1, 45, 127));
+        events.push(note_on_at(segment as u32, 2, 45, 30));
+        events.push(TimedEvent {
+            offset: (segment * 2) as u32,
+            event: Event::NoteOff { id: 2, note: 45 },
+        });
+        synth.process(&ctx(frames), &mut bus, &events, None);
+        let rendered = &bus.l[..frames];
+
+        // Skip the first tenth of each segment so the 5 ms velocity ramp and
+        // the envelope attack are behind us.
+        let settled = |n: usize| {
+            let start = n * segment + segment / 10;
+            brightness(&rendered[start..(n + 1) * segment])
+        };
+        let (accented, soft, restored) = (settled(0), settled(1), settled(2));
+        assert!(
+            soft < accented * 0.95,
+            "the soft note did not take the accent down: {accented:.3} -> {soft:.3}"
+        );
+        assert!(
+            (restored - accented).abs() < accented * 0.05,
+            "the fallback did not restore the held note's accent: \
+             {accented:.3} -> {soft:.3} -> {restored:.3}"
+        );
+    }
+
+    /// Accent rides the smoothed velocity and is folded into the smoothed
+    /// drive, so an accented note landing over a sounding one in `Legato`
+    /// slides. Any step would be a click, and a click is a discontinuity far
+    /// larger than the waveform's own sample-to-sample motion.
+    #[test]
+    fn an_accented_note_over_a_sounding_voice_does_not_step() {
+        let mut params = sine_patch();
+        params.accent = 1.0;
+        params.env_trigger = EnvTrigger::Legato;
+        params.filter_cutoff = 0.25;
+        params.filter_env_amount = 0.6;
+        params.filter_sustain = 1.0;
+        params.drive = 0.5;
+
+        let frames = SR as usize / 2;
+        let landing = SR as usize / 4;
+        let mut synth = Ml1::new(params, SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on_at(0, 1, 45, 30));
+        events.push(note_on_at(landing as u32, 2, 45, 127));
+        synth.process(&ctx(frames), &mut bus, &events, None);
+        let rendered = &bus.l[..frames];
+
+        let biggest_step = |range: std::ops::Range<usize>| {
+            rendered[range]
+                .windows(2)
+                .map(|w| (w[1] - w[0]).abs())
+                .fold(0.0_f32, f32::max)
+        };
+        // The tail of the ramp is the loudest part of the note, so its own
+        // motion is the fair yardstick for the ramp itself.
+        let steady = biggest_step(frames - SR as usize / 20..frames);
+        let across = biggest_step(landing - 8..landing + 8);
+        assert!(
+            across <= steady * 1.5,
+            "the accent stepped rather than slid: {across:.4} against a steady {steady:.4}"
+        );
     }
 }

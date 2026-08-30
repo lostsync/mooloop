@@ -1,4 +1,4 @@
-In progress. 02, 03, 04 and 05 are in, restructured; 06-08 are not started.
+In progress. 02-06 are in, restructured; 07 and 08 are not started.
 
 ## The restructure, decided 2026-08-30
 
@@ -42,6 +42,24 @@ Consequences for the steps below:
   in its own module, because the poly synth needs the same thing for its mono
   mode. Note priority, env trigger, and glide mode at ids 25-27. Fallback on
   note-off is a pitch change and never a retrigger.
+- **04:** `PreDrive` sits between the mix and the filter, with RMS-matched
+  makeup gain rather than peak-matched — a saturated wave carries more energy
+  for the same peak, so peak matching let Drive add 4.2 dB. Its gain range is
+  4.0 against `apply_drive`'s 15, because `PreDrive` sees a raw mix near unity
+  while `apply_drive` is anchored at the -12 dBFS operating level; at 15 the
+  shaper squared everything and oscillator level stopped changing the tone.
+  The `Ladder` is four one-poles inside a `tanh` feedback loop.
+- **05, opened up by Adam:** as many filters as are useful, so the Model
+  switch has three — `Ladder`, `Acid`, `Clean`. 01's rule survives: it forbids
+  an LP/BP/HP *response-shape* menu, and all three of these are low-pass. Every
+  constant and the reason it is what it is are in the commit message for
+  `feat(ml1): three filter characters behind one Model switch`.
+- **06:** Accent, id 29, on the PERF page. Velocity is the carrier, as the
+  plan requires — no new event type. Accent rides the *same smoothed
+  `velocity_amp` the VCA uses*, which is what gives it per-note capture, the
+  priority fallback's winning-note velocity, and the legato slide without any
+  new state at all. It scales `filter_env_amount` by up to 4/3 and adds up to
+  0.35 to the smoothed drive.
 - **The face:** `ml1-device.slint`, three pages, the third being PERF.
   `OscillatorDeviceStrip` was extracted to `device-oscillator.slint` — the
   part of 07 that could not wait, since a third face would have been a third
@@ -49,10 +67,23 @@ Consequences for the steps below:
 
 ## What is not
 
-04-08, unchanged as written, except that they now apply to `Ml1` rather
-than to `MonoSynth`. In particular **drive is still post-filter**: moving it
-ahead of the filter without the makeup-gain scheme 04 designs would change
-loudness rather than character, so the two land together.
+07 and 08, unchanged as written, except that they now apply to `Ml1` rather
+than to `MonoSynth`. 07's remaining work is the duplication `Ml1` inherited
+from the v1 synths: `note_to_freq`, `MIN_GLIDE_S`, `STOP_RELEASE_S` and
+`PARAM_SMOOTH_S` are still copied across `monosynth.rs`, `polysynth.rs` and
+`ml1.rs`. 08 is the six factory patches and the listening pass, which is
+expected to re-voice several of the constants above — `ACCENT_ENV_SCALE` and
+`ACCENT_DRIVE_PUSH` included, since both were chosen against measurements
+rather than against music.
+
+## Deviations from the plan as written
+
+- **06 asks for a `Theme.warning` fill on the Accent knob**, "matching Drive
+  and the other character controls". No knob in the project uses that fill —
+  Drive included — so it would have made Accent the only warning-coloured
+  control rather than one of a set. Left on the default fill. If the character
+  grouping is wanted, it should land as a pass over every character control at
+  once.
 
 Read 01 first regardless of which step you pick up.
 

@@ -182,6 +182,11 @@ pub struct Ml1Params {
     pub priority: NotePriority,
     /// Which filter the voice runs.
     pub filter_model: FilterModel,
+    /// How hard velocity pushes the filter envelope and the pre-filter drive,
+    /// in `[0, 1]`. At `0` velocity only scales amplitude, exactly as before.
+    /// This is a depth control on velocity, not a switch: a soft note in an
+    /// accented patch is still a soft note.
+    pub accent: f32,
 }
 
 impl Default for Ml1Params {
@@ -233,6 +238,7 @@ impl Default for Ml1Params {
             env_trigger: EnvTrigger::Retrig,
             priority: NotePriority::Last,
             filter_model: FilterModel::Ladder,
+            accent: 0.0,
         }
     }
 }

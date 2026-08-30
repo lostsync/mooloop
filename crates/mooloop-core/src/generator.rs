@@ -195,6 +195,7 @@ pub const SYNTH_PARAM_GLIDE_MODE: u32 = 25;
 pub const SYNTH_PARAM_ENV_TRIGGER: u32 = 26;
 pub const SYNTH_PARAM_NOTE_PRIORITY: u32 = 27;
 pub const SYNTH_PARAM_FILTER_MODEL: u32 = 28;
+pub const SYNTH_PARAM_ACCENT: u32 = 29;
 
 const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
     [
@@ -332,7 +333,7 @@ const fn concat_core_lfo(
 
 /// The ML-1's second envelope, its keytracking, and the three
 /// switches that make its note behaviour a performance rather than a lookup.
-const ML1_VOICE_DESCRIPTORS: [ParamDescriptor; 9] = [
+const ML1_VOICE_DESCRIPTORS: [ParamDescriptor; 10] = [
     seconds(SYNTH_PARAM_FILTER_ATTACK, "F attack", 0.005),
     seconds(SYNTH_PARAM_FILTER_DECAY, "F decay", 0.2),
     unit(SYNTH_PARAM_FILTER_SUSTAIN, "F sustain", 0.7),
@@ -342,6 +343,7 @@ const ML1_VOICE_DESCRIPTORS: [ParamDescriptor; 9] = [
     stepped(SYNTH_PARAM_ENV_TRIGGER, "Env trig", 2, 0.0),
     stepped(SYNTH_PARAM_NOTE_PRIORITY, "Priority", 3, 0.0),
     stepped(SYNTH_PARAM_FILTER_MODEL, "Model", 3, 0.0),
+    unit(SYNTH_PARAM_ACCENT, "Accent", 0.0),
 ];
 
 /// `SHARED_SYNTH_DESCRIPTORS` then three oscillator blocks. Written out rather
@@ -357,7 +359,7 @@ static MONO_DESCRIPTORS: [ParamDescriptor; 30] = concat_synth(
 /// Built from the shared core rather than from `MONO_DESCRIPTORS`: the v2
 /// mono synth is a different instrument, and a table that inherits from
 /// another one quietly becomes a lie the moment the two diverge.
-static ML1_DESCRIPTORS: [ParamDescriptor; 33] = concat_ml1(
+static ML1_DESCRIPTORS: [ParamDescriptor; 34] = concat_ml1(
     SYNTH_CORE_DESCRIPTORS,
     ML1_VOICE_DESCRIPTORS,
     osc_descriptors(0, "Osc 1 wave"),
@@ -367,27 +369,27 @@ static ML1_DESCRIPTORS: [ParamDescriptor; 33] = concat_ml1(
 
 const fn concat_ml1(
     core: [ParamDescriptor; 9],
-    voice: [ParamDescriptor; 9],
+    voice: [ParamDescriptor; 10],
     a: [ParamDescriptor; 5],
     b: [ParamDescriptor; 5],
     c: [ParamDescriptor; 5],
-) -> [ParamDescriptor; 33] {
-    let mut out = [core[0]; 33];
+) -> [ParamDescriptor; 34] {
+    let mut out = [core[0]; 34];
     let mut i = 0;
     while i < 9 {
         out[i] = core[i];
         i += 1;
     }
     let mut v = 0;
-    while v < 9 {
+    while v < 10 {
         out[9 + v] = voice[v];
         v += 1;
     }
     let mut j = 0;
     while j < 5 {
-        out[18 + j] = a[j];
-        out[23 + j] = b[j];
-        out[28 + j] = c[j];
+        out[19 + j] = a[j];
+        out[24 + j] = b[j];
+        out[29 + j] = c[j];
         j += 1;
     }
     out
@@ -635,6 +637,7 @@ impl GeneratorParams {
                     SYNTH_PARAM_ENV_TRIGGER => p.env_trigger.to_index() as f32,
                     SYNTH_PARAM_NOTE_PRIORITY => p.priority.to_index() as f32,
                     SYNTH_PARAM_FILTER_MODEL => p.filter_model.to_index() as f32,
+                    SYNTH_PARAM_ACCENT => p.accent,
                     _ => return None,
                 })
             }
@@ -752,6 +755,7 @@ impl GeneratorParams {
                         SYNTH_PARAM_FILTER_MODEL => {
                             p.filter_model = FilterModel::from_index(value.round() as i32)
                         }
+                        SYNTH_PARAM_ACCENT => p.accent = value,
                         _ => return None,
                     }
                 }

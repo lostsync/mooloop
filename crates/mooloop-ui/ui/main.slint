@@ -916,6 +916,7 @@ export component MainWindow inherits Window {
     in-out property <float> ml1-filter-sustain: 0.7;
     in-out property <float> ml1-filter-release: 0.15;
     in-out property <float> ml1-filter-keytrack;
+    in-out property <float> ml1-accent;
     in-out property <int> ml1-filter-model;
     in-out property <int> ml1-glide-mode: 1;
     in-out property <int> ml1-env-trigger;
@@ -926,6 +927,7 @@ export component MainWindow inherits Window {
     callback ml1-glide-changed(float); callback ml1-attack-changed(float); callback ml1-decay-changed(float); callback ml1-sustain-changed(float); callback ml1-release-changed(float);
     callback ml1-filter-cutoff-changed(float); callback ml1-filter-resonance-changed(float); callback ml1-filter-env-changed(float); callback ml1-drive-changed(float);
     callback ml1-filter-attack-changed(float); callback ml1-filter-decay-changed(float); callback ml1-filter-sustain-changed(float); callback ml1-filter-release-changed(float); callback ml1-filter-keytrack-changed(float);
+    callback ml1-accent-changed(float);
     callback ml1-glide-mode-changed(int); callback ml1-env-trigger-changed(int); callback ml1-priority-changed(int);
     callback ml1-filter-model-changed(int);
     in-out property <int> ml1-device-page;
@@ -2601,6 +2603,7 @@ export component MainWindow inherits Window {
                                                     glide <=> root.ml1-glide; attack <=> root.ml1-attack; decay <=> root.ml1-decay; sustain <=> root.ml1-sustain; release <=> root.ml1-release;
                                                     filter-cutoff <=> root.ml1-filter-cutoff; filter-resonance <=> root.ml1-filter-resonance; filter-env <=> root.ml1-filter-env; drive <=> root.ml1-drive;
                                                     filter-attack <=> root.ml1-filter-attack; filter-decay <=> root.ml1-filter-decay; filter-sustain <=> root.ml1-filter-sustain; filter-release <=> root.ml1-filter-release; filter-keytrack <=> root.ml1-filter-keytrack;
+                                                    accent <=> root.ml1-accent;
                                                     glide-mode <=> root.ml1-glide-mode; env-trigger <=> root.ml1-env-trigger; priority <=> root.ml1-priority;
                                                     filter-model <=> root.ml1-filter-model;
                                                     modulation-armed: root.modulation-armed-slot >= 0;
@@ -2614,6 +2617,7 @@ export component MainWindow inherits Window {
                                                     glide-changed(v) => { root.ml1-glide-changed(v); } attack-changed(v) => { root.ml1-attack-changed(v); } decay-changed(v) => { root.ml1-decay-changed(v); } sustain-changed(v) => { root.ml1-sustain-changed(v); } release-changed(v) => { root.ml1-release-changed(v); }
                                                     filter-cutoff-changed(v) => { root.ml1-filter-cutoff-changed(v); } filter-resonance-changed(v) => { root.ml1-filter-resonance-changed(v); } filter-env-changed(v) => { root.ml1-filter-env-changed(v); } drive-changed(v) => { root.ml1-drive-changed(v); }
                                                     filter-attack-changed(v) => { root.ml1-filter-attack-changed(v); } filter-decay-changed(v) => { root.ml1-filter-decay-changed(v); } filter-sustain-changed(v) => { root.ml1-filter-sustain-changed(v); } filter-release-changed(v) => { root.ml1-filter-release-changed(v); } filter-keytrack-changed(v) => { root.ml1-filter-keytrack-changed(v); }
+                                                    accent-changed(v) => { root.ml1-accent-changed(v); }
                                                     glide-mode-changed(v) => { root.ml1-glide-mode-changed(v); } env-trigger-changed(v) => { root.ml1-env-trigger-changed(v); } priority-changed(v) => { root.ml1-priority-changed(v); }
                                                     filter-model-changed(v) => { root.ml1-filter-model-changed(v); }
                                                     modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }

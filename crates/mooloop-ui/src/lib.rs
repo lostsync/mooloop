@@ -3292,6 +3292,7 @@ impl UiState {
         window.set_ml1_filter_sustain(ml1.filter_sustain);
         window.set_ml1_filter_release(ml1.filter_release);
         window.set_ml1_filter_keytrack(ml1.filter_keytrack);
+        window.set_ml1_accent(ml1.accent);
         window.set_ml1_glide_mode(ml1.glide_mode.to_index());
         window.set_ml1_env_trigger(ml1.env_trigger.to_index());
         window.set_ml1_priority(ml1.priority.to_index());
@@ -8001,6 +8002,7 @@ impl AppUi {
         wire_ml1_param!(on_ml1_filter_sustain_changed, filter_sustain);
         wire_ml1_param!(on_ml1_filter_release_changed, filter_release);
         wire_ml1_param!(on_ml1_filter_keytrack_changed, filter_keytrack);
+        wire_ml1_param!(on_ml1_accent_changed, accent);
 
         /// The three performance switches arrive as selector indices rather
         /// than floats, so they take the same shape with a conversion.
