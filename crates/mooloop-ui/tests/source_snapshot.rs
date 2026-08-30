@@ -176,6 +176,21 @@ fn render_ml1_source_editor() {
     );
     write_snapshot(&plucked, "MOOLOOP_ML1_PLUCK_SOURCE_SNAPSHOT");
 
+    // Each model draws its own slope, so switching has to redraw the curve.
+    for model in [1, 2] {
+        ui.set_ml1_filter_model(model);
+        let switched = ui.window().take_snapshot().unwrap();
+        assert_ne!(
+            plucked.as_bytes(),
+            switched.as_bytes(),
+            "filter model {model} drew the same response curve as the ladder"
+        );
+        if model == 1 {
+            write_snapshot(&switched, "MOOLOOP_ML1_ACID_SOURCE_SNAPSHOT");
+        }
+    }
+    ui.set_ml1_filter_model(0);
+
     ui.set_ml1_device_page(2);
     let perf = ui.window().take_snapshot().unwrap();
     assert_ne!(plucked.as_bytes(), perf.as_bytes());

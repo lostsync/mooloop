@@ -103,6 +103,42 @@ impl GlideMode {
     }
 }
 
+/// Which filter the voice runs. A character choice, not a response-shape
+/// menu: all three are low-pass, and they differ in slope, in where the
+/// nonlinearity sits, and in what resonance does to the low end.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FilterModel {
+    /// Four-pole transistor-ladder-flavoured: heavy, symmetric saturation,
+    /// bass held up under resonance.
+    #[default]
+    Ladder,
+    /// Three-pole diode-ladder-flavoured: forward and nasal, asymmetric
+    /// saturation, low end squeezed out as resonance rises.
+    Acid,
+    /// The shared linear state-variable filter: two poles, no saturation, no
+    /// character of its own. The one to reach for when the filter should get
+    /// out of the way.
+    Clean,
+}
+
+impl FilterModel {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Acid,
+            2 => Self::Clean,
+            _ => Self::Ladder,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Ladder => 0,
+            Self::Acid => 1,
+            Self::Clean => 2,
+        }
+    }
+}
+
 /// All ML-1 parameters, in the units the DSP and UI share.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -144,6 +180,8 @@ pub struct Ml1Params {
     pub env_trigger: EnvTrigger,
     /// Which held note wins when several are down.
     pub priority: NotePriority,
+    /// Which filter the voice runs.
+    pub filter_model: FilterModel,
 }
 
 impl Default for Ml1Params {
@@ -194,6 +232,7 @@ impl Default for Ml1Params {
             glide_mode: GlideMode::Legato,
             env_trigger: EnvTrigger::Retrig,
             priority: NotePriority::Last,
+            filter_model: FilterModel::Ladder,
         }
     }
 }

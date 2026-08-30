@@ -29,7 +29,7 @@ pub use automation::{
 pub use bridge::{EngineCommand, EngineEvent};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
-pub use ml1::{EnvTrigger, GlideMode, Ml1Params, NotePriority};
+pub use ml1::{EnvTrigger, FilterModel, GlideMode, Ml1Params, NotePriority};
 pub use modulation::{
     strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModPolarity, ModRack,
     ModRoute, ModTimeDivision, ModulatorKind, ModulatorParams, ParamAddr, ParamOwner,

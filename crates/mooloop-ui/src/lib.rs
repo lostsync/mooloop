@@ -21,8 +21,8 @@ use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, strip_descriptor, would_create_cycle,
     AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup,
     ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectParams,
-    EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, GeneratorParams,
-    GlideMode, HatCharacter,
+    EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
+    GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
     ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModTimeDivision,
     ModulatorParams, MonoSynthParams, MonoSynthState, Ml1Params, Ml1State, NoteEvent,
@@ -3295,6 +3295,7 @@ impl UiState {
         window.set_ml1_glide_mode(ml1.glide_mode.to_index());
         window.set_ml1_env_trigger(ml1.env_trigger.to_index());
         window.set_ml1_priority(ml1.priority.to_index());
+        window.set_ml1_filter_model(ml1.filter_model.to_index());
         let poly = ch.poly_params;
         window.set_poly_osc1_wave(osc_wave_to_int(poly.osc[0].wave));
         window.set_poly_osc1_semitones(poly.osc[0].semitones);
@@ -8030,6 +8031,11 @@ impl AppUi {
             on_ml1_priority_changed,
             priority,
             NotePriority::from_index
+        );
+        wire_ml1_enum!(
+            on_ml1_filter_model_changed,
+            filter_model,
+            FilterModel::from_index
         );
 
         macro_rules! wire_ml1_osc_float {

@@ -92,8 +92,10 @@ export component FilterResponseDisplay inherits Rectangle {
     in property <int> mode;
     in property <float> cutoff;
     in property <float> resonance;
-    // 0 = one 12 dB/oct SVF stage, 1 = two cascaded stages.
-    in property <int> slope;
+    // Extra cascaded 12 dB/oct stages beyond the first: 0 = 12 dB/oct, 1 = 24.
+    // Fractional values are meaningful, for filters that land between the two
+    // -- a three-pole ladder is 0.5.
+    in property <float> slope;
     in property <float> env-amount;
     callback point-dragged(float, float);
     callback point-scrolled(float);
@@ -111,7 +113,7 @@ export component FilterResponseDisplay inherits Rectangle {
         let damping = clamp(2 - clamp(root.resonance, 0, 1) * 1.9, 0.1, 2);
         let denominator = max(0.0001, pow(pow(1 - ratio * ratio, 2) + pow(damping * ratio, 2), 0.5));
         let stage = root.mode == 0 ? 1 / denominator : root.mode == 1 ? ratio / denominator : ratio * ratio / denominator;
-        return root.slope >= 1 ? stage * stage : stage;
+        return root.slope > 0 ? pow(stage, 1 + root.slope) : stage;
     }
 
     pure function response(index: int, normalized-cutoff: float) -> float {

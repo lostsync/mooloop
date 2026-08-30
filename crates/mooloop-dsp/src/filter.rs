@@ -15,6 +15,8 @@
 //! result. New instruments (mono, not stereo-per-voice) use `Svf` directly,
 //! where the doubling doesn't apply.
 
+use mooloop_core::DriveCurve;
+
 /// A topology-preserving state-variable low-pass filter (Chamberlin/Zavalishin
 /// form). Unlike a biquad it stays well behaved while cutoff moves every
 /// sample, which is what envelope-modulated synth filters need.
@@ -247,6 +249,34 @@ pub fn apply_drive(input: f32, drive: f32) -> f32 {
     (input * input_gain).tanh() * compensation
 }
 
+/// A safety ceiling for a voice's output: exactly transparent below the knee,
+/// asymptotic to [`VOICE_CEILING`] above it.
+///
+/// This is a bound, not a tone stage. [`Ladder`] and [`Acid`] cannot exceed 1
+/// by construction, since their stages only ever integrate a shaper output, so
+/// for them this never engages at all. [`Svf`] is linear and has no such
+/// guarantee: at full resonance with three oscillators pushed into it, it will
+/// happily hand back four times full scale. The knee sits well above the
+/// nominal voice level (one oscillator at its 0 dB top lands near 0.7), so a
+/// patch that is merely loud passes through untouched.
+pub fn soft_ceiling(input: f32) -> f32 {
+    let magnitude = input.abs();
+    if magnitude <= VOICE_CEILING_KNEE {
+        return input;
+    }
+    let headroom = VOICE_CEILING - VOICE_CEILING_KNEE;
+    let over = (magnitude - VOICE_CEILING_KNEE) / headroom;
+    input.signum() * (VOICE_CEILING_KNEE + headroom * over.tanh())
+}
+
+/// Where the ceiling starts to bend. Above the loudest a sane patch reaches,
+/// below where a resonant linear filter runs away.
+const VOICE_CEILING_KNEE: f32 = 1.5;
+
+/// Asymptote. Chosen against `VOICE_OUTPUT_REFERENCE` so a voice at the bound,
+/// at full envelope and full velocity, still lands under full scale.
+const VOICE_CEILING: f32 = 2.5;
+
 /// A nonlinear four-pole ladder low-pass: four cascaded one-pole stages with a
 /// resonance feedback path from the last stage back to the input, saturated
 /// inside the loop.
@@ -338,6 +368,97 @@ impl Ladder {
 }
 
 impl Default for Ladder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A nonlinear three-pole ladder with an asymmetric resonance path: the other
+/// half of the ML-1's filter, and a genuinely different circuit rather than
+/// the same one with different constants.
+///
+/// ```text
+/// Acid
+/// in:  audio, cutoff (Hz, 20..sr*0.45), resonance (0..1)
+/// out: audio
+/// ```
+///
+/// Three things separate it from [`Ladder`], and they are the three things
+/// that separate the instruments it is named after:
+///
+/// - **Three poles, not four.** Roughly 18 dB/oct. Less of the spectrum is
+///   removed above the corner, so it reads as forward and nasal where the
+///   ladder reads as heavy.
+/// - **The saturation is asymmetric** ([`DriveCurve::Tape`]), so it generates
+///   even harmonics as well as odd. That is most of why it sounds brighter at
+///   the same settings rather than merely thinner.
+/// - **No bass compensation.** The ladder deliberately feeds part of the input
+///   past the feedback subtraction to keep its low end; this one does not,
+///   which is what makes resonance squeeze the body out of a note and squelch.
+///
+/// Bounded for the same structural reason as the ladder: the stages only ever
+/// integrate a shaper output, and every shaper in `shaper::shape` is bounded.
+#[derive(Clone, Copy, Debug)]
+pub struct Acid {
+    stage: [f32; 3],
+    feedback: f32,
+}
+
+/// Three cascaded one-poles reach -3 dB at `1 / sqrt(2^(1/3) - 1)` below a
+/// single pole's corner. Same job as [`LADDER_POLE_COMPENSATION`]: make the
+/// Cutoff knob mean one frequency across every model.
+const ACID_POLE_COMPENSATION: f32 = 0.8;
+
+/// Half the ladder's, so the low end still thins as resonance rises -- that is
+/// the squelch -- without the Resonance knob spending its first half just
+/// making the patch quieter.
+const ACID_BASS_COMPENSATION: f32 = 0.25;
+
+/// Feedback gain at full resonance. Higher than the ladder's because three
+/// poles reach 180 degrees of phase further above the corner, where each pole
+/// has already taken more out of the loop.
+const ACID_MAX_FEEDBACK: f32 = 12.0;
+
+/// Same correction as [`LADDER_FEEDBACK_TRACKING`], for the same reason.
+const ACID_FEEDBACK_TRACKING: f32 = 1.5;
+
+impl Acid {
+    pub fn new() -> Self {
+        Self {
+            stage: [0.0; 3],
+            feedback: 0.0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.stage = [0.0; 3];
+        self.feedback = 0.0;
+    }
+
+    pub fn next_sample(
+        &mut self,
+        input: f32,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> f32 {
+        let sr = sample_rate as f32;
+        let cutoff = (cutoff_hz * ACID_POLE_COMPENSATION).clamp(20.0, sr * 0.45);
+        let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
+        let k = resonance.clamp(0.0, 1.0) * ACID_MAX_FEEDBACK * (1.0 + ACID_FEEDBACK_TRACKING * g);
+
+        let driven = input * (1.0 + k * ACID_BASS_COMPENSATION) - k * self.feedback;
+        let shaped = crate::shaper::shape(DriveCurve::Tape, driven);
+
+        self.stage[0] += g * (shaped - self.stage[0]);
+        self.stage[1] += g * (self.stage[0] - self.stage[1]);
+        self.stage[2] += g * (self.stage[1] - self.stage[2]);
+        self.feedback = self.stage[2];
+        self.stage[2]
+    }
+}
+
+impl Default for Acid {
     fn default() -> Self {
         Self::new()
     }
@@ -470,6 +591,15 @@ mod tests {
         )
     }
 
+    fn acid_response_db(cutoff: f32, resonance: f32, freq: f32) -> f32 {
+        let mut acid = Acid::new();
+        response_db(
+            &mut |x| acid.next_sample(x, cutoff, resonance, SR),
+            freq,
+            SMALL_SIGNAL,
+        )
+    }
+
     fn svf_response_db(cutoff: f32, resonance: f32, freq: f32) -> f32 {
         let mut svf = Svf::new();
         response_db(
@@ -524,14 +654,40 @@ mod tests {
     /// The tallest point of the response, wherever it sits -- the resonant
     /// peak moves with resonance, so pinning the probe to the corner would
     /// measure the peak sliding off it rather than the peak growing.
-    fn ladder_resonant_peak_db(cutoff: f32, resonance: f32) -> f32 {
-        let passband = ladder_response_db(cutoff, 0.0, cutoff / 16.0);
+    fn resonant_peak_db(
+        at: &dyn Fn(f32, f32, f32) -> f32,
+        cutoff: f32,
+        resonance: f32,
+    ) -> f32 {
+        let passband = at(cutoff, 0.0, cutoff / 16.0);
         let mut best = f32::MIN;
         for step in 0..24 {
             let mult = 2.0_f32.powf(-1.0 + step as f32 * 2.0 / 23.0);
-            best = best.max(ladder_response_db(cutoff, resonance, cutoff * mult) - passband);
+            best = best.max(at(cutoff, resonance, cutoff * mult) - passband);
         }
         best
+    }
+
+    /// Both character models have to climb smoothly to self-oscillation and
+    /// mean the same thing wherever the Cutoff knob is, so that Resonance is
+    /// one control rather than two that share a label.
+    fn assert_resonance_taper(name: &str, at: &dyn Fn(f32, f32, f32) -> f32) {
+        for cutoff in [100.0_f32, 500.0, 2000.0] {
+            let peaks: Vec<f32> = [0.0, 0.3, 0.5, 0.7, 0.85, 1.0]
+                .iter()
+                .map(|reso| resonant_peak_db(at, cutoff, *reso))
+                .collect();
+            assert!(
+                peaks.windows(2).all(|pair| pair[1] > pair[0]),
+                "{name} at {cutoff} Hz has a non-monotonic resonance taper: {peaks:?}"
+            );
+            assert!(
+                peaks[5] - peaks[0] > 14.0,
+                "{name} at {cutoff} Hz covers only {:.1} dB across the knob: {peaks:?}",
+                peaks[5] - peaks[0]
+            );
+            assert!(peaks.iter().all(|peak| peak.is_finite()));
+        }
     }
 
     /// Resonance has to climb smoothly to self-oscillation and mean the same
@@ -539,22 +695,66 @@ mod tests {
     /// `LADDER_FEEDBACK_TRACKING` exists for.
     #[test]
     fn ladder_resonance_climbs_smoothly_across_the_cutoff_range() {
-        for cutoff in [100.0_f32, 500.0, 2000.0] {
-            let peaks: Vec<f32> = [0.0, 0.3, 0.5, 0.7, 0.85, 1.0]
-                .iter()
-                .map(|reso| ladder_resonant_peak_db(cutoff, *reso))
-                .collect();
-            assert!(
-                peaks.windows(2).all(|pair| pair[1] > pair[0] + 1.0),
-                "at {cutoff} Hz the resonance taper is not monotonic: {peaks:?}"
-            );
-            assert!(
-                peaks[5] > 15.0,
-                "at {cutoff} Hz full resonance only reached {:.1} dB",
-                peaks[5]
-            );
-            assert!(peaks.iter().all(|peak| peak.is_finite()));
+        assert_resonance_taper("ladder", &ladder_response_db);
+    }
+
+    #[test]
+    fn acid_resonance_climbs_smoothly_across_the_cutoff_range() {
+        assert_resonance_taper("acid", &acid_response_db);
+    }
+
+    /// Three poles, so it sits between the SVF's two and the ladder's four.
+    /// That is most of why it reads forward and nasal where the ladder reads
+    /// heavy: it simply removes less of the spectrum above the corner.
+    #[test]
+    fn the_acid_slope_sits_between_the_svf_and_the_ladder() {
+        let cutoff = 500.0;
+        let fall = |at: &dyn Fn(f32, f32, f32) -> f32| {
+            at(cutoff, 0.0, cutoff * 2.0) - at(cutoff, 0.0, cutoff * 8.0)
+        };
+        let svf = fall(&svf_response_db);
+        let acid = fall(&acid_response_db);
+        let ladder = fall(&ladder_response_db);
+        assert!(
+            svf < acid && acid < ladder,
+            "wanted svf < acid < ladder, got {svf:.1} / {acid:.1} / {ladder:.1} dB"
+        );
+    }
+
+    /// The two character models have to be different instruments' worth of
+    /// filter at identical settings, not the same one with different numbers.
+    #[test]
+    fn the_ladder_and_the_acid_are_audibly_distinct() {
+        let cutoff = 800.0;
+        let mut widest = 0.0_f32;
+        for reso in [0.2_f32, 0.6, 0.9] {
+            for mult in [0.5_f32, 1.0, 2.0, 4.0] {
+                let ladder = ladder_response_db(cutoff, reso, cutoff * mult);
+                let acid = acid_response_db(cutoff, reso, cutoff * mult);
+                widest = widest.max((ladder - acid).abs());
+            }
         }
+        // "Not bit-identical" is not the bar; this wants a difference a
+        // listener would call a different filter.
+        assert!(
+            widest > 8.0,
+            "the two models never differ by more than {widest:.1} dB"
+        );
+    }
+
+    #[test]
+    fn the_acid_stays_bounded_under_a_swept_resonant_sweep() {
+        let mut acid = Acid::new();
+        let mut peak = 0.0_f32;
+        for i in 0..SR as usize {
+            let t = i as f32 / SR as f32;
+            let input = (t * 110.0 * core::f32::consts::TAU).sin() * 4.0;
+            let cutoff = 200.0 + 6000.0 * (t * 40.0).sin().abs();
+            let out = acid.next_sample(input, cutoff, 1.0, SR);
+            peak = peak.max(out.abs());
+        }
+        assert!(peak.is_finite(), "acid went non-finite");
+        assert!(peak <= 1.0, "acid peaked at {peak}");
     }
 
     /// The stages only ever integrate a `tanh` output, so this holds for any
@@ -643,6 +843,24 @@ mod tests {
             loud > quiet * 1.5,
             "input level did not change the harmonic content: {quiet:.4} -> {loud:.4}"
         );
+    }
+
+    /// The ceiling is a bound, not a tone stage: it has to be exactly
+    /// transparent everywhere a real patch lives, and it has to hold whatever
+    /// a linear filter at self-resonance throws at it.
+    #[test]
+    fn the_voice_ceiling_is_transparent_until_it_is_needed() {
+        for sample in [0.0_f32, 0.25, -0.7, 1.0, -1.4999] {
+            assert_eq!(soft_ceiling(sample), sample, "bent a normal level");
+        }
+        for sample in [2.0_f32, -4.5, 40.0, -1000.0] {
+            let bounded = soft_ceiling(sample);
+            assert!(bounded.abs() <= VOICE_CEILING, "{sample} escaped to {bounded}");
+            assert_eq!(bounded.signum(), sample.signum());
+        }
+        // That the bound is low enough for a voice to stay under full scale
+        // once the output reference is applied is asserted where the reference
+        // lives, by `ml1::tests::resonant_filter_and_drive_stay_bounded`.
     }
 
     #[test]

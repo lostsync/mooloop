@@ -103,7 +103,8 @@ work session you can recall being part of, and don't stress over precision.
   with note priority and independent legato and glide-mode switches, and a
   face whose third page is PERF rather than MOD. Named it the ML-1 and gave it its
   filter: a nonlinear four-pole ladder with the saturation moved ahead of the
-  filter, so the oscillator mixer is a tone control.
+  filter, so the oscillator mixer is a tone control, then a three-pole
+  asymmetric one beside it and the clean SVF as a third character.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

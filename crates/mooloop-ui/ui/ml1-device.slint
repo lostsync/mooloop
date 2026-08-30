@@ -18,6 +18,7 @@ export component Ml1DeviceFace inherits Rectangle {
     in-out property <float> filter-cutoff; in-out property <float> filter-resonance; in-out property <float> filter-env; in-out property <float> drive;
     in-out property <float> filter-attack; in-out property <float> filter-decay; in-out property <float> filter-sustain; in-out property <float> filter-release; in-out property <float> filter-keytrack;
     in-out property <int> glide-mode; in-out property <int> env-trigger; in-out property <int> priority;
+    in-out property <int> filter-model;
     in property <bool> modulation-armed;
     // Indexed by descriptor id, mirroring `SYNTH_PARAM_*` in mooloop-core, so
     // every eligible control on this face routes through one path.
@@ -32,6 +33,7 @@ export component Ml1DeviceFace inherits Rectangle {
     callback filter-cutoff-changed(float); callback filter-resonance-changed(float); callback filter-env-changed(float); callback drive-changed(float);
     callback filter-attack-changed(float); callback filter-decay-changed(float); callback filter-sustain-changed(float); callback filter-release-changed(float); callback filter-keytrack-changed(float);
     callback glide-mode-changed(int); callback env-trigger-changed(int); callback priority-changed(int);
+    callback filter-model-changed(int);
     callback modulation-depth-changed(int, float);
     callback modulation-edit-started(int);
     callback modulation-edit-finished(int);
@@ -139,6 +141,13 @@ export component Ml1DeviceFace inherits Rectangle {
                         spacing: 4px;
                         Text { text: "FILTER"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
+                        SelectorBank {
+                            options: ["LADDER", "ACID", "CLEAN"];
+                            selected-index <=> root.filter-model;
+                            segment-width: 54px;
+                            tooltip: "Filter character";
+                            selected(i) => { root.filter-model-changed(i); }
+                        }
                     }
                     HorizontalLayout {
                         vertical-stretch: 1;
@@ -147,9 +156,9 @@ export component Ml1DeviceFace inherits Rectangle {
                         FilterResponseDisplay {
                             horizontal-stretch: 1;
                             mode: 0;
-                            // The ladder is four poles, so the drawn curve is
-                            // two cascaded stages rather than one.
-                            slope: 1;
+                            // Each model's real steepness: four poles for the
+                            // ladder, three for acid, two for clean.
+                            slope: root.filter-model == 0 ? 1.0 : root.filter-model == 1 ? 0.5 : 0.0;
                             cutoff: root.filter-cutoff;
                             resonance: root.filter-resonance;
                             env-amount: root.filter-env;

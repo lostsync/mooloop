@@ -18,23 +18,25 @@
 //!   independent legato and glide-mode switches, so note transitions are
 //!   something the player performs rather than something the synth decides.
 //!
-//! - a nonlinear four-pole [`Ladder`] with saturation *ahead* of it rather
-//!   than after it, so the oscillator mixer is a tone control: pushing more
-//!   level into the filter changes the character and not merely the gain.
+//! - three selectable filter characters — a four-pole [`Ladder`], a
+//!   three-pole [`Acid`], and the linear [`Svf`] — with saturation *ahead* of
+//!   the filter rather than after it, so the oscillator mixer is a tone
+//!   control: pushing more level into the filter changes the character and
+//!   not merely the gain.
 //!
-//! Still to come, and called out so the gaps read as sequencing rather than
-//! oversight: the Acid filter model beside the ladder, and Accent.
+//! Still to come, and called out so the gap reads as sequencing rather than
+//! oversight: Accent.
 
 use crate::bus::StereoBus;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
-use crate::filter::{Ladder, PreDrive};
+use crate::filter::{soft_ceiling, Acid, Ladder, PreDrive, Svf};
 use crate::heldnotes::{HeldNote, HeldNotes};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::Osc;
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
-use mooloop_core::{EnvTrigger, GlideMode, Ml1Params};
+use mooloop_core::{EnvTrigger, FilterModel, GlideMode, Ml1Params};
 
 /// Minimum glide time; at or below this, pitch changes are instant.
 const MIN_GLIDE_S: f32 = 1.0e-3;
@@ -59,6 +61,52 @@ fn note_to_freq(note: u8) -> f32 {
     440.0 * 2.0_f32.powf((f32::from(note.min(127)) - 69.0) / 12.0)
 }
 
+/// The three filter characters, and the switch between them.
+///
+/// Each model keeps its own state rather than sharing one array, because they
+/// are different filters with different orders and not one filter with a mode
+/// flag. Holding all three costs eleven floats, which is nothing next to
+/// making the switch a special case.
+struct VoiceFilter {
+    ladder: Ladder,
+    acid: Acid,
+    clean: Svf,
+}
+
+impl VoiceFilter {
+    fn new() -> Self {
+        Self {
+            ladder: Ladder::new(),
+            acid: Acid::new(),
+            clean: Svf::new(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.ladder.reset();
+        self.acid.reset();
+        self.clean.reset();
+    }
+
+    /// Dispatched per sample rather than per block. The model is constant
+    /// across a block, so the branch predicts perfectly, and hoisting it would
+    /// mean three copies of the render loop.
+    fn next_sample(
+        &mut self,
+        model: FilterModel,
+        input: f32,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> f32 {
+        match model {
+            FilterModel::Ladder => self.ladder.next_sample(input, cutoff_hz, resonance, sample_rate),
+            FilterModel::Acid => self.acid.next_sample(input, cutoff_hz, resonance, sample_rate),
+            FilterModel::Clean => self.clean.next_sample(input, cutoff_hz, resonance, sample_rate),
+        }
+    }
+}
+
 struct Ml1Voice {
     active: bool,
     event_id: u64,
@@ -74,7 +122,7 @@ struct Ml1Voice {
     /// the whole difference between a filter with a drive knob and a filter
     /// you play by pushing level into it.
     pre_drive: PreDrive,
-    filter: Ladder,
+    filter: VoiceFilter,
     /// Velocity gain, smoothed so that a retrigger at a different velocity
     /// slides rather than steps.
     velocity_amp: Smoothed,
@@ -95,7 +143,7 @@ impl Ml1Voice {
             current_freq: 0.0,
             target_freq: 0.0,
             pre_drive: PreDrive::new(),
-            filter: Ladder::new(),
+            filter: VoiceFilter::new(),
             velocity_amp: smoothed(0.0),
             osc_level: [smoothed(0.0), smoothed(0.0), smoothed(0.0)],
             cutoff: smoothed(1.0),
@@ -337,6 +385,7 @@ impl Ml1 {
         let env_amount = params.filter_env_amount.clamp(-1.0, 1.0);
         let resonance = params.filter_resonance.clamp(0.0, 1.0);
         let keytrack = params.filter_keytrack.clamp(0.0, 1.0);
+        let model = params.filter_model;
         let max_hz = sr as f32 * 0.45;
 
         for i in start..end {
@@ -399,11 +448,18 @@ impl Ml1 {
                 };
                 let octaves = voice.filter_env.level() * env_amount * 6.0 + keytrack_oct;
                 let cutoff_hz = (base_hz * octaves.exp2()).clamp(20.0, max_hz);
-                voice.filter.next_sample(driven, cutoff_hz, resonance, sr)
+                voice
+                    .filter
+                    .next_sample(model, driven, cutoff_hz, resonance, sr)
             };
 
-            let sample =
-                filtered * voice.amp_env.level() * velocity * VOICE_OUTPUT_REFERENCE;
+            // The ceiling is transparent for the two nonlinear models, which
+            // are bounded by construction; it is there for the linear one,
+            // which is not.
+            let sample = soft_ceiling(filtered)
+                * voice.amp_env.level()
+                * velocity
+                * VOICE_OUTPUT_REFERENCE;
             bus.l[i] += sample;
             bus.r[i] += sample;
         }
@@ -1023,21 +1079,101 @@ mod tests {
 
     #[test]
     fn resonant_filter_and_drive_stay_bounded() {
-        let mut params = saw_patch();
-        params.osc[1].level = 1.0;
-        params.osc[2].level = 1.0;
-        params.filter_cutoff = 0.2;
-        params.filter_resonance = 1.0;
-        params.filter_env_amount = 1.0;
-        params.filter_decay = 0.05;
-        params.filter_sustain = 0.0;
-        params.filter_keytrack = 1.0;
-        params.drive = 1.0;
+        for model in [FilterModel::Ladder, FilterModel::Acid, FilterModel::Clean] {
+            let mut params = saw_patch();
+            params.filter_model = model;
+            params.osc[1].level = 1.0;
+            params.osc[2].level = 1.0;
+            params.filter_cutoff = 0.2;
+            params.filter_resonance = 1.0;
+            params.filter_env_amount = 1.0;
+            params.filter_decay = 0.05;
+            params.filter_sustain = 0.0;
+            params.filter_keytrack = 1.0;
+            params.drive = 1.0;
 
-        let frames = SR as usize;
-        let rendered = render(params, 36, frames);
-        let peak = rendered.iter().fold(0.0_f32, |a, s| a.max(s.abs()));
-        assert!(peak.is_finite(), "output went non-finite");
-        assert!(peak <= 1.0, "peak {peak} exceeded full scale");
+            let frames = SR as usize;
+            let rendered = render(params, 36, frames);
+            let peak = rendered.iter().fold(0.0_f32, |a, s| a.max(s.abs()));
+            assert!(peak.is_finite(), "{model:?} went non-finite");
+            assert!(peak <= 1.0, "{model:?} peaked at {peak}");
+        }
+    }
+
+    /// Acid's whole use case is a sequenced line where the filter envelope is
+    /// doing the musical work, so at the same envelope amount its sweep has to
+    /// be the more pronounced one. If the two models swept alike, Acid would
+    /// not be earning its place on the switch.
+    #[test]
+    fn the_acid_sweeps_harder_than_the_ladder_at_the_same_settings() {
+        let sweep_depth = |model: FilterModel| {
+            let mut params = saw_patch();
+            params.filter_model = model;
+            params.sustain = 1.0;
+            params.filter_cutoff = 0.4;
+            params.filter_resonance = 0.6;
+            params.filter_env_amount = 0.5;
+            params.filter_attack = 0.001;
+            params.filter_decay = 0.1;
+            params.filter_sustain = 0.0;
+
+            let frames = (SR as f32 * 0.2) as usize;
+            let rendered = render(params, 45, frames);
+            let window = SR as usize / 200;
+            let early = brightness(&rendered[window..window * 2]);
+            let late = brightness(&rendered[frames - window * 4..frames]);
+            early / late
+        };
+
+        let ladder = sweep_depth(FilterModel::Ladder);
+        let acid = sweep_depth(FilterModel::Acid);
+        assert!(
+            acid > ladder * 1.1,
+            "acid swept {acid:.2}x against the ladder's {ladder:.2}x"
+        );
+    }
+
+    /// Largest sample-to-sample jump, the same measure the smoothing tests use.
+    fn max_step(samples: &[f32]) -> f32 {
+        samples
+            .windows(2)
+            .fold(0.0_f32, |worst, pair| worst.max((pair[1] - pair[0]).abs()))
+    }
+
+    /// Switching model on a sounding voice must not click. Each model keeps
+    /// its own state, so the incoming one starts from wherever it last left
+    /// off rather than from zero, and the parameter smoothing covers the rest.
+    #[test]
+    fn switching_filter_model_mid_note_does_not_step_the_output() {
+        let mut params = saw_patch();
+        params.sustain = 1.0;
+        params.filter_cutoff = 0.4;
+        params.filter_resonance = 0.5;
+
+        let mut synth = Ml1::new(params, SR);
+        let frames = 4096;
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 45));
+        synth.process(&ctx(frames), &mut bus, &events, None);
+        let settled = max_step(&bus.l[frames / 2..frames]);
+
+        for model in [FilterModel::Acid, FilterModel::Clean, FilterModel::Ladder] {
+            let mut bus = StereoBus::with_capacity(frames);
+            let mut events = EventList::empty();
+            events.push(TimedEvent {
+                offset: 0,
+                event: Event::ParamValue {
+                    id: mooloop_core::generator::SYNTH_PARAM_FILTER_MODEL,
+                    value: model.to_index() as f32,
+                },
+            });
+            synth.process(&ctx(frames), &mut bus, &events, None);
+            let stepped = max_step(&bus.l[..frames]);
+            assert!(
+                stepped < settled.max(0.01) * 3.0,
+                "switching to {model:?} stepped {stepped:.4} against a settled {settled:.4}"
+            );
+        }
     }
 }
