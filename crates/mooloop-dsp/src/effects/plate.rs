@@ -52,11 +52,11 @@ const FEEDBACK_MAX: f32 = 0.97;
 const DAMP_MIN_HZ: f32 = 1_000.0;
 const DAMP_MAX_HZ: f32 = 18_000.0;
 
-/// Width is the only thing smoothed sample-by-sample (it directly scales
-/// amplitude, so a block-boundary step would click); `size`/`decay_s`/
-/// `damping` changes apply immediately, same as the existing reverb not
-/// smoothing shape/decay changes either.
+/// Width is smoothed sample-by-sample because it directly scales amplitude.
+/// Size moves a delay read head, so it gets its own slightly slower glide
+/// rather than clearing the network or jumping to uncorrelated history.
 const WIDTH_SMOOTH_S: f32 = 0.02;
+const SIZE_GLIDE_S: f32 = 0.04;
 
 /// Input is mono-summed before the network (matches the convolution
 /// reverb's convention); this scales it back down before the 8-way parallel
@@ -88,47 +88,75 @@ fn scale_len(base: usize, sample_rate: u32, multiplier: f32) -> usize {
     ((base as f32 * multiplier * sample_rate as f32 / TUNING_SAMPLE_RATE).round() as usize).max(1)
 }
 
-/// One feedback comb: a delay tap with damped feedback. `buffer` is sized
-/// once for the largest `size` can ask for; `len` is the currently active
-/// span within it, so `size` changes never reallocate on the audio thread.
+/// A mono ring with a linearly interpolated read head. The writer always
+/// traverses the full preallocated capacity; moving a delay length therefore
+/// changes only where history is read, never the ownership or contents of the
+/// storage.
+struct Ring {
+    buffer: Vec<f32>,
+    write: usize,
+}
+
+impl Ring {
+    fn with_capacity(frames: usize) -> Self {
+        Self {
+            buffer: vec![0.0; frames.max(4)],
+            write: 0,
+        }
+    }
+
+    fn write(&mut self, value: f32) {
+        self.buffer[self.write] = value;
+        self.write += 1;
+        if self.write >= self.buffer.len() {
+            self.write = 0;
+        }
+    }
+
+    fn read(&self, delay: f32) -> f32 {
+        let capacity = self.buffer.len();
+        let delay = delay.clamp(1.0, capacity as f32 - 2.0);
+        let base = delay.floor();
+        let fraction = delay - base;
+        let index = (self.write + capacity - base as usize) % capacity;
+        let previous = if index == 0 { capacity - 1 } else { index - 1 };
+        self.buffer[index] * (1.0 - fraction) + self.buffer[previous] * fraction
+    }
+}
+
+/// One feedback comb: a delay tap with damped feedback. Its ring is sized
+/// once for the largest `size` can ask for; the active read length glides so
+/// a size event cannot clear a tail or do buffer-wide work in `process()`.
 struct Comb {
     base_len: usize,
-    buffer: Vec<f32>,
-    len: usize,
-    index: usize,
+    ring: Ring,
+    len: f32,
+    target_len: f32,
     feedback: f32,
     damp: OnePoleLp,
 }
 
 impl Comb {
     fn new(base_len: usize, sample_rate: u32) -> Self {
-        let capacity = scale_len(base_len, sample_rate, SIZE_MAX_MULTIPLIER);
+        let capacity = scale_len(base_len, sample_rate, SIZE_MAX_MULTIPLIER) + 2;
+        let len = scale_len(base_len, sample_rate, 1.0) as f32;
         Self {
             base_len,
-            buffer: vec![0.0; capacity],
-            len: capacity,
-            index: 0,
+            ring: Ring::with_capacity(capacity),
+            len,
+            target_len: len,
             feedback: 0.0,
             damp: OnePoleLp::new(),
         }
     }
 
-    /// Changing the effective length resets the tap: there is no clean way
-    /// to resize a ring's active span mid-stream without either a click or
-    /// an interpolated crossfade, and a room-size change is a rare, coarse
-    /// gesture — the existing convolution reverb produces the same kind of
-    /// hard discontinuity on any shape change, via a full async IR swap.
     fn set_size(&mut self, sample_rate: u32, size: f32) {
-        let len = scale_len(self.base_len, sample_rate, size_multiplier(size)).min(self.buffer.len());
-        if len != self.len {
-            self.buffer.fill(0.0);
-            self.index = 0;
-            self.len = len;
-        }
+        self.target_len = (scale_len(self.base_len, sample_rate, size_multiplier(size)) as f32)
+            .min(self.ring.buffer.len() as f32 - 2.0);
     }
 
     fn set_decay(&mut self, sample_rate: u32, decay_s: f32) {
-        let seconds = self.len as f32 / sample_rate.max(1) as f32;
+        let seconds = self.target_len / sample_rate.max(1) as f32;
         self.feedback = 10f32
             .powf(-3.0 * seconds / decay_s.max(0.01))
             .clamp(0.0, FEEDBACK_MAX);
@@ -140,14 +168,11 @@ impl Comb {
         self.damp.set_cutoff(hz, sample_rate);
     }
 
-    fn process(&mut self, input: f32) -> f32 {
-        let output = self.buffer[self.index];
+    fn process(&mut self, input: f32, size_glide: f32) -> f32 {
+        self.len += (self.target_len - self.len) * size_glide;
+        let output = self.ring.read(self.len);
         let damped = self.damp.next_sample(output);
-        self.buffer[self.index] = input + damped * self.feedback;
-        self.index += 1;
-        if self.index >= self.len {
-            self.index = 0;
-        }
+        self.ring.write(input + damped * self.feedback);
         output
     }
 }
@@ -158,39 +183,33 @@ impl Comb {
 /// a delay-line diffuser.
 struct SchroederAllpass {
     base_len: usize,
-    buffer: Vec<f32>,
-    len: usize,
-    index: usize,
+    ring: Ring,
+    len: f32,
+    target_len: f32,
 }
 
 impl SchroederAllpass {
     fn new(base_len: usize, sample_rate: u32) -> Self {
-        let capacity = scale_len(base_len, sample_rate, SIZE_MAX_MULTIPLIER);
+        let capacity = scale_len(base_len, sample_rate, SIZE_MAX_MULTIPLIER) + 2;
+        let len = scale_len(base_len, sample_rate, 1.0) as f32;
         Self {
             base_len,
-            buffer: vec![0.0; capacity],
-            len: capacity,
-            index: 0,
+            ring: Ring::with_capacity(capacity),
+            len,
+            target_len: len,
         }
     }
 
     fn set_size(&mut self, sample_rate: u32, size: f32) {
-        let len = scale_len(self.base_len, sample_rate, size_multiplier(size)).min(self.buffer.len());
-        if len != self.len {
-            self.buffer.fill(0.0);
-            self.index = 0;
-            self.len = len;
-        }
+        self.target_len = (scale_len(self.base_len, sample_rate, size_multiplier(size)) as f32)
+            .min(self.ring.buffer.len() as f32 - 2.0);
     }
 
-    fn process(&mut self, input: f32) -> f32 {
-        let buffered = self.buffer[self.index];
+    fn process(&mut self, input: f32, size_glide: f32) -> f32 {
+        self.len += (self.target_len - self.len) * size_glide;
+        let buffered = self.ring.read(self.len);
         let output = -input + buffered;
-        self.buffer[self.index] = input + buffered * ALLPASS_GAIN;
-        self.index += 1;
-        if self.index >= self.len {
-            self.index = 0;
-        }
+        self.ring.write(input + buffered * ALLPASS_GAIN);
         output
     }
 }
@@ -204,6 +223,7 @@ pub struct PlateEffect {
     allpass_r: [SchroederAllpass; NUM_ALLPASS],
     wet1: Smoothed,
     wet2: Smoothed,
+    size_glide: f32,
 }
 
 impl PlateEffect {
@@ -211,7 +231,8 @@ impl PlateEffect {
         let combs_l = std::array::from_fn(|i| Comb::new(COMB_TUNING_L[i], sample_rate));
         let combs_r =
             std::array::from_fn(|i| Comb::new(COMB_TUNING_L[i] + STEREO_SPREAD, sample_rate));
-        let allpass_l = std::array::from_fn(|i| SchroederAllpass::new(ALLPASS_TUNING_L[i], sample_rate));
+        let allpass_l =
+            std::array::from_fn(|i| SchroederAllpass::new(ALLPASS_TUNING_L[i], sample_rate));
         let allpass_r = std::array::from_fn(|i| {
             SchroederAllpass::new(ALLPASS_TUNING_L[i] + STEREO_SPREAD, sample_rate)
         });
@@ -225,6 +246,7 @@ impl PlateEffect {
             allpass_r,
             wet1: Smoothed::new(0.5 + width * 0.5, WIDTH_SMOOTH_S, sample_rate),
             wet2: Smoothed::new(0.5 - width * 0.5, WIDTH_SMOOTH_S, sample_rate),
+            size_glide: glide_coeff(SIZE_GLIDE_S, sample_rate),
         };
         effect.resize();
         effect.rebuild_damping();
@@ -288,18 +310,18 @@ impl PlateEffect {
 
             let mut wet_l = 0.0f32;
             for comb in self.combs_l.iter_mut() {
-                wet_l += comb.process(input);
+                wet_l += comb.process(input, self.size_glide);
             }
             let mut wet_r = 0.0f32;
             for comb in self.combs_r.iter_mut() {
-                wet_r += comb.process(input);
+                wet_r += comb.process(input, self.size_glide);
             }
 
             for allpass in self.allpass_l.iter_mut() {
-                wet_l = allpass.process(wet_l);
+                wet_l = allpass.process(wet_l, self.size_glide);
             }
             for allpass in self.allpass_r.iter_mut() {
-                wet_r = allpass.process(wet_r);
+                wet_r = allpass.process(wet_r, self.size_glide);
             }
 
             let wet1 = self.wet1.advance();
@@ -329,6 +351,7 @@ impl AudioNode for PlateEffect {
             self.rebuild_damping();
             self.wet1.set_time(WIDTH_SMOOTH_S, ctx.sample_rate);
             self.wet2.set_time(WIDTH_SMOOTH_S, ctx.sample_rate);
+            self.size_glide = glide_coeff(SIZE_GLIDE_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
         let mut pos = 0usize;
@@ -342,6 +365,11 @@ impl AudioNode for PlateEffect {
         }
         self.process_range(bus, pos, frames);
     }
+}
+
+fn glide_coeff(time_s: f32, sample_rate: u32) -> f32 {
+    let samples = (time_s.max(1.0e-5) * sample_rate.max(1) as f32).max(1.0);
+    1.0 - (-1.0 / samples).exp()
 }
 
 #[cfg(test)]
@@ -440,5 +468,85 @@ mod tests {
             assert!(sample.is_finite(), "output must never be NaN/Inf");
             assert!(sample.abs() < 20.0, "output should stay bounded: {sample}");
         }
+    }
+
+    #[test]
+    fn size_change_preserves_delay_history() {
+        let mut comb = Comb::new(COMB_TUNING_L[0], 48_000);
+        comb.set_size(48_000, 0.5);
+        comb.set_decay(48_000, 4.0);
+        comb.set_damping(48_000, 0.2);
+        for frame in 0..4_000 {
+            comb.process(if frame == 0 { 1.0 } else { 0.0 }, 1.0);
+        }
+
+        let history = comb.ring.buffer.clone();
+        let write = comb.ring.write;
+        comb.set_size(48_000, 1.0);
+
+        assert_eq!(
+            comb.ring.buffer, history,
+            "retuning must not clear the ring"
+        );
+        assert_eq!(
+            comb.ring.write, write,
+            "retuning must not reset the write head"
+        );
+    }
+
+    #[test]
+    fn sweeping_size_does_not_click_or_silence_the_tail() {
+        const BLOCK: usize = 256;
+        const TONE_HZ: f32 = 80.0;
+        let mut effect = PlateEffect::new(PlateParams::default(), 48_000);
+        let mut phase = 0.0f32;
+        let mut fill_tone = |bus: &mut StereoBus| {
+            for i in 0..BLOCK {
+                phase += TONE_HZ / 48_000.0;
+                if phase >= 1.0 {
+                    phase -= 1.0;
+                }
+                let value = (phase * core::f32::consts::TAU).sin();
+                bus.l[i] = value;
+                bus.r[i] = value;
+            }
+        };
+
+        for _ in 0..64 {
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            fill_tone(&mut bus);
+            effect.process(&context(BLOCK), &mut bus, &EventList::empty(), None);
+        }
+
+        let mut worst_step = 0.0f32;
+        let mut peak = 0.0f32;
+        let mut previous: Option<f32> = None;
+        for step in 0..64 {
+            let mut events = EventList::empty();
+            events.push(crate::event::TimedEvent {
+                offset: 0,
+                event: Event::ParamValue {
+                    id: PLATE_PARAM_SIZE,
+                    value: step as f32 / 63.0,
+                },
+            });
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            fill_tone(&mut bus);
+            effect.process(&context(BLOCK), &mut bus, &events, None);
+            for sample in &bus.l[..BLOCK] {
+                if let Some(previous) = previous {
+                    worst_step = worst_step.max((sample - previous).abs());
+                }
+                peak = peak.max(sample.abs());
+                previous = Some(*sample);
+            }
+        }
+
+        assert!(peak > 1e-4, "the tone should have excited the network");
+        assert!(
+            worst_step < peak * 0.1,
+            "a size sweep stepped the output by {worst_step}, {:.1}% of the peak",
+            100.0 * worst_step / peak,
+        );
     }
 }
