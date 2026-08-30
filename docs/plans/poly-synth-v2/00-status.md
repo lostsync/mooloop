@@ -1,12 +1,17 @@
 Not started.
 
-**Prerequisite: `docs/plans/mono-synth-v2/02-split-the-filter-envelope.md`.**
-That step is the shared v2 foundation — separate filter ADSR and filter
-keytracking on *both* devices, plus the serialization and descriptor-table
-work both plans depend on. It lands once, in the Mono plan, and is not
-repeated here. Nothing below can be done properly without it: Drift has no
-envelope times to vary, and the filter modes have no independent sweep to
-demonstrate.
+**The prerequisite changed.** This plan used to name
+`docs/plans/mono-synth-v2/02-split-the-filter-envelope.md` as shared
+foundation landing on both devices. It no longer is: per
+`docs/plans/mono-synth-v2/00-status.md`, Mono v2 is a new instrument with its
+own parameter struct, so 02 landed only there. Poly v2 needs its own
+equivalent — a separate filter ADSR and filter keytracking — and it is still a
+prerequisite for everything below, because Drift has no envelope times to vary
+and the filter modes have no independent sweep to demonstrate without it.
+
+Note also that the original poly synth is being *kept* as a third device and
+gaining a mono/poly toggle and a legato toggle; Poly v2 is a new instrument
+beside it, not a rewrite of it.
 
 Then work 01 → 07 in order. 01 is the contract every other step refers to and
 should be read first even when picking up a later step.
