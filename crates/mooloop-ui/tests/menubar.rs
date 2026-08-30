@@ -10,8 +10,7 @@
 //!   right window callback,
 //! - a disabled title (File while a document operation is busy) opens
 //!   nothing,
-//! - a disabled row (Undo has no command layer yet) swallows the click
-//!   without firing anything.
+//! - disabled rows swallow clicks without firing their callbacks.
 
 use mooloop_ui::MainWindow;
 use slint::platform::{PointerEventButton, WindowEvent};
@@ -102,16 +101,45 @@ fn disabled_rows_swallow_clicks() {
     let ui = harness();
 
     click(ui.window(), EDIT_X, TITLE_Y);
-    // "Undo" is the first row of the Edit menu. It has no command layer
-    // yet; the click must neither fire anything nor close the popup in a
-    // way that breaks the next selection.
+    // "Undo" is the first row of the Edit menu and starts unavailable; the
+    // click must neither fire anything nor destabilize the menu.
     click(ui.window(), 60.0, 52.0);
-    // "Copy" (fourth row, after Undo, Redo and a separator) is equally
-    // disabled; a real selection would need a callback that does not
-    // exist, so just verify the window survived and rows keep rendering
-    // by making a selection elsewhere.
+    // Verify the window survived and rows keep rendering by toggling the
+    // menu again.
     click(ui.window(), EDIT_X, TITLE_Y);
     assert_eq!(ui.get_editor_page(), 0);
+}
+
+#[test]
+fn pending_project_edits_disable_paste_until_installation_finishes() {
+    let ui = harness();
+    ui.set_channel_clipboard_available(true);
+    ui.set_project_edit_pending(true);
+    let pasted = Rc::new(Cell::new(false));
+    ui.on_edit_command_requested({
+        let pasted = pasted.clone();
+        move |kind, _| {
+            if kind == 4 {
+                pasted.set(true);
+            }
+        }
+    });
+
+    click(ui.window(), EDIT_X, TITLE_Y);
+    // Paste is the third channel row, after Undo, Redo, and the separator.
+    click(ui.window(), 60.0, 150.0);
+    assert!(
+        !pasted.get(),
+        "paste must stay inert while a project swap is pending"
+    );
+
+    ui.set_project_edit_pending(false);
+    click(ui.window(), EDIT_X, TITLE_Y);
+    click(ui.window(), 60.0, 150.0);
+    assert!(
+        pasted.get(),
+        "paste should become available once installation finishes"
+    );
 }
 
 #[test]

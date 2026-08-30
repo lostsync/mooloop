@@ -672,16 +672,29 @@ fn snapshot_channel_clipboard(
     window: &MainWindow,
     index: usize,
 ) -> Option<ChannelClipboard> {
-    let project = state.project_snapshot(window.get_bpm(), window.get_swing_percent());
+    let snapshot = project_snapshot(state, window);
     Some(ChannelClipboard {
-        channel: project.channels.get(index)?.clone(),
-        sample: state.sample_snapshots().get(index)?.clone(),
+        channel: snapshot.project.channels.get(index)?.clone(),
+        sample: snapshot.samples.get(index)?.clone(),
     })
 }
 
+/// Keep every channel's pattern-indexed banks parallel to the project's
+/// pattern list. A clipboard can outlive pattern edits, and old projects may
+/// legitimately arrive without the automation banks introduced later.
+fn normalize_project_pattern_banks(project: &mut Project) {
+    let pattern_count = project.pattern_lengths.len();
+    for channel in &mut project.channels {
+        channel.notes.resize_with(pattern_count, Vec::new);
+        channel.automation.resize_with(pattern_count, Vec::new);
+    }
+}
+
 fn project_snapshot(state: &UiState, window: &MainWindow) -> ProjectSnapshot {
+    let mut project = state.project_snapshot(window.get_bpm(), window.get_swing_percent());
+    normalize_project_pattern_banks(&mut project);
     ProjectSnapshot {
-        project: state.project_snapshot(window.get_bpm(), window.get_swing_percent()),
+        project,
         samples: state.sample_snapshots(),
     }
 }
@@ -732,6 +745,7 @@ fn sync_command_availability(window: &MainWindow, commands: &CommandState) {
     window.set_can_undo(!commands.project_edit_pending && commands.history.can_undo());
     window.set_can_redo(!commands.project_edit_pending && commands.history.can_redo());
     window.set_channel_clipboard_available(commands.channel_clipboard.is_some());
+    window.set_project_edit_pending(commands.project_edit_pending);
 }
 
 /// `SegmentedMeter` only changes pixels when its lit-segment count changes.
@@ -779,6 +793,12 @@ fn queue_channel_insert(
         return false;
     }
     let mut channel = clipboard.channel;
+    channel
+        .notes
+        .resize_with(project.pattern_lengths.len(), Vec::new);
+    channel
+        .automation
+        .resize_with(project.pattern_lengths.len(), Vec::new);
     channel.setup.channel.name = copied_channel_name(&project, &channel.setup.channel.name);
     let index = after + 1;
     project.channels.insert(index, channel);
@@ -836,6 +856,8 @@ fn queue_pattern_clone(
     for channel in &mut project.channels {
         let notes = channel.notes[index].clone();
         channel.notes.insert(index + 1, notes);
+        let automation = channel.automation[index].clone();
+        channel.automation.insert(index + 1, automation);
     }
     for placement in &mut project.playlist {
         if placement.pattern as usize > index {
@@ -869,6 +891,7 @@ fn queue_pattern_remove(
     project.pattern_lengths.remove(index);
     for channel in &mut project.channels {
         channel.notes.remove(index);
+        channel.automation.remove(index);
     }
     project
         .playlist
@@ -882,9 +905,9 @@ fn queue_pattern_remove(
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
-/// Empties pattern `index`'s notes on every channel. The pattern itself,
-/// its length, and any playlist placements referencing it are untouched --
-/// it still exists and still plays, just silently.
+/// Empties pattern `index`'s notes and automation on every channel. The
+/// pattern itself, its length, and any playlist placements referencing it are
+/// untouched -- it still exists and still plays, just silently.
 fn queue_pattern_clear(
     tx: &ProjectEditSender,
     state: &Rc<RefCell<UiState>>,
@@ -903,6 +926,7 @@ fn queue_pattern_clear(
     }
     for channel in &mut project.channels {
         channel.notes[index].clear();
+        channel.automation[index].clear();
     }
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
@@ -2247,6 +2271,7 @@ impl UiState {
 
     fn refresh_selected_note_controls(&self, window: &MainWindow) {
         window.set_has_selected_note(false);
+        window.set_has_note_selection(!self.selected_note_ids.is_empty());
         // The precision editor shows one note's fields; once the selection
         // is a group (Shift-click, Select All) there is no single note left
         // to show them for.
@@ -4605,8 +4630,12 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_add_pattern_clicked(move || {
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
                 let mut st = st.borrow_mut();
                 if st.pattern_lengths.len() >= MAX_PATTERNS {
                     return;
@@ -5955,8 +5984,12 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let reset_tx = sample_reset_tx.clone();
             let st = state.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_add_channel_clicked(move |value| {
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
                 let source = device_kind_from_int(value);
                 let mut st = st.borrow_mut();
                 if st.channels.len() >= MAX_CHANNELS {
@@ -6001,12 +6034,19 @@ impl AppUi {
         }
         {
             let st = state.clone();
+            let commands = command_state.clone();
             let tx = project_edit_tx.clone();
             let weak = window.as_weak();
             window.on_remove_channel_clicked(move || {
                 let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
                 let selected = st.borrow().selected;
-                queue_channel_delete(&tx, &st, &window, selected, "Channel deleted");
+                if queue_channel_delete(&tx, &st, &window, selected, "Channel deleted") {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
             });
         }
         // All channel-edit surfaces arrive here.  The menu bar, Ctrl keys,
@@ -9595,6 +9635,8 @@ fn install_project_in_ui(
     project: &Project,
     samples: &[Option<Arc<SampleData>>],
 ) -> bool {
+    let mut project = project.clone();
+    normalize_project_pattern_banks(&mut project);
     // Queue the complete state first. If the bounded realtime queue is full,
     // leave both the sample slots and visible project untouched.
     if !handle.install_project(Arc::new(project.clone())) {
@@ -9623,7 +9665,7 @@ fn install_project_in_ui(
             handle.clear_sample(index);
         }
     }
-    state.borrow_mut().replace_project(project, samples, window);
+    state.borrow_mut().replace_project(&project, samples, window);
     sync_effect_spectrum_subscriptions(&state.borrow(), handle);
     window.set_playing(false);
     window.set_playlist_position_ticks(0);
@@ -10402,6 +10444,22 @@ mod tests {
         first_copy.setup.channel.name = "Kick copy".into();
         project.channels.push(first_copy);
         assert_eq!(copied_channel_name(&project, "Kick"), "Kick copy 2");
+    }
+
+    #[test]
+    fn project_pattern_banks_are_normalized_for_stale_clipboard_channels() {
+        let mut project = Project::default();
+        project.pattern_lengths = vec![16, 32, 8];
+        project.channels[0].notes = vec![vec![NoteEvent::new(1, 0, 6, 60, 100)]];
+        project.channels[0].automation = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+
+        normalize_project_pattern_banks(&mut project);
+
+        assert_eq!(project.channels[0].notes.len(), 3);
+        assert_eq!(project.channels[0].automation.len(), 3);
+        assert_eq!(project.channels[0].notes[0].len(), 1);
+        assert!(project.channels[0].notes[1].is_empty());
+        assert!(project.channels[0].notes[2].is_empty());
     }
 
     #[test]

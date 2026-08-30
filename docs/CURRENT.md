@@ -272,8 +272,8 @@ boundary.
   sampler presets may carry a referenced or embedded audio file while synth
   presets contain only inspectable parameter state.
 - Missing samples are recoverable by loading a replacement audio file, but
-  there is no dedicated path-search/relink dialog, undo, autosave, or crash
-  recovery yet.
+  there is no dedicated path-search/relink dialog, autosave, or crash recovery
+  yet.
 
 ### Mixing, Routing, And Effects
 
@@ -414,8 +414,10 @@ boundary.
 - The application is usable but still has interaction and responsive-layout
   edge cases.
 - The lower parameter selector only implements Velocity.
-- There is no canonical command/shortcut layer, selection model, undo stack,
-  or project-level navigation.
+- A canonical action registry drives the menu bar and rebindable shortcuts.
+  Note multi-selection supports Select All and bulk deletion; channel,
+  pattern, note, and modulation edits feed a project-snapshot undo/redo stack.
+  Project-level navigation remains limited.
 
 ## Architecture Risks To Resolve Early
 
