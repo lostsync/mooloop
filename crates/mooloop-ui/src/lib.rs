@@ -3390,6 +3390,14 @@ impl AppUi {
     pub fn new(mut handle: EngineHandle) -> Result<Self, slint::PlatformError> {
         let window = MainWindow::new()?;
 
+        // The shipped patches become ordinary user presets the first time
+        // the app runs, and are not touched again. A failure here is not
+        // worth refusing to start over: the bank is content, not
+        // configuration, and the browser simply shows one fewer category.
+        if let Err(error) = mooloop_project::seed_ml1_bank(&settings::channel_presets_dir()) {
+            eprintln!("could not write the ML-1 factory bank: {error}");
+        }
+
         // --- Transport initial state ---
         window.set_bpm(INITIAL_BPM);
         window.set_swing_percent(DEFAULT_SWING_PERCENT.into());
@@ -8692,6 +8700,15 @@ impl AppUi {
                                     let mut project = current;
                                     let selected = project.selected_channel as usize;
                                     project.channels[selected].setup = *setup;
+                                    // A saved rack still names the channel it
+                                    // was authored on. Point it at this one,
+                                    // or a preset saved from channel 3 would
+                                    // modulate channel 3 from wherever it
+                                    // landed.
+                                    mooloop_project::rescope_modulation(
+                                        &mut project.channels[selected].setup,
+                                        selected as u8,
+                                    );
                                     let mut samples = current_samples;
                                     samples[selected] = loaded_samples.into_iter().next().flatten();
                                     Some((project, samples, false))

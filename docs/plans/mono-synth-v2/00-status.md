@@ -1,4 +1,6 @@
-In progress. 02-07 are in, restructured; 08 is not started.
+In progress. 02-07 are in, restructured. 08's bank and its automated checks
+are in; **08's listening pass is not done and cannot be done without Adam** —
+see "What is not".
 
 ## The restructure, decided 2026-08-30
 
@@ -60,6 +62,15 @@ Consequences for the steps below:
   priority fallback's winning-note velocity, and the legato slide without any
   new state at all. It scales `filter_env_amount` by up to 4/3 and adds up to
   0.35 to the smoothed drive.
+- **08, the bank:** six patches in `crates/mooloop-core/src/ml1_factory.rs`,
+  defined as data rather than as files so the DSP tests and the preset seeder
+  share one source of truth. `mooloop_project::seed_ml1_bank` writes them into
+  the user's channel-preset directory on first run, after which they are
+  ordinary editable user presets. The whole-instrument checks the step asks
+  for run over the shipped patches: peak bound at full velocity across each
+  patch's register, prompt release on transport stop, no step when cutoff,
+  resonance, drive or accent is jumped end-to-end mid-note, and Round Bass
+  against Acid Line as two instruments.
 - **The face:** `ml1-device.slint`, three pages, the third being PERF.
   `OscillatorDeviceStrip` was extracted to `device-oscillator.slint` — the
   part of 07 that could not wait, since a third face would have been a third
@@ -67,10 +78,25 @@ Consequences for the steps below:
 
 ## What is not
 
-08 is the six factory patches and the listening pass, which is
-expected to re-voice several of the constants above — `ACCENT_ENV_SCALE` and
-`ACCENT_DRIVE_PUSH` included, since both were chosen against measurements
-rather than against music.
+**08's listening pass.** The step's own framing is that the Ladder's bass
+compensation, the Acid filter's resonance path, the Accent depth constants and
+the pre-drive makeup gain are "tune by ear", and that tuning them against six
+concrete patches is what turns them from plausible to right. That has not
+happened, and no constant in 04, 05 or 06 was changed during this pass.
+
+This is a limitation of who did the work, not an oversight. The bank was
+voiced against measurements — the same brightness and peak proxies the earlier
+steps used — because that is the only instrument available to an agent that
+cannot hear the output. So `ACCENT_ENV_SCALE`, `ACCENT_DRIVE_PUSH`,
+`PRE_DRIVE_GAIN_RANGE` and the Ladder/Acid compensation and feedback values
+still stand where measurement left them, and every patch below is a first
+draft in the same sense.
+
+What the bank does give is the thing the plan wanted it for: six real patches
+that exercise the constants in combination, so that when Adam does play them,
+what needs moving should be obvious and the file to move it in is small.
+Anything changed then still needs writing back into 04, 05 or 06 with the
+reason, per the step.
 
 ## 07 audit result
 
@@ -97,12 +123,50 @@ rather than against music.
 
 ## Deviations from the plan as written
 
+- **08's "101 Pluck" ships as "Snap Pluck".** The plan's table names it after
+  a specific piece of hardware, and no user-facing string in this project may
+  claim that lineage. The patch is unchanged in intent: fast filter decay,
+  heavy keytrack, focused mono response.
+- **08's bank is channel-scoped, not generator-scoped.** A generator preset is
+  a bare `ChannelSource` with nowhere to put a `ModRack`, and Sequence Bleep is
+  an S&H LFO routed to cutoff — it is nothing without one. That is a
+  consequence of the ML-1 having no device-local LFO by design, not a
+  workaround. The cost is that the bank appears in the channel-preset menu
+  alongside other device kinds rather than in the ML-1-filtered generator menu.
 - **06 asks for a `Theme.warning` fill on the Accent knob**, "matching Drive
   and the other character controls". No knob in the project uses that fill —
   Drive included — so it would have made Accent the only warning-coloured
   control rather than one of a set. Left on the default fill. If the character
   grouping is wanted, it should land as a pass over every character control at
   once.
+
+## Findings from 08
+
+The step says a patch needing fifteen precise settings means the defaults or
+the ranges are wrong, and that this is the finding rather than the patch's
+problem. `ml1_factory::moves_from_default` counts, and a test holds every
+patch under fifteen. Three things came out of getting there:
+
+- **There was no factory-bank mechanism at all.** Presets only existed as
+  user-saved bundles in the config directory. Seeding on first run was chosen
+  over merging a read-only factory directory into every scan, because it is
+  much the smaller change — nothing in the browser, the loader, or the on-disk
+  format learns about a second class of preset — and it leaves the patches
+  editable, which for a starting point is the point. A marker file makes the
+  bank non-self-healing on purpose, so deleting a patch you do not want keeps
+  it deleted.
+- **Modulation routes did not survive being loaded onto a different channel.**
+  A `ModRoute` names its destination channel absolutely, which is right for a
+  project and wrong for a preset. A channel preset saved from channel 3 and
+  loaded onto channel 0 kept modulating channel 3. Pre-existing, and not
+  specific to the ML-1 — it applied to every channel preset already savable —
+  but the bank could not ship without fixing it. `rescope_modulation` runs on
+  the channel-preset load path; kits are unaffected, since their channels land
+  on the indices they were saved from.
+- **The amplitude envelope defaults suit a pad better than a bass.** Several
+  patches spend a move on `sustain` alone. Worth considering when the default
+  patch is next revisited, though it is not obviously wrong — the default
+  patch is also the gain reference.
 
 Read 01 first regardless of which step you pick up.
 

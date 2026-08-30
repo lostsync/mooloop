@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-30
-- Sessions: 17
+- Sessions: 18
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -108,7 +108,14 @@ work session you can recall being part of, and don't stress over precision.
   Accent knob, which turned out to need no new state: velocity is the carrier
   the plan asks for, and riding the smoothed velocity the VCA already uses
   gives per-note capture, the priority fallback's winning-note velocity, and
-  the legato slide for free.
+  the legato slide for free. Then wrote its factory bank — six patches defined
+  as data so the DSP tests and the preset seeder share one source of truth,
+  seeded onto disk on first run because the project had no factory-content
+  mechanism at all. Building it surfaced that modulation routes name their
+  destination channel absolutely, so any channel preset with a rack modulated
+  whatever channel it was saved from; the bank could not ship without
+  rescoping on load. The listening pass the step exists for is still open,
+  since voicing by ear is not something I can do.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

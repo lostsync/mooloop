@@ -1394,4 +1394,208 @@ mod tests {
             "the accent stepped rather than slid: {across:.4} against a steady {steady:.4}"
         );
     }
+
+    // --- The factory bank -------------------------------------------------
+    //
+    // `docs/plans/mono-synth-v2/08-mono-factory-patches.md` asks for these
+    // checks once the bank exists, on the grounds that they are cheapest to
+    // catch here. They run over the shipped patches rather than over invented
+    // ones deliberately: a bound that holds for a test patch and not for
+    // Round Bass has told nobody anything.
+
+    use mooloop_core::ml1_factory;
+    use mooloop_core::generator::SYNTH_PARAM_ACCENT;
+    use mooloop_core::{
+        SYNTH_PARAM_DRIVE, SYNTH_PARAM_FILTER_CUTOFF, SYNTH_PARAM_FILTER_RESONANCE,
+    };
+
+    /// A note in each patch's own register. A bass patch voiced at C1 says
+    /// nothing about anything if it is only ever tested at C4, and the
+    /// keytracking patches say the least of all.
+    fn audition_notes(name: &str) -> &'static [u8] {
+        match name {
+            "Round Bass" | "Rubber Bass" | "Acid Line" => &[24, 36, 48],
+            "Snap Pluck" | "Sequence Bleep" => &[48, 60, 72],
+            _ => &[36, 60, 84],
+        }
+    }
+
+    /// Every patch, at full velocity, across its register, stays inside the
+    /// same bound the synthetic worst case uses. This is the practical form
+    /// of the Accent gain-staging requirement: the patches that ship are the
+    /// ones a user will actually drive.
+    #[test]
+    fn every_factory_patch_stays_within_the_peak_bound() {
+        for patch in ml1_factory::patches() {
+            for &note in audition_notes(patch.name) {
+                let frames = SR as usize;
+                let rendered = render_at(patch.params, note, 127, frames);
+                let peak = rendered.iter().fold(0.0_f32, |a, s| a.max(s.abs()));
+                assert!(peak.is_finite(), "{} went non-finite at note {note}", patch.name);
+                assert!(peak <= 1.0, "{} peaked at {peak} on note {note}", patch.name);
+            }
+        }
+    }
+
+    /// A patch that cannot be heard is not a patch. Cheap, but it is the
+    /// check that catches a level or an envelope typo in the bank before any
+    /// of the more specific tests below get a chance to be confusing.
+    #[test]
+    fn every_factory_patch_makes_a_sound() {
+        for patch in ml1_factory::patches() {
+            let rendered = render_at(patch.params, 48, 100, (SR / 4) as usize);
+            let level = rms(&rendered);
+            assert!(
+                level > 0.01,
+                "{} rendered near-silence ({level:.5})",
+                patch.name
+            );
+        }
+    }
+
+    /// Transport stop has to end every patch quickly, including the ones with
+    /// a long release. `STOP_RELEASE_S` overrides the patch's own release for
+    /// exactly this reason, and Porta Lead's quarter-second tail is what
+    /// would expose it if that stopped being true.
+    #[test]
+    fn every_factory_patch_releases_promptly_on_a_transport_stop() {
+        // Generous next to `STOP_RELEASE_S` (5 ms), because the envelope has
+        // to reach silence and not merely start heading there. Still far
+        // shorter than the longest release in the bank, which is the point.
+        let allowed_frames = (SR as f32 * 0.05) as usize;
+        for patch in ml1_factory::patches() {
+            let mut synth = Ml1::new(patch.params, SR);
+            let mut bus = StereoBus::with_capacity(allowed_frames.max(512));
+            let mut events = EventList::empty();
+            events.push(note_on_at(0, 1, 48, 127));
+            synth.process(&ctx(512), &mut bus, &events, None);
+
+            let mut stopped = ctx(allowed_frames);
+            stopped.playing = false;
+            bus.clear(allowed_frames);
+            synth.process(&stopped, &mut bus, &EventList::empty(), None);
+
+            let tail = &bus.l[..allowed_frames];
+            let residue = tail[tail.len() / 2..]
+                .iter()
+                .fold(0.0_f32, |a, s| a.max(s.abs()));
+            assert!(
+                residue < 1.0e-3,
+                "{} was still sounding {residue:.5} after a stop",
+                patch.name
+            );
+            assert!(
+                !synth.voice.active || synth.voice.amp_env.is_idle(),
+                "{} left a voice running after a stop",
+                patch.name
+            );
+        }
+    }
+
+    /// Jumps one parameter in a single event under a held note, and reports
+    /// the worst sample-to-sample step across the jump against the worst step
+    /// in the settled signal either side of it.
+    ///
+    /// A single large jump is the right probe, and a slow ramp is not: five
+    /// hundred steps across the range move the parameter by 0.002 each, which
+    /// would not click even with the smoothing removed. What smoothing is for
+    /// is the automation lane or the mouse that moves a knob from one end to
+    /// the other in one block.
+    ///
+    /// Comparing against the settled steps on *both* sides is what keeps this
+    /// honest in either direction: opening a filter genuinely raises the slew,
+    /// so the after-state is the fair reference going up, and the before-state
+    /// is the fair reference coming back down.
+    fn jump_step_ratio(params: Ml1Params, param_id: u32, from: f32, to: f32) -> f32 {
+        let frames = SR as usize / 2;
+        let jump_at = frames / 2;
+        // Comfortably longer than `PARAM_SMOOTH_S`, so the window contains the
+        // whole of the smoothed transition and not a slice of it.
+        let settle = (SR as f32 * 0.05) as usize;
+
+        let mut synth = Ml1::new(params, SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on_at(0, 1, 48, 110));
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::ParamValue {
+                id: param_id,
+                value: from,
+            },
+        });
+        events.push(TimedEvent {
+            offset: jump_at as u32,
+            event: Event::ParamValue {
+                id: param_id,
+                value: to,
+            },
+        });
+        synth.process(&ctx(frames), &mut bus, &events, None);
+
+        let before = max_step(&bus.l[jump_at - settle..jump_at]);
+        let across = max_step(&bus.l[jump_at..jump_at + settle]);
+        let after = max_step(&bus.l[jump_at + settle..frames]);
+        // A floor, so a patch that is nearly silent either side cannot make
+        // an inaudible wobble look like an infinite ratio.
+        across / before.max(after).max(1.0e-4)
+    }
+
+    /// The plan asks for no clicks when the character controls are automated
+    /// across their full range mid-note, in every patch.
+    ///
+    /// The amplitude sustain is forced up first. Four of the six patches decay
+    /// to silence long before the jump, and a test that measured mostly
+    /// silence would pass without having looked at anything. What is under
+    /// test is the smoothing in the cutoff, drive and resonance path, which the
+    /// amplitude envelope does not touch.
+    #[test]
+    fn automating_the_character_controls_mid_note_does_not_click() {
+        for patch in ml1_factory::patches() {
+            let mut params = patch.params;
+            params.sustain = 1.0;
+            params.decay = 0.05;
+            for (label, id) in [
+                ("cutoff", SYNTH_PARAM_FILTER_CUTOFF),
+                ("resonance", SYNTH_PARAM_FILTER_RESONANCE),
+                ("drive", SYNTH_PARAM_DRIVE),
+                ("accent", SYNTH_PARAM_ACCENT),
+            ] {
+                for (from, to) in [(0.0, 1.0), (1.0, 0.0)] {
+                    let ratio = jump_step_ratio(params, id, from, to);
+                    assert!(
+                        ratio < 2.0,
+                        "{}: jumping {label} {from} -> {to} stepped {ratio:.2}x \
+                         the settled slew",
+                        patch.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// The plan's headline claim about the bank: Round Bass and Acid Line are
+    /// two instruments, not one instrument twice. They share an oscillator
+    /// setting — a single saw — so anything that separates them comes from
+    /// the filter, and that is exactly what step 05 built the models for.
+    #[test]
+    fn round_bass_and_acid_line_are_different_instruments() {
+        let patches = ml1_factory::patches();
+        let round = patches[0];
+        let acid = patches[2];
+        assert_eq!(round.name, "Round Bass");
+        assert_eq!(acid.name, "Acid Line");
+
+        let frames = (SR as f32 * 0.4) as usize;
+        let round_sound = render_at(round.params, 36, 127, frames);
+        let acid_sound = render_at(acid.params, 36, 127, frames);
+
+        let round_brightness = brightness(&round_sound);
+        let acid_brightness = brightness(&acid_sound);
+        assert!(
+            acid_brightness > round_brightness * 1.5,
+            "the two bass patches are too alike: round {round_brightness:.4}, \
+             acid {acid_brightness:.4}"
+        );
+    }
 }

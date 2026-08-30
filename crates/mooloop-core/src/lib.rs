@@ -15,6 +15,7 @@ pub mod modulation;
 pub mod mixer;
 pub mod mod_metadata;
 pub mod ml1;
+pub mod ml1_factory;
 pub mod pattern;
 pub mod playlist;
 pub mod project;
@@ -30,6 +31,7 @@ pub use bridge::{EngineCommand, EngineEvent};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
 pub use ml1::{EnvTrigger, FilterModel, GlideMode, Ml1Params, NotePriority};
+pub use ml1_factory::FactoryPatch;
 pub use modulation::{
     strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModPolarity, ModRack,
     ModRoute, ModTimeDivision, ModulatorKind, ModulatorParams, ParamAddr, ParamOwner,

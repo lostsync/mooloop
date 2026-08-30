@@ -15,6 +15,10 @@ use mooloop_core::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod factory;
+
+pub use factory::{rescope_modulation, seed_ml1_bank};
+
 pub const FORMAT_VERSION: u32 = 1;
 pub const MANIFEST_FILE: &str = "manifest.toml";
 
