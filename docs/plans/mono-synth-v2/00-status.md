@@ -1,4 +1,4 @@
-In progress. 02-06 are in, restructured; 07 and 08 are not started.
+In progress. 02-07 are in, restructured; 08 is not started.
 
 ## The restructure, decided 2026-08-30
 
@@ -67,14 +67,33 @@ Consequences for the steps below:
 
 ## What is not
 
-07 and 08, unchanged as written, except that they now apply to `Ml1` rather
-than to `MonoSynth`. 07's remaining work is the duplication `Ml1` inherited
-from the v1 synths: `note_to_freq`, `MIN_GLIDE_S`, `STOP_RELEASE_S` and
-`PARAM_SMOOTH_S` are still copied across `monosynth.rs`, `polysynth.rs` and
-`ml1.rs`. 08 is the six factory patches and the listening pass, which is
+08 is the six factory patches and the listening pass, which is
 expected to re-voice several of the constants above — `ACCENT_ENV_SCALE` and
 `ACCENT_DRIVE_PUSH` included, since both were chosen against measurements
 rather than against music.
+
+## 07 audit result
+
+- The three synths share only DSP primitives, their oscillator front end, and
+  the four voice conventions now in
+  `crates/mooloop-dsp/src/synth_voice.rs`. Their note engines, filters,
+  envelopes, and output calibrations remain local.
+- `ML1_DESCRIPTORS` is built independently from the shared core and oscillator
+  descriptor blocks. The v1 `POLY_DESCRIPTORS` still copies the v1 Mono table
+  by design until the later v1 migration; ML-1 parameter ids 20-29 do not enter
+  either legacy table. A test walks every generator table and rejects duplicate
+  ids within a device.
+- The shared cutoff/resonance and oscillator descriptor defaults, plus Poly's
+  spread default, were stale. They now match all three parameter structs, with
+  a test pinning that contract. The descriptor ranges remain correct for both
+  linear and nonlinear filters.
+- The v1 Mono, ML-1, and Poly validators cover every numeric parameter. Their
+  bool and enum fields are valid by construction after deserialization and do
+  not need numeric range checks.
+- `OscillatorDeviceStrip` already lives once in `device-oscillator.slint` and
+  is imported by all three faces. The ML-1 copy and status text make no
+  hardware-emulation claim. `docs/AUDIO_ARCHITECTURE.md` did not describe a
+  shared synth voice architecture, so it needed no change.
 
 ## Deviations from the plan as written
 

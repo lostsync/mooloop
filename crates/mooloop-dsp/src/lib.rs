@@ -45,6 +45,7 @@ pub mod sampler;
 pub mod scale;
 pub mod shaper;
 pub mod smooth;
+mod synth_voice;
 
 pub use align::DryAlign;
 pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};

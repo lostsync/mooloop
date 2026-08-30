@@ -198,6 +198,11 @@ pub const SYNTH_PARAM_FILTER_MODEL: u32 = 28;
 pub const SYNTH_PARAM_ACCENT: u32 = 29;
 
 const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
+    let (semitones, cents, level) = match n {
+        0 => (0.0, 0.0, 1.0),
+        1 => (12.0, 4.0, 0.0),
+        _ => (-12.0, -4.0, 0.0),
+    };
     [
         stepped(synth_osc_param(n, OSC_OFFSET_WAVE), name, 4, 2.0),
         ParamDescriptor {
@@ -210,7 +215,7 @@ const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
             min: -48.0,
             max: 48.0,
             curve: ParamCurve::Linear,
-            default: 0.0,
+            default: semitones,
         },
         ParamDescriptor {
             id: synth_osc_param(n, OSC_OFFSET_CENTS),
@@ -219,9 +224,9 @@ const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
             min: -100.0,
             max: 100.0,
             curve: ParamCurve::Linear,
-            default: 0.0,
+            default: cents,
         },
-        unit(synth_osc_param(n, OSC_OFFSET_LEVEL), "Level", 0.0),
+        unit(synth_osc_param(n, OSC_OFFSET_LEVEL), "Level", level),
         ParamDescriptor {
             id: synth_osc_param(n, OSC_OFFSET_PULSE_WIDTH),
             name: "Width",
@@ -252,8 +257,8 @@ const SYNTH_CORE_DESCRIPTORS: [ParamDescriptor; 9] = [
     seconds(SYNTH_PARAM_DECAY, "Decay", 0.2),
     unit(SYNTH_PARAM_SUSTAIN, "Sustain", 0.7),
     seconds(SYNTH_PARAM_RELEASE, "Release", 0.15),
-    unit(SYNTH_PARAM_FILTER_CUTOFF, "Cutoff", 0.7),
-    unit(SYNTH_PARAM_FILTER_RESONANCE, "Reso", 0.1),
+    unit(SYNTH_PARAM_FILTER_CUTOFF, "Cutoff", 1.0),
+    unit(SYNTH_PARAM_FILTER_RESONANCE, "Reso", 0.0),
     ParamDescriptor {
         id: SYNTH_PARAM_FILTER_ENV_AMOUNT,
         name: "Env amt",
@@ -412,7 +417,7 @@ static POLY_DESCRIPTORS: [ParamDescriptor; 32] = {
         curve: ParamCurve::Stepped(MAX_POLY_VOICES),
         default: 8.0,
     };
-    out[31] = unit(SYNTH_PARAM_SPREAD, "Spread", 0.3);
+    out[31] = unit(SYNTH_PARAM_SPREAD, "Spread", 0.0);
     out
 };
 
@@ -819,6 +824,29 @@ mod tests {
                     "{:?} reuses parameter id {}",
                     kind,
                     descriptor.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn synth_descriptor_defaults_match_parameter_defaults() {
+        for params in [
+            GeneratorParams::MonoSynth(MonoSynthParams::default()),
+            GeneratorParams::PolySynth(PolySynthParams::default()),
+            GeneratorParams::Ml1(Ml1Params::default()),
+        ] {
+            let kind = params.kind();
+            for descriptor in kind.descriptors() {
+                let actual = params
+                    .get(descriptor.id)
+                    .expect("every synth descriptor reads from its parameter struct");
+                assert!(
+                    (actual - descriptor.default).abs() <= 1.0e-6,
+                    "{:?} {} defaults to {actual}, descriptor says {}",
+                    kind,
+                    descriptor.name,
+                    descriptor.default
                 );
             }
         }

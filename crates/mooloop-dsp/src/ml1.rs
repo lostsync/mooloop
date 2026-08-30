@@ -24,8 +24,8 @@
 //!   control: pushing more level into the filter changes the character and
 //!   not merely the gain.
 //!
-//! Still to come, and called out so the gap reads as sequencing rather than
-//! oversight: Accent.
+//! - velocity Accent pushes the filter envelope and pre-filter drive while
+//!   preserving velocity's amplitude role.
 
 use crate::bus::StereoBus;
 use crate::env::Adsr;
@@ -36,21 +36,13 @@ use crate::node::{AudioNode, ProcessContext};
 use crate::osc::Osc;
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
+use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::{EnvTrigger, FilterModel, GlideMode, Ml1Params};
-
-/// Minimum glide time; at or below this, pitch changes are instant.
-const MIN_GLIDE_S: f32 = 1.0e-3;
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
 /// top (which the default patch runs at) peaks within a dB of
 /// `mooloop_core::gain::REFERENCE_PEAK_DBFS` (-12 dBFS) at the master.
 const VOICE_OUTPUT_REFERENCE: f32 = 0.36;
-
-/// Fast release used when the transport stops (seconds).
-const STOP_RELEASE_S: f32 = 0.005;
-
-/// Lag applied to parameters that scale the signal directly.
-const PARAM_SMOOTH_S: f32 = 0.005;
 
 /// Middle C (MIDI 60). Keytracking is referenced here, so a patch voiced
 /// around the middle of the keyboard keeps its cutoff where it was set.
@@ -66,11 +58,6 @@ const ACCENT_ENV_SCALE: f32 = 1.0 / 3.0;
 /// to be clearly audible while leaving headroom at the top of the knob, so an
 /// accented patch never asks for the channel fader back.
 const ACCENT_DRIVE_PUSH: f32 = 0.35;
-
-/// MIDI note number to frequency in Hz (A4 = 69 = 440 Hz).
-fn note_to_freq(note: u8) -> f32 {
-    440.0 * 2.0_f32.powf((f32::from(note.min(127)) - 69.0) / 12.0)
-}
 
 /// The three filter characters, and the switch between them.
 ///

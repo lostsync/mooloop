@@ -12,26 +12,13 @@ use crate::node::{AudioNode, ProcessContext};
 use crate::osc::Osc;
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
+use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::{PolySynthParams, MAX_POLY_VOICES};
-
-/// Minimum glide time; at or below this, pitch changes are instant.
-const MIN_GLIDE_S: f32 = 1.0e-3;
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
 /// top (which the default patch runs at) peaks within a dB of
 /// `mooloop_core::gain::REFERENCE_PEAK_DBFS` (-12 dBFS) at the master.
 const VOICE_OUTPUT_REFERENCE: f32 = 0.51;
-
-/// Fast release used when the transport stops (seconds).
-const STOP_RELEASE_S: f32 = 0.005;
-
-/// Lag applied to parameters that scale the signal directly.
-const PARAM_SMOOTH_S: f32 = 0.005;
-
-/// MIDI note number to frequency in Hz (A4 = 69 = 440 Hz).
-fn note_to_freq(note: u8) -> f32 {
-    440.0 * 2.0_f32.powf((f32::from(note.min(127)) - 69.0) / 12.0)
-}
 
 /// Stereo position for a voice from the active voice index and the current
 /// polyphony count. Returns a pan in `[-1, 1]`; centre when spread is zero or

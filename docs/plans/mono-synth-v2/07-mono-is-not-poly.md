@@ -76,3 +76,9 @@ if it describes the shared voice architecture the two synths no longer have.
 - Descriptor ID uniqueness is asserted by a test for both devices.
 - Both validators cover every field of their struct.
 - `cargo check` and the full test suite pass; no behaviour change.
+
+## Completion note
+
+Completed after the plan's three-instrument restructure. The audit applies to
+ML-1 as the new mono instrument; the v1 Mono remains temporarily for project
+compatibility. Detailed verdicts are recorded in `00-status.md`.
