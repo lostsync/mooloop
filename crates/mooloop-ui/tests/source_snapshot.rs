@@ -188,6 +188,12 @@ fn render_sampler_source_editor() {
             depth: 1.0,
             phase: 0.0,
             pulse_width: 0.3,
+            preview_fade_cycles: 0.5,
+            preview_smoothing_cycles: 0.16,
+            preview_attack: 0.0,
+            preview_decay: 0.0,
+            preview_sustain: 0.0,
+            preview_release: 0.0,
             retrigger: false,
             selected: false,
         },
@@ -200,6 +206,12 @@ fn render_sampler_source_editor() {
             depth: 1.0,
             phase: 0.0,
             pulse_width: 0.5,
+            preview_fade_cycles: 0.0,
+            preview_smoothing_cycles: 0.0,
+            preview_attack: 0.015,
+            preview_decay: 0.25,
+            preview_sustain: 0.62,
+            preview_release: 0.38,
             retrigger: true,
             selected: true,
         },
@@ -231,6 +243,9 @@ fn render_sampler_source_editor() {
     ui.set_modulation_selected_envelope_sustain(0.62);
     ui.set_modulation_selected_envelope_release(0.38);
     ui.set_modulation_selected_envelope_amount(1.0);
+    ui.set_modulation_selected_envelope_preview_attack(0.015);
+    ui.set_modulation_selected_envelope_preview_decay(0.25);
+    ui.set_modulation_selected_envelope_preview_release(0.38);
     ui.set_modulation_selected_waveform(3);
     ui.set_modulation_selected_rate(2.0);
     ui.set_modulation_selected_rate_tempo_sync(true);
@@ -239,6 +254,8 @@ fn render_sampler_source_editor() {
     ui.set_modulation_selected_fade_in(0.75);
     ui.set_modulation_selected_smoothing(0.08);
     ui.set_modulation_selected_pulse_width(0.3);
+    ui.set_modulation_selected_preview_fade_cycles(0.5);
+    ui.set_modulation_selected_preview_smoothing_cycles(0.16);
     // Descriptor-id indexed, so the sampler's cutoff overlay sits at 12.
     let mut source_depths = vec![0.0f32; 22];
     source_depths[12] = 0.35;
@@ -254,6 +271,41 @@ fn render_sampler_source_editor() {
     assert_eq!((modulation.width(), modulation.height()), (1440, 900));
     assert_ne!(snapshot.as_bytes(), modulation.as_bytes());
     write_snapshot(&modulation, "MOOLOOP_MODULATION_SHELF_SNAPSHOT");
+
+    // The source faces are parameter readouts, not generic type icons. A
+    // zero-time attack has a vertical leading edge, while a long attack
+    // visibly slopes toward the peak.
+    ui.set_modulation_selected_envelope_preview_attack(0.0);
+    let instant_attack = ui.window().take_snapshot().unwrap();
+    ui.set_modulation_selected_envelope_preview_attack(16.0);
+    let long_attack = ui.window().take_snapshot().unwrap();
+    assert_ne!(instant_attack.as_bytes(), long_attack.as_bytes());
+    write_snapshot(&instant_attack, "MOOLOOP_ENVELOPE_INSTANT_ATTACK_SNAPSHOT");
+    write_snapshot(&long_attack, "MOOLOOP_ENVELOPE_LONG_ATTACK_SNAPSHOT");
+
+    // The LFO face likewise follows waveform, phase, amount, fade, smoothing,
+    // and pulse width instead of retaining the last generic oscillator glyph.
+    ui.set_modulation_selected_slot(0);
+    ui.set_modulation_selected_kind(0);
+    ui.set_modulation_selected_waveform(2);
+    ui.set_modulation_selected_phase(0.0);
+    ui.set_modulation_selected_depth(1.0);
+    ui.set_modulation_selected_preview_fade_cycles(0.0);
+    ui.set_modulation_selected_preview_smoothing_cycles(0.0);
+    let saw_face = ui.window().take_snapshot().unwrap();
+    ui.set_modulation_selected_waveform(3);
+    ui.set_modulation_selected_phase(0.2);
+    ui.set_modulation_selected_depth(0.55);
+    ui.set_modulation_selected_pulse_width(0.2);
+    ui.set_modulation_selected_preview_fade_cycles(0.75);
+    ui.set_modulation_selected_preview_smoothing_cycles(0.2);
+    let shaped_lfo = ui.window().take_snapshot().unwrap();
+    assert_ne!(saw_face.as_bytes(), shaped_lfo.as_bytes());
+    write_snapshot(&shaped_lfo, "MOOLOOP_LFO_SHAPED_FACE_SNAPSHOT");
+
+    ui.set_modulation_selected_slot(1);
+    ui.set_modulation_selected_kind(1);
+    ui.set_modulation_selected_envelope_preview_attack(0.015);
 
     // Out of assign mode the same knobs must read differently: the value arc
     // returns, the dots appear, and a live offset displaces the arc's end.

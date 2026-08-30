@@ -598,6 +598,8 @@ export component MainWindow inherits Window {
     in property <int> modulation-selected-fade-division: 7;
     in property <float> modulation-selected-smoothing;
     in property <float> modulation-selected-pulse-width: 0.5;
+    in property <float> modulation-selected-preview-fade-cycles;
+    in property <float> modulation-selected-preview-smoothing-cycles;
     in property <[string]> modulation-input-channels;
     in property <int> modulation-selected-envelope-input-channel;
     in property <float> modulation-selected-envelope-attack;
@@ -611,6 +613,9 @@ export component MainWindow inherits Window {
     in property <bool> modulation-selected-envelope-release-sync;
     in property <int> modulation-selected-envelope-release-division: 7;
     in property <float> modulation-selected-envelope-amount: 1;
+    in property <float> modulation-selected-envelope-preview-attack;
+    in property <float> modulation-selected-envelope-preview-decay;
+    in property <float> modulation-selected-envelope-preview-release;
     in property <int> modulation-max-sources;
     callback modulation-shelf-toggled();
     callback modulation-source-selected(int);
@@ -2973,6 +2978,8 @@ export component MainWindow inherits Window {
                                             selected-fade-division: root.modulation-selected-fade-division;
                                             selected-smoothing: root.modulation-selected-smoothing;
                                             selected-pulse-width: root.modulation-selected-pulse-width;
+                                            selected-preview-fade-cycles: root.modulation-selected-preview-fade-cycles;
+                                            selected-preview-smoothing-cycles: root.modulation-selected-preview-smoothing-cycles;
                                             input-channels: root.modulation-input-channels;
                                             selected-envelope-input-channel: root.modulation-selected-envelope-input-channel;
                                             selected-envelope-attack: root.modulation-selected-envelope-attack;
@@ -2986,6 +2993,9 @@ export component MainWindow inherits Window {
                                             selected-envelope-release-sync: root.modulation-selected-envelope-release-sync;
                                             selected-envelope-release-division: root.modulation-selected-envelope-release-division;
                                             selected-envelope-amount: root.modulation-selected-envelope-amount;
+                                            selected-envelope-preview-attack: root.modulation-selected-envelope-preview-attack;
+                                            selected-envelope-preview-decay: root.modulation-selected-envelope-preview-decay;
+                                            selected-envelope-preview-release: root.modulation-selected-envelope-preview-release;
                                             max-sources: root.modulation-max-sources;
                                             toggled => { root.modulation-shelf-toggled(); }
                                             source-selected(slot) => { root.modulation-source-selected(slot); }

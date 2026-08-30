@@ -14,6 +14,12 @@ export struct ModulationSourceRow {
     depth: float,
     phase: float,
     pulse-width: float,
+    preview-fade-cycles: float,
+    preview-smoothing-cycles: float,
+    preview-attack: float,
+    preview-decay: float,
+    preview-sustain: float,
+    preview-release: float,
     retrigger: bool,
     selected: bool,
 }
@@ -44,11 +50,31 @@ export global ModulationShelfMetrics {
 // A small source-shape view gives every collapsed source a recognizable face.
 // It is parameter-derived, not telemetry, and therefore makes no promise that
 // the line is phase-synchronized with the audio thread.
-component LfoShape inherits Rectangle {
+component ModulatorShape inherits Rectangle {
     in property <int> kind;
     in property <int> waveform;
+    in property <float> amount: 1;
+    in property <float> phase;
     in property <float> pulse-width: 0.5;
+    // LFO time controls are expressed relative to one displayed cycle.
+    in property <float> fade-cycles;
+    in property <float> smoothing-cycles;
+    // Envelope stage durations are effective seconds (tempo divisions have
+    // already been resolved by Rust). The display compresses their range but
+    // preserves their relative lengths and the exact zero-time edges.
+    in property <float> attack;
+    in property <float> decay;
+    in property <float> sustain: 0.7;
+    in property <float> release;
     in property <color> line-color: Theme.accent;
+    private property <float> attack-weight: root.attack <= 0 ? 0 : root.attack / (root.attack + 0.35);
+    private property <float> decay-weight: root.decay <= 0 ? 0 : root.decay / (root.decay + 0.35);
+    private property <float> release-weight: root.release <= 0 ? 0 : root.release / (root.release + 0.35);
+    private property <float> hold-weight: 0.22;
+    private property <float> envelope-total: max(0.001, root.attack-weight + root.decay-weight + root.hold-weight + root.release-weight);
+    private property <float> attack-end: root.attack-weight / root.envelope-total;
+    private property <float> decay-end: (root.attack-weight + root.decay-weight) / root.envelope-total;
+    private property <float> hold-end: (root.attack-weight + root.decay-weight + root.hold-weight) / root.envelope-total;
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.border;
@@ -56,31 +82,54 @@ component LfoShape inherits Rectangle {
 
     Rectangle {
         x: 3px;
-        y: parent.height / 2;
+        y: root.kind == 1 ? parent.height - 4px : parent.height / 2;
         width: parent.width - 6px;
         height: 1px;
         background: Theme.border;
     }
+    if root.kind == 1 && root.attack <= 0.0001 && root.amount > 0 : Rectangle {
+        x: 3px;
+        y: 4px + (1 - min(1, root.amount)) * (parent.height - 8px);
+        width: 2px;
+        height: min(1, root.amount) * (parent.height - 8px);
+        background: root.line-color;
+    }
     for point in 40 : Rectangle {
         private property <float> unit: point * 1.0 / 39.0;
-        private property <float> shaped: root.kind == 1
-            ? (self.unit < 0.2 ? -1 + self.unit * 10
-                : self.unit < 0.42 ? 1 - (self.unit - 0.2) * 1.8
-                : self.unit < 0.72 ? 0.6
-                : 0.6 - (self.unit - 0.72) * 2.15)
-            : root.waveform == 0
-            ? sin(self.unit * 360deg)
+        private property <float> cycle: mod(self.unit + root.phase, 1);
+        private property <float> raw-lfo: root.waveform == 0
+            ? sin(self.cycle * 360deg)
             : root.waveform == 1
-                ? 1 - 4 * abs(mod(self.unit + 0.25, 1) - 0.5)
+                ? 1 - 4 * abs(mod(self.cycle + 0.25, 1) - 0.5)
                 : root.waveform == 2
-                    ? 2 * mod(self.unit + 0.5, 1) - 1
+                    ? 2 * mod(self.cycle + 0.5, 1) - 1
                     : root.waveform == 3
-                        ? (self.unit < root.pulse-width ? 1 : -1)
-                        : (mod(point, 13) < 3 ? 0.65
-                            : mod(point, 13) < 7 ? -0.35
-                            : mod(point, 13) < 10 ? 0.2 : -0.72);
+                        ? (self.cycle < root.pulse-width ? 1 : -1)
+                        : (mod(point + round(root.phase * 40), 13) < 3 ? 0.65
+                            : mod(point + round(root.phase * 40), 13) < 7 ? -0.35
+                            : mod(point + round(root.phase * 40), 13) < 10 ? 0.2 : -0.72);
+        private property <float> soft-lfo: root.waveform == 3
+            ? sin((self.cycle - root.pulse-width / 2) * 360deg)
+            : sin(self.cycle * 360deg);
+        private property <float> smoothing: min(1, max(0, root.smoothing-cycles * 4));
+        private property <float> fade: root.fade-cycles <= 0
+            ? 1 : min(1, self.unit / max(0.001, min(1, root.fade-cycles)));
+        private property <float> lfo-value: (self.raw-lfo * (1 - self.smoothing) + self.soft-lfo * self.smoothing)
+            * min(1, max(0, root.amount)) * self.fade;
+        private property <float> envelope-value: self.unit <= root.attack-end
+            ? (root.attack-end <= 0.0001 ? 1 : self.unit / root.attack-end)
+            : self.unit <= root.decay-end
+                ? 1 - (1 - root.sustain) * (self.unit - root.attack-end) / max(0.0001, root.decay-end - root.attack-end)
+                : self.unit <= root.hold-end
+                    ? root.sustain
+                    : root.sustain * (1 - (self.unit - root.hold-end) / max(0.0001, 1 - root.hold-end));
+        private property <float> shaped: root.kind == 1
+            ? min(1, max(0, self.envelope-value)) * min(1, max(0, root.amount))
+            : self.lfo-value;
         x: 3px + self.unit * (parent.width - 7px);
-        y: parent.height * 0.5 - self.shaped * (parent.height - 8px) * 0.38;
+        y: root.kind == 1
+            ? parent.height - 4px - self.shaped * (parent.height - 8px)
+            : parent.height * 0.5 - self.shaped * (parent.height - 8px) * 0.38;
         width: max(1px, (parent.width - 6px) / 39);
         height: 2px;
         background: root.line-color;
@@ -92,6 +141,14 @@ component SourceTile inherits Rectangle {
     in property <int> waveform;
     in property <int> kind;
     in property <float> pulse-width: 0.5;
+    in property <float> amount: 1;
+    in property <float> phase;
+    in property <float> fade-cycles;
+    in property <float> smoothing-cycles;
+    in property <float> attack;
+    in property <float> decay;
+    in property <float> sustain: 0.7;
+    in property <float> release;
     in property <bool> selected;
     in property <bool> armed;
     callback clicked();
@@ -107,11 +164,19 @@ component SourceTile inherits Rectangle {
     VerticalLayout {
         padding: 2px;
         spacing: 2px;
-        LfoShape {
+        ModulatorShape {
             height: 22px;
             waveform: root.waveform;
             kind: root.kind;
+            amount: root.amount;
+            phase: root.phase;
             pulse-width: root.pulse-width;
+            fade-cycles: root.fade-cycles;
+            smoothing-cycles: root.smoothing-cycles;
+            attack: root.attack;
+            decay: root.decay;
+            sustain: root.sustain;
+            release: root.release;
             line-color: root.armed ? Theme.focus : Theme.accent;
         }
         Text {
@@ -301,6 +366,8 @@ export component ModulationShelf inherits Rectangle {
     in property <int> selected-fade-division: 7;
     in property <float> selected-smoothing;
     in property <float> selected-pulse-width: 0.5;
+    in property <float> selected-preview-fade-cycles;
+    in property <float> selected-preview-smoothing-cycles;
     in property <[string]> input-channels;
     in property <int> selected-envelope-input-channel;
     in property <float> selected-envelope-attack;
@@ -314,6 +381,9 @@ export component ModulationShelf inherits Rectangle {
     in property <bool> selected-envelope-release-sync;
     in property <int> selected-envelope-release-division: 7;
     in property <float> selected-envelope-amount: 1;
+    in property <float> selected-envelope-preview-attack;
+    in property <float> selected-envelope-preview-decay;
+    in property <float> selected-envelope-preview-release;
     // Capacity is an engine protocol boundary, not a UI layout constant
     // (docs/MODULATOR_SYSTEM_SPEC.md), so Rust reports it.
     in property <int> max-sources: 0;
@@ -441,6 +511,14 @@ export component ModulationShelf inherits Rectangle {
                                 kind: source.kind;
                                 waveform: source.waveform;
                                 pulse-width: source.pulse-width;
+                                amount: source.depth;
+                                phase: source.phase;
+                                fade-cycles: source.preview-fade-cycles;
+                                smoothing-cycles: source.preview-smoothing-cycles;
+                                attack: source.preview-attack;
+                                decay: source.preview-decay;
+                                sustain: source.preview-sustain;
+                                release: source.preview-release;
                                 selected: source.selected;
                                 armed: root.armed-slot == source.slot;
                                 clicked => {
@@ -549,12 +627,16 @@ export component ModulationShelf inherits Rectangle {
                         }
                         HorizontalLayout {
                             spacing: 4px;
-                            LfoShape {
+                            ModulatorShape {
                                 width: 68px;
                                 height: 40px;
                                 waveform: root.selected-waveform;
                                 kind: 0;
+                                amount: root.selected-depth;
+                                phase: root.selected-phase;
                                 pulse-width: root.selected-pulse-width;
+                                fade-cycles: root.selected-preview-fade-cycles;
+                                smoothing-cycles: root.selected-preview-smoothing-cycles;
                                 line-color: root.assigning ? Theme.focus : Theme.accent;
                             }
                             VerticalLayout {
@@ -709,7 +791,18 @@ export component ModulationShelf inherits Rectangle {
                         }
                         HorizontalLayout {
                             spacing: 4px;
-                            LfoShape { width: 68px; height: 40px; kind: 1; waveform: 0; line-color: root.assigning ? Theme.focus : Theme.accent; }
+                            ModulatorShape {
+                                width: 68px;
+                                height: 40px;
+                                kind: 1;
+                                waveform: 0;
+                                amount: root.selected-envelope-amount;
+                                attack: root.selected-envelope-preview-attack;
+                                decay: root.selected-envelope-preview-decay;
+                                sustain: root.selected-envelope-sustain;
+                                release: root.selected-envelope-preview-release;
+                                line-color: root.assigning ? Theme.focus : Theme.accent;
+                            }
                             VerticalLayout {
                                 width: 112px;
                                 spacing: 2px;

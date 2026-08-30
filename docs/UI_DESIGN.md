@@ -226,6 +226,14 @@ turning Assign off restores base-value editing. A small marker on a parameter
 opens its incoming-route inspector. The inspector is destination-first and
 should be sufficient for ordinary review and removal.
 
+Both the compact tile and expanded source face are parameter-derived previews,
+not generic type icons. An envelope face follows its effective attack, decay,
+sustain, release, and amount (including tempo-synced stage durations); a
+zero-time attack therefore has a vertical leading edge while a long attack
+has a visible ramp. An LFO face follows waveform, phase, amount, fade-in,
+smoothing, and pulse width. These are deterministic previews of the configured
+signal, not phase-locked telemetry from the audio thread.
+
 A source's own signal inputs belong on its expanded control surface. For an
 LFO this begins with `Reset: Free | Note On`. The gate-driven envelope exposes
 an explicit channel-note input picker, so `Kick notes → Envelope → Sampler

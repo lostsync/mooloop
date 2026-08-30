@@ -2599,6 +2599,7 @@ impl UiState {
         });
         self.modulation_selected_slot.set(selected);
         self.modulation_armed_slot.set(armed);
+        let bpm = f64::from(window.get_bpm().max(1));
         let sources: Vec<ModulationSourceRow> = channel
             .modulation
             .slots
@@ -2606,9 +2607,52 @@ impl UiState {
             .enumerate()
             .filter_map(|(slot, params)| {
                 let params = (*params)?;
-                let (name, kind, waveform, rate, depth, phase, pulse_width, retrigger) =
-                    match params {
-                        ModulatorParams::Lfo(lfo) => (
+                let common = |name: String,
+                              kind,
+                              waveform,
+                              rate,
+                              depth,
+                              phase,
+                              pulse_width,
+                              preview_fade_cycles,
+                              preview_smoothing_cycles,
+                              preview_attack,
+                              preview_decay,
+                              preview_sustain,
+                              preview_release,
+                              retrigger| {
+                    ModulationSourceRow {
+                        slot: slot as i32,
+                        name: name.into(),
+                        kind,
+                        waveform,
+                        rate,
+                        depth,
+                        phase,
+                        pulse_width,
+                        preview_fade_cycles,
+                        preview_smoothing_cycles,
+                        preview_attack,
+                        preview_decay,
+                        preview_sustain,
+                        preview_release,
+                        retrigger,
+                        selected: selected == Some(slot as u8),
+                    }
+                };
+                Some(match params {
+                    ModulatorParams::Lfo(lfo) => {
+                        let cycle_seconds = if lfo.tempo_sync {
+                            lfo.rate_division.seconds(bpm)
+                        } else {
+                            lfo.rate_hz.max(0.001).recip()
+                        };
+                        let fade_seconds = if lfo.fade_in_tempo_sync {
+                            lfo.fade_in_division.seconds(bpm)
+                        } else {
+                            lfo.fade_in_seconds
+                        };
+                        common(
                             format!("LFO {}", slot + 1),
                             0,
                             mod_lfo_waveform_to_int(lfo.waveform),
@@ -2616,30 +2660,43 @@ impl UiState {
                             lfo.depth,
                             lfo.phase,
                             lfo.pulse_width,
+                            fade_seconds / cycle_seconds,
+                            lfo.smoothing_seconds / cycle_seconds,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
                             lfo.retrigger,
-                        ),
-                        ModulatorParams::Envelope(envelope) => (
-                            format!("ENV {}", slot + 1),
-                            1,
-                            0,
-                            0.0,
-                            envelope.amount,
-                            0.0,
-                            0.5,
-                            true,
-                        ),
-                    };
-                Some(ModulationSourceRow {
-                    slot: slot as i32,
-                    name: name.into(),
-                    kind,
-                    waveform,
-                    rate,
-                    depth,
-                    phase,
-                    pulse_width,
-                    retrigger,
-                    selected: selected == Some(slot as u8),
+                        )
+                    }
+                    ModulatorParams::Envelope(envelope) => common(
+                        format!("ENV {}", slot + 1),
+                        1,
+                        0,
+                        0.0,
+                        envelope.amount,
+                        0.0,
+                        0.5,
+                        0.0,
+                        0.0,
+                        if envelope.attack_tempo_sync {
+                            envelope.attack_division.seconds(bpm)
+                        } else {
+                            envelope.attack_seconds
+                        },
+                        if envelope.decay_tempo_sync {
+                            envelope.decay_division.seconds(bpm)
+                        } else {
+                            envelope.decay_seconds
+                        },
+                        envelope.sustain,
+                        if envelope.release_tempo_sync {
+                            envelope.release_division.seconds(bpm)
+                        } else {
+                            envelope.release_seconds
+                        },
+                        true,
+                    ),
                 })
             })
             .collect();
@@ -2750,6 +2807,24 @@ impl UiState {
             selected_lfo.map_or(0.0, |lfo| lfo.smoothing_seconds),
         );
         window.set_modulation_selected_pulse_width(selected_lfo.map_or(0.5, |lfo| lfo.pulse_width));
+        let selected_lfo_cycle_seconds = selected_lfo.map_or(1.0, |lfo| {
+            if lfo.tempo_sync {
+                lfo.rate_division.seconds(bpm)
+            } else {
+                lfo.rate_hz.max(0.001).recip()
+            }
+        });
+        window.set_modulation_selected_preview_fade_cycles(selected_lfo.map_or(0.0, |lfo| {
+            let seconds = if lfo.fade_in_tempo_sync {
+                lfo.fade_in_division.seconds(bpm)
+            } else {
+                lfo.fade_in_seconds
+            };
+            seconds / selected_lfo_cycle_seconds
+        }));
+        window.set_modulation_selected_preview_smoothing_cycles(selected_lfo.map_or(0.0, |lfo| {
+            lfo.smoothing_seconds / selected_lfo_cycle_seconds
+        }));
         let input_channels: Vec<slint::SharedString> = self
             .channels
             .iter()
@@ -2800,6 +2875,36 @@ impl UiState {
         window.set_modulation_selected_envelope_amount(
             selected_envelope.map_or(1.0, |env| env.amount),
         );
+        window.set_modulation_selected_envelope_preview_attack(selected_envelope.map_or(
+            0.0,
+            |env| {
+                if env.attack_tempo_sync {
+                    env.attack_division.seconds(bpm)
+                } else {
+                    env.attack_seconds
+                }
+            },
+        ));
+        window.set_modulation_selected_envelope_preview_decay(selected_envelope.map_or(
+            0.0,
+            |env| {
+                if env.decay_tempo_sync {
+                    env.decay_division.seconds(bpm)
+                } else {
+                    env.decay_seconds
+                }
+            },
+        ));
+        window.set_modulation_selected_envelope_preview_release(selected_envelope.map_or(
+            0.0,
+            |env| {
+                if env.release_tempo_sync {
+                    env.release_division.seconds(bpm)
+                } else {
+                    env.release_seconds
+                }
+            },
+        ));
 
         // Every described generator and strip parameter carries its own
         // overlay depth and legality, so which controls can be routed is
