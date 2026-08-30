@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-30
-- Sessions: 15
+- Sessions: 16
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -94,7 +94,12 @@ work session you can recall being part of, and don't stress over precision.
   since a convolution node also cannot accept a parameter event — so every
   modulation route aimed at a reverb knob was a silent no-op — and a static
   image-source IR rings rather than blooms. Worst-case per-block cost fell
-  31x and stopped depending on decay length at all.
+  31x and stopped depending on decay length at all. Started the v2 mono synth
+  as a third device rather than an edit of the v1 one: its own params struct
+  with `#[serde(default)]` from the start, a descriptor table built from a
+  shared core block instead of inherited from Mono's, and a voice with
+  separate amplitude and filter envelopes plus cutoff keytracking read off the
+  gliding frequency.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

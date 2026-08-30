@@ -14,6 +14,7 @@ pub mod midi;
 pub mod modulation;
 pub mod mixer;
 pub mod mod_metadata;
+pub mod mono_v2;
 pub mod pattern;
 pub mod playlist;
 pub mod project;
@@ -28,6 +29,7 @@ pub use automation::{
 pub use bridge::{EngineCommand, EngineEvent};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
+pub use mono_v2::MonoV2Params;
 pub use modulation::{
     strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModPolarity, ModRack,
     ModRoute, ModTimeDivision, ModulatorKind, ModulatorParams, ParamAddr, ParamOwner,
@@ -99,8 +101,8 @@ pub use playlist::{
 };
 pub use project::{
     ChannelPreset, ChannelSetup, ChannelSource, DrumSynthState, Kit, MonoSynthState,
-    PolySynthState, Project, ProjectChannel, SampleReference, SamplerState, DEFAULT_SWING_PERCENT,
-    MAX_SWING_PERCENT, MIN_SWING_PERCENT,
+    MonoV2State, PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
+    DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };
 pub use sampler::{
     clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,

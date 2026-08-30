@@ -24,7 +24,8 @@ use mooloop_core::{
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, GeneratorParams, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
     ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModTimeDivision,
-    ModulatorParams, MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, ParamAddr,
+    ModulatorParams, MonoSynthParams, MonoSynthState, MonoV2Params, MonoV2State, NoteEvent,
+    NoteId, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
     SamplerParams, SamplerState, SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
@@ -384,6 +385,7 @@ struct ChannelState {
     params: SamplerParams,
     drum_params: DrumSynthParams,
     mono_params: MonoSynthParams,
+    mono_v2_params: MonoV2Params,
     poly_params: PolySynthParams,
     sample_name: String,
     sample_description: String,
@@ -415,6 +417,7 @@ impl ChannelState {
             DeviceKind::Sampler => GeneratorParams::Sampler(self.params),
             DeviceKind::MonoSynth => GeneratorParams::MonoSynth(self.mono_params),
             DeviceKind::PolySynth => GeneratorParams::PolySynth(self.poly_params),
+            DeviceKind::MonoV2 => GeneratorParams::MonoV2(self.mono_v2_params),
             DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
         }
     }
@@ -431,6 +434,7 @@ impl ChannelState {
             params: SamplerParams::default(),
             drum_params: DrumSynthParams::default(),
             mono_params: MonoSynthParams::default(),
+            mono_v2_params: MonoV2Params::default(),
             poly_params: PolySynthParams::default(),
             sample_name: String::new(),
             sample_description: String::new(),
@@ -1113,6 +1117,7 @@ fn device_kind_from_int(value: i32) -> DeviceKind {
         1 => DeviceKind::DrumSynth,
         2 => DeviceKind::MonoSynth,
         3 => DeviceKind::PolySynth,
+        4 => DeviceKind::MonoV2,
         _ => DeviceKind::Sampler,
     }
 }
@@ -1123,6 +1128,7 @@ fn device_kind_to_int(kind: DeviceKind) -> i32 {
         DeviceKind::DrumSynth => 1,
         DeviceKind::MonoSynth => 2,
         DeviceKind::PolySynth => 3,
+        DeviceKind::MonoV2 => 4,
     }
 }
 
@@ -1513,6 +1519,7 @@ impl UiState {
             DeviceKind::DrumSynth => format!("Drum {}", index + 1),
             DeviceKind::MonoSynth => format!("Mono {}", index + 1),
             DeviceKind::PolySynth => format!("Poly {}", index + 1),
+            DeviceKind::MonoV2 => format!("Mono {}", index + 1),
         };
         match kind {
             DeviceKind::Sampler => {
@@ -1529,6 +1536,18 @@ impl UiState {
             }
             DeviceKind::DrumSynth => {
                 channel.drum_params = DrumSynthParams::default();
+                channel.sample_name.clear();
+                channel.sample_description.clear();
+                channel.sample_duration = 0.0;
+                channel.sample_path = None;
+                channel.sample_embedded = false;
+                channel.sample_data = None;
+                channel.waveform.clear();
+                channel.can_previous_sample = false;
+                channel.can_next_sample = false;
+            }
+            DeviceKind::MonoV2 => {
+                channel.mono_v2_params = MonoV2Params::default();
                 channel.sample_name.clear();
                 channel.sample_description.clear();
                 channel.sample_duration = 0.0;
@@ -1594,6 +1613,9 @@ impl UiState {
                     }),
                     DeviceKind::PolySynth => ChannelSource::PolySynth(PolySynthState {
                         params: channel.poly_params,
+                    }),
+                    DeviceKind::MonoV2 => ChannelSource::MonoV2(MonoV2State {
+                        params: channel.mono_v2_params,
                     }),
                 };
                 ProjectChannel {
@@ -1664,32 +1686,44 @@ impl UiState {
             .enumerate()
             .map(|(index, project_channel)| {
                 let setup = &project_channel.setup;
-                let (sampler, drum_params, mono_params, poly_params) = match &setup.source {
-                    ChannelSource::Sampler(sampler) => (
-                        Some(sampler),
-                        DrumSynthParams::default(),
-                        MonoSynthParams::default(),
-                        PolySynthParams::default(),
-                    ),
-                    ChannelSource::DrumSynth(drum) => (
-                        None,
-                        drum.params,
-                        MonoSynthParams::default(),
-                        PolySynthParams::default(),
-                    ),
-                    ChannelSource::MonoSynth(mono) => (
-                        None,
-                        DrumSynthParams::default(),
-                        mono.params,
-                        PolySynthParams::default(),
-                    ),
-                    ChannelSource::PolySynth(poly) => (
-                        None,
-                        DrumSynthParams::default(),
-                        MonoSynthParams::default(),
-                        poly.params,
-                    ),
-                };
+                let (sampler, drum_params, mono_params, poly_params, mono_v2_params) =
+                    match &setup.source {
+                        ChannelSource::Sampler(sampler) => (
+                            Some(sampler),
+                            DrumSynthParams::default(),
+                            MonoSynthParams::default(),
+                            PolySynthParams::default(),
+                            MonoV2Params::default(),
+                        ),
+                        ChannelSource::DrumSynth(drum) => (
+                            None,
+                            drum.params,
+                            MonoSynthParams::default(),
+                            PolySynthParams::default(),
+                            MonoV2Params::default(),
+                        ),
+                        ChannelSource::MonoSynth(mono) => (
+                            None,
+                            DrumSynthParams::default(),
+                            mono.params,
+                            PolySynthParams::default(),
+                            MonoV2Params::default(),
+                        ),
+                        ChannelSource::PolySynth(poly) => (
+                            None,
+                            DrumSynthParams::default(),
+                            MonoSynthParams::default(),
+                            poly.params,
+                            MonoV2Params::default(),
+                        ),
+                        ChannelSource::MonoV2(mono) => (
+                            None,
+                            DrumSynthParams::default(),
+                            MonoSynthParams::default(),
+                            PolySynthParams::default(),
+                            mono.params,
+                        ),
+                    };
                 let sample = sampler
                     .is_some()
                     .then(|| samples.get(index).cloned().flatten())
@@ -1785,6 +1819,7 @@ impl UiState {
                     drum_params,
                     mono_params,
                     poly_params,
+                    mono_v2_params,
                     sample_name,
                     sample_description: description,
                     sample_duration: duration,
@@ -3590,7 +3625,8 @@ impl AppUi {
                                         ChannelSource::Sampler(sampler) => Some(sampler.sample),
                                         ChannelSource::DrumSynth(_)
                                         | ChannelSource::MonoSynth(_)
-                                        | ChannelSource::PolySynth(_) => None,
+                                        | ChannelSource::PolySynth(_)
+                                        | ChannelSource::MonoV2(_) => None,
                                     })
                                     .collect(),
                             })
@@ -9407,7 +9443,8 @@ fn install_project_in_ui(
                 }
                 ChannelSource::DrumSynth(_)
                 | ChannelSource::MonoSynth(_)
-                | ChannelSource::PolySynth(_) => default_sample.cloned(),
+                | ChannelSource::PolySynth(_)
+                | ChannelSource::MonoV2(_) => default_sample.cloned(),
             });
         if let Some(sample) = sample {
             handle.load_sample(index, sample);
@@ -9491,7 +9528,8 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
                 ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
                 ChannelSource::DrumSynth(_)
                 | ChannelSource::MonoSynth(_)
-                | ChannelSource::PolySynth(_) => None,
+                | ChannelSource::PolySynth(_)
+                | ChannelSource::MonoV2(_) => None,
             })
             .collect::<Vec<_>>(),
         LoadedDocument::Kit(kit) => kit
@@ -9501,20 +9539,23 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
                 ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
                 ChannelSource::DrumSynth(_)
                 | ChannelSource::MonoSynth(_)
-                | ChannelSource::PolySynth(_) => None,
+                | ChannelSource::PolySynth(_)
+                | ChannelSource::MonoV2(_) => None,
             })
             .collect(),
         LoadedDocument::Channel(channel) => vec![match &channel.source {
             ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
             ChannelSource::DrumSynth(_)
             | ChannelSource::MonoSynth(_)
-            | ChannelSource::PolySynth(_) => None,
+            | ChannelSource::PolySynth(_)
+            | ChannelSource::MonoV2(_) => None,
         }],
         LoadedDocument::Generator(source) => vec![match source {
             ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
             ChannelSource::DrumSynth(_)
             | ChannelSource::MonoSynth(_)
-            | ChannelSource::PolySynth(_) => None,
+            | ChannelSource::PolySynth(_)
+            | ChannelSource::MonoV2(_) => None,
         }],
     };
     let mut samples = Vec::with_capacity(sample_references.len());

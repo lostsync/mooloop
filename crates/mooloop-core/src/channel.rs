@@ -30,6 +30,10 @@ pub enum DeviceKind {
     DrumSynth,
     MonoSynth,
     PolySynth,
+    /// The v2 mono synth. Transitional name: `MonoSynth` is the v1 device,
+    /// which stays loadable until its channels have somewhere to migrate to
+    /// and is then deleted, at which point this takes the plain name.
+    MonoV2,
 }
 
 /// One mixer channel.

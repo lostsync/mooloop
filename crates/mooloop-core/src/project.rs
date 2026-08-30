@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use crate::{
     default_buses, BusSetup, Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter,
-    AutomationLane, ModRack, MonoSynthParams, NoteEvent, NoteId, PatternPlacement, PlaybackMode,
-    PolySynthParams,
+    AutomationLane, ModRack, MonoSynthParams, MonoV2Params, NoteEvent, NoteId, PatternPlacement,
+    PlaybackMode, PolySynthParams,
     SamplerParams, SnareCharacter, DEFAULT_STEPS,
 };
 
@@ -46,6 +46,11 @@ pub struct MonoSynthState {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MonoV2State {
+    pub params: MonoV2Params,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PolySynthState {
     pub params: PolySynthParams,
 }
@@ -58,6 +63,7 @@ pub enum ChannelSource {
     DrumSynth(DrumSynthState),
     MonoSynth(MonoSynthState),
     PolySynth(PolySynthState),
+    MonoV2(MonoV2State),
 }
 
 impl Default for ChannelSource {
@@ -73,6 +79,7 @@ impl ChannelSource {
             Self::DrumSynth(_) => DeviceKind::DrumSynth,
             Self::MonoSynth(_) => DeviceKind::MonoSynth,
             Self::PolySynth(_) => DeviceKind::PolySynth,
+            Self::MonoV2(_) => DeviceKind::MonoV2,
         }
     }
 
@@ -114,6 +121,20 @@ impl ChannelSource {
     pub fn mono_synth_state_mut(&mut self) -> Option<&mut MonoSynthState> {
         match self {
             Self::MonoSynth(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn mono_v2_state(&self) -> Option<&MonoV2State> {
+        match self {
+            Self::MonoV2(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn mono_v2_state_mut(&mut self) -> Option<&mut MonoV2State> {
+        match self {
+            Self::MonoV2(state) => Some(state),
             _ => None,
         }
     }
@@ -184,6 +205,19 @@ impl ChannelSetup {
         }
     }
 
+    pub fn mono_v2(name: impl Into<String>) -> Self {
+        Self::mono_v2_with_params(name, MonoV2Params::default())
+    }
+
+    pub fn mono_v2_with_params(name: impl Into<String>, params: MonoV2Params) -> Self {
+        Self {
+            channel: Channel::new(name, DeviceKind::MonoV2),
+            source: ChannelSource::MonoV2(MonoV2State { params }),
+            effects: Vec::new(),
+            modulation: ModRack::default(),
+        }
+    }
+
     pub fn poly_synth(name: impl Into<String>) -> Self {
         Self::poly_synth_with_params(name, PolySynthParams::default())
     }
@@ -223,6 +257,14 @@ impl ChannelSetup {
 
     pub fn mono_synth_state_mut(&mut self) -> Option<&mut MonoSynthState> {
         self.source.mono_synth_state_mut()
+    }
+
+    pub fn mono_v2_state(&self) -> Option<&MonoV2State> {
+        self.source.mono_v2_state()
+    }
+
+    pub fn mono_v2_state_mut(&mut self) -> Option<&mut MonoV2State> {
+        self.source.mono_v2_state_mut()
     }
 
     pub fn poly_synth_state(&self) -> Option<&PolySynthState> {
@@ -290,6 +332,23 @@ impl ProjectChannel {
                 format!("Mono Synth {}", index + 1),
                 params,
             ),
+            notes: vec![Vec::new(); pattern_count.max(1)],
+            automation: vec![Vec::new(); pattern_count.max(1)],
+            next_note_id: 1,
+        }
+    }
+
+    pub fn mono_v2(index: usize, pattern_count: usize) -> Self {
+        Self::mono_v2_with_params(index, pattern_count, MonoV2Params::default())
+    }
+
+    pub fn mono_v2_with_params(
+        index: usize,
+        pattern_count: usize,
+        params: MonoV2Params,
+    ) -> Self {
+        Self {
+            setup: ChannelSetup::mono_v2_with_params(format!("Mono {}", index + 1), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,

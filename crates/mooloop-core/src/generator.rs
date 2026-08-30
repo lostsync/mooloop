@@ -13,9 +13,9 @@
 //! adding an oscillator parameter later does not disturb the others.
 
 use crate::{
-    DeviceKind, LfoParams, LfoWave, LoopMode, MonoSynthParams, OscParams, OscWave, ParamCurve,
-    ParamDescriptor, PolySynthParams, RetriggerMode, SamplerParams, VoiceMode, MAX_POLY_VOICES,
-    MAX_SAMPLER_VOICES,
+    DeviceKind, LfoParams, LfoWave, LoopMode, MonoSynthParams, MonoV2Params, OscParams, OscWave,
+    ParamCurve, ParamDescriptor, PolySynthParams, RetriggerMode, SamplerParams, VoiceMode,
+    MAX_POLY_VOICES, MAX_SAMPLER_VOICES,
 };
 
 // --- Sampler ---------------------------------------------------------------
@@ -182,6 +182,16 @@ pub const SYNTH_PARAM_LFO_TO_AMP: u32 = 14;
 pub const SYNTH_PARAM_POLYPHONY: u32 = 15;
 pub const SYNTH_PARAM_SPREAD: u32 = 16;
 
+// 17-19 are deliberately unused, so the v1 synths keep room to grow without
+// reaching into the v2 mono block below.
+
+/// The v2 mono synth's own ids, starting clear of everything above.
+pub const SYNTH_PARAM_FILTER_ATTACK: u32 = 20;
+pub const SYNTH_PARAM_FILTER_DECAY: u32 = 21;
+pub const SYNTH_PARAM_FILTER_SUSTAIN: u32 = 22;
+pub const SYNTH_PARAM_FILTER_RELEASE: u32 = 23;
+pub const SYNTH_PARAM_FILTER_KEYTRACK: u32 = 24;
+
 const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
     [
         stepped(synth_osc_param(n, OSC_OFFSET_WAVE), name, 4, 2.0),
@@ -219,7 +229,11 @@ const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
     ]
 }
 
-const SHARED_SYNTH_DESCRIPTORS: [ParamDescriptor; 15] = [
+/// The voice parameters every synth in the project shares: glide, one ADSR,
+/// and the filter's cutoff, resonance, envelope depth, and drive. Split out
+/// from the LFO block so the v2 mono synth, which has no device-local LFO, can
+/// build its table from the same entries rather than a near-copy of them.
+const SYNTH_CORE_DESCRIPTORS: [ParamDescriptor; 9] = [
     ParamDescriptor {
         id: SYNTH_PARAM_GLIDE,
         name: "Glide",
@@ -245,6 +259,12 @@ const SHARED_SYNTH_DESCRIPTORS: [ParamDescriptor; 15] = [
         default: 0.0,
     },
     unit(SYNTH_PARAM_DRIVE, "Drive", 0.0),
+];
+
+/// The v1 synths' device-local LFO. The v2 mono synth does not have one; its
+/// modulation comes from the channel's `ModRack` through these same
+/// descriptor ids on the parameters themselves.
+const LFO_DESCRIPTORS: [ParamDescriptor; 6] = [
     stepped(SYNTH_PARAM_LFO_WAVE, "LFO wave", 5, 0.0),
     ParamDescriptor {
         id: SYNTH_PARAM_LFO_RATE_HZ,
@@ -285,6 +305,36 @@ const SHARED_SYNTH_DESCRIPTORS: [ParamDescriptor; 15] = [
     unit(SYNTH_PARAM_LFO_TO_AMP, "LFO amp", 0.0),
 ];
 
+const SHARED_SYNTH_DESCRIPTORS: [ParamDescriptor; 15] =
+    concat_core_lfo(SYNTH_CORE_DESCRIPTORS, LFO_DESCRIPTORS);
+
+const fn concat_core_lfo(
+    core: [ParamDescriptor; 9],
+    lfo: [ParamDescriptor; 6],
+) -> [ParamDescriptor; 15] {
+    let mut out = [core[0]; 15];
+    let mut i = 0;
+    while i < 9 {
+        out[i] = core[i];
+        i += 1;
+    }
+    let mut j = 0;
+    while j < 6 {
+        out[9 + j] = lfo[j];
+        j += 1;
+    }
+    out
+}
+
+/// The v2 mono synth's second envelope and its keytracking.
+const MONO_V2_FILTER_DESCRIPTORS: [ParamDescriptor; 5] = [
+    seconds(SYNTH_PARAM_FILTER_ATTACK, "F attack", 0.005),
+    seconds(SYNTH_PARAM_FILTER_DECAY, "F decay", 0.2),
+    unit(SYNTH_PARAM_FILTER_SUSTAIN, "F sustain", 0.7),
+    seconds(SYNTH_PARAM_FILTER_RELEASE, "F release", 0.15),
+    unit(SYNTH_PARAM_FILTER_KEYTRACK, "Keytrack", 0.0),
+];
+
 /// `SHARED_SYNTH_DESCRIPTORS` then three oscillator blocks. Written out rather
 /// than concatenated at runtime so the table stays `static` and the engine
 /// never allocates to enumerate it.
@@ -294,6 +344,41 @@ static MONO_DESCRIPTORS: [ParamDescriptor; 30] = concat_synth(
     osc_descriptors(1, "Osc 2 wave"),
     osc_descriptors(2, "Osc 3 wave"),
 );
+
+/// Built from the shared core rather than from `MONO_DESCRIPTORS`: the v2
+/// mono synth is a different instrument, and a table that inherits from
+/// another one quietly becomes a lie the moment the two diverge.
+static MONO_V2_DESCRIPTORS: [ParamDescriptor; 29] = concat_mono_v2(
+    SYNTH_CORE_DESCRIPTORS,
+    MONO_V2_FILTER_DESCRIPTORS,
+    osc_descriptors(0, "Osc 1 wave"),
+    osc_descriptors(1, "Osc 2 wave"),
+    osc_descriptors(2, "Osc 3 wave"),
+);
+
+const fn concat_mono_v2(
+    core: [ParamDescriptor; 9],
+    filter: [ParamDescriptor; 5],
+    a: [ParamDescriptor; 5],
+    b: [ParamDescriptor; 5],
+    c: [ParamDescriptor; 5],
+) -> [ParamDescriptor; 29] {
+    let mut out = [core[0]; 29];
+    let mut i = 0;
+    while i < 9 {
+        out[i] = core[i];
+        i += 1;
+    }
+    let mut j = 0;
+    while j < 5 {
+        out[9 + j] = filter[j];
+        out[14 + j] = a[j];
+        out[19 + j] = b[j];
+        out[24 + j] = c[j];
+        j += 1;
+    }
+    out
+}
 
 static POLY_DESCRIPTORS: [ParamDescriptor; 32] = {
     let mut out = [SHARED_SYNTH_DESCRIPTORS[0]; 32];
@@ -351,6 +436,7 @@ impl DeviceKind {
             Self::Sampler => &SAMPLER_DESCRIPTORS,
             Self::MonoSynth => &MONO_DESCRIPTORS,
             Self::PolySynth => &POLY_DESCRIPTORS,
+            Self::MonoV2 => &MONO_V2_DESCRIPTORS,
             Self::DrumSynth => &[],
         }
     }
@@ -427,6 +513,7 @@ pub enum GeneratorParams {
     Sampler(SamplerParams),
     MonoSynth(MonoSynthParams),
     PolySynth(PolySynthParams),
+    MonoV2(MonoV2Params),
     /// Not addressable yet; every `get`/`set` misses.
     DrumSynth,
 }
@@ -437,6 +524,7 @@ impl GeneratorParams {
             Self::Sampler(_) => DeviceKind::Sampler,
             Self::MonoSynth(_) => DeviceKind::MonoSynth,
             Self::PolySynth(_) => DeviceKind::PolySynth,
+            Self::MonoV2(_) => DeviceKind::MonoV2,
             Self::DrumSynth => DeviceKind::DrumSynth,
         }
     }
@@ -508,6 +596,28 @@ impl GeneratorParams {
                     SYNTH_PARAM_DRIVE => p.drive,
                     SYNTH_PARAM_POLYPHONY => f32::from(p.polyphony),
                     SYNTH_PARAM_SPREAD => p.spread,
+                    _ => return None,
+                })
+            }
+            Self::MonoV2(p) => {
+                if let Some((oscillator, offset)) = osc_slot(id) {
+                    return osc_get(&p.osc[oscillator], offset);
+                }
+                Some(match id {
+                    SYNTH_PARAM_GLIDE => p.glide,
+                    SYNTH_PARAM_ATTACK => p.attack,
+                    SYNTH_PARAM_DECAY => p.decay,
+                    SYNTH_PARAM_SUSTAIN => p.sustain,
+                    SYNTH_PARAM_RELEASE => p.release,
+                    SYNTH_PARAM_FILTER_CUTOFF => p.filter_cutoff,
+                    SYNTH_PARAM_FILTER_RESONANCE => p.filter_resonance,
+                    SYNTH_PARAM_FILTER_ENV_AMOUNT => p.filter_env_amount,
+                    SYNTH_PARAM_DRIVE => p.drive,
+                    SYNTH_PARAM_FILTER_ATTACK => p.filter_attack,
+                    SYNTH_PARAM_FILTER_DECAY => p.filter_decay,
+                    SYNTH_PARAM_FILTER_SUSTAIN => p.filter_sustain,
+                    SYNTH_PARAM_FILTER_RELEASE => p.filter_release,
+                    SYNTH_PARAM_FILTER_KEYTRACK => p.filter_keytrack,
                     _ => return None,
                 })
             }
@@ -592,6 +702,31 @@ impl GeneratorParams {
                     }
                 }
             }
+            Self::MonoV2(p) => {
+                if let Some((oscillator, offset)) = osc_slot(id) {
+                    if !osc_set(&mut p.osc[oscillator], offset, value) {
+                        return None;
+                    }
+                } else {
+                    match id {
+                        SYNTH_PARAM_GLIDE => p.glide = value,
+                        SYNTH_PARAM_ATTACK => p.attack = value,
+                        SYNTH_PARAM_DECAY => p.decay = value,
+                        SYNTH_PARAM_SUSTAIN => p.sustain = value,
+                        SYNTH_PARAM_RELEASE => p.release = value,
+                        SYNTH_PARAM_FILTER_CUTOFF => p.filter_cutoff = value,
+                        SYNTH_PARAM_FILTER_RESONANCE => p.filter_resonance = value,
+                        SYNTH_PARAM_FILTER_ENV_AMOUNT => p.filter_env_amount = value,
+                        SYNTH_PARAM_DRIVE => p.drive = value,
+                        SYNTH_PARAM_FILTER_ATTACK => p.filter_attack = value,
+                        SYNTH_PARAM_FILTER_DECAY => p.filter_decay = value,
+                        SYNTH_PARAM_FILTER_SUSTAIN => p.filter_sustain = value,
+                        SYNTH_PARAM_FILTER_RELEASE => p.filter_release = value,
+                        SYNTH_PARAM_FILTER_KEYTRACK => p.filter_keytrack = value,
+                        _ => return None,
+                    }
+                }
+            }
             Self::DrumSynth => return None,
         }
         Some(value)
@@ -603,11 +738,12 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn all() -> [GeneratorParams; 3] {
+    fn all() -> [GeneratorParams; 4] {
         [
             GeneratorParams::Sampler(SamplerParams::default()),
             GeneratorParams::MonoSynth(MonoSynthParams::default()),
             GeneratorParams::PolySynth(PolySynthParams::default()),
+            GeneratorParams::MonoV2(MonoV2Params::default()),
         ]
     }
 

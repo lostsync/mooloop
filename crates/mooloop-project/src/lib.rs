@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooloop_core::{
-    ChannelSetup, ChannelSource, DeviceKind, DrumSynthParams, Kit, MonoSynthParams,
+    ChannelSetup, ChannelSource, DeviceKind, DrumSynthParams, Kit, MonoSynthParams, MonoV2Params,
     PolySynthParams, Project, SampleReference, SamplerParams, MAX_AUTOMATION_LANES_PER_CHANNEL,
     MAX_AUTOMATION_POINTS_PER_LANE, MAX_CHANNELS, MAX_CHOKE_GROUP,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS,
@@ -980,6 +980,7 @@ fn validate_source(index: usize, source: &ChannelSource) -> Result<(), Error> {
         ChannelSource::DrumSynth(synth) => validate_drum_synth(index, synth.params),
         ChannelSource::MonoSynth(synth) => validate_mono_synth(index, synth.params),
         ChannelSource::PolySynth(synth) => validate_poly_synth(index, synth.params),
+        ChannelSource::MonoV2(synth) => validate_mono_v2(index, synth.params),
     }
 }
 
@@ -1044,6 +1045,57 @@ fn validate_mono_synth(channel: usize, params: MonoSynthParams) -> Result<(), Er
     Ok(())
 }
 
+/// The three-oscillator front end every synth in the project shares.
+fn validate_oscillators(
+    channel: usize,
+    kind: &str,
+    oscillators: &[mooloop_core::OscParams],
+) -> Result<(), Error> {
+    for (index, osc) in oscillators.iter().enumerate() {
+        for (field, value, min, max) in [
+            ("semitones", osc.semitones, -48.0, 48.0),
+            ("cents", osc.cents, -100.0, 100.0),
+            ("level", osc.level, 0.0, 1.0),
+            ("pulse width", osc.pulse_width, 0.05, 0.95),
+        ] {
+            validate_range(
+                channel,
+                &format!("{kind} oscillator {} {field}", index + 1),
+                value,
+                min,
+                max,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// The v2 mono synth has no device-local LFO and two envelopes, so it gets its
+/// own field list rather than being squeezed through the v1 signature.
+fn validate_mono_v2(channel: usize, params: MonoV2Params) -> Result<(), Error> {
+    const KIND: &str = "mono v2 synth";
+    validate_oscillators(channel, KIND, &params.osc)?;
+    for (field, value, min, max) in [
+        ("glide", params.glide, 0.0, 10.0),
+        ("attack", params.attack, 0.0, 10.0),
+        ("decay", params.decay, 0.0, 10.0),
+        ("sustain", params.sustain, 0.0, 1.0),
+        ("release", params.release, 0.0, 10.0),
+        ("filter cutoff", params.filter_cutoff, 0.0, 1.0),
+        ("filter resonance", params.filter_resonance, 0.0, 1.0),
+        ("filter envelope", params.filter_env_amount, -1.0, 1.0),
+        ("drive", params.drive, 0.0, 1.0),
+        ("filter attack", params.filter_attack, 0.0, 10.0),
+        ("filter decay", params.filter_decay, 0.0, 10.0),
+        ("filter sustain", params.filter_sustain, 0.0, 1.0),
+        ("filter release", params.filter_release, 0.0, 10.0),
+        ("filter keytrack", params.filter_keytrack, 0.0, 1.0),
+    ] {
+        validate_range(channel, &format!("{KIND} {field}"), value, min, max)?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn validate_synth_params(
     channel: usize,
@@ -1064,36 +1116,7 @@ fn validate_synth_params(
     pulse: f32,
     amp: f32,
 ) -> Result<(), Error> {
-    for (index, osc) in oscillators.iter().enumerate() {
-        validate_range(
-            channel,
-            &format!("{kind} oscillator {} semitones", index + 1),
-            osc.semitones,
-            -48.0,
-            48.0,
-        )?;
-        validate_range(
-            channel,
-            &format!("{kind} oscillator {} cents", index + 1),
-            osc.cents,
-            -100.0,
-            100.0,
-        )?;
-        validate_range(
-            channel,
-            &format!("{kind} oscillator {} level", index + 1),
-            osc.level,
-            0.0,
-            1.0,
-        )?;
-        validate_range(
-            channel,
-            &format!("{kind} oscillator {} pulse width", index + 1),
-            osc.pulse_width,
-            0.05,
-            0.95,
-        )?;
-    }
+    validate_oscillators(channel, kind, oscillators)?;
     for (field, value, min, max) in [
         ("glide", glide, 0.0, 10.0),
         ("attack", attack, 0.0, 10.0),
@@ -1771,6 +1794,56 @@ id = "default_kick"
         assert_eq!(loaded, MonoSynthParams::default());
     }
 
+    /// The v2 mono synth carries `#[serde(default)]` from the start, so a
+    /// manifest written by a build that predates any given field still loads.
+    /// Asserted by truncating the table at the filter envelope, which is the
+    /// shape a project saved before that block existed would have.
+    #[test]
+    fn mono_v2_params_load_from_a_manifest_missing_later_fields() {
+        let written = toml::to_string(&MonoV2Params::default()).unwrap();
+        let (before_filter_env, _) = written.split_once("filter_attack").unwrap();
+        let loaded: MonoV2Params = toml::from_str(before_filter_env).unwrap();
+        assert_eq!(loaded, MonoV2Params::default());
+    }
+
+    #[test]
+    fn mono_v2_source_round_trips_in_a_song() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("mono-v2.mooloop");
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::mono_v2(0, 1);
+        let params = &mut project.channels[0]
+            .setup
+            .mono_v2_state_mut()
+            .unwrap()
+            .params;
+        params.filter_decay = 0.08;
+        params.filter_sustain = 0.0;
+        params.filter_keytrack = 0.75;
+        params.filter_env_amount = 0.6;
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        assert!(manifest.contains("type = \"mono_v2\""));
+        assert_eq!(
+            load_bundle(&bundle).unwrap().document,
+            LoadedDocument::Song(project)
+        );
+    }
+
+    #[test]
+    fn mono_v2_validation_rejects_an_out_of_range_filter_envelope() {
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::mono_v2(0, 1);
+        project.channels[0]
+            .setup
+            .mono_v2_state_mut()
+            .unwrap()
+            .params
+            .filter_keytrack = 4.0;
+        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+    }
+
     #[test]
     fn generator_presets_round_trip_for_every_kind() {
         let temp = tempdir().unwrap();
@@ -1779,6 +1852,7 @@ id = "default_kick"
             ChannelSource::DrumSynth(mooloop_core::DrumSynthState::default()),
             ChannelSource::MonoSynth(mooloop_core::MonoSynthState::default()),
             ChannelSource::PolySynth(mooloop_core::PolySynthState::default()),
+            ChannelSource::MonoV2(mooloop_core::MonoV2State::default()),
         ];
         for (index, source) in sources.into_iter().enumerate() {
             let info = PresetInfo {
