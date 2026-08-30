@@ -21,11 +21,12 @@ use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, strip_descriptor, would_create_cycle,
     AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup,
     ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectParams,
-    EffectSlotState, EffectTarget, EngineCommand, EngineEvent, GeneratorParams, HatCharacter,
+    EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, GeneratorParams,
+    GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
     ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModTimeDivision,
     ModulatorParams, MonoSynthParams, MonoSynthState, MonoV2Params, MonoV2State, NoteEvent,
-    NoteId, OscWave, ParamAddr,
+    NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
     SamplerParams, SamplerState, SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
@@ -3261,6 +3262,39 @@ impl UiState {
         window.set_mono_lfo_filter(mono.lfo.to_filter);
         window.set_mono_lfo_pulse_width(mono.lfo.to_pulse_width);
         window.set_mono_lfo_amp(mono.lfo.to_amp);
+        let mono_v2 = ch.mono_v2_params;
+        window.set_monov2_osc1_wave(osc_wave_to_int(mono_v2.osc[0].wave));
+        window.set_monov2_osc1_semitones(mono_v2.osc[0].semitones);
+        window.set_monov2_osc1_cents(mono_v2.osc[0].cents);
+        window.set_monov2_osc1_level(mono_v2.osc[0].level);
+        window.set_monov2_osc1_pulse_width(mono_v2.osc[0].pulse_width);
+        window.set_monov2_osc2_wave(osc_wave_to_int(mono_v2.osc[1].wave));
+        window.set_monov2_osc2_semitones(mono_v2.osc[1].semitones);
+        window.set_monov2_osc2_cents(mono_v2.osc[1].cents);
+        window.set_monov2_osc2_level(mono_v2.osc[1].level);
+        window.set_monov2_osc2_pulse_width(mono_v2.osc[1].pulse_width);
+        window.set_monov2_osc3_wave(osc_wave_to_int(mono_v2.osc[2].wave));
+        window.set_monov2_osc3_semitones(mono_v2.osc[2].semitones);
+        window.set_monov2_osc3_cents(mono_v2.osc[2].cents);
+        window.set_monov2_osc3_level(mono_v2.osc[2].level);
+        window.set_monov2_osc3_pulse_width(mono_v2.osc[2].pulse_width);
+        window.set_monov2_glide(mono_v2.glide);
+        window.set_monov2_attack(mono_v2.attack);
+        window.set_monov2_decay(mono_v2.decay);
+        window.set_monov2_sustain(mono_v2.sustain);
+        window.set_monov2_release(mono_v2.release);
+        window.set_monov2_filter_cutoff(mono_v2.filter_cutoff);
+        window.set_monov2_filter_resonance(mono_v2.filter_resonance);
+        window.set_monov2_filter_env(mono_v2.filter_env_amount);
+        window.set_monov2_drive(mono_v2.drive);
+        window.set_monov2_filter_attack(mono_v2.filter_attack);
+        window.set_monov2_filter_decay(mono_v2.filter_decay);
+        window.set_monov2_filter_sustain(mono_v2.filter_sustain);
+        window.set_monov2_filter_release(mono_v2.filter_release);
+        window.set_monov2_filter_keytrack(mono_v2.filter_keytrack);
+        window.set_monov2_glide_mode(mono_v2.glide_mode.to_index());
+        window.set_monov2_env_trigger(mono_v2.env_trigger.to_index());
+        window.set_monov2_priority(mono_v2.priority.to_index());
         let poly = ch.poly_params;
         window.set_poly_osc1_wave(osc_wave_to_int(poly.osc[0].wave));
         window.set_poly_osc1_semitones(poly.osc[0].semitones);
@@ -7934,6 +7968,118 @@ impl AppUi {
                 });
             });
         }
+
+        macro_rules! wire_mono_v2_param {
+            ($callback:ident, $($field:ident).+) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value: f32| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    channel.mono_v2_params.$($field).+ = value;
+                    let _ = tx.send(EngineCommand::SetChannelMonoV2Params {
+                        channel: channel_index as u8,
+                        params: channel.mono_v2_params,
+                    });
+                });
+            }};
+        }
+
+        wire_mono_v2_param!(on_monov2_glide_changed, glide);
+        wire_mono_v2_param!(on_monov2_attack_changed, attack);
+        wire_mono_v2_param!(on_monov2_decay_changed, decay);
+        wire_mono_v2_param!(on_monov2_sustain_changed, sustain);
+        wire_mono_v2_param!(on_monov2_release_changed, release);
+        wire_mono_v2_param!(on_monov2_filter_cutoff_changed, filter_cutoff);
+        wire_mono_v2_param!(on_monov2_filter_resonance_changed, filter_resonance);
+        wire_mono_v2_param!(on_monov2_filter_env_changed, filter_env_amount);
+        wire_mono_v2_param!(on_monov2_drive_changed, drive);
+        wire_mono_v2_param!(on_monov2_filter_attack_changed, filter_attack);
+        wire_mono_v2_param!(on_monov2_filter_decay_changed, filter_decay);
+        wire_mono_v2_param!(on_monov2_filter_sustain_changed, filter_sustain);
+        wire_mono_v2_param!(on_monov2_filter_release_changed, filter_release);
+        wire_mono_v2_param!(on_monov2_filter_keytrack_changed, filter_keytrack);
+
+        /// The three performance switches arrive as selector indices rather
+        /// than floats, so they take the same shape with a conversion.
+        macro_rules! wire_mono_v2_enum {
+            ($callback:ident, $field:ident, $from_index:path) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value: i32| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    channel.mono_v2_params.$field = $from_index(value);
+                    let _ = tx.send(EngineCommand::SetChannelMonoV2Params {
+                        channel: channel_index as u8,
+                        params: channel.mono_v2_params,
+                    });
+                });
+            }};
+        }
+
+        wire_mono_v2_enum!(on_monov2_glide_mode_changed, glide_mode, GlideMode::from_index);
+        wire_mono_v2_enum!(
+            on_monov2_env_trigger_changed,
+            env_trigger,
+            EnvTrigger::from_index
+        );
+        wire_mono_v2_enum!(
+            on_monov2_priority_changed,
+            priority,
+            NotePriority::from_index
+        );
+
+        macro_rules! wire_mono_v2_osc_float {
+            ($callback:ident, $index:expr, $field:ident) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value: f32| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    channel.mono_v2_params.osc[$index].$field = value;
+                    let _ = tx.send(EngineCommand::SetChannelMonoV2Params {
+                        channel: channel_index as u8,
+                        params: channel.mono_v2_params,
+                    });
+                });
+            }};
+        }
+        macro_rules! wire_mono_v2_osc_wave {
+            ($callback:ident, $index:expr) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    channel.mono_v2_params.osc[$index].wave = osc_wave_from_int(value);
+                    let _ = tx.send(EngineCommand::SetChannelMonoV2Params {
+                        channel: channel_index as u8,
+                        params: channel.mono_v2_params,
+                    });
+                });
+            }};
+        }
+
+        wire_mono_v2_osc_wave!(on_monov2_osc1_wave_changed, 0);
+        wire_mono_v2_osc_float!(on_monov2_osc1_semitones_changed, 0, semitones);
+        wire_mono_v2_osc_float!(on_monov2_osc1_cents_changed, 0, cents);
+        wire_mono_v2_osc_float!(on_monov2_osc1_level_changed, 0, level);
+        wire_mono_v2_osc_float!(on_monov2_osc1_pulse_width_changed, 0, pulse_width);
+        wire_mono_v2_osc_wave!(on_monov2_osc2_wave_changed, 1);
+        wire_mono_v2_osc_float!(on_monov2_osc2_semitones_changed, 1, semitones);
+        wire_mono_v2_osc_float!(on_monov2_osc2_cents_changed, 1, cents);
+        wire_mono_v2_osc_float!(on_monov2_osc2_level_changed, 1, level);
+        wire_mono_v2_osc_float!(on_monov2_osc2_pulse_width_changed, 1, pulse_width);
+        wire_mono_v2_osc_wave!(on_monov2_osc3_wave_changed, 2);
+        wire_mono_v2_osc_float!(on_monov2_osc3_semitones_changed, 2, semitones);
+        wire_mono_v2_osc_float!(on_monov2_osc3_cents_changed, 2, cents);
+        wire_mono_v2_osc_float!(on_monov2_osc3_level_changed, 2, level);
+        wire_mono_v2_osc_float!(on_monov2_osc3_pulse_width_changed, 2, pulse_width);
 
         macro_rules! wire_mono_osc_float {
             ($callback:ident, $index:expr, $field:ident) => {{

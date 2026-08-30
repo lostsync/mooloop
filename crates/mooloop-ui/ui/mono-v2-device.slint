@@ -1,0 +1,266 @@
+import { Theme } from "theme.slint";
+import { NoteFormat, ParameterKnob, SelectorBank } from "controls.slint";
+import { DevicePageButton } from "device-rack.slint";
+import { FilterResponseDisplay } from "device-displays.slint";
+import { EnvelopeEditor } from "envelope.slint";
+import { OscillatorDeviceStrip } from "device-oscillator.slint";
+
+// The v2 mono synth's face. Three pages, and the third is PERF rather than
+// MOD: general modulation belongs to the channel shelf that the common device
+// frame opens, so the space goes to note behaviour instead of to a
+// device-local LFO.
+export component MonoV2DeviceFace inherits Rectangle {
+    in-out property <int> page;
+    in-out property <int> osc1-wave; in-out property <float> osc1-semitones; in-out property <float> osc1-cents; in-out property <float> osc1-level; in-out property <float> osc1-pulse-width;
+    in-out property <int> osc2-wave; in-out property <float> osc2-semitones; in-out property <float> osc2-cents; in-out property <float> osc2-level; in-out property <float> osc2-pulse-width;
+    in-out property <int> osc3-wave; in-out property <float> osc3-semitones; in-out property <float> osc3-cents; in-out property <float> osc3-level; in-out property <float> osc3-pulse-width;
+    in-out property <float> glide; in-out property <float> attack; in-out property <float> decay; in-out property <float> sustain; in-out property <float> release;
+    in-out property <float> filter-cutoff; in-out property <float> filter-resonance; in-out property <float> filter-env; in-out property <float> drive;
+    in-out property <float> filter-attack; in-out property <float> filter-decay; in-out property <float> filter-sustain; in-out property <float> filter-release; in-out property <float> filter-keytrack;
+    in-out property <int> glide-mode; in-out property <int> env-trigger; in-out property <int> priority;
+    in property <bool> modulation-armed;
+    // Indexed by descriptor id, mirroring `SYNTH_PARAM_*` in mooloop-core, so
+    // every eligible control on this face routes through one path.
+    in property <[float]> modulation-depths;
+    in property <[bool]> modulation-allowed;
+    in property <[float]> modulation-offsets;
+    in property <[int]> modulation-route-counts;
+    callback osc1-wave-changed(int); callback osc1-semitones-changed(float); callback osc1-cents-changed(float); callback osc1-level-changed(float); callback osc1-pulse-width-changed(float);
+    callback osc2-wave-changed(int); callback osc2-semitones-changed(float); callback osc2-cents-changed(float); callback osc2-level-changed(float); callback osc2-pulse-width-changed(float);
+    callback osc3-wave-changed(int); callback osc3-semitones-changed(float); callback osc3-cents-changed(float); callback osc3-level-changed(float); callback osc3-pulse-width-changed(float);
+    callback glide-changed(float); callback attack-changed(float); callback decay-changed(float); callback sustain-changed(float); callback release-changed(float);
+    callback filter-cutoff-changed(float); callback filter-resonance-changed(float); callback filter-env-changed(float); callback drive-changed(float);
+    callback filter-attack-changed(float); callback filter-decay-changed(float); callback filter-sustain-changed(float); callback filter-release-changed(float); callback filter-keytrack-changed(float);
+    callback glide-mode-changed(int); callback env-trigger-changed(int); callback priority-changed(int);
+    callback modulation-depth-changed(int, float);
+    callback modulation-edit-started(int);
+    callback modulation-edit-finished(int);
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 5px;
+        HorizontalLayout {
+            spacing: 3px;
+            DevicePageButton { text: "OSC"; active: root.page == 0; clicked => { root.page = 0; } }
+            DevicePageButton { text: "AMP/FILTER"; active: root.page == 1; clicked => { root.page = 1; } }
+            DevicePageButton { text: "PERF"; active: root.page == 2; clicked => { root.page = 2; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+
+        if root.page == 0 : HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 5px;
+            OscillatorDeviceStrip {
+                horizontal-stretch: 1; title: "OSC 1";
+                param-base: 100;
+                modulation-armed: root.modulation-armed;
+                modulation-depths: root.modulation-depths;
+                modulation-allowed: root.modulation-allowed;
+                modulation-offsets: root.modulation-offsets;
+                modulation-route-counts: root.modulation-route-counts;
+                modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                modulation-edit-started(p) => { root.modulation-edit-started(p); }
+                modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
+                wave <=> root.osc1-wave; semitones <=> root.osc1-semitones; cents <=> root.osc1-cents; level <=> root.osc1-level; pulse-width <=> root.osc1-pulse-width;
+                wave-changed(v) => { root.osc1-wave-changed(v); } semitones-changed(v) => { root.osc1-semitones-changed(v); } cents-changed(v) => { root.osc1-cents-changed(v); } level-changed(v) => { root.osc1-level-changed(v); } pulse-width-changed(v) => { root.osc1-pulse-width-changed(v); }
+            }
+            OscillatorDeviceStrip {
+                horizontal-stretch: 1; title: "OSC 2";
+                param-base: 110;
+                modulation-armed: root.modulation-armed;
+                modulation-depths: root.modulation-depths;
+                modulation-allowed: root.modulation-allowed;
+                modulation-offsets: root.modulation-offsets;
+                modulation-route-counts: root.modulation-route-counts;
+                modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                modulation-edit-started(p) => { root.modulation-edit-started(p); }
+                modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
+                wave <=> root.osc2-wave; semitones <=> root.osc2-semitones; cents <=> root.osc2-cents; level <=> root.osc2-level; pulse-width <=> root.osc2-pulse-width;
+                wave-changed(v) => { root.osc2-wave-changed(v); } semitones-changed(v) => { root.osc2-semitones-changed(v); } cents-changed(v) => { root.osc2-cents-changed(v); } level-changed(v) => { root.osc2-level-changed(v); } pulse-width-changed(v) => { root.osc2-pulse-width-changed(v); }
+            }
+            OscillatorDeviceStrip {
+                horizontal-stretch: 1; title: "OSC 3";
+                param-base: 120;
+                modulation-armed: root.modulation-armed;
+                modulation-depths: root.modulation-depths;
+                modulation-allowed: root.modulation-allowed;
+                modulation-offsets: root.modulation-offsets;
+                modulation-route-counts: root.modulation-route-counts;
+                modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                modulation-edit-started(p) => { root.modulation-edit-started(p); }
+                modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
+                wave <=> root.osc3-wave; semitones <=> root.osc3-semitones; cents <=> root.osc3-cents; level <=> root.osc3-level; pulse-width <=> root.osc3-pulse-width;
+                wave-changed(v) => { root.osc3-wave-changed(v); } semitones-changed(v) => { root.osc3-semitones-changed(v); } cents-changed(v) => { root.osc3-cents-changed(v); } level-changed(v) => { root.osc3-level-changed(v); } pulse-width-changed(v) => { root.osc3-pulse-width-changed(v); }
+            }
+        }
+
+        // Two envelopes and six filter controls. The filter panel carries the
+        // wider share because on this instrument the filter is the
+        // instrument, and its header keeps a slot for the model selector the
+        // Ladder/Acid work adds.
+        if root.page == 1 : HorizontalLayout {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            spacing: 6px;
+            Rectangle {
+                horizontal-stretch: 4;
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 5px; spacing: 4px;
+                    Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: 8px; }
+                    EnvelopeEditor {
+                        vertical-stretch: 1;
+                        min-height: 44px;
+                        attack: root.attack / 2; decay: root.decay / 2; sustain <=> root.sustain; release: root.release / 2;
+                        attack-text: round(root.attack * 1000) + " ms"; decay-text: round(root.decay * 1000) + " ms"; sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 1000) + " ms";
+                        attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
+                        decay-changed(v) => { root.decay = v * 2; root.decay-changed(root.decay); }
+                        sustain-changed(v) => { root.sustain-changed(v); }
+                        release-changed(v) => { root.release = v * 2; root.release-changed(root.release); }
+                    }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; minimum: 0; maximum: 2; default-value: 0.005; value-text: round(root.attack * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[1]; modulation-depth: root.modulation-depths[1]; modulation-offset: root.modulation-offsets[1]; modulation-route-count: root.modulation-route-counts[1]; changed(v) => { root.attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); } modulation-edit-started => { root.modulation-edit-started(1); } modulation-edit-finished => { root.modulation-edit-finished(1); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; minimum: 0; maximum: 2; default-value: 0.2; value-text: round(root.decay * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; modulation-offset: root.modulation-offsets[2]; modulation-route-count: root.modulation-route-counts[2]; changed(v) => { root.decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 0.7; value-text: round(root.sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; modulation-offset: root.modulation-offsets[3]; modulation-route-count: root.modulation-route-counts[3]; changed(v) => { root.sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; minimum: 0; maximum: 2; default-value: 0.15; value-text: round(root.release * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; modulation-offset: root.modulation-offsets[4]; modulation-route-count: root.modulation-route-counts[4]; changed(v) => { root.release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 6;
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 5px; spacing: 4px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "FILTER"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout {
+                        vertical-stretch: 1;
+                        min-height: 44px;
+                        spacing: 5px;
+                        FilterResponseDisplay {
+                            horizontal-stretch: 1;
+                            mode: 0;
+                            cutoff: root.filter-cutoff;
+                            resonance: root.filter-resonance;
+                            env-amount: root.filter-env;
+                        }
+                        EnvelopeEditor {
+                            horizontal-stretch: 1;
+                            attack: root.filter-attack / 2; decay: root.filter-decay / 2; sustain <=> root.filter-sustain; release: root.filter-release / 2;
+                            attack-text: round(root.filter-attack * 1000) + " ms"; decay-text: round(root.filter-decay * 1000) + " ms"; sustain-text: round(root.filter-sustain * 100) + "%"; release-text: round(root.filter-release * 1000) + " ms";
+                            attack-changed(v) => { root.filter-attack = v * 2; root.filter-attack-changed(root.filter-attack); }
+                            decay-changed(v) => { root.filter-decay = v * 2; root.filter-decay-changed(root.filter-decay); }
+                            sustain-changed(v) => { root.filter-sustain-changed(v); }
+                            release-changed(v) => { root.filter-release = v * 2; root.filter-release-changed(root.filter-release); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        ParameterKnob {
+                            width: 52px; diameter: 34px; label: "Cutoff"; tooltip: "Low-pass cutoff";
+                            value <=> root.filter-cutoff; default-value: 1;
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[5];
+                            modulation-depth: root.modulation-depths[5];
+                            modulation-offset: root.modulation-offsets[5];
+                            modulation-route-count: root.modulation-route-counts[5];
+                            value-text: NoteFormat.frequency-value(20 * pow(1000, root.filter-cutoff));
+                            changed(v) => { root.filter-cutoff-changed(v); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); }
+                            modulation-edit-started => { root.modulation-edit-started(5); }
+                            modulation-edit-finished => { root.modulation-edit-finished(5); }
+                        }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[6]; modulation-depth: root.modulation-depths[6]; modulation-offset: root.modulation-offsets[6]; modulation-route-count: root.modulation-route-counts[6]; changed(v) => { root.filter-resonance-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(6, v); } modulation-edit-started => { root.modulation-edit-started(6); } modulation-edit-finished => { root.modulation-edit-finished(6); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Env"; tooltip: "Envelope depth"; value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true; value-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[7]; modulation-depth: root.modulation-depths[7]; modulation-offset: root.modulation-offsets[7]; modulation-route-count: root.modulation-route-counts[7]; changed(v) => { root.filter-env-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(7, v); } modulation-edit-started => { root.modulation-edit-started(7); } modulation-edit-finished => { root.modulation-edit-finished(7); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Track"; tooltip: "Keyboard tracking"; value <=> root.filter-keytrack; default-value: 0; value-text: round(root.filter-keytrack * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[24]; modulation-depth: root.modulation-depths[24]; modulation-offset: root.modulation-offsets[24]; modulation-route-count: root.modulation-route-counts[24]; changed(v) => { root.filter-keytrack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(24, v); } modulation-edit-started => { root.modulation-edit-started(24); } modulation-edit-finished => { root.modulation-edit-finished(24); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Drive"; tooltip: "Soft saturation"; value <=> root.drive; default-value: 0; value-text: round(root.drive * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[8]; modulation-depth: root.modulation-depths[8]; modulation-offset: root.modulation-offsets[8]; modulation-route-count: root.modulation-route-counts[8]; changed(v) => { root.drive-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(8, v); } modulation-edit-started => { root.modulation-edit-started(8); } modulation-edit-finished => { root.modulation-edit-finished(8); } }
+                    }
+                }
+            }
+        }
+
+        // PERF. Glide lives here rather than in the amplitude row, because on
+        // this instrument it is a performance control and belongs beside the
+        // switches that decide what a note transition does.
+        if root.page == 2 : Rectangle {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            background: Theme.panel;
+            border-radius: Theme.radius-sm;
+            VerticalLayout {
+                padding: 8px; spacing: 8px;
+                Text { text: "PERFORMANCE"; color: Theme.text-faint; font-size: 8px; }
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    spacing: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        ParameterKnob {
+                            width: 60px; diameter: 44px; label: "Glide"; tooltip: "Portamento time";
+                            value <=> root.glide; minimum: 0; maximum: 2; default-value: 0;
+                            value-text: round(root.glide * 1000) + " ms";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[0];
+                            modulation-depth: root.modulation-depths[0];
+                            modulation-offset: root.modulation-offsets[0];
+                            modulation-route-count: root.modulation-route-counts[0];
+                            changed(v) => { root.glide-changed(v); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                            modulation-edit-started => { root.modulation-edit-started(0); }
+                            modulation-edit-finished => { root.modulation-edit-finished(0); }
+                        }
+                    }
+                    Rectangle { width: 1px; background: Theme.border; }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 10px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { width: 74px; text: "GLIDE MODE"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                            SelectorBank {
+                                options: ["ALWAYS", "LEGATO"];
+                                selected-index <=> root.glide-mode;
+                                segment-width: 62px;
+                                tooltip: "When glide applies";
+                                selected(i) => { root.glide-mode-changed(i); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { width: 74px; text: "ENV TRIGGER"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                            SelectorBank {
+                                options: ["RETRIG", "LEGATO"];
+                                selected-index <=> root.env-trigger;
+                                segment-width: 62px;
+                                tooltip: "Envelope behaviour on an overlapping note";
+                                selected(i) => { root.env-trigger-changed(i); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { width: 74px; text: "PRIORITY"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                            SelectorBank {
+                                options: ["LAST", "LOW", "HIGH"];
+                                selected-index <=> root.priority;
+                                segment-width: 52px;
+                                tooltip: "Which held note wins";
+                                selected(i) => { root.priority-changed(i); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

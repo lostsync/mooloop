@@ -100,7 +100,8 @@ work session you can recall being part of, and don't stress over precision.
   shared core block instead of inherited from Mono's, and a voice with
   separate amplitude and filter envelopes plus cutoff keytracking read off the
   gliding frequency. Then gave it a real held-note stack in its own module,
-  with note priority and independent legato and glide-mode switches.
+  with note priority and independent legato and glide-mode switches, and a
+  face whose third page is PERF rather than MOD.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
