@@ -4855,7 +4855,7 @@ impl AppUi {
                     pattern,
                     start_tick,
                     duration_ticks.max(1) as u32,
-                    midi_note.clamp(36, 84) as u8,
+                    midi_note.clamp(0, 127) as u8,
                 );
                 note.duration_ticks = note
                     .duration_ticks
@@ -4958,7 +4958,7 @@ impl AppUi {
                     moving.push(anchor.id);
                 }
                 let wanted_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
-                let wanted_note = midi_note.clamp(36, 84) as u8;
+                let wanted_note = midi_note.clamp(0, 127) as u8;
                 let tick_delta = wanted_tick as i64 - anchor.start_tick as i64;
                 let note_delta = wanted_note as i32 - anchor.note as i32;
                 // Clamp the delta by the group, not per note: letting notes
@@ -4989,7 +4989,7 @@ impl AppUi {
                 let tick_delta =
                     tick_delta.clamp(-min_tick, (last_start - max_tick).max(-min_tick));
                 let note_delta =
-                    note_delta.clamp(36 - min_note, (84 - max_note).max(36 - min_note));
+                    note_delta.clamp(-min_note, (127 - max_note).max(-min_note));
 
                 let mut edited = Vec::with_capacity(moving.len());
                 let mut touched_steps = Vec::with_capacity(moving.len() * 2);
@@ -5511,7 +5511,7 @@ impl AppUi {
             }};
         }
         wire_selected_note_edit!(on_selected_note_changed, note, |value: i32, _, _| value
-            .clamp(36, 84)
+            .clamp(0, 127)
             as u8);
         wire_selected_note_edit!(
             on_selected_velocity_changed,
