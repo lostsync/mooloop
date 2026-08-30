@@ -24,13 +24,15 @@ use crate::modulation::{ModPolarity, ModRack, ModulatorParams};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ModSourceId(pub u32);
 
-/// What family a source belongs to. Only `Lfo` has runtime behavior today;
+/// What family a source belongs to. LFO and Envelope have runtime behavior;
 /// the rest name the planned collection so metadata and UI can already be
 /// written against them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModSourceKind {
     Lfo,
+    /// Gate-driven attack/decay/sustain/release contour.
+    Envelope,
     /// Clocked patterns with probability and controlled variation.
     Step,
     /// Sample-and-hold variation beyond what an LFO wave expresses.
@@ -47,6 +49,7 @@ impl ModSourceKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Lfo => "LFO",
+            Self::Envelope => "Envelope",
             Self::Step => "Step",
             Self::Random => "Random",
             Self::Macro => "Macro",
@@ -146,6 +149,18 @@ impl ModSourceDescriptor {
             } else {
                 TriggerPolicy::Free
             },
+        }
+    }
+
+    pub fn local_envelope(id: ModSourceId, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            kind: ModSourceKind::Envelope,
+            name: name.into(),
+            signal: SignalShape::Unipolar,
+            update: ControlRate::Subdivision32,
+            latency: ControlLatency::IMMEDIATE,
+            trigger: TriggerPolicy::NoteReset,
         }
     }
 }
@@ -248,7 +263,7 @@ impl ModSourceRef {
     }
 }
 
-/// Legacy decode: the current `ModRack` LFO slots described as sources, so
+/// Legacy decode: the current `ModRack` local slots described as sources, so
 /// existing routes keep their behavior when the collection grows. Each entry
 /// carries its original runtime slot — the rack is sparse, so the slot is
 /// not the position in this list. Empty slots stay out of the collection.
@@ -257,18 +272,19 @@ pub fn local_slot_sources(rack: &ModRack) -> Vec<(u8, ModSourceDescriptor)> {
         .iter()
         .enumerate()
         .filter_map(|(slot, params)| {
-            let retrigger = match params {
-                Some(ModulatorParams::Lfo(lfo)) => lfo.retrigger,
-                None => return None,
-            };
-            Some((
-                slot as u8,
-                ModSourceDescriptor::local_lfo(
+            let descriptor = match params {
+                Some(ModulatorParams::Lfo(lfo)) => ModSourceDescriptor::local_lfo(
                     ModSourceId(slot as u32),
                     format!("LFO {}", slot + 1),
-                    retrigger,
+                    lfo.retrigger,
                 ),
-            ))
+                Some(ModulatorParams::Envelope(_)) => ModSourceDescriptor::local_envelope(
+                    ModSourceId(slot as u32),
+                    format!("ENV {}", slot + 1),
+                ),
+                None => return None,
+            };
+            Some((slot as u8, descriptor))
         })
         .collect()
 }
@@ -335,6 +351,19 @@ mod tests {
         assert_eq!(source.latency, ControlLatency::IMMEDIATE);
         assert_eq!(source.trigger, TriggerPolicy::NoteReset);
         assert_eq!(source.name, "LFO 2");
+    }
+
+    #[test]
+    fn envelope_slots_declare_a_unipolar_immediate_source() {
+        let mut rack = ModRack::default();
+        rack.slots[0] = Some(ModulatorParams::Envelope(
+            crate::modulation::ModEnvelopeParams::default(),
+        ));
+        let sources = local_slot_sources(&rack);
+        assert_eq!(sources[0].1.kind, ModSourceKind::Envelope);
+        assert_eq!(sources[0].1.signal, SignalShape::Unipolar);
+        assert_eq!(sources[0].1.latency, ControlLatency::IMMEDIATE);
+        assert_eq!(sources[0].1.name, "ENV 1");
     }
 
     /// Durable ids resolve through the descriptor table; local slots pass

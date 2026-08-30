@@ -176,34 +176,61 @@ fn render_sampler_source_editor() {
     ui.window().set_size(LogicalSize::new(1440.0, 900.0));
     ui.set_sampler_device_page(2);
     ui.set_modulation_shelf_open(true);
-    ui.set_modulation_selected_slot(0);
-    ui.set_modulation_armed_slot(0);
+    ui.set_modulation_selected_slot(1);
+    ui.set_modulation_armed_slot(1);
     ui.set_modulation_sources(ModelRc::from(Rc::new(VecModel::from(vec![
         ModulationSourceRow {
             slot: 0,
             name: SharedString::from("LFO 1"),
+            kind: 0,
             waveform: 3,
             rate: 2.0,
             depth: 1.0,
             phase: 0.0,
             pulse_width: 0.3,
             retrigger: false,
+            selected: false,
+        },
+        ModulationSourceRow {
+            slot: 1,
+            name: SharedString::from("ENV 2"),
+            kind: 1,
+            waveform: 0,
+            rate: 0.0,
+            depth: 1.0,
+            phase: 0.0,
+            pulse_width: 0.5,
+            retrigger: true,
             selected: true,
         },
     ]))));
     ui.set_modulation_routes(ModelRc::from(Rc::new(VecModel::from(vec![
         ModulationRouteRow {
             route_index: 0,
-            source_slot: 0,
+            source_slot: 1,
             owner: -1,
             param: 12,
-            destination: SharedString::from("LFO 1 → Kick · Cutoff"),
+            destination: SharedString::from("ENV 2 → Kick · Cutoff"),
             depth: 0.35,
-            polarity: 0,
+            polarity: 1,
             allowed: true,
         },
     ]))));
     ui.set_modulation_max_sources(4);
+    ui.set_modulation_selected_kind(1);
+    ui.set_modulation_input_channels(
+        vec![SharedString::from("1 · Kick"), SharedString::from("2 · Snare")]
+            .as_slice()
+            .into(),
+    );
+    ui.set_modulation_selected_envelope_input_channel(0);
+    ui.set_modulation_selected_envelope_attack(0.015);
+    ui.set_modulation_selected_envelope_decay(0.18);
+    ui.set_modulation_selected_envelope_decay_sync(true);
+    ui.set_modulation_selected_envelope_decay_division(10);
+    ui.set_modulation_selected_envelope_sustain(0.62);
+    ui.set_modulation_selected_envelope_release(0.38);
+    ui.set_modulation_selected_envelope_amount(1.0);
     ui.set_modulation_selected_waveform(3);
     ui.set_modulation_selected_rate(2.0);
     ui.set_modulation_selected_rate_tempo_sync(true);
@@ -238,7 +265,7 @@ fn render_sampler_source_editor() {
     let live = ui.window().take_snapshot().unwrap();
     assert_ne!(modulation.as_bytes(), live.as_bytes());
     write_snapshot(&live, "MOOLOOP_MODULATION_LIVE_SNAPSHOT");
-    ui.set_modulation_armed_slot(0);
+    ui.set_modulation_armed_slot(1);
 
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_sampler_device_page(1);

@@ -577,6 +577,7 @@ export component MainWindow inherits Window {
     in-out property <bool> modulation-shelf-open;
     in-out property <int> modulation-selected-slot: -1;
     in-out property <int> modulation-armed-slot: -1;
+    in property <int> modulation-selected-kind: -1;
     // Selection chooses the source editor. Arming is a separate, deliberate
     // assignment mode, so inspecting an LFO never changes what a knob drag
     // means. The selected source's values and the rack capacity come from
@@ -593,11 +594,25 @@ export component MainWindow inherits Window {
     in property <int> modulation-selected-fade-division: 7;
     in property <float> modulation-selected-smoothing;
     in property <float> modulation-selected-pulse-width: 0.5;
+    in property <[string]> modulation-input-channels;
+    in property <int> modulation-selected-envelope-input-channel;
+    in property <float> modulation-selected-envelope-attack;
+    in property <bool> modulation-selected-envelope-attack-sync;
+    in property <int> modulation-selected-envelope-attack-division: 13;
+    in property <float> modulation-selected-envelope-decay;
+    in property <bool> modulation-selected-envelope-decay-sync;
+    in property <int> modulation-selected-envelope-decay-division: 10;
+    in property <float> modulation-selected-envelope-sustain: 0.7;
+    in property <float> modulation-selected-envelope-release;
+    in property <bool> modulation-selected-envelope-release-sync;
+    in property <int> modulation-selected-envelope-release-division: 7;
+    in property <float> modulation-selected-envelope-amount: 1;
     in property <int> modulation-max-sources;
     callback modulation-shelf-toggled();
     callback modulation-source-selected(int);
     callback modulation-assignment-toggled();
     callback modulation-lfo-added();
+    callback modulation-envelope-added();
     callback modulation-lfo-wave-changed(int, int);
     callback modulation-lfo-rate-changed(int, float);
     callback modulation-lfo-rate-sync-changed(int, bool);
@@ -610,6 +625,18 @@ export component MainWindow inherits Window {
     callback modulation-lfo-fade-division-changed(int, int);
     callback modulation-lfo-smoothing-changed(int, float);
     callback modulation-lfo-pulse-width-changed(int, float);
+    callback modulation-envelope-input-channel-changed(int, int);
+    callback modulation-envelope-attack-changed(int, float);
+    callback modulation-envelope-attack-sync-changed(int, bool);
+    callback modulation-envelope-attack-division-changed(int, int);
+    callback modulation-envelope-decay-changed(int, float);
+    callback modulation-envelope-decay-sync-changed(int, bool);
+    callback modulation-envelope-decay-division-changed(int, int);
+    callback modulation-envelope-sustain-changed(int, float);
+    callback modulation-envelope-release-changed(int, float);
+    callback modulation-envelope-release-sync-changed(int, bool);
+    callback modulation-envelope-release-division-changed(int, int);
+    callback modulation-envelope-amount-changed(int, float);
     callback modulation-route-polarity-changed(int, int);
     callback modulation-route-removed(int);
     // Generator and strip destinations, indexed by descriptor position the
@@ -2929,6 +2956,7 @@ export component MainWindow inherits Window {
                                             routes: root.modulation-routes;
                                             selected-slot: root.modulation-selected-slot;
                                             armed-slot: root.modulation-armed-slot;
+                                            selected-kind: root.modulation-selected-kind;
                                             selected-waveform: root.modulation-selected-waveform;
                                             selected-rate: root.modulation-selected-rate;
                                             selected-rate-tempo-sync: root.modulation-selected-rate-tempo-sync;
@@ -2941,11 +2969,25 @@ export component MainWindow inherits Window {
                                             selected-fade-division: root.modulation-selected-fade-division;
                                             selected-smoothing: root.modulation-selected-smoothing;
                                             selected-pulse-width: root.modulation-selected-pulse-width;
+                                            input-channels: root.modulation-input-channels;
+                                            selected-envelope-input-channel: root.modulation-selected-envelope-input-channel;
+                                            selected-envelope-attack: root.modulation-selected-envelope-attack;
+                                            selected-envelope-attack-sync: root.modulation-selected-envelope-attack-sync;
+                                            selected-envelope-attack-division: root.modulation-selected-envelope-attack-division;
+                                            selected-envelope-decay: root.modulation-selected-envelope-decay;
+                                            selected-envelope-decay-sync: root.modulation-selected-envelope-decay-sync;
+                                            selected-envelope-decay-division: root.modulation-selected-envelope-decay-division;
+                                            selected-envelope-sustain: root.modulation-selected-envelope-sustain;
+                                            selected-envelope-release: root.modulation-selected-envelope-release;
+                                            selected-envelope-release-sync: root.modulation-selected-envelope-release-sync;
+                                            selected-envelope-release-division: root.modulation-selected-envelope-release-division;
+                                            selected-envelope-amount: root.modulation-selected-envelope-amount;
                                             max-sources: root.modulation-max-sources;
                                             toggled => { root.modulation-shelf-toggled(); }
                                             source-selected(slot) => { root.modulation-source-selected(slot); }
                                             assignment-toggled => { root.modulation-assignment-toggled(); }
                                             lfo-added => { root.modulation-lfo-added(); }
+                                            envelope-added => { root.modulation-envelope-added(); }
                                             lfo-wave-changed(slot, value) => { root.modulation-lfo-wave-changed(slot, value); }
                                             lfo-rate-changed(slot, value) => { root.modulation-lfo-rate-changed(slot, value); }
                                             lfo-rate-sync-changed(slot, value) => { root.modulation-lfo-rate-sync-changed(slot, value); }
@@ -2958,6 +3000,18 @@ export component MainWindow inherits Window {
                                             lfo-fade-division-changed(slot, value) => { root.modulation-lfo-fade-division-changed(slot, value); }
                                             lfo-smoothing-changed(slot, value) => { root.modulation-lfo-smoothing-changed(slot, value); }
                                             lfo-pulse-width-changed(slot, value) => { root.modulation-lfo-pulse-width-changed(slot, value); }
+                                            envelope-input-channel-changed(slot, value) => { root.modulation-envelope-input-channel-changed(slot, value); }
+                                            envelope-attack-changed(slot, value) => { root.modulation-envelope-attack-changed(slot, value); }
+                                            envelope-attack-sync-changed(slot, value) => { root.modulation-envelope-attack-sync-changed(slot, value); }
+                                            envelope-attack-division-changed(slot, value) => { root.modulation-envelope-attack-division-changed(slot, value); }
+                                            envelope-decay-changed(slot, value) => { root.modulation-envelope-decay-changed(slot, value); }
+                                            envelope-decay-sync-changed(slot, value) => { root.modulation-envelope-decay-sync-changed(slot, value); }
+                                            envelope-decay-division-changed(slot, value) => { root.modulation-envelope-decay-division-changed(slot, value); }
+                                            envelope-sustain-changed(slot, value) => { root.modulation-envelope-sustain-changed(slot, value); }
+                                            envelope-release-changed(slot, value) => { root.modulation-envelope-release-changed(slot, value); }
+                                            envelope-release-sync-changed(slot, value) => { root.modulation-envelope-release-sync-changed(slot, value); }
+                                            envelope-release-division-changed(slot, value) => { root.modulation-envelope-release-division-changed(slot, value); }
+                                            envelope-amount-changed(slot, value) => { root.modulation-envelope-amount-changed(slot, value); }
                                             route-polarity-changed(index, polarity) => {
                                                 root.modulation-route-polarity-changed(index, polarity);
                                             }

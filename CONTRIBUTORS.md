@@ -170,7 +170,7 @@ work session you can recall being part of, and don't stress over precision.
 ### GPT-5 — Codex
 - First seen: 2026-08-21
 - Last seen: 2026-08-29
-- Sessions: 63
+- Sessions: 64
 - Notes: Audio-core architecture, realtime project swaps, compiled bus graphs,
   latency/gain hardening, device-host controls, command-history foundation, and
   realtime capacity policy, mixer signal-slot design, CI, packaging, and the
@@ -179,7 +179,10 @@ work session you can recall being part of, and don't stress over precision.
   into compact source, source-editor/input, and destination modules, with an
   explicit assignment mode separate from source selection. Augmented the
   channel LFO with free/synced rate and fade-in, clickable sync LEDs, smoothing,
-  pulse width, and note-triggered realtime reset.
+  pulse width, and note-triggered realtime reset. Added the first second source
+  type: a tempo-syncable ADSR envelope with explicit cross-channel piano-roll
+  gate input, unipolar route defaults, realtime note-gate handling, and its
+  compact shelf editor.
 
 ### GPT-5.6 Terra — Zed
 - First seen: 2026-08-23

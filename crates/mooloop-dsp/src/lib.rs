@@ -45,7 +45,7 @@ pub mod smooth;
 pub use align::DryAlign;
 pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};
 pub use buffer_device::{buffer_allocation_key, BufferDevice, TimedBufferEvent};
-pub use modulator::{ModulatorRack, CONTROL_RATE_FRAMES};
+pub use modulator::{ModulatorRack, NoteGateEvents, CONTROL_RATE_FRAMES};
 pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;

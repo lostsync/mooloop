@@ -57,16 +57,18 @@ extends it; it does not replace it.
 | --- | --- |
 | `ParamAddr` | Stable destination address: scope, owner, and a per-kind never-renumbered descriptor ID. It already models sources, effect slots, modulator slots, and strips. |
 | `ParamDescriptor` | Single source of truth for natural range, curve, default, and normalized conversion. Events carry natural values; routes operate in normalized destination space. |
-| `ModRack` | Persisted per-channel source slots and routes. Its current realtime storage is four LFO slots and sixteen route rows. |
+| `ModRack` | Persisted per-channel source slots and routes. Its current realtime storage is four local source slots and sixteen route rows. |
 | `ModRoute` | Current source slot, destination, signed full-range depth, and polarity. Reassigning the same source/destination retunes instead of duplicating it. |
 | Renderer | Sources tick at `CONTROL_RATE_FRAMES = 32`; offsets are summed, clamped, converted through the descriptor, then sent as ordinary timed `Event::ParamValue` events. |
 | Base state | The renderer/chain retains the knob base separately from a device's last resolved value. A lane supplies the base when active; modulation is added after it. |
 | DSP | `AudioNode::process` has an in-place stereo bus and timed events. Effects already split at parameter-event offsets; they need no modulation-specific branch. |
 
-Only the local LFO is implemented today. It is a bipolar `-1..1` source with
-sine, triangle, saw, square, and sample-and-hold random waves; it has source
-depth, phase, and optional note retriggering. The other source kinds and the
-shelf described below are planned, not current behavior.
+The local LFO and gate-driven ADSR envelope are implemented today. The LFO is
+a bipolar `-1..1` source with sine, triangle, saw, square, and sample-and-hold
+random waves. The envelope is unipolar and currently binds its gate inlet to
+the scheduled Note On/Off stream of an explicitly selected piano-roll channel.
+That note stream is the first adapter for a future typed generator `Gate`
+outlet; envelope destinations already use ordinary routes.
 
 Do not replace `ParamAddr`, descriptor IDs, natural-unit events, or the
 timed-event path. They are the seam shared by knobs, automation, and
@@ -112,12 +114,13 @@ as their corresponding local-slot source and preserve their current behavior.
 | Kind | Meaning | Status |
 | --- | --- | --- |
 | LFO | Free-running or note-restarted periodic movement. Random is initially a sample-and-hold LFO wave. | Implemented as local slots. |
+| Envelope | Gate-driven attack, decay, sustain, and release contour. | Implemented with an explicit channel-note gate adapter; typed device gate outlets are planned. |
 | Step / random generator | Clocked patterns, probability, and controlled variation. | Planned. |
 | Macro / internal value | User macro, transport phase, velocity, key track, pressure, or another declared channel value. | Planned. |
 | Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Planned. |
 | Device outlet | Named effect signals such as gain reduction, envelope-following level, or gate state. | Planned. |
 | Audio-derived control | Explicit envelope follower, transient detector, or another control extractor. | Deferred until it has an outlet contract. |
-| External / cross-channel control | MIDI/CV, another channel, bus, or global source. | Deferred by routing policy. |
+| External / cross-channel control | Another channel's note gate is an explicit source-inlet adapter. MIDI/CV, buses, global sources, and general cross-channel outlets remain deferred by routing policy. | Note-gate adapter implemented; general routing deferred. |
 
 A musical outlet is not display telemetry. Telemetry is best-effort observation
 for meters, plots, and waveforms; it cannot drive parameters. A control outlet
@@ -213,6 +216,14 @@ square pulse width moves the high-to-low transition without changing the
 route language. Note triggers are observed on the containing 32-frame control
 subdivision, keeping the callback bounded and allocation-free.
 
+An envelope stores an explicit input channel and ADSR values. Attack, decay,
+and release use the same free/synced timing vocabulary as the LFO. Note On
+restarts attack from the current value; the final held Note Off begins release,
+so overlapping piano-roll notes keep the gate high. Runtime output stays in the
+rack's signed convention and a new envelope route defaults to unipolar
+polarity, making idle contribute no offset and sustain/peak rise above the
+destination base.
+
 Generator and device outlets publish into a per-channel control table. Consumers
 read that table on the following block, with one declared block of latency.
 This rule is mandatory: it makes realtime/offline results identical, prevents
@@ -234,9 +245,10 @@ The channel has one collapsed-by-default **MOD** shelf immediately beneath the
 device rack. It lists existing source chips and **Add source**. Selecting a chip
 opens its compact editor without arming assignment. The editor contains
 source-owned controls (for an LFO: waveform, free/synced rate, free/synced
-fade-in, phase, depth, smoothing, square pulse width, and retrigger). There is
-one shelf per channel, not a `MOD` page copied into Mono, Poly, Buffer, and
-every effect.
+fade-in, phase, depth, smoothing, square pulse width, and retrigger; for an
+envelope: gate input, free/synced attack/decay/release, sustain, and amount).
+There is one shelf per channel, not a `MOD` page copied into Mono, Poly, Buffer,
+and every effect.
 
 Every common device frame shows `MOD n`, the number of routes that terminate
 there, and may show source pills where more legible. Activating it opens the
@@ -259,11 +271,10 @@ into the shared `4/1` through `1/64T` musical-division range. This compact
 `O.` affordance is used consistently for source timing controls rather than
 adding a second selector row for each one.
 
-This makes a future chain such as `Kick / Gate → LFO / Reset → Sampler /
-Position` readable in the ordinary rack. The first edge configures the LFO's
-declared trigger inlet; the second is the existing explicit parameter route.
-Both use the same durable source identities and control-rate graph. Cross-
-channel policy and actual outlet publication remain later engine work.
+Today `Kick notes → Envelope / Gate → Sampler / Position` is readable and
+playable in the ordinary rack. Later, `Kick / Gate → LFO / Reset → Sampler /
+Position` uses the same inlet and route concepts once generators publish typed
+outlets through the control table.
 
 ### Direct assignment
 
@@ -306,9 +317,10 @@ The gesture is one undoable route edit, not a stream of unrelated parameter
 edits. Re-dragging the same pair retunes it. Zero depth is a valid parked route;
 the inspector offers explicit removal.
 
-There are no routine patch cords, freeform canvas, or mandatory matrix. A
-future matrix/graph is expert tooling over the identical source, destination,
-route, rate, and latency data. It may not create parallel routes, implicit
+Patch cords are optional presentation, not a product taboo. The compact rack
+and direct assignment remain the routine workflow; a future matrix/graph may
+draw and edit the identical typed inlet and destination edges when a larger
+patch benefits from it. It may not create parallel routes, implicit
 modulation, or a new audio-rack model.
 
 ## Scope boundaries and delivery order
@@ -318,10 +330,11 @@ base-plus-offset resolution, current LFO continuity, the shelf/common-frame
 interaction, and the direct-assignment inspector.
 
 It excludes a general visual-programming environment; device-local general LFO
-pages; cross-channel/global routing; true audio sidechain, audio-rate FM, and
-control feedback cycles; a graph editor or patch cords as the normal workflow;
-and treating display telemetry as control data. Existing transitional synth LFO
-pages should migrate into channel sources rather than grow a parallel system.
+pages; general cross-channel/global routing beyond the explicit channel-note
+gate adapter; true audio sidechain, audio-rate FM, and control feedback cycles;
+and treating display telemetry as control data. Existing transitional synth
+LFO pages should migrate into channel sources rather than grow a parallel
+system.
 
 1. Preserve `ModRack`/`ParamAddr`; add destination metadata and expose LFO
    routes in the channel shelf.

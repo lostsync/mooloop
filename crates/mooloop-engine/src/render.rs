@@ -15,8 +15,9 @@ use mooloop_core::{
 use mooloop_dsp::build_effect;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, DrumSynth,
-    DryAlign, Event, EventList, ModulatorRack, MonoSynth, PolySynth, ProcessContext, SampleData,
-    Sampler, SpectrumAnalyzer, StereoBus, TimedEvent, CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
+    DryAlign, Event, EventList, ModulatorRack, MonoSynth, NoteGateEvents, PolySynth,
+    ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, TimedEvent,
+    CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
 };
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
@@ -1406,7 +1407,7 @@ impl RenderState {
         &mut self,
         channel: usize,
         frames: usize,
-        retrigger_ticks: &[bool; MAX_CONTROL_TICKS_PER_BLOCK],
+        gate_ticks: &[[NoteGateEvents; MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK],
     ) -> usize {
         let sample_rate = self.sample_rate;
         let bpm = self.transport.bpm;
@@ -1419,10 +1420,7 @@ impl RenderState {
         let mut tick = 0;
         for offset in (0..frames).step_by(CONTROL_RATE_FRAMES) {
             let span = (frames - offset).min(CONTROL_RATE_FRAMES);
-            if retrigger_ticks[tick] {
-                runtime.retrigger();
-            }
-            runtime.tick(sample_rate, span, bpm);
+            runtime.tick_with_note_gates(sample_rate, span, bpm, channel, &gate_ticks[tick]);
             outputs[tick] = *runtime.outputs();
             tick += 1;
         }
@@ -1930,16 +1928,23 @@ impl RenderState {
         // Not an iterator loop: the body takes `&mut self`, which cannot
         // coexist with a mutable borrow of the array being filled.
         #[allow(clippy::needless_range_loop)]
-        for index in 0..active_channels {
-            let mut retrigger_ticks = [false; MAX_CONTROL_TICKS_PER_BLOCK];
-            for event in self.events[index].iter() {
-                if matches!(event.event, Event::NoteOn { .. }) {
-                    let tick = (event.offset as usize / CONTROL_RATE_FRAMES)
-                        .min(MAX_CONTROL_TICKS_PER_BLOCK - 1);
-                    retrigger_ticks[tick] = true;
+        let mut gate_ticks =
+            [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
+        for source_channel in 0..active_channels {
+            for event in self.events[source_channel].iter() {
+                let tick = (event.offset as usize / CONTROL_RATE_FRAMES)
+                    .min(MAX_CONTROL_TICKS_PER_BLOCK - 1);
+                let gate = &mut gate_ticks[tick][source_channel];
+                match event.event {
+                    Event::NoteOn { .. } => gate.note_ons = gate.note_ons.saturating_add(1),
+                    Event::NoteOff { .. } => gate.note_offs = gate.note_offs.saturating_add(1),
+                    Event::Choke => gate.choke = true,
+                    _ => {}
                 }
             }
-            modulator_ticks[index] = self.tick_channel_modulators(index, frames, &retrigger_ticks);
+        }
+        for index in 0..active_channels {
+            modulator_ticks[index] = self.tick_channel_modulators(index, frames, &gate_ticks);
         }
         // Lanes resolve whether or not the transport is running: stopped, the
         // playhead simply holds still and the destination sits at the value
@@ -2515,7 +2520,7 @@ mod tests {
         ));
         let project = synth_project(channel);
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        let none = [false; MAX_CONTROL_TICKS_PER_BLOCK];
+        let none = [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
         assert_eq!(render.tick_channel_modulators(0, 64, &none), 2);
         assert_eq!(render.control_outputs[0][0][0], -1.0);
         assert_eq!(render.control_outputs[0][1][0], -0.5);
@@ -2524,10 +2529,32 @@ mod tests {
         // NoteOn offsets. The tick method applies it before sampling, so the
         // destination sees the reset phase on that subdivision rather than
         // one control tick later.
-        let mut note_on = [false; MAX_CONTROL_TICKS_PER_BLOCK];
-        note_on[0] = true;
+        let mut note_on = [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
+        note_on[0][0].note_ons = 1;
         render.tick_channel_modulators(0, 32, &note_on);
         assert_eq!(render.control_outputs[0][0][0], -1.0);
+    }
+
+    #[test]
+    fn an_envelope_can_subscribe_to_another_channels_note_gate() {
+        let mut target = ProjectChannel::sampler(0, 1);
+        target.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Envelope(
+            mooloop_core::ModEnvelopeParams {
+                input_channel: 1,
+                attack_seconds: 0.0,
+                decay_seconds: 0.0,
+                sustain: 1.0,
+                ..mooloop_core::ModEnvelopeParams::default()
+            },
+        ));
+        let mut project = synth_project(target);
+        project.channels.push(ProjectChannel::sampler(1, 1));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let mut gates = [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
+        gates[0][1].note_ons = 1;
+
+        render.tick_channel_modulators(0, 32, &gates);
+        assert_eq!(render.control_outputs[0][0][0], 1.0);
     }
 
     /// A stepped parameter refuses modulation, so a route aimed at one is

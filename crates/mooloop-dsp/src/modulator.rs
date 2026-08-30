@@ -5,7 +5,10 @@
 //! sample: once per block stair-steps audibly on a fast LFO, and per sample
 //! buys nothing at these rates (`docs/MODULATION_PLAN.md`).
 
-use mooloop_core::{ModLfoParams, ModLfoWaveform, ModulatorParams, MAX_MODULATORS_PER_CHANNEL};
+use mooloop_core::{
+    ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModulatorParams, MAX_CHANNELS,
+    MAX_MODULATORS_PER_CHANNEL,
+};
 
 /// Frames between modulation updates. The plan allows 32 or 64; 32 keeps a
 /// 20 Hz LFO smooth at 48 kHz while costing one evaluation per 32 frames.
@@ -129,9 +132,148 @@ impl Lfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoteGateEvents {
+    pub note_ons: u8,
+    pub note_offs: u8,
+    pub choke: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvelopeStage {
+    Idle,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Envelope {
+    params: ModEnvelopeParams,
+    stage: EnvelopeStage,
+    level: f32,
+    stage_start: f32,
+    elapsed: f32,
+    held_notes: u16,
+}
+
+impl Envelope {
+    fn new(params: ModEnvelopeParams) -> Self {
+        Self {
+            params,
+            stage: EnvelopeStage::Idle,
+            level: 0.0,
+            stage_start: 0.0,
+            elapsed: 0.0,
+            held_notes: 0,
+        }
+    }
+
+    fn seconds(free: f32, synced: bool, division: mooloop_core::ModTimeDivision, bpm: f64) -> f32 {
+        if synced {
+            division.seconds(bpm)
+        } else {
+            free.max(0.0)
+        }
+    }
+
+    fn note_events(&mut self, events: NoteGateEvents) {
+        if events.choke {
+            self.held_notes = 0;
+            self.begin(EnvelopeStage::Release);
+        } else {
+            self.held_notes = self.held_notes.saturating_sub(u16::from(events.note_offs));
+        }
+        if events.note_ons > 0 {
+            self.held_notes = self.held_notes.saturating_add(u16::from(events.note_ons));
+            // Every new gate edge retriggers from the current value. This is
+            // click-safe for overlapping notes while still making drum gates
+            // articulate repeated contours.
+            self.begin(EnvelopeStage::Attack);
+            if !self.params.attack_tempo_sync && self.params.attack_seconds <= f32::EPSILON {
+                self.level = 1.0;
+                self.begin(EnvelopeStage::Decay);
+            }
+        } else if self.held_notes == 0 && events.note_offs > 0 {
+            self.begin(EnvelopeStage::Release);
+            if !self.params.release_tempo_sync && self.params.release_seconds <= f32::EPSILON {
+                self.level = 0.0;
+                self.begin(EnvelopeStage::Idle);
+            }
+        }
+    }
+
+    fn begin(&mut self, stage: EnvelopeStage) {
+        self.stage = stage;
+        self.stage_start = self.level;
+        self.elapsed = 0.0;
+    }
+
+    fn value(&self) -> f32 {
+        // The rack's realtime convention remains signed. A normal unipolar
+        // route lifts this back to 0..1, so idle contributes zero offset.
+        self.level.clamp(0.0, 1.0) * self.params.amount.clamp(0.0, 1.0) * 2.0 - 1.0
+    }
+
+    fn advance(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
+        let delta = frames as f32 / sample_rate.max(1) as f32;
+        self.elapsed += delta;
+        match self.stage {
+            EnvelopeStage::Idle => self.level = 0.0,
+            EnvelopeStage::Attack => {
+                let duration = Self::seconds(
+                    self.params.attack_seconds,
+                    self.params.attack_tempo_sync,
+                    self.params.attack_division,
+                    bpm,
+                );
+                if duration <= f32::EPSILON || self.elapsed >= duration {
+                    self.level = 1.0;
+                    self.begin(EnvelopeStage::Decay);
+                } else {
+                    self.level =
+                        self.stage_start + (1.0 - self.stage_start) * self.elapsed / duration;
+                }
+            }
+            EnvelopeStage::Decay => {
+                let sustain = self.params.sustain.clamp(0.0, 1.0);
+                let duration = Self::seconds(
+                    self.params.decay_seconds,
+                    self.params.decay_tempo_sync,
+                    self.params.decay_division,
+                    bpm,
+                );
+                if duration <= f32::EPSILON || self.elapsed >= duration {
+                    self.level = sustain;
+                    self.begin(EnvelopeStage::Sustain);
+                } else {
+                    self.level = 1.0 + (sustain - 1.0) * self.elapsed / duration;
+                }
+            }
+            EnvelopeStage::Sustain => self.level = self.params.sustain.clamp(0.0, 1.0),
+            EnvelopeStage::Release => {
+                let duration = Self::seconds(
+                    self.params.release_seconds,
+                    self.params.release_tempo_sync,
+                    self.params.release_division,
+                    bpm,
+                );
+                if duration <= f32::EPSILON || self.elapsed >= duration {
+                    self.level = 0.0;
+                    self.begin(EnvelopeStage::Idle);
+                } else {
+                    self.level = self.stage_start * (1.0 - self.elapsed / duration);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Source {
     Lfo(Lfo),
+    Envelope(Envelope),
 }
 
 /// One channel's modulator slots and their current outputs.
@@ -177,6 +319,16 @@ impl ModulatorRack {
                 }
             }
             (Some(ModulatorParams::Lfo(next)), _) => *existing = Some(Source::Lfo(Lfo::new(next))),
+            (Some(ModulatorParams::Envelope(next)), Some(Source::Envelope(envelope))) => {
+                if envelope.params.input_channel != next.input_channel {
+                    envelope.held_notes = 0;
+                    envelope.begin(EnvelopeStage::Release);
+                }
+                envelope.params = next;
+            }
+            (Some(ModulatorParams::Envelope(next)), _) => {
+                *existing = Some(Source::Envelope(Envelope::new(next)))
+            }
             (None, _) => {
                 *existing = None;
                 self.outputs[slot] = 0.0;
@@ -197,19 +349,58 @@ impl ModulatorRack {
     /// Evaluate every slot for the coming `frames` and advance its phase.
     pub fn tick(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
         for (slot, source) in self.slots.iter_mut().enumerate() {
-            let Some(Source::Lfo(lfo)) = source else {
-                continue;
+            let Some(source) = source else { continue };
+            match source {
+                Source::Lfo(lfo) => {
+                    self.outputs[slot] = lfo.value(sample_rate, frames, bpm);
+                    lfo.advance(sample_rate, frames, bpm);
+                }
+                Source::Envelope(envelope) => {
+                    self.outputs[slot] = envelope.value();
+                    envelope.advance(sample_rate, frames, bpm);
+                }
             };
-            self.outputs[slot] = lfo.value(sample_rate, frames, bpm);
-            lfo.advance(sample_rate, frames, bpm);
         }
+    }
+
+    /// Deliver the current control tick's channel-note adapters, then
+    /// evaluate. The owning channel remains the LFO's legacy Note On input;
+    /// envelopes name their input channel explicitly.
+    pub fn tick_with_note_gates(
+        &mut self,
+        sample_rate: u32,
+        frames: usize,
+        bpm: f64,
+        owning_channel: usize,
+        gates: &[NoteGateEvents; MAX_CHANNELS],
+    ) {
+        for source in self.slots.iter_mut().flatten() {
+            match source {
+                Source::Lfo(lfo) => {
+                    if gates
+                        .get(owning_channel)
+                        .is_some_and(|events| events.note_ons > 0)
+                    {
+                        lfo.retrigger();
+                    }
+                }
+                Source::Envelope(envelope) => {
+                    let input = usize::from(envelope.params.input_channel);
+                    if let Some(events) = gates.get(input).copied() {
+                        envelope.note_events(events);
+                    }
+                }
+            }
+        }
+        self.tick(sample_rate, frames, bpm);
     }
 
     /// Restart phase on every slot configured to follow notes.
     pub fn retrigger(&mut self) {
         for source in self.slots.iter_mut().flatten() {
-            let Source::Lfo(lfo) = source;
-            lfo.retrigger();
+            if let Source::Lfo(lfo) = source {
+                lfo.retrigger();
+            }
         }
     }
 }
@@ -384,7 +575,11 @@ mod tests {
             })),
         );
         rack.tick(48_000, 0, 120.0);
-        assert_eq!(rack.outputs()[0], 0.0, "editing fade must audition a new ramp");
+        assert_eq!(
+            rack.outputs()[0],
+            0.0,
+            "editing fade must audition a new ramp"
+        );
     }
 
     #[test]
@@ -417,5 +612,64 @@ mod tests {
             "smoothed transition jumped to {}",
             rack.outputs()[0]
         );
+    }
+
+    #[test]
+    fn envelope_follows_its_selected_channel_gate_through_release() {
+        let mut rack = ModulatorRack::new();
+        rack.set_slot(
+            0,
+            Some(ModulatorParams::Envelope(ModEnvelopeParams {
+                input_channel: 2,
+                attack_seconds: 0.1,
+                decay_seconds: 0.0,
+                sustain: 1.0,
+                release_seconds: 0.1,
+                ..ModEnvelopeParams::default()
+            })),
+        );
+        let mut gates = [NoteGateEvents::default(); MAX_CHANNELS];
+        gates[2].note_ons = 1;
+        rack.tick_with_note_gates(48_000, 4_800, 120.0, 0, &gates);
+        assert_eq!(rack.outputs()[0], -1.0, "attack starts at the floor");
+        rack.tick_with_note_gates(
+            48_000,
+            0,
+            120.0,
+            0,
+            &[NoteGateEvents::default(); MAX_CHANNELS],
+        );
+        assert_eq!(rack.outputs()[0], 1.0, "attack reaches the ceiling");
+
+        gates = [NoteGateEvents::default(); MAX_CHANNELS];
+        gates[2].note_offs = 1;
+        rack.tick_with_note_gates(48_000, 4_800, 120.0, 0, &gates);
+        assert_eq!(rack.outputs()[0], 1.0, "release begins from the held level");
+        rack.tick_with_note_gates(
+            48_000,
+            0,
+            120.0,
+            0,
+            &[NoteGateEvents::default(); MAX_CHANNELS],
+        );
+        assert_eq!(rack.outputs()[0], -1.0, "release returns to the floor");
+    }
+
+    #[test]
+    fn envelope_ignores_unselected_channel_notes() {
+        let mut rack = ModulatorRack::new();
+        rack.set_slot(
+            0,
+            Some(ModulatorParams::Envelope(ModEnvelopeParams {
+                input_channel: 3,
+                attack_seconds: 0.0,
+                ..ModEnvelopeParams::default()
+            })),
+        );
+        let mut gates = [NoteGateEvents::default(); MAX_CHANNELS];
+        gates[1].note_ons = 1;
+        rack.tick_with_note_gates(48_000, 32, 120.0, 0, &gates);
+        rack.tick(48_000, 0, 120.0);
+        assert_eq!(rack.outputs()[0], -1.0);
     }
 }

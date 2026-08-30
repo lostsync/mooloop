@@ -227,24 +227,26 @@ opens its incoming-route inspector. The inspector is destination-first and
 should be sufficient for ordinary review and removal.
 
 A source's own signal inputs belong on its expanded control surface. For an
-LFO this begins with `Reset: Free | Note On`; later, the same compact input
-picker can list compatible generator, device, Buffer, and cross-channel
-outlets such as `Kick / Gate`. This is selection over the channel control
-graph, not a second device-local modulation system. It is intentionally
-different from Assign: the input picker determines what drives the source,
-while Assign determines where that source's output goes.
+LFO this begins with `Reset: Free | Note On`. The gate-driven envelope exposes
+an explicit channel-note input picker, so `Kick notes → Envelope → Sampler
+position` is possible before generators publish typed outlets. The channel
+choice is an adapter for the future `Kick / Gate` outlet, not a competing
+routing language. Input selection is intentionally different from Assign: the
+input picker determines what drives the source, while Assign determines where
+that source's output goes.
 
-Sync-capable LFO timing knobs use the compact `O.` pattern: the knob is the
+Sync-capable source timing knobs use the compact `O.` pattern: the knob is the
 circle and a clickable LED immediately to its right selects transport sync.
 When the LED is dark the knob reads continuous time or frequency; when lit it
 steps through musical divisions from `4/1` to `1/64T` and shows the division
-in the same value field. Rate and fade-in use this pattern. Smoothing and
-square-wave pulse width remain ordinary continuous controls; pulse width is
-visibly disabled when another waveform is selected.
+in the same value field. LFO rate/fade-in and envelope attack/decay/release use
+this pattern. Smoothing and square-wave pulse width remain ordinary continuous
+controls; pulse width is visibly disabled when another waveform is selected.
 
-This interaction has no drawn patch cords. A full route matrix or zoomed-out
-graph is deferred expert tooling, not a replacement for the rack and not a
-requirement for the first modulation UI.
+The compact rack does not require drawn patch cords. A later expanded graph may
+draw and edit the same typed inlet and destination edges when that makes a
+complex patch easier to read; cables are a visualization of existing routes,
+not a separate engine or a replacement for the rack.
 
 ### Sampler
 

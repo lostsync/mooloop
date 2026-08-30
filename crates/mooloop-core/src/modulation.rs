@@ -271,17 +271,61 @@ impl Default for ModLfoParams {
     }
 }
 
+/// A gate-driven ADSR control source. The input is an explicit channel-note
+/// adapter today; it is intentionally stored on the source so a future typed
+/// generator `Gate` outlet can replace the adapter without changing routes or
+/// destinations.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModEnvelopeParams {
+    /// Channel whose scheduled Note On/Off stream drives this gate.
+    pub input_channel: u8,
+    pub attack_seconds: f32,
+    pub attack_tempo_sync: bool,
+    pub attack_division: ModTimeDivision,
+    pub decay_seconds: f32,
+    pub decay_tempo_sync: bool,
+    pub decay_division: ModTimeDivision,
+    pub sustain: f32,
+    pub release_seconds: f32,
+    pub release_tempo_sync: bool,
+    pub release_division: ModTimeDivision,
+    /// Source-wide output scale. Destination route depth remains separate.
+    pub amount: f32,
+}
+
+impl Default for ModEnvelopeParams {
+    fn default() -> Self {
+        Self {
+            input_channel: 0,
+            attack_seconds: 0.01,
+            attack_tempo_sync: false,
+            attack_division: ModTimeDivision::Sixteenth,
+            decay_seconds: 0.2,
+            decay_tempo_sync: false,
+            decay_division: ModTimeDivision::Eighth,
+            sustain: 0.7,
+            release_seconds: 0.4,
+            release_tempo_sync: false,
+            release_division: ModTimeDivision::Quarter,
+            amount: 1.0,
+        }
+    }
+}
+
 /// One modulator slot's configuration.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ModulatorParams {
     Lfo(ModLfoParams),
+    Envelope(ModEnvelopeParams),
 }
 
 impl ModulatorParams {
     pub fn kind(self) -> ModulatorKind {
         match self {
             Self::Lfo(_) => ModulatorKind::Lfo,
+            Self::Envelope(_) => ModulatorKind::Envelope,
         }
     }
 }
@@ -290,20 +334,23 @@ impl ModulatorParams {
 #[serde(rename_all = "snake_case")]
 pub enum ModulatorKind {
     Lfo,
+    Envelope,
 }
 
 impl ModulatorKind {
-    pub const ALL: [ModulatorKind; 1] = [ModulatorKind::Lfo];
+    pub const ALL: [ModulatorKind; 2] = [ModulatorKind::Lfo, ModulatorKind::Envelope];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Lfo => "LFO",
+            Self::Envelope => "Envelope",
         }
     }
 
     pub fn default_params(self) -> ModulatorParams {
         match self {
             Self::Lfo => ModulatorParams::Lfo(ModLfoParams::default()),
+            Self::Envelope => ModulatorParams::Envelope(ModEnvelopeParams::default()),
         }
     }
 }
@@ -714,6 +761,12 @@ retrigger = true
         rack.slots[2] = Some(ModulatorParams::Lfo(ModLfoParams {
             rate_hz: 3.5,
             ..ModLfoParams::default()
+        }));
+        rack.slots[1] = Some(ModulatorParams::Envelope(ModEnvelopeParams {
+            input_channel: 3,
+            attack_tempo_sync: true,
+            sustain: 0.42,
+            ..ModEnvelopeParams::default()
         }));
         rack.add_route(ModRoute {
             source_slot: 2,
