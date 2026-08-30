@@ -33,6 +33,7 @@ pub mod effects;
 pub mod env;
 pub mod event;
 pub mod filter;
+pub mod heldnotes;
 pub mod lfo;
 pub mod modulator;
 pub mod mono_v2;

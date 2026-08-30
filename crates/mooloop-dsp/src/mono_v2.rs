@@ -14,22 +14,26 @@
 //! - no device-local LFO. Modulation is channel state and arrives through the
 //!   ordinary descriptor parameter events.
 //!
+//! - a real held-note stack ([`crate::heldnotes`]) with note priority, and
+//!   independent legato and glide-mode switches, so note transitions are
+//!   something the player performs rather than something the synth decides.
+//!
 //! Still to come, and called out so the gaps read as sequencing rather than
-//! oversight: the held-note stack and its legato/priority modes, the Ladder
-//! and Acid filter models with saturation moved *ahead* of the filter, and
-//! Accent. Drive stays post-filter until the model work lands, because moving
-//! it without the makeup-gain scheme that step designs would change loudness
-//! rather than character.
+//! oversight: the Ladder and Acid filter models with saturation moved *ahead*
+//! of the filter, and Accent. Drive stays post-filter until the model work
+//! lands, because moving it without the makeup-gain scheme that step designs
+//! would change loudness rather than character.
 
 use crate::bus::StereoBus;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
 use crate::filter::{apply_drive, Svf};
+use crate::heldnotes::{HeldNote, HeldNotes};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::Osc;
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
-use mooloop_core::MonoV2Params;
+use mooloop_core::{EnvTrigger, GlideMode, MonoV2Params};
 
 /// Minimum glide time; at or below this, pitch changes are instant.
 const MIN_GLIDE_S: f32 = 1.0e-3;
@@ -125,6 +129,9 @@ pub struct MonoV2 {
     params: MonoV2Params,
     sample_rate: u32,
     voice: MonoV2Voice,
+    /// Every note currently down, not just the one sounding. This is what
+    /// makes trills, fallback, and note priority possible at all.
+    held: HeldNotes,
 }
 
 impl MonoV2 {
@@ -136,6 +143,7 @@ impl MonoV2 {
             params,
             sample_rate,
             voice,
+            held: HeldNotes::new(),
         }
     }
 
@@ -165,6 +173,7 @@ impl MonoV2 {
         self.voice = MonoV2Voice::new(self.sample_rate);
         self.voice.configure_envelopes(&self.params);
         self.voice.snap_to(&self.params, 0.0);
+        self.held.clear();
     }
 
     pub fn choke(&mut self) {
@@ -172,38 +181,118 @@ impl MonoV2 {
     }
 
     fn note_on(&mut self, event_id: u64, note: u8, velocity: u8) {
-        let was_active = self.voice.active;
-        self.voice.event_id = event_id;
-        self.voice.target_freq = note_to_freq(note);
-        let velocity_amp = f32::from(velocity) / 127.0;
-        if !was_active {
+        // Both switches key off the same question: were notes overlapping?
+        let was_overlapping = !self.held.is_empty();
+        let was_sounding = self.voice.active;
+        self.held.push(HeldNote {
+            event_id,
+            note,
+            velocity,
+        });
+
+        // Under `Low` or `High` priority a note can be pressed and still lose
+        // to something already held. Then nothing happens at all: no pitch
+        // change and no retrigger. It is on the stack, so releasing the
+        // winner will fall back to it.
+        let Some(winner) = self.held.winner(self.params.priority) else {
+            return;
+        };
+        if winner.event_id != event_id {
+            return;
+        }
+
+        if !was_sounding {
             // Fresh start: no glide from silence, clean filter and phases,
             // and every smoothed parameter taken up immediately.
-            self.voice.current_freq = self.voice.target_freq;
-            self.voice.filter.reset();
-            for osc in &mut self.voice.oscs {
-                osc.reset();
-            }
-            self.voice.snap_to(&self.params, velocity_amp);
-        } else if self.params.glide <= MIN_GLIDE_S {
-            self.voice.current_freq = self.voice.target_freq;
+            self.start_voice(note, velocity);
+            self.voice.event_id = event_id;
+            return;
         }
-        // While the voice is still sounding the new velocity has to slide in:
-        // stepping the gain mid-note is as audible as stepping the envelope.
+
+        // A note landing over a still-sounding release tail is where the two
+        // glide modes part company: `Always` slides into the tail, `Legato`
+        // only glides when the notes genuinely overlapped.
+        let glide = if was_overlapping {
+            true
+        } else {
+            self.params.glide_mode == GlideMode::Always
+        };
+        self.retarget(note, velocity, glide);
+
+        // Legato holds the envelopes only for a genuinely overlapping note.
+        // Taking over a release tail is a new note by any reading, and
+        // restarting there is what stops the voice from fading out under it.
+        if !was_overlapping || self.params.env_trigger == EnvTrigger::Retrig {
+            self.voice.amp_env.note_on();
+            self.voice.filter_env.note_on();
+        }
+        self.voice.event_id = event_id;
+        self.voice.active = true;
+    }
+
+    /// Take the voice from silence. Nothing is smoothed or glided into,
+    /// because there is nothing to click against.
+    fn start_voice(&mut self, note: u8, velocity: u8) {
+        let velocity_amp = f32::from(velocity) / 127.0;
+        self.voice.target_freq = note_to_freq(note);
+        self.voice.current_freq = self.voice.target_freq;
+        self.voice.filter.reset();
+        for osc in &mut self.voice.oscs {
+            osc.reset();
+        }
+        self.voice.snap_to(&self.params, velocity_amp);
         self.voice.velocity_amp.set_target(velocity_amp);
         self.voice.amp_env.note_on();
         self.voice.filter_env.note_on();
         self.voice.active = true;
     }
 
+    /// Move the sounding voice to a different note without touching its
+    /// envelopes. This is the whole of what a fallback is, and it is why a
+    /// trill works: releasing the top note of two returns to the lower one as
+    /// a pitch change, not as a new note.
+    fn retarget(&mut self, note: u8, velocity: u8, glide: bool) {
+        self.voice.target_freq = note_to_freq(note);
+        if !glide || self.params.glide <= MIN_GLIDE_S {
+            self.voice.current_freq = self.voice.target_freq;
+        }
+        // While the voice is still sounding the new velocity has to slide in:
+        // stepping the gain mid-note is as audible as stepping the envelope.
+        self.voice
+            .velocity_amp
+            .set_target(f32::from(velocity) / 127.0);
+    }
+
     fn note_off(&mut self, event_id: u64) {
-        if self.voice.active && self.voice.event_id == event_id {
-            self.voice.amp_env.release();
-            self.voice.filter_env.release();
+        // A `NoteOff` for something not held is stale by definition. Bailing
+        // here is what keeps it from releasing a newer note.
+        if !self.held.remove(event_id) {
+            return;
+        }
+        if !self.voice.active {
+            return;
+        }
+        match self.held.winner(self.params.priority) {
+            // Still holding something: this is a pitch change, never a
+            // retrigger, whatever the envelope trigger mode says.
+            Some(winner) => {
+                if winner.event_id != self.voice.event_id {
+                    self.retarget(winner.note, winner.velocity, true);
+                    self.voice.event_id = winner.event_id;
+                }
+            }
+            None => {
+                self.voice.amp_env.release();
+                self.voice.filter_env.release();
+            }
         }
     }
 
+    /// Transport stop and choke. The stack has to go with the voice: a held
+    /// entry left behind would resurrect the voice on the next `NoteOff`
+    /// fallback, long after the transport said stop.
     fn release_all(&mut self) {
+        self.held.clear();
         if self.voice.active && !self.voice.amp_env.is_releasing() {
             self.voice.amp_env.release_with(STOP_RELEASE_S);
             self.voice.filter_env.release_with(STOP_RELEASE_S);
@@ -347,7 +436,7 @@ impl AudioNode for MonoV2 {
 mod tests {
     use super::*;
     use crate::event::TimedEvent;
-    use mooloop_core::{OscParams, OscWave};
+    use mooloop_core::{NotePriority, OscParams, OscWave};
 
     const SR: u32 = 48_000;
 
@@ -576,6 +665,260 @@ mod tests {
         synth.process(&ctx(1024), &mut bus, &events, None);
         assert!(!synth.voice.amp_env.is_releasing());
         assert!(!synth.voice.filter_env.is_releasing());
+    }
+
+    fn note_off(offset: u32, id: u64, note: u8) -> TimedEvent {
+        TimedEvent {
+            offset,
+            event: Event::NoteOff { id, note },
+        }
+    }
+
+    /// A synth that settles at a partial sustain, which is what makes a
+    /// retrigger observable at all.
+    ///
+    /// `Adsr::note_on` deliberately does not reset the level — it attacks from
+    /// wherever the envelope already is, so a retrigger over a sounding voice
+    /// does not click. So a restart is not a dip to zero; it is a *climb back
+    /// to the peak* from sustain. These tests measure that climb.
+    fn sustained(params: impl FnOnce(&mut MonoV2Params)) -> MonoV2 {
+        let mut p = saw_patch();
+        p.attack = 0.005;
+        p.decay = 0.01;
+        p.sustain = SUSTAIN;
+        p.release = 0.5;
+        p.filter_attack = 0.005;
+        p.filter_decay = 0.01;
+        p.filter_sustain = SUSTAIN;
+        p.filter_release = 0.5;
+        params(&mut p);
+        MonoV2::new(p, SR)
+    }
+
+    const SUSTAIN: f32 = 0.4;
+
+    /// Feed the events one sample at a time and report the highest level each
+    /// envelope reaches after `from`. Above sustain means it restarted.
+    fn envelope_peaks(
+        synth: &mut MonoV2,
+        events: &EventList,
+        frames: usize,
+        from: usize,
+    ) -> (f32, f32) {
+        let mut bus = StereoBus::with_capacity(frames);
+        let (mut amp, mut filter) = (0.0_f32, 0.0_f32);
+        for offset in 0..frames {
+            let mut slice = EventList::empty();
+            for ev in events.iter() {
+                if ev.offset as usize == offset {
+                    slice.push(TimedEvent {
+                        offset: 0,
+                        event: ev.event,
+                    });
+                }
+            }
+            synth.process(&ctx(1), &mut bus, &slice, None);
+            if offset >= from {
+                amp = amp.max(synth.voice.amp_env.level());
+                filter = filter.max(synth.voice.filter_env.level());
+            }
+        }
+        (amp, filter)
+    }
+
+    #[test]
+    fn legato_changes_pitch_without_restarting_either_envelope() {
+        let mut synth = sustained(|p| p.env_trigger = EnvTrigger::Legato);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(note_on(2000, 2, 67));
+
+        let (amp, filter) = envelope_peaks(&mut synth, &events, 4000, 2000);
+        assert!(
+            amp <= SUSTAIN + 1.0e-3 && filter <= SUSTAIN + 1.0e-3,
+            "legato restarted an envelope (amp {amp}, filter {filter})"
+        );
+        assert!((synth.voice.target_freq - note_to_freq(67)).abs() < 0.01);
+    }
+
+    #[test]
+    fn retrig_restarts_both_envelopes_on_an_overlapping_note() {
+        let mut synth = sustained(|p| p.env_trigger = EnvTrigger::Retrig);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(note_on(2000, 2, 67));
+
+        let (amp, filter) = envelope_peaks(&mut synth, &events, 4000, 2000);
+        assert!(
+            amp > 0.95 && filter > 0.95,
+            "retrig did not restart both envelopes (amp {amp}, filter {filter})"
+        );
+    }
+
+    /// Releasing the winner while another note is still down is a pitch
+    /// change, not a note-on — in *either* trigger mode. That is what makes a
+    /// trill work.
+    #[test]
+    fn releasing_the_winner_falls_back_without_restarting_envelopes() {
+        for trigger in [EnvTrigger::Retrig, EnvTrigger::Legato] {
+            let mut synth = sustained(|p| p.env_trigger = trigger);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 1, 60));
+            events.push(note_on(1000, 2, 67));
+            events.push(note_off(2000, 2, 67));
+
+            let (amp, filter) = envelope_peaks(&mut synth, &events, 4000, 2000);
+            assert!(
+                amp <= SUSTAIN + 1.0e-3 && filter <= SUSTAIN + 1.0e-3,
+                "{trigger:?} restarted an envelope on fallback (amp {amp}, filter {filter})"
+            );
+            assert!(
+                (synth.voice.target_freq - note_to_freq(60)).abs() < 0.01,
+                "{trigger:?} did not fall back to the held note"
+            );
+        }
+    }
+
+    #[test]
+    fn each_priority_takes_its_own_note() {
+        for (priority, expected) in [
+            (NotePriority::Last, 55),
+            (NotePriority::Low, 48),
+            (NotePriority::High, 67),
+        ] {
+            let mut synth = sustained(|p| p.priority = priority);
+            let mut bus = StereoBus::with_capacity(512);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 1, 67));
+            events.push(note_on(1, 2, 48));
+            events.push(note_on(2, 3, 55));
+            synth.process(&ctx(512), &mut bus, &events, None);
+            assert!(
+                (synth.voice.target_freq - note_to_freq(expected)).abs() < 0.01,
+                "{priority:?} chose {} Hz, wanted note {expected}",
+                synth.voice.target_freq
+            );
+        }
+    }
+
+    /// Under `Low`, a higher note pressed over a held one loses. It does not
+    /// take the voice and it does not retrigger — but it is on the stack, so
+    /// releasing the low note hands the voice to it.
+    #[test]
+    fn a_losing_note_does_not_take_the_voice_but_is_still_held() {
+        let mut synth = sustained(|p| p.priority = NotePriority::Low);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 48));
+        events.push(note_on(2000, 2, 72));
+
+        let (amp, filter) = envelope_peaks(&mut synth, &events, 4000, 2000);
+        assert!(
+            amp <= SUSTAIN + 1.0e-3 && filter <= SUSTAIN + 1.0e-3,
+            "a losing note retriggered the envelopes (amp {amp}, filter {filter})"
+        );
+        assert!((synth.voice.target_freq - note_to_freq(48)).abs() < 0.01);
+
+        let mut bus = StereoBus::with_capacity(512);
+        let mut events = EventList::empty();
+        events.push(note_off(0, 1, 48));
+        synth.process(&ctx(512), &mut bus, &events, None);
+        assert!(!synth.voice.amp_env.is_releasing());
+        assert!((synth.voice.target_freq - note_to_freq(72)).abs() < 0.01);
+    }
+
+    #[test]
+    fn releasing_a_note_that_is_not_the_winner_changes_nothing() {
+        let mut synth = sustained(|_| {});
+        let mut bus = StereoBus::with_capacity(512);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(note_on(1, 2, 67));
+        events.push(note_off(2, 1, 60));
+        synth.process(&ctx(512), &mut bus, &events, None);
+
+        assert!(!synth.voice.amp_env.is_releasing());
+        assert!((synth.voice.target_freq - note_to_freq(67)).abs() < 0.01);
+    }
+
+    /// The one row of the table where the two glide modes disagree: a note
+    /// landing on a still-sounding release tail.
+    #[test]
+    fn glide_modes_differ_only_over_a_release_tail() {
+        for (mode, glides) in [(GlideMode::Always, true), (GlideMode::Legato, false)] {
+            let mut synth = sustained(|p| {
+                p.glide = 0.5;
+                p.glide_mode = mode;
+            });
+            let mut bus = StereoBus::with_capacity(4096);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 1, 48));
+            synth.process(&ctx(2048), &mut bus, &events, None);
+
+            // Release, let the tail run, then land a new note on top of it.
+            let mut events = EventList::empty();
+            events.push(note_off(0, 1, 48));
+            synth.process(&ctx(2048), &mut bus, &events, None);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 2, 72));
+            synth.process(&ctx(1), &mut bus, &events, None);
+
+            let started_at_the_old_pitch =
+                (synth.voice.current_freq - note_to_freq(48)).abs() < 5.0;
+            assert_eq!(
+                started_at_the_old_pitch, glides,
+                "{mode:?} over a release tail started at {} Hz",
+                synth.voice.current_freq
+            );
+        }
+    }
+
+    /// Both modes glide between genuinely overlapping notes, and neither
+    /// glides from silence.
+    #[test]
+    fn overlapping_notes_glide_and_silence_never_does() {
+        for mode in [GlideMode::Always, GlideMode::Legato] {
+            let mut synth = sustained(|p| {
+                p.glide = 0.5;
+                p.glide_mode = mode;
+            });
+            let mut bus = StereoBus::with_capacity(2048);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 1, 48));
+            synth.process(&ctx(1), &mut bus, &events, None);
+            assert!(
+                (synth.voice.current_freq - note_to_freq(48)).abs() < 0.01,
+                "{mode:?} glided from silence"
+            );
+
+            let mut events = EventList::empty();
+            events.push(note_on(0, 2, 72));
+            synth.process(&ctx(1), &mut bus, &events, None);
+            assert!(
+                (synth.voice.current_freq - note_to_freq(48)).abs() < 5.0,
+                "{mode:?} did not glide between overlapping notes"
+            );
+        }
+    }
+
+    #[test]
+    fn a_transport_stop_clears_the_held_notes() {
+        let mut synth = sustained(|_| {});
+        let mut bus = StereoBus::with_capacity(512);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(note_on(1, 2, 67));
+        synth.process(&ctx(512), &mut bus, &events, None);
+
+        let mut stopped = ctx(512);
+        stopped.playing = false;
+        synth.process(&stopped, &mut bus, &EventList::empty(), None);
+        assert!(synth.held.is_empty());
+
+        // A late NoteOff must not resurrect the voice through a fallback.
+        let mut events = EventList::empty();
+        events.push(note_off(0, 2, 67));
+        synth.process(&stopped, &mut bus, &events, None);
+        assert!(synth.voice.amp_env.is_releasing() || !synth.voice.active);
     }
 
     #[test]

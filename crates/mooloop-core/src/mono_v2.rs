@@ -18,6 +18,91 @@
 
 use crate::OscParams;
 
+/// Which held note the single voice plays when several are down.
+///
+/// `Last` is what the v1 synth does and is the conservative default; `Low` and
+/// `High` are the other two standard answers, and having all three is part of
+/// what separates a monosynth from a synth with one voice.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NotePriority {
+    #[default]
+    Last,
+    Low,
+    High,
+}
+
+/// Whether an overlapping note restarts the envelopes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EnvTrigger {
+    /// Every note starts both envelopes. Matches the v1 synth exactly.
+    #[default]
+    Retrig,
+    /// An overlapping note changes pitch and leaves the envelopes running.
+    Legato,
+}
+
+/// When glide applies.
+///
+/// Both modes glide between overlapping notes and neither glides from
+/// silence. They differ only over a still-sounding release tail: `Always`
+/// slides into it, `Legato` jumps.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GlideMode {
+    Always,
+    #[default]
+    Legato,
+}
+
+impl NotePriority {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Low,
+            2 => Self::High,
+            _ => Self::Last,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Last => 0,
+            Self::Low => 1,
+            Self::High => 2,
+        }
+    }
+}
+
+impl EnvTrigger {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Legato,
+            _ => Self::Retrig,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Retrig => 0,
+            Self::Legato => 1,
+        }
+    }
+}
+
+impl GlideMode {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Legato,
+            _ => Self::Always,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Always => 0,
+            Self::Legato => 1,
+        }
+    }
+}
+
 /// All v2 mono synth parameters, in the units the DSP and UI share.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -52,6 +137,13 @@ pub struct MonoV2Params {
     /// Keyboard tracking of cutoff in `[0, 1]`. `1` moves the cutoff about one
     /// octave per played octave, referenced to middle C.
     pub filter_keytrack: f32,
+    /// When glide applies. Independent of [`Self::env_trigger`] — these are
+    /// two switches, not one four-position one.
+    pub glide_mode: GlideMode,
+    /// Whether an overlapping note restarts the envelopes.
+    pub env_trigger: EnvTrigger,
+    /// Which held note wins when several are down.
+    pub priority: NotePriority,
 }
 
 impl Default for MonoV2Params {
@@ -95,6 +187,13 @@ impl Default for MonoV2Params {
             filter_sustain: 0.7,
             filter_release: 0.15,
             filter_keytrack: 0.0,
+            // `Retrig` reproduces the v1 synth exactly. `Legato` glide does
+            // not, but glide defaults to 0 s, so nothing can hear the
+            // difference until it is dialled in — and by then `Legato` is the
+            // mode a player wants.
+            glide_mode: GlideMode::Legato,
+            env_trigger: EnvTrigger::Retrig,
+            priority: NotePriority::Last,
         }
     }
 }

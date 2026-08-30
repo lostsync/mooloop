@@ -13,9 +13,9 @@
 //! adding an oscillator parameter later does not disturb the others.
 
 use crate::{
-    DeviceKind, LfoParams, LfoWave, LoopMode, MonoSynthParams, MonoV2Params, OscParams, OscWave,
-    ParamCurve, ParamDescriptor, PolySynthParams, RetriggerMode, SamplerParams, VoiceMode,
-    MAX_POLY_VOICES, MAX_SAMPLER_VOICES,
+    DeviceKind, EnvTrigger, GlideMode, LfoParams, LfoWave, LoopMode, MonoSynthParams, MonoV2Params,
+    NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PolySynthParams, RetriggerMode,
+    SamplerParams, VoiceMode, MAX_POLY_VOICES, MAX_SAMPLER_VOICES,
 };
 
 // --- Sampler ---------------------------------------------------------------
@@ -191,6 +191,9 @@ pub const SYNTH_PARAM_FILTER_DECAY: u32 = 21;
 pub const SYNTH_PARAM_FILTER_SUSTAIN: u32 = 22;
 pub const SYNTH_PARAM_FILTER_RELEASE: u32 = 23;
 pub const SYNTH_PARAM_FILTER_KEYTRACK: u32 = 24;
+pub const SYNTH_PARAM_GLIDE_MODE: u32 = 25;
+pub const SYNTH_PARAM_ENV_TRIGGER: u32 = 26;
+pub const SYNTH_PARAM_NOTE_PRIORITY: u32 = 27;
 
 const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
     [
@@ -326,13 +329,17 @@ const fn concat_core_lfo(
     out
 }
 
-/// The v2 mono synth's second envelope and its keytracking.
-const MONO_V2_FILTER_DESCRIPTORS: [ParamDescriptor; 5] = [
+/// The v2 mono synth's second envelope, its keytracking, and the three
+/// switches that make its note behaviour a performance rather than a lookup.
+const MONO_V2_VOICE_DESCRIPTORS: [ParamDescriptor; 8] = [
     seconds(SYNTH_PARAM_FILTER_ATTACK, "F attack", 0.005),
     seconds(SYNTH_PARAM_FILTER_DECAY, "F decay", 0.2),
     unit(SYNTH_PARAM_FILTER_SUSTAIN, "F sustain", 0.7),
     seconds(SYNTH_PARAM_FILTER_RELEASE, "F release", 0.15),
     unit(SYNTH_PARAM_FILTER_KEYTRACK, "Keytrack", 0.0),
+    stepped(SYNTH_PARAM_GLIDE_MODE, "Glide mode", 2, 1.0),
+    stepped(SYNTH_PARAM_ENV_TRIGGER, "Env trig", 2, 0.0),
+    stepped(SYNTH_PARAM_NOTE_PRIORITY, "Priority", 3, 0.0),
 ];
 
 /// `SHARED_SYNTH_DESCRIPTORS` then three oscillator blocks. Written out rather
@@ -348,9 +355,9 @@ static MONO_DESCRIPTORS: [ParamDescriptor; 30] = concat_synth(
 /// Built from the shared core rather than from `MONO_DESCRIPTORS`: the v2
 /// mono synth is a different instrument, and a table that inherits from
 /// another one quietly becomes a lie the moment the two diverge.
-static MONO_V2_DESCRIPTORS: [ParamDescriptor; 29] = concat_mono_v2(
+static MONO_V2_DESCRIPTORS: [ParamDescriptor; 32] = concat_mono_v2(
     SYNTH_CORE_DESCRIPTORS,
-    MONO_V2_FILTER_DESCRIPTORS,
+    MONO_V2_VOICE_DESCRIPTORS,
     osc_descriptors(0, "Osc 1 wave"),
     osc_descriptors(1, "Osc 2 wave"),
     osc_descriptors(2, "Osc 3 wave"),
@@ -358,23 +365,27 @@ static MONO_V2_DESCRIPTORS: [ParamDescriptor; 29] = concat_mono_v2(
 
 const fn concat_mono_v2(
     core: [ParamDescriptor; 9],
-    filter: [ParamDescriptor; 5],
+    voice: [ParamDescriptor; 8],
     a: [ParamDescriptor; 5],
     b: [ParamDescriptor; 5],
     c: [ParamDescriptor; 5],
-) -> [ParamDescriptor; 29] {
-    let mut out = [core[0]; 29];
+) -> [ParamDescriptor; 32] {
+    let mut out = [core[0]; 32];
     let mut i = 0;
     while i < 9 {
         out[i] = core[i];
         i += 1;
     }
+    let mut v = 0;
+    while v < 8 {
+        out[9 + v] = voice[v];
+        v += 1;
+    }
     let mut j = 0;
     while j < 5 {
-        out[9 + j] = filter[j];
-        out[14 + j] = a[j];
-        out[19 + j] = b[j];
-        out[24 + j] = c[j];
+        out[17 + j] = a[j];
+        out[22 + j] = b[j];
+        out[27 + j] = c[j];
         j += 1;
     }
     out
@@ -618,6 +629,9 @@ impl GeneratorParams {
                     SYNTH_PARAM_FILTER_SUSTAIN => p.filter_sustain,
                     SYNTH_PARAM_FILTER_RELEASE => p.filter_release,
                     SYNTH_PARAM_FILTER_KEYTRACK => p.filter_keytrack,
+                    SYNTH_PARAM_GLIDE_MODE => p.glide_mode.to_index() as f32,
+                    SYNTH_PARAM_ENV_TRIGGER => p.env_trigger.to_index() as f32,
+                    SYNTH_PARAM_NOTE_PRIORITY => p.priority.to_index() as f32,
                     _ => return None,
                 })
             }
@@ -723,6 +737,15 @@ impl GeneratorParams {
                         SYNTH_PARAM_FILTER_SUSTAIN => p.filter_sustain = value,
                         SYNTH_PARAM_FILTER_RELEASE => p.filter_release = value,
                         SYNTH_PARAM_FILTER_KEYTRACK => p.filter_keytrack = value,
+                        SYNTH_PARAM_GLIDE_MODE => {
+                            p.glide_mode = GlideMode::from_index(value.round() as i32)
+                        }
+                        SYNTH_PARAM_ENV_TRIGGER => {
+                            p.env_trigger = EnvTrigger::from_index(value.round() as i32)
+                        }
+                        SYNTH_PARAM_NOTE_PRIORITY => {
+                            p.priority = NotePriority::from_index(value.round() as i32)
+                        }
                         _ => return None,
                     }
                 }
