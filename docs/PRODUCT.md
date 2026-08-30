@@ -120,6 +120,15 @@ placements.
 Pattern mode loops the selected pattern. Song mode schedules placements. Song
 loop boundaries are independent of pattern lengths.
 
+### Device Controls Are Not Studio Hardware
+
+The frame around a device is studio hardware, not part of the device. The
+device sits inside the frame and must stand on its own design: an instrument
+ships with a master volume, a reverb ships with its own wet/dry control.
+Device controls exist for the artist; studio hardware exists for the engineer
+to solve problems. Artists may use and misuse the hardware, but it must never
+exist to paper over shortcomings in device design.
+
 ### Trustworthy Machinery
 
 Audible instability is a musical option; application instability is not. The
