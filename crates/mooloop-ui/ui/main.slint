@@ -39,7 +39,7 @@ import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, Modulatio
 import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
-import { MonoV2DeviceFace } from "mono-v2-device.slint";
+import { Ml1DeviceFace } from "ml1-device.slint";
 import { PolyDeviceFace } from "poly-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 import { SampleTrace } from "device-displays.slint";
@@ -545,7 +545,7 @@ export component MainWindow inherits Window {
     in-out property <[float]> browser-info-waveform;
     in-out property <string> browser-info-name;
     in-out property <string> browser-info-stats;
-    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly, 4=Mono 2
+    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly, 4=ML-1
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
     in-out property <int> poly-device-page;
@@ -886,47 +886,47 @@ export component MainWindow inherits Window {
     callback mono-lfo-wave-changed(int); callback mono-lfo-rate-changed(float); callback mono-lfo-retrigger-changed(bool);
     callback mono-lfo-pitch-changed(float); callback mono-lfo-filter-changed(float); callback mono-lfo-pulse-width-changed(float); callback mono-lfo-amp-changed(float);
 
-    // ---- v2 mono synth params of the selected channel ----
-    in-out property <int> monov2-osc1-wave: 2;
-    in-out property <float> monov2-osc1-semitones;
-    in-out property <float> monov2-osc1-cents;
-    in-out property <float> monov2-osc1-level: 1;
-    in-out property <float> monov2-osc1-pulse-width: 0.5;
-    in-out property <int> monov2-osc2-wave: 2;
-    in-out property <float> monov2-osc2-semitones: 12;
-    in-out property <float> monov2-osc2-cents: 4;
-    in-out property <float> monov2-osc2-level;
-    in-out property <float> monov2-osc2-pulse-width: 0.5;
-    in-out property <int> monov2-osc3-wave: 2;
-    in-out property <float> monov2-osc3-semitones: -12;
-    in-out property <float> monov2-osc3-cents: -4;
-    in-out property <float> monov2-osc3-level;
-    in-out property <float> monov2-osc3-pulse-width: 0.5;
-    in-out property <float> monov2-glide;
-    in-out property <float> monov2-attack: 0.005;
-    in-out property <float> monov2-decay: 0.2;
-    in-out property <float> monov2-sustain: 0.7;
-    in-out property <float> monov2-release: 0.15;
-    in-out property <float> monov2-filter-cutoff: 1;
-    in-out property <float> monov2-filter-resonance;
-    in-out property <float> monov2-filter-env;
-    in-out property <float> monov2-drive;
-    in-out property <float> monov2-filter-attack: 0.005;
-    in-out property <float> monov2-filter-decay: 0.2;
-    in-out property <float> monov2-filter-sustain: 0.7;
-    in-out property <float> monov2-filter-release: 0.15;
-    in-out property <float> monov2-filter-keytrack;
-    in-out property <int> monov2-glide-mode: 1;
-    in-out property <int> monov2-env-trigger;
-    in-out property <int> monov2-priority;
-    callback monov2-osc1-wave-changed(int); callback monov2-osc1-semitones-changed(float); callback monov2-osc1-cents-changed(float); callback monov2-osc1-level-changed(float); callback monov2-osc1-pulse-width-changed(float);
-    callback monov2-osc2-wave-changed(int); callback monov2-osc2-semitones-changed(float); callback monov2-osc2-cents-changed(float); callback monov2-osc2-level-changed(float); callback monov2-osc2-pulse-width-changed(float);
-    callback monov2-osc3-wave-changed(int); callback monov2-osc3-semitones-changed(float); callback monov2-osc3-cents-changed(float); callback monov2-osc3-level-changed(float); callback monov2-osc3-pulse-width-changed(float);
-    callback monov2-glide-changed(float); callback monov2-attack-changed(float); callback monov2-decay-changed(float); callback monov2-sustain-changed(float); callback monov2-release-changed(float);
-    callback monov2-filter-cutoff-changed(float); callback monov2-filter-resonance-changed(float); callback monov2-filter-env-changed(float); callback monov2-drive-changed(float);
-    callback monov2-filter-attack-changed(float); callback monov2-filter-decay-changed(float); callback monov2-filter-sustain-changed(float); callback monov2-filter-release-changed(float); callback monov2-filter-keytrack-changed(float);
-    callback monov2-glide-mode-changed(int); callback monov2-env-trigger-changed(int); callback monov2-priority-changed(int);
-    in-out property <int> monov2-device-page;
+    // ---- ML-1 params of the selected channel ----
+    in-out property <int> ml1-osc1-wave: 2;
+    in-out property <float> ml1-osc1-semitones;
+    in-out property <float> ml1-osc1-cents;
+    in-out property <float> ml1-osc1-level: 1;
+    in-out property <float> ml1-osc1-pulse-width: 0.5;
+    in-out property <int> ml1-osc2-wave: 2;
+    in-out property <float> ml1-osc2-semitones: 12;
+    in-out property <float> ml1-osc2-cents: 4;
+    in-out property <float> ml1-osc2-level;
+    in-out property <float> ml1-osc2-pulse-width: 0.5;
+    in-out property <int> ml1-osc3-wave: 2;
+    in-out property <float> ml1-osc3-semitones: -12;
+    in-out property <float> ml1-osc3-cents: -4;
+    in-out property <float> ml1-osc3-level;
+    in-out property <float> ml1-osc3-pulse-width: 0.5;
+    in-out property <float> ml1-glide;
+    in-out property <float> ml1-attack: 0.005;
+    in-out property <float> ml1-decay: 0.2;
+    in-out property <float> ml1-sustain: 0.7;
+    in-out property <float> ml1-release: 0.15;
+    in-out property <float> ml1-filter-cutoff: 1;
+    in-out property <float> ml1-filter-resonance;
+    in-out property <float> ml1-filter-env;
+    in-out property <float> ml1-drive;
+    in-out property <float> ml1-filter-attack: 0.005;
+    in-out property <float> ml1-filter-decay: 0.2;
+    in-out property <float> ml1-filter-sustain: 0.7;
+    in-out property <float> ml1-filter-release: 0.15;
+    in-out property <float> ml1-filter-keytrack;
+    in-out property <int> ml1-glide-mode: 1;
+    in-out property <int> ml1-env-trigger;
+    in-out property <int> ml1-priority;
+    callback ml1-osc1-wave-changed(int); callback ml1-osc1-semitones-changed(float); callback ml1-osc1-cents-changed(float); callback ml1-osc1-level-changed(float); callback ml1-osc1-pulse-width-changed(float);
+    callback ml1-osc2-wave-changed(int); callback ml1-osc2-semitones-changed(float); callback ml1-osc2-cents-changed(float); callback ml1-osc2-level-changed(float); callback ml1-osc2-pulse-width-changed(float);
+    callback ml1-osc3-wave-changed(int); callback ml1-osc3-semitones-changed(float); callback ml1-osc3-cents-changed(float); callback ml1-osc3-level-changed(float); callback ml1-osc3-pulse-width-changed(float);
+    callback ml1-glide-changed(float); callback ml1-attack-changed(float); callback ml1-decay-changed(float); callback ml1-sustain-changed(float); callback ml1-release-changed(float);
+    callback ml1-filter-cutoff-changed(float); callback ml1-filter-resonance-changed(float); callback ml1-filter-env-changed(float); callback ml1-drive-changed(float);
+    callback ml1-filter-attack-changed(float); callback ml1-filter-decay-changed(float); callback ml1-filter-sustain-changed(float); callback ml1-filter-release-changed(float); callback ml1-filter-keytrack-changed(float);
+    callback ml1-glide-mode-changed(int); callback ml1-env-trigger-changed(int); callback ml1-priority-changed(int);
+    in-out property <int> ml1-device-page;
 
     // ---- poly synth params of the selected channel ----
     in-out property <int> poly-osc1-wave: 2;
@@ -2282,7 +2282,7 @@ export component MainWindow inherits Window {
                                             vertical-alignment: center;
                                         }
                                         if !root.editing-bus : SelectorBank {
-                                            options: ["Sampler", "Drum", "Mono", "Poly", "Mono 2"];
+                                            options: ["Sampler", "Drum", "Mono", "Poly", "ML-1"];
                                             selected-index <=> root.source-kind;
                                             segment-width: 48px;
                                             tooltip: "Source device";
@@ -2587,31 +2587,31 @@ export component MainWindow inherits Window {
                                                     polyphony-changed(v) => { root.poly-polyphony-changed(v); } spread-changed(v) => { root.poly-spread-changed(v); }
                                                 }
 
-                                                if !root.editing-bus && root.source-kind == 4 : MonoV2DeviceFace {
+                                                if !root.editing-bus && root.source-kind == 4 : Ml1DeviceFace {
                                                     x: DeviceRackMetrics.rail-width;
                                                     y: DeviceRackMetrics.header-height;
                                                     width: parent.content-width;
                                                     height: parent.height - DeviceRackMetrics.header-height;
-                                                    page <=> root.monov2-device-page;
-                                                    osc1-wave <=> root.monov2-osc1-wave; osc1-semitones <=> root.monov2-osc1-semitones; osc1-cents <=> root.monov2-osc1-cents; osc1-level <=> root.monov2-osc1-level; osc1-pulse-width <=> root.monov2-osc1-pulse-width;
-                                                    osc2-wave <=> root.monov2-osc2-wave; osc2-semitones <=> root.monov2-osc2-semitones; osc2-cents <=> root.monov2-osc2-cents; osc2-level <=> root.monov2-osc2-level; osc2-pulse-width <=> root.monov2-osc2-pulse-width;
-                                                    osc3-wave <=> root.monov2-osc3-wave; osc3-semitones <=> root.monov2-osc3-semitones; osc3-cents <=> root.monov2-osc3-cents; osc3-level <=> root.monov2-osc3-level; osc3-pulse-width <=> root.monov2-osc3-pulse-width;
-                                                    glide <=> root.monov2-glide; attack <=> root.monov2-attack; decay <=> root.monov2-decay; sustain <=> root.monov2-sustain; release <=> root.monov2-release;
-                                                    filter-cutoff <=> root.monov2-filter-cutoff; filter-resonance <=> root.monov2-filter-resonance; filter-env <=> root.monov2-filter-env; drive <=> root.monov2-drive;
-                                                    filter-attack <=> root.monov2-filter-attack; filter-decay <=> root.monov2-filter-decay; filter-sustain <=> root.monov2-filter-sustain; filter-release <=> root.monov2-filter-release; filter-keytrack <=> root.monov2-filter-keytrack;
-                                                    glide-mode <=> root.monov2-glide-mode; env-trigger <=> root.monov2-env-trigger; priority <=> root.monov2-priority;
+                                                    page <=> root.ml1-device-page;
+                                                    osc1-wave <=> root.ml1-osc1-wave; osc1-semitones <=> root.ml1-osc1-semitones; osc1-cents <=> root.ml1-osc1-cents; osc1-level <=> root.ml1-osc1-level; osc1-pulse-width <=> root.ml1-osc1-pulse-width;
+                                                    osc2-wave <=> root.ml1-osc2-wave; osc2-semitones <=> root.ml1-osc2-semitones; osc2-cents <=> root.ml1-osc2-cents; osc2-level <=> root.ml1-osc2-level; osc2-pulse-width <=> root.ml1-osc2-pulse-width;
+                                                    osc3-wave <=> root.ml1-osc3-wave; osc3-semitones <=> root.ml1-osc3-semitones; osc3-cents <=> root.ml1-osc3-cents; osc3-level <=> root.ml1-osc3-level; osc3-pulse-width <=> root.ml1-osc3-pulse-width;
+                                                    glide <=> root.ml1-glide; attack <=> root.ml1-attack; decay <=> root.ml1-decay; sustain <=> root.ml1-sustain; release <=> root.ml1-release;
+                                                    filter-cutoff <=> root.ml1-filter-cutoff; filter-resonance <=> root.ml1-filter-resonance; filter-env <=> root.ml1-filter-env; drive <=> root.ml1-drive;
+                                                    filter-attack <=> root.ml1-filter-attack; filter-decay <=> root.ml1-filter-decay; filter-sustain <=> root.ml1-filter-sustain; filter-release <=> root.ml1-filter-release; filter-keytrack <=> root.ml1-filter-keytrack;
+                                                    glide-mode <=> root.ml1-glide-mode; env-trigger <=> root.ml1-env-trigger; priority <=> root.ml1-priority;
                                                     modulation-armed: root.modulation-armed-slot >= 0;
                                                     modulation-depths: root.source-modulation-depths;
                                                     modulation-allowed: root.source-modulation-allowed;
                                                     modulation-offsets: root.source-modulation-offsets;
                                                     modulation-route-counts: root.source-modulation-route-counts;
-                                                    osc1-wave-changed(v) => { root.monov2-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.monov2-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.monov2-osc1-cents-changed(v); } osc1-level-changed(v) => { root.monov2-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.monov2-osc1-pulse-width-changed(v); }
-                                                    osc2-wave-changed(v) => { root.monov2-osc2-wave-changed(v); } osc2-semitones-changed(v) => { root.monov2-osc2-semitones-changed(v); } osc2-cents-changed(v) => { root.monov2-osc2-cents-changed(v); } osc2-level-changed(v) => { root.monov2-osc2-level-changed(v); } osc2-pulse-width-changed(v) => { root.monov2-osc2-pulse-width-changed(v); }
-                                                    osc3-wave-changed(v) => { root.monov2-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.monov2-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.monov2-osc3-cents-changed(v); } osc3-level-changed(v) => { root.monov2-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.monov2-osc3-pulse-width-changed(v); }
-                                                    glide-changed(v) => { root.monov2-glide-changed(v); } attack-changed(v) => { root.monov2-attack-changed(v); } decay-changed(v) => { root.monov2-decay-changed(v); } sustain-changed(v) => { root.monov2-sustain-changed(v); } release-changed(v) => { root.monov2-release-changed(v); }
-                                                    filter-cutoff-changed(v) => { root.monov2-filter-cutoff-changed(v); } filter-resonance-changed(v) => { root.monov2-filter-resonance-changed(v); } filter-env-changed(v) => { root.monov2-filter-env-changed(v); } drive-changed(v) => { root.monov2-drive-changed(v); }
-                                                    filter-attack-changed(v) => { root.monov2-filter-attack-changed(v); } filter-decay-changed(v) => { root.monov2-filter-decay-changed(v); } filter-sustain-changed(v) => { root.monov2-filter-sustain-changed(v); } filter-release-changed(v) => { root.monov2-filter-release-changed(v); } filter-keytrack-changed(v) => { root.monov2-filter-keytrack-changed(v); }
-                                                    glide-mode-changed(v) => { root.monov2-glide-mode-changed(v); } env-trigger-changed(v) => { root.monov2-env-trigger-changed(v); } priority-changed(v) => { root.monov2-priority-changed(v); }
+                                                    osc1-wave-changed(v) => { root.ml1-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.ml1-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.ml1-osc1-cents-changed(v); } osc1-level-changed(v) => { root.ml1-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.ml1-osc1-pulse-width-changed(v); }
+                                                    osc2-wave-changed(v) => { root.ml1-osc2-wave-changed(v); } osc2-semitones-changed(v) => { root.ml1-osc2-semitones-changed(v); } osc2-cents-changed(v) => { root.ml1-osc2-cents-changed(v); } osc2-level-changed(v) => { root.ml1-osc2-level-changed(v); } osc2-pulse-width-changed(v) => { root.ml1-osc2-pulse-width-changed(v); }
+                                                    osc3-wave-changed(v) => { root.ml1-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.ml1-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.ml1-osc3-cents-changed(v); } osc3-level-changed(v) => { root.ml1-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.ml1-osc3-pulse-width-changed(v); }
+                                                    glide-changed(v) => { root.ml1-glide-changed(v); } attack-changed(v) => { root.ml1-attack-changed(v); } decay-changed(v) => { root.ml1-decay-changed(v); } sustain-changed(v) => { root.ml1-sustain-changed(v); } release-changed(v) => { root.ml1-release-changed(v); }
+                                                    filter-cutoff-changed(v) => { root.ml1-filter-cutoff-changed(v); } filter-resonance-changed(v) => { root.ml1-filter-resonance-changed(v); } filter-env-changed(v) => { root.ml1-filter-env-changed(v); } drive-changed(v) => { root.ml1-drive-changed(v); }
+                                                    filter-attack-changed(v) => { root.ml1-filter-attack-changed(v); } filter-decay-changed(v) => { root.ml1-filter-decay-changed(v); } filter-sustain-changed(v) => { root.ml1-filter-sustain-changed(v); } filter-release-changed(v) => { root.ml1-filter-release-changed(v); } filter-keytrack-changed(v) => { root.ml1-filter-keytrack-changed(v); }
+                                                    glide-mode-changed(v) => { root.ml1-glide-mode-changed(v); } env-trigger-changed(v) => { root.ml1-env-trigger-changed(v); } priority-changed(v) => { root.ml1-priority-changed(v); }
                                                     modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
                                                     modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
                                                     modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
@@ -2622,7 +2622,7 @@ export component MainWindow inherits Window {
                                                     name: root.source-kind == 0 ? "Sampler"
                                                         : root.source-kind == 1 ? "Drum Synth"
                                                         : root.source-kind == 2 ? "Mono Synth"
-                                                        : root.source-kind == 3 ? "Poly Synth" : "Mono Synth 2";
+                                                        : root.source-kind == 3 ? "Poly Synth" : "ML-1";
                                                     kind: "SOURCE / 3U";
                                                     device-color: Theme.accent;
                                                 }

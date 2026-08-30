@@ -1,4 +1,4 @@
-//! Parameters for the v2 mono synth.
+//! Parameters for the ML-1.
 //!
 //! A separate instrument from [`crate::MonoSynthParams`], not an extension of
 //! it. The v1 mono synth is Poly with the voice count set to one; this one is
@@ -103,10 +103,10 @@ impl GlideMode {
     }
 }
 
-/// All v2 mono synth parameters, in the units the DSP and UI share.
+/// All ML-1 parameters, in the units the DSP and UI share.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct MonoV2Params {
+pub struct Ml1Params {
     pub osc: [OscParams; 3],
     /// Portamento time (seconds). `0` is instant pitch changes.
     pub glide: f32,
@@ -146,7 +146,7 @@ pub struct MonoV2Params {
     pub priority: NotePriority,
 }
 
-impl Default for MonoV2Params {
+impl Default for Ml1Params {
     fn default() -> Self {
         Self {
             osc: [

@@ -14,7 +14,7 @@ pub mod midi;
 pub mod modulation;
 pub mod mixer;
 pub mod mod_metadata;
-pub mod mono_v2;
+pub mod ml1;
 pub mod pattern;
 pub mod playlist;
 pub mod project;
@@ -29,7 +29,7 @@ pub use automation::{
 pub use bridge::{EngineCommand, EngineEvent};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
-pub use mono_v2::{EnvTrigger, GlideMode, MonoV2Params, NotePriority};
+pub use ml1::{EnvTrigger, GlideMode, Ml1Params, NotePriority};
 pub use modulation::{
     strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModPolarity, ModRack,
     ModRoute, ModTimeDivision, ModulatorKind, ModulatorParams, ParamAddr, ParamOwner,
@@ -101,7 +101,7 @@ pub use playlist::{
 };
 pub use project::{
     ChannelPreset, ChannelSetup, ChannelSource, DrumSynthState, Kit, MonoSynthState,
-    MonoV2State, PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
+    Ml1State, PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
     DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };
 pub use sampler::{

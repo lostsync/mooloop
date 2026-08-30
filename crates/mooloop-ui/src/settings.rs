@@ -516,7 +516,7 @@ fn kind_slug(kind: DeviceKind) -> &'static str {
         DeviceKind::DrumSynth => "drum_synth",
         DeviceKind::MonoSynth => "mono_synth",
         DeviceKind::PolySynth => "poly_synth",
-        DeviceKind::MonoV2 => "mono_v2",
+        DeviceKind::Ml1 => "ml1",
     }
 }
 

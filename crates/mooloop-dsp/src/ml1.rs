@@ -1,4 +1,4 @@
-//! The v2 mono synth: one voice, two envelopes, and a filter that tracks the
+//! The ML-1: one voice, two envelopes, and a filter that tracks the
 //! keyboard.
 //!
 //! Deliberately not a variant of [`crate::monosynth`]. That device is the poly
@@ -33,7 +33,7 @@ use crate::node::{AudioNode, ProcessContext};
 use crate::osc::Osc;
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
-use mooloop_core::{EnvTrigger, GlideMode, MonoV2Params};
+use mooloop_core::{EnvTrigger, GlideMode, Ml1Params};
 
 /// Minimum glide time; at or below this, pitch changes are instant.
 const MIN_GLIDE_S: f32 = 1.0e-3;
@@ -58,7 +58,7 @@ fn note_to_freq(note: u8) -> f32 {
     440.0 * 2.0_f32.powf((f32::from(note.min(127)) - 69.0) / 12.0)
 }
 
-struct MonoV2Voice {
+struct Ml1Voice {
     active: bool,
     event_id: u64,
     /// Scales the VCA and decides when the voice goes idle.
@@ -78,7 +78,7 @@ struct MonoV2Voice {
     drive: Smoothed,
 }
 
-impl MonoV2Voice {
+impl Ml1Voice {
     fn new(sample_rate: u32) -> Self {
         let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, sample_rate);
         Self {
@@ -101,7 +101,7 @@ impl MonoV2Voice {
     /// together everywhere, so they are configured together here too — the
     /// bug this avoids is a filter envelope left on stale times after a knob
     /// move.
-    fn configure_envelopes(&mut self, params: &MonoV2Params) {
+    fn configure_envelopes(&mut self, params: &Ml1Params) {
         self.amp_env
             .configure(params.attack, params.decay, params.sustain, params.release);
         self.filter_env.configure(
@@ -114,7 +114,7 @@ impl MonoV2Voice {
 
     /// Adopt the current parameters without a ramp. Only safe when the voice
     /// is silent — there is nothing to click.
-    fn snap_to(&mut self, params: &MonoV2Params, velocity_amp: f32) {
+    fn snap_to(&mut self, params: &Ml1Params, velocity_amp: f32) {
         self.velocity_amp.reset_to(velocity_amp);
         for (smoothed, osc) in self.osc_level.iter_mut().zip(params.osc.iter()) {
             smoothed.reset_to(osc.level.clamp(0.0, 1.0));
@@ -124,19 +124,19 @@ impl MonoV2Voice {
     }
 }
 
-/// The v2 mono synth node.
-pub struct MonoV2 {
-    params: MonoV2Params,
+/// The ML-1 node.
+pub struct Ml1 {
+    params: Ml1Params,
     sample_rate: u32,
-    voice: MonoV2Voice,
+    voice: Ml1Voice,
     /// Every note currently down, not just the one sounding. This is what
     /// makes trills, fallback, and note priority possible at all.
     held: HeldNotes,
 }
 
-impl MonoV2 {
-    pub fn new(params: MonoV2Params, sample_rate: u32) -> Self {
-        let mut voice = MonoV2Voice::new(sample_rate);
+impl Ml1 {
+    pub fn new(params: Ml1Params, sample_rate: u32) -> Self {
+        let mut voice = Ml1Voice::new(sample_rate);
         voice.configure_envelopes(&params);
         voice.snap_to(&params, 0.0);
         Self {
@@ -148,7 +148,7 @@ impl MonoV2 {
     }
 
     /// Replace the parameter set. Called from the RT command drain.
-    pub fn set_params(&mut self, params: MonoV2Params) {
+    pub fn set_params(&mut self, params: Ml1Params) {
         self.params = params;
         self.voice.configure_envelopes(&params);
     }
@@ -158,11 +158,11 @@ impl MonoV2 {
     /// Routed through `set_params` so a control-rate change gets exactly the
     /// same clamping and voice reconfiguration a whole-struct update does.
     fn apply_param(&mut self, id: u32, value: f32) {
-        let mut params = mooloop_core::GeneratorParams::MonoV2(self.params);
+        let mut params = mooloop_core::GeneratorParams::Ml1(self.params);
         if params.set(id, value).is_none() {
             return;
         }
-        if let mooloop_core::GeneratorParams::MonoV2(params) = params {
+        if let mooloop_core::GeneratorParams::Ml1(params) = params {
             self.set_params(params);
         }
     }
@@ -170,7 +170,7 @@ impl MonoV2 {
     /// Immediately invalidate the active voice and return every oscillator
     /// and filter to its initial state.
     pub fn reset(&mut self) {
-        self.voice = MonoV2Voice::new(self.sample_rate);
+        self.voice = Ml1Voice::new(self.sample_rate);
         self.voice.configure_envelopes(&self.params);
         self.voice.snap_to(&self.params, 0.0);
         self.held.clear();
@@ -400,7 +400,7 @@ impl MonoV2 {
     }
 }
 
-impl AudioNode for MonoV2 {
+impl AudioNode for Ml1 {
     fn process(
         &mut self,
         ctx: &ProcessContext,
@@ -464,8 +464,8 @@ mod tests {
 
     /// A saw at a fixed level, so every test hears the filter rather than the
     /// oscillator mix.
-    fn saw_patch() -> MonoV2Params {
-        let mut params = MonoV2Params::default();
+    fn saw_patch() -> Ml1Params {
+        let mut params = Ml1Params::default();
         params.osc[0] = OscParams {
             wave: OscWave::Saw,
             level: 1.0,
@@ -474,8 +474,8 @@ mod tests {
         params
     }
 
-    fn render(params: MonoV2Params, note: u8, frames: usize) -> Vec<f32> {
-        let mut synth = MonoV2::new(params, SR);
+    fn render(params: Ml1Params, note: u8, frames: usize) -> Vec<f32> {
+        let mut synth = Ml1::new(params, SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
         events.push(note_on(0, 1, note));
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn idle_is_silent() {
-        let mut synth = MonoV2::new(MonoV2Params::default(), SR);
+        let mut synth = Ml1::new(Ml1Params::default(), SR);
         let mut bus = StereoBus::with_capacity(256);
         synth.process(&ctx(256), &mut bus, &EventList::empty(), None);
         assert_eq!(bus.peak(256), (0.0, 0.0));
@@ -527,7 +527,7 @@ mod tests {
     fn note_on_at_offset_is_sample_accurate() {
         let frames = 512;
         let k = 200usize;
-        let mut synth = MonoV2::new(saw_patch(), SR);
+        let mut synth = Ml1::new(saw_patch(), SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
         events.push(note_on(k as u32, 0, 60));
@@ -556,7 +556,7 @@ mod tests {
         params.filter_env_amount = 0.5;
 
         let frames = (SR as f32 * 0.2) as usize;
-        let mut synth = MonoV2::new(params, SR);
+        let mut synth = Ml1::new(params, SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
         events.push(note_on(0, 1, 48));
@@ -600,7 +600,7 @@ mod tests {
         params.filter_release = 0.02;
         params.filter_env_amount = 0.6;
 
-        let mut synth = MonoV2::new(params, SR);
+        let mut synth = Ml1::new(params, SR);
         let frames = SR as usize / 2;
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn a_stale_note_off_does_not_release_a_retriggered_voice() {
-        let mut synth = MonoV2::new(saw_patch(), SR);
+        let mut synth = Ml1::new(saw_patch(), SR);
         let mut bus = StereoBus::with_capacity(1024);
         let mut events = EventList::empty();
         events.push(note_on(0, 1, 60));
@@ -681,7 +681,7 @@ mod tests {
     /// wherever the envelope already is, so a retrigger over a sounding voice
     /// does not click. So a restart is not a dip to zero; it is a *climb back
     /// to the peak* from sustain. These tests measure that climb.
-    fn sustained(params: impl FnOnce(&mut MonoV2Params)) -> MonoV2 {
+    fn sustained(params: impl FnOnce(&mut Ml1Params)) -> Ml1 {
         let mut p = saw_patch();
         p.attack = 0.005;
         p.decay = 0.01;
@@ -692,7 +692,7 @@ mod tests {
         p.filter_sustain = SUSTAIN;
         p.filter_release = 0.5;
         params(&mut p);
-        MonoV2::new(p, SR)
+        Ml1::new(p, SR)
     }
 
     const SUSTAIN: f32 = 0.4;
@@ -700,7 +700,7 @@ mod tests {
     /// Feed the events one sample at a time and report the highest level each
     /// envelope reaches after `from`. Above sustain means it restarted.
     fn envelope_peaks(
-        synth: &mut MonoV2,
+        synth: &mut Ml1,
         events: &EventList,
         frames: usize,
         from: usize,

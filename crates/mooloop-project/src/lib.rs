@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooloop_core::{
-    ChannelSetup, ChannelSource, DeviceKind, DrumSynthParams, Kit, MonoSynthParams, MonoV2Params,
+    ChannelSetup, ChannelSource, DeviceKind, DrumSynthParams, Kit, MonoSynthParams, Ml1Params,
     PolySynthParams, Project, SampleReference, SamplerParams, MAX_AUTOMATION_LANES_PER_CHANNEL,
     MAX_AUTOMATION_POINTS_PER_LANE, MAX_CHANNELS, MAX_CHOKE_GROUP,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS,
@@ -980,7 +980,7 @@ fn validate_source(index: usize, source: &ChannelSource) -> Result<(), Error> {
         ChannelSource::DrumSynth(synth) => validate_drum_synth(index, synth.params),
         ChannelSource::MonoSynth(synth) => validate_mono_synth(index, synth.params),
         ChannelSource::PolySynth(synth) => validate_poly_synth(index, synth.params),
-        ChannelSource::MonoV2(synth) => validate_mono_v2(index, synth.params),
+        ChannelSource::Ml1(synth) => validate_ml1(index, synth.params),
     }
 }
 
@@ -1070,10 +1070,10 @@ fn validate_oscillators(
     Ok(())
 }
 
-/// The v2 mono synth has no device-local LFO and two envelopes, so it gets its
+/// The ML-1 has no device-local LFO and two envelopes, so it gets its
 /// own field list rather than being squeezed through the v1 signature.
-fn validate_mono_v2(channel: usize, params: MonoV2Params) -> Result<(), Error> {
-    const KIND: &str = "mono v2 synth";
+fn validate_ml1(channel: usize, params: Ml1Params) -> Result<(), Error> {
+    const KIND: &str = "ML-1";
     validate_oscillators(channel, KIND, &params.osc)?;
     for (field, value, min, max) in [
         ("glide", params.glide, 0.0, 10.0),
@@ -1794,27 +1794,27 @@ id = "default_kick"
         assert_eq!(loaded, MonoSynthParams::default());
     }
 
-    /// The v2 mono synth carries `#[serde(default)]` from the start, so a
+    /// The ML-1 carries `#[serde(default)]` from the start, so a
     /// manifest written by a build that predates any given field still loads.
     /// Asserted by truncating the table at the filter envelope, which is the
     /// shape a project saved before that block existed would have.
     #[test]
-    fn mono_v2_params_load_from_a_manifest_missing_later_fields() {
-        let written = toml::to_string(&MonoV2Params::default()).unwrap();
+    fn ml1_params_load_from_a_manifest_missing_later_fields() {
+        let written = toml::to_string(&Ml1Params::default()).unwrap();
         let (before_filter_env, _) = written.split_once("filter_attack").unwrap();
-        let loaded: MonoV2Params = toml::from_str(before_filter_env).unwrap();
-        assert_eq!(loaded, MonoV2Params::default());
+        let loaded: Ml1Params = toml::from_str(before_filter_env).unwrap();
+        assert_eq!(loaded, Ml1Params::default());
     }
 
     #[test]
-    fn mono_v2_source_round_trips_in_a_song() {
+    fn ml1_source_round_trips_in_a_song() {
         let temp = tempdir().unwrap();
-        let bundle = temp.path().join("mono-v2.mooloop");
+        let bundle = temp.path().join("ml1.mooloop");
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::mono_v2(0, 1);
+        project.channels[0] = mooloop_core::ProjectChannel::ml1(0, 1);
         let params = &mut project.channels[0]
             .setup
-            .mono_v2_state_mut()
+            .ml1_state_mut()
             .unwrap()
             .params;
         params.filter_decay = 0.08;
@@ -1824,7 +1824,7 @@ id = "default_kick"
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();
         let manifest = fs::read_to_string(&bundle).unwrap();
-        assert!(manifest.contains("type = \"mono_v2\""));
+        assert!(manifest.contains("type = \"ml1\""));
         assert_eq!(
             load_bundle(&bundle).unwrap().document,
             LoadedDocument::Song(project)
@@ -1832,12 +1832,12 @@ id = "default_kick"
     }
 
     #[test]
-    fn mono_v2_validation_rejects_an_out_of_range_filter_envelope() {
+    fn ml1_validation_rejects_an_out_of_range_filter_envelope() {
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::mono_v2(0, 1);
+        project.channels[0] = mooloop_core::ProjectChannel::ml1(0, 1);
         project.channels[0]
             .setup
-            .mono_v2_state_mut()
+            .ml1_state_mut()
             .unwrap()
             .params
             .filter_keytrack = 4.0;
@@ -1852,7 +1852,7 @@ id = "default_kick"
             ChannelSource::DrumSynth(mooloop_core::DrumSynthState::default()),
             ChannelSource::MonoSynth(mooloop_core::MonoSynthState::default()),
             ChannelSource::PolySynth(mooloop_core::PolySynthState::default()),
-            ChannelSource::MonoV2(mooloop_core::MonoV2State::default()),
+            ChannelSource::Ml1(mooloop_core::Ml1State::default()),
         ];
         for (index, source) in sources.into_iter().enumerate() {
             let info = PresetInfo {

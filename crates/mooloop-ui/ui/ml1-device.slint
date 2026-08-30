@@ -5,11 +5,11 @@ import { FilterResponseDisplay } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { OscillatorDeviceStrip } from "device-oscillator.slint";
 
-// The v2 mono synth's face. Three pages, and the third is PERF rather than
+// The ML-1's face. Three pages, and the third is PERF rather than
 // MOD: general modulation belongs to the channel shelf that the common device
 // frame opens, so the space goes to note behaviour instead of to a
 // device-local LFO.
-export component MonoV2DeviceFace inherits Rectangle {
+export component Ml1DeviceFace inherits Rectangle {
     in-out property <int> page;
     in-out property <int> osc1-wave; in-out property <float> osc1-semitones; in-out property <float> osc1-cents; in-out property <float> osc1-level; in-out property <float> osc1-pulse-width;
     in-out property <int> osc2-wave; in-out property <float> osc2-semitones; in-out property <float> osc2-cents; in-out property <float> osc2-level; in-out property <float> osc2-pulse-width;

@@ -13,7 +13,7 @@ poly. Three synths end up in the project, not two.
 Consequences for the steps below:
 
 - **02 no longer "lands on both synths".** The v1 synths are untouched.
-  `MonoV2Params` is a new struct in `crates/mooloop-core/src/mono_v2.rs` with
+  `Ml1Params` is a new struct in `crates/mooloop-core/src/ml1.rs` with
   `#[serde(default)]` from the start, so the "make `MonoSynthParams` safe to
   extend first" work in 02 is moot here and the pre-v2 migration in 02.5 does
   not apply — there is no pre-v2 form of this device on disk.
@@ -24,12 +24,12 @@ Consequences for the steps below:
   `MONO_DESCRIPTORS`), because those are the v1 devices and are on their way
   out. What 02 asked for was done for the new table:
   `SYNTH_CORE_DESCRIPTORS` was split out of `SHARED_SYNTH_DESCRIPTORS`, and
-  `MONO_V2_DESCRIPTORS` is built from it rather than from either v1 table.
+  `ML1_DESCRIPTORS` is built from it rather than from either v1 table.
 - **The v1 mono synth is still present and still loadable.** Deleting it is
   blocked on the poly toggles, since old projects' MonoSynth channels need
   somewhere to land. Until then the device picker shows both, as "Mono" and
   "Mono 2". Naming settles when the v1 device goes.
-- **`DeviceKind::MonoV2` is a transitional name.** It takes the plain name
+- **`DeviceKind::Ml1` is a transitional name.** It takes the plain name
   when `DeviceKind::MonoSynth` is deleted.
 
 ## What is in
@@ -42,14 +42,14 @@ Consequences for the steps below:
   in its own module, because the poly synth needs the same thing for its mono
   mode. Note priority, env trigger, and glide mode at ids 25-27. Fallback on
   note-off is a pitch change and never a retrigger.
-- **The face:** `mono-v2-device.slint`, three pages, the third being PERF.
+- **The face:** `ml1-device.slint`, three pages, the third being PERF.
   `OscillatorDeviceStrip` was extracted to `device-oscillator.slint` — the
   part of 07 that could not wait, since a third face would have been a third
   copy.
 
 ## What is not
 
-04-08, unchanged as written, except that they now apply to `MonoV2` rather
+04-08, unchanged as written, except that they now apply to `Ml1` rather
 than to `MonoSynth`. In particular **drive is still post-filter**: moving it
 ahead of the filter without the makeup-gain scheme 04 designs would change
 loudness rather than character, so the two land together.
