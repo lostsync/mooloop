@@ -487,6 +487,9 @@ struct LoadedSample {
 struct LoadResult {
     channel: usize,
     source_revision: u64,
+    /// Load into a sampler channel created on arrival (`channel` is then the
+    /// index the new channel will take) rather than an existing one.
+    new_channel: bool,
     /// `None` = dialog cancelled; `Some(Err)` = decode failed.
     result: Option<Result<LoadedSample, String>>,
 }
@@ -8125,6 +8128,28 @@ impl AppUi {
         {
             let st = state.clone();
             let load_tx = load_tx.clone();
+            window.on_browser_sample_loaded(move |path| {
+                let (channel, source_revision) = {
+                    let st = st.borrow();
+                    (st.selected, st.source_revision)
+                };
+                spawn_browser_sample_load(&path, channel, source_revision, false, &load_tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let load_tx = load_tx.clone();
+            window.on_browser_sample_loaded_new_channel(move |path| {
+                let (channel, source_revision) = {
+                    let st = st.borrow();
+                    (st.channels.len(), st.source_revision)
+                };
+                spawn_browser_sample_load(&path, channel, source_revision, true, &load_tx);
+            });
+        }
+        {
+            let st = state.clone();
+            let load_tx = load_tx.clone();
             window.on_load_sample_clicked(move || {
                 let (channel, source_revision) = {
                     let st = st.borrow();
@@ -8137,6 +8162,7 @@ impl AppUi {
                     let _ = tx.send(LoadResult {
                         channel,
                         source_revision,
+                    new_channel: false,
                         result,
                     });
                 });
@@ -8165,6 +8191,7 @@ impl AppUi {
                     let _ = tx.send(LoadResult {
                         channel,
                         source_revision,
+                    new_channel: false,
                         result,
                     });
                 });
@@ -8193,6 +8220,7 @@ impl AppUi {
                     let _ = tx.send(LoadResult {
                         channel,
                         source_revision,
+                    new_channel: false,
                         result,
                     });
                 });
@@ -8500,14 +8528,17 @@ impl AppUi {
                         }
                     }
                 }
+                let mut deferred_new_channel_load = None;
                 while let Ok(load) = load_rx.try_recv() {
                     let still_current = {
                         let st = st.borrow();
                         load.source_revision == st.source_revision
-                            && st
-                                .channels
-                                .get(load.channel)
-                                .is_some_and(|channel| channel.kind == DeviceKind::Sampler)
+                            && (load.new_channel && st.channels.len() < MAX_CHANNELS
+                                || !load.new_channel
+                                    && st
+                                        .channels
+                                        .get(load.channel)
+                                        .is_some_and(|channel| channel.kind == DeviceKind::Sampler))
                     };
                     if !still_current {
                         continue;
@@ -8522,36 +8553,27 @@ impl AppUi {
                     }) else {
                         continue;
                     };
-                    let name = loaded
-                        .path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("loaded")
-                        .to_string();
-                    dbg_log(&format!("UI: channel {} loaded {name}", load.channel));
-                    let waveform = waveform_peaks(&loaded.sample, WAVEFORM_BINS);
-                    let description = sample_description(&loaded.sample);
-                    let duration = sample_duration(&loaded.sample);
-                    handle.load_sample(load.channel, loaded.sample.clone());
-                    let mut st = st.borrow_mut();
-                    if let Some(ch) = st.channels.get_mut(load.channel) {
-                        ch.sample_name = name;
-                        ch.sample_description = description;
-                        ch.sample_duration = duration;
-                        ch.sample_path = Some(loaded.path);
-                        ch.sample_embedded = false;
-                        ch.sample_data = Some(loaded.sample.clone());
-                        ch.waveform = waveform;
-                        ch.can_previous_sample = loaded.can_previous;
-                        ch.can_next_sample = loaded.can_next;
+                    if load.new_channel {
+                        // The channel is created below, after the reset loop,
+                        // so its default-sample reset lands first and this
+                        // load overwrites it rather than the reverse.
+                        deferred_new_channel_load = Some(loaded);
+                        continue;
                     }
-                    st.dirty = true;
-                    st.revision = st.revision.wrapping_add(1);
-                    if load.channel == st.selected {
-                        if let Some(w) = weak.upgrade() {
-                            st.refresh_editor(&w);
-                            st.update_document_title(&w);
-                        }
+                    apply_loaded_sample(&handle, &st, &weak, load.channel, loaded);
+                }
+                while let Ok(channel) = sample_reset_rx.try_recv() {
+                    if let Some(sample) = default_sample_for_pump.as_ref() {
+                        handle.load_sample(channel, sample.clone());
+                    } else {
+                        handle.clear_sample(channel);
+                    }
+                }
+                if let Some(loaded) = deferred_new_channel_load {
+                    if let Some(window) = weak.upgrade() {
+                        window.invoke_add_channel_clicked(0);
+                        let channel = st.borrow().channels.len().saturating_sub(1);
+                        apply_loaded_sample(&handle, &st, &weak, channel, loaded);
                     }
                 }
                 while let Ok(channel) = sample_reset_rx.try_recv() {
@@ -9651,6 +9673,71 @@ fn load_sample_at_path(path: &Path) -> Result<LoadedSample, String> {
     })
 }
 
+/// Publish a finished background load to `channel`: hand the decoded sample
+/// to the engine, record it on the channel state, and refresh the visible
+/// editor when that channel is the one on screen.
+fn apply_loaded_sample(
+    handle: &EngineHandle,
+    st: &Rc<RefCell<UiState>>,
+    weak: &slint::Weak<MainWindow>,
+    channel: usize,
+    loaded: LoadedSample,
+) {
+    let name = loaded
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("loaded")
+        .to_string();
+    dbg_log(&format!("UI: channel {channel} loaded {name}"));
+    let waveform = waveform_peaks(&loaded.sample, WAVEFORM_BINS);
+    let description = sample_description(&loaded.sample);
+    let duration = sample_duration(&loaded.sample);
+    handle.load_sample(channel, loaded.sample.clone());
+    let mut st = st.borrow_mut();
+    if let Some(ch) = st.channels.get_mut(channel) {
+        ch.sample_name = name;
+        ch.sample_description = description;
+        ch.sample_duration = duration;
+        ch.sample_path = Some(loaded.path);
+        ch.sample_embedded = false;
+        ch.sample_data = Some(loaded.sample.clone());
+        ch.waveform = waveform;
+        ch.can_previous_sample = loaded.can_previous;
+        ch.can_next_sample = loaded.can_next;
+    }
+    st.dirty = true;
+    st.revision = st.revision.wrapping_add(1);
+    if channel == st.selected {
+        if let Some(window) = weak.upgrade() {
+            st.refresh_editor(&window);
+            st.update_document_title(&window);
+        }
+    }
+}
+
+/// Decode a browser sample off the UI thread and deliver it to the pump as a
+/// `LoadResult`. `new_channel` targets the sampler channel the pump will
+/// create on arrival, so `channel` is the index it will take.
+fn spawn_browser_sample_load(
+    path: &str,
+    channel: usize,
+    source_revision: u64,
+    new_channel: bool,
+    load_tx: &std::sync::mpsc::Sender<LoadResult>,
+) {
+    let path = PathBuf::from(path.to_string());
+    let tx = load_tx.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(LoadResult {
+            channel,
+            source_revision,
+            new_channel,
+            result: Some(load_sample_at_path(&path)),
+        });
+    });
+}
+
 fn waveform_peaks(sample: &SampleData, max_bins: usize) -> Vec<f32> {
     peaks_from_frames(&sample.frames, max_bins)
 }
@@ -9911,6 +9998,18 @@ fn inspect_sample(path: &Path) -> Result<SampleInspection, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_load_delivery_carries_its_target() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn_browser_sample_load("/nonexistent/missing.wav", 3, 7, true, &tx);
+        let load = rx.recv().unwrap();
+        assert_eq!(load.channel, 3);
+        assert_eq!(load.source_revision, 7);
+        assert!(load.new_channel);
+        // The decode fails off-thread; the pump owns the user-visible handling.
+        assert!(matches!(load.result, Some(Err(_))));
+    }
 
     #[test]
     fn browser_tree_hides_folders_without_playable_samples() {

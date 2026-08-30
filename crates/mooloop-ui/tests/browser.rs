@@ -6,7 +6,10 @@
 //! starts empty and hidden.
 
 use mooloop_ui::{BrowserRow, MainWindow};
-use slint::{ComponentHandle, LogicalSize, Model, ModelRc, SharedString, VecModel};
+use slint::{
+    platform::{PointerEventButton, WindowEvent},
+    ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, SharedString, VecModel,
+};
 use std::rc::Rc;
 
 fn harness() -> MainWindow {
@@ -86,6 +89,97 @@ fn info_pane_renders_once_a_sample_is_inspected() {
         first_diff(&before, &after),
         None,
         "the info pane must appear when a sample is inspected"
+    );
+}
+
+/// The sidebar is right-docked at the window's right edge; sample rows fill
+/// its width. Column x is any point inside a row clear of the scrollbar.
+const ROW_X: f32 = 960.0 - 260.0 + 40.0;
+
+/// Right-button press + release at `at`, the way a context click arrives.
+fn right_click(window: &slint::Window, at: LogicalPosition) {
+    window.dispatch_event(WindowEvent::PointerMoved { position: at });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: at,
+        button: PointerEventButton::Right,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: at,
+        button: PointerEventButton::Right,
+    });
+}
+
+/// Find a browser row by its hover highlight: move the pointer down the
+/// row column and report the first y whose render differs from the resting
+/// snapshot. Scanning keeps the test honest about layout drift.
+fn find_row_y(ui: &MainWindow, rest: &[u8]) -> f32 {
+    let window = ui.window();
+    for y in (0..300).step_by(2) {
+        let at = LogicalPosition::new(ROW_X, y as f32 + 0.5);
+        window.dispatch_event(WindowEvent::PointerMoved { position: at });
+        if snapshot(ui) != rest {
+            return y as f32 + 0.5;
+        }
+    }
+    panic!("no browser row highlighted under the scan column");
+}
+
+#[test]
+fn right_clicking_a_sample_row_opens_the_load_menu() {
+    let ui = harness();
+    ui.set_sidebar_visible(true);
+    ui.set_browser_rows(ModelRc::from(Rc::new(VecModel::from(vec![BrowserRow {
+        depth: 1,
+        kind: 1,
+        name: "909.wav".into(),
+        path: "/sounds/Drums/909.wav".into(),
+        expanded: false,
+    }]))));
+    let removed: Rc<std::cell::RefCell<Vec<String>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
+    {
+        let removed = removed.clone();
+        ui.on_browser_location_removed(move |path| removed.borrow_mut().push(path.to_string()));
+    }
+    let rest = snapshot(&ui);
+    let row_y = find_row_y(&ui, &rest);
+
+    right_click(ui.window(), LogicalPosition::new(ROW_X, row_y));
+    let with_menu = snapshot(&ui);
+    assert_ne!(
+        first_diff(&rest, &with_menu),
+        None,
+        "right-clicking a sample row should open the load menu"
+    );
+    assert!(
+        removed.borrow().is_empty(),
+        "right-clicking a sample row must not remove a location"
+    );
+}
+
+#[test]
+fn right_clicking_a_folder_row_still_removes_the_location() {
+    let ui = harness();
+    ui.set_sidebar_visible(true);
+    ui.set_browser_rows(ModelRc::from(Rc::new(VecModel::from(vec![BrowserRow {
+        depth: 0,
+        kind: 0,
+        name: "Drums".into(),
+        path: "/sounds/Drums".into(),
+        expanded: false,
+    }]))));
+    let removed: Rc<std::cell::RefCell<Vec<String>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
+    {
+        let removed = removed.clone();
+        ui.on_browser_location_removed(move |path| removed.borrow_mut().push(path.to_string()));
+    }
+    let rest = snapshot(&ui);
+    let row_y = find_row_y(&ui, &rest);
+
+    right_click(ui.window(), LogicalPosition::new(ROW_X, row_y));
+    assert_eq!(
+        *removed.borrow(),
+        vec!["/sounds/Drums".to_string()],
+        "right-clicking a location row should still remove it"
     );
 }
 
