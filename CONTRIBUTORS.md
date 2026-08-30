@@ -38,8 +38,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-29
-- Sessions: 14
+- Last seen: 2026-08-30
+- Sessions: 15
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -88,7 +88,13 @@ work session you can recall being part of, and don't stress over precision.
   value, assigning, dialled-in depth, and live -- backed by a new
   `ModulatorMeters` that publishes each channel's four modulator outputs so
   the UI can resolve per-destination offsets itself instead of the engine
-  shipping a value per parameter.
+  shipping a value per parameter. Replaced the generated-room convolution
+  reverb with an eight-line feedback delay network rather than amortizing its
+  partition spike as planned: the spike was only one of its three problems,
+  since a convolution node also cannot accept a parameter event — so every
+  modulation route aimed at a reverb knob was a silent no-op — and a static
+  image-source IR rings rather than blooms. Worst-case per-block cost fell
+  31x and stopped depending on decay length at all.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

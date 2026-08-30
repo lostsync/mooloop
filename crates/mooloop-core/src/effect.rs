@@ -1176,218 +1176,184 @@ impl Default for ModulationParams {
 
 /// `Event::ParamValue` ids for [`ReverbParams`].
 ///
-/// These describe a generated room rather than a conventional feedback
-/// network. The control side turns the complete parameter set into a prepared
-/// impulse response; the realtime node only convolves against that response.
-pub const REVERB_PARAM_SHAPE: u32 = 0;
-pub const REVERB_PARAM_MATERIAL: u32 = 1;
-pub const REVERB_PARAM_WIDTH_M: u32 = 2;
-pub const REVERB_PARAM_DEPTH_M: u32 = 3;
-pub const REVERB_PARAM_HEIGHT_M: u32 = 4;
-pub const REVERB_PARAM_DECAY_S: u32 = 5;
-pub const REVERB_PARAM_CAPTURE_X: u32 = 6;
-pub const REVERB_PARAM_CAPTURE_Y: u32 = 7;
+/// These start at 8 because ids 0..=7 are **retired**: they belonged to the
+/// generated-room convolution reverb this device replaced (shape, material,
+/// width/depth/height in metres, decay, and a capture point). A shipped id
+/// may never change meaning — see `docs/MODULATION_PLAN.md` — so a saved
+/// route or automation lane aimed at the old "Mic X" resolves to no
+/// descriptor and stays inert, instead of silently becoming Diffusion.
+pub const REVERB_PARAM_SIZE: u32 = 8;
+pub const REVERB_PARAM_DECAY_S: u32 = 9;
+pub const REVERB_PARAM_DAMPING: u32 = 10;
+pub const REVERB_PARAM_PREDELAY_MS: u32 = 11;
+pub const REVERB_PARAM_DIFFUSION: u32 = 12;
+pub const REVERB_PARAM_WIDTH: u32 = 13;
+pub const REVERB_PARAM_MODULATION: u32 = 14;
+pub const REVERB_PARAM_LOW_CUT_HZ: u32 = 15;
 
 static REVERB_DESCRIPTORS: [ParamDescriptor; 8] = [
     ParamDescriptor {
-        id: REVERB_PARAM_SHAPE,
-        name: "Shape",
+        id: REVERB_PARAM_SIZE,
+        name: "Size",
         unit: "",
         min: 0.0,
-        max: 2.0,
-        curve: ParamCurve::Stepped(3),
-        default: 0.0,
-    },
-    ParamDescriptor {
-        id: REVERB_PARAM_MATERIAL,
-        name: "Material",
-        unit: "",
-        min: 0.0,
-        max: 3.0,
-        curve: ParamCurve::Stepped(4),
-        default: 0.0,
-    },
-    ParamDescriptor {
-        id: REVERB_PARAM_WIDTH_M,
-        name: "Width",
-        unit: "m",
-        min: 2.0,
-        max: 30.0,
-        curve: ParamCurve::Exponential,
-        default: 6.0,
-    },
-    ParamDescriptor {
-        id: REVERB_PARAM_DEPTH_M,
-        name: "Depth",
-        unit: "m",
-        min: 2.0,
-        max: 50.0,
-        curve: ParamCurve::Exponential,
-        default: 8.0,
-    },
-    ParamDescriptor {
-        id: REVERB_PARAM_HEIGHT_M,
-        name: "Height",
-        unit: "m",
-        min: 2.0,
-        max: 20.0,
-        curve: ParamCurve::Exponential,
-        default: 3.2,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.5,
     },
     ParamDescriptor {
         id: REVERB_PARAM_DECAY_S,
         name: "Decay",
         unit: "s",
-        min: 0.15,
-        max: 8.0,
+        min: 0.2,
+        max: 20.0,
         curve: ParamCurve::Exponential,
-        default: 1.2,
+        default: 2.4,
     },
     ParamDescriptor {
-        id: REVERB_PARAM_CAPTURE_X,
-        name: "Mic X",
+        id: REVERB_PARAM_DAMPING,
+        name: "Damp",
         unit: "",
-        min: 0.05,
-        max: 0.95,
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.38,
+    },
+    // Exponential needs a positive minimum, and 1 ms is already below the
+    // point where a pre-delay reads as a separate arrival, so it serves as
+    // this control's "off" rather than a missing zero.
+    ParamDescriptor {
+        id: REVERB_PARAM_PREDELAY_MS,
+        name: "Pre",
+        unit: "ms",
+        min: 1.0,
+        max: 200.0,
+        curve: ParamCurve::Exponential,
+        default: 12.0,
+    },
+    ParamDescriptor {
+        id: REVERB_PARAM_DIFFUSION,
+        name: "Diffuse",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
         curve: ParamCurve::Linear,
         default: 0.72,
     },
     ParamDescriptor {
-        id: REVERB_PARAM_CAPTURE_Y,
-        name: "Mic Y",
+        id: REVERB_PARAM_WIDTH,
+        name: "Width",
         unit: "",
-        min: 0.05,
-        max: 0.95,
+        min: 0.0,
+        max: 1.0,
         curve: ParamCurve::Linear,
-        default: 0.66,
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: REVERB_PARAM_MODULATION,
+        name: "Mod",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.3,
+    },
+    // Filters the input, not the feedback loop. A highpass inside the loop
+    // compounds once per trip and would strip the bass out of the tail
+    // entirely; one pass on the way in is what keeps a long hall from
+    // turning to mud. See `docs/REVERB.md`.
+    ParamDescriptor {
+        id: REVERB_PARAM_LOW_CUT_HZ,
+        name: "Low Cut",
+        unit: "Hz",
+        min: 20.0,
+        max: 500.0,
+        curve: ParamCurve::Exponential,
+        default: 42.0,
     },
 ];
 
-/// Geometric family used by the room-IR generator. Dimensions remain explicit
-/// in every family; shape changes the reflection density and tail diffusion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReverbShape {
-    #[default]
-    Studio,
-    Chamber,
-    Hall,
-}
-
-impl ReverbShape {
-    pub fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Chamber,
-            2 => Self::Hall,
-            _ => Self::Studio,
-        }
-    }
-
-    pub fn to_index(self) -> i32 {
-        match self {
-            Self::Studio => 0,
-            Self::Chamber => 1,
-            Self::Hall => 2,
-        }
-    }
-}
-
-/// Broad wall absorption profiles used by the generated room. They alter both
-/// reflection loss and high-frequency decay before the IR reaches the player.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReverbMaterial {
-    #[default]
-    Plaster,
-    Wood,
-    Brick,
-    Curtain,
-}
-
-impl ReverbMaterial {
-    pub fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Wood,
-            2 => Self::Brick,
-            3 => Self::Curtain,
-            _ => Self::Plaster,
-        }
-    }
-
-    pub fn to_index(self) -> i32 {
-        match self {
-            Self::Plaster => 0,
-            Self::Wood => 1,
-            Self::Brick => 2,
-            Self::Curtain => 3,
-        }
-    }
-}
-
-/// Parameters for the generated-room convolution reverb.
+/// Parameters for the feedback-delay-network hall reverb.
 ///
-/// `capture_x` and `capture_y` are normalized room-plan coordinates. The
-/// source remains in a musically useful asymmetric fixed position so moving
-/// the capture point changes early timing and stereo perspective without
-/// turning the compact face into a full acoustic CAD tool.
+/// Every field is a direct control of the running network: there is no
+/// impulse response and no prepared resource, so a change applies on the
+/// realtime side at its event offset like any other effect. That is what
+/// makes the device a legal modulation destination — the convolution reverb
+/// this replaced could only rebuild an IR off-thread, so a route pointed at
+/// it did nothing at all.
+///
+/// `size` scales the network's delay lengths together; `decay_s` is the
+/// mid-band RT60 the per-line feedback gains are solved for. Damping shortens
+/// the high end relative to that, as a room does, so a heavily damped tail
+/// measures shorter than `decay_s` on purpose.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReverbParams {
-    pub shape: ReverbShape,
-    pub material: ReverbMaterial,
-    pub width_m: f32,
-    pub depth_m: f32,
-    pub height_m: f32,
+    #[serde(default = "default_reverb_size")]
+    pub size: f32,
+    #[serde(default = "default_reverb_decay_s")]
     pub decay_s: f32,
-    pub capture_x: f32,
-    pub capture_y: f32,
+    #[serde(default = "default_reverb_damping")]
+    pub damping: f32,
+    #[serde(default = "default_reverb_predelay_ms")]
+    pub predelay_ms: f32,
+    #[serde(default = "default_reverb_diffusion")]
+    pub diffusion: f32,
+    #[serde(default = "default_reverb_width")]
+    pub width: f32,
+    #[serde(default = "default_reverb_modulation")]
+    pub modulation: f32,
+    #[serde(default = "default_reverb_low_cut_hz")]
+    pub low_cut_hz: f32,
+}
+
+// Field defaults are named functions rather than a `#[serde(default)]` on the
+// struct because a v1 manifest written for the generated-room reverb carries
+// `decay_s` and nothing else this device understands: the remaining fields
+// have to fill in individually so that one real value survives the migration.
+// See `docs/PROJECT_FORMAT.md`.
+const fn default_reverb_size() -> f32 {
+    0.5
+}
+const fn default_reverb_decay_s() -> f32 {
+    2.4
+}
+const fn default_reverb_damping() -> f32 {
+    0.38
+}
+const fn default_reverb_predelay_ms() -> f32 {
+    12.0
+}
+const fn default_reverb_diffusion() -> f32 {
+    0.72
+}
+const fn default_reverb_width() -> f32 {
+    1.0
+}
+const fn default_reverb_modulation() -> f32 {
+    0.3
+}
+const fn default_reverb_low_cut_hz() -> f32 {
+    42.0
 }
 
 impl Default for ReverbParams {
     fn default() -> Self {
         Self {
-            shape: ReverbShape::default(),
-            material: ReverbMaterial::default(),
-            width_m: 6.0,
-            depth_m: 8.0,
-            height_m: 3.2,
-            decay_s: 1.2,
-            capture_x: 0.72,
-            capture_y: 0.66,
+            size: default_reverb_size(),
+            decay_s: default_reverb_decay_s(),
+            damping: default_reverb_damping(),
+            predelay_ms: default_reverb_predelay_ms(),
+            diffusion: default_reverb_diffusion(),
+            width: default_reverb_width(),
+            modulation: default_reverb_modulation(),
+            low_cut_hz: default_reverb_low_cut_hz(),
         }
-    }
-}
-
-impl ReverbParams {
-    /// Stable control-side identity for a prepared IR. This is not a project
-    /// serialization format or an audio checksum; it lets a delayed prepared
-    /// resource prove which room state it was built from before replacing a
-    /// live node at a block boundary.
-    pub fn fingerprint(self) -> u64 {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for value in [
-            self.shape.to_index() as u32,
-            self.material.to_index() as u32,
-            self.width_m.to_bits(),
-            self.depth_m.to_bits(),
-            self.height_m.to_bits(),
-            self.decay_s.to_bits(),
-            self.capture_x.to_bits(),
-            self.capture_y.to_bits(),
-        ] {
-            hash ^= u64::from(value);
-            hash = hash.wrapping_mul(0x100_0000_01b3);
-        }
-        hash
     }
 }
 
 // --- Plate -------------------------------------------------------------
 
 /// `Event::ParamValue` ids for [`PlateParams`].
-///
-/// Unlike `ReverbParams`, these drive a feedback network directly: no
-/// impulse response is generated, so changes apply immediately on the
-/// realtime side rather than through a prepared-resource swap.
 pub const PLATE_PARAM_SIZE: u32 = 0;
 pub const PLATE_PARAM_DECAY_S: u32 = 1;
 pub const PLATE_PARAM_DAMPING: u32 = 2;
@@ -1432,9 +1398,10 @@ static PLATE_DESCRIPTORS: [ParamDescriptor; 4] = [
     },
 ];
 
-/// Parameters for the lightweight comb/allpass ("plate") reverb. A cheap
-/// alternative to [`ReverbParams`]'s convolution reverb: CPU cost is a fixed
-/// number of buffer taps per sample, independent of `decay_s`.
+/// Parameters for the lightweight comb/allpass ("plate") reverb. A small,
+/// dense, coloured box next to [`ReverbParams`]'s feedback delay network:
+/// both are fixed-cost per sample, but the plate's parallel combs give it a
+/// tighter, more resonant character than the FDN hall's diffuse one.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlateParams {
     pub size: f32,
@@ -1956,14 +1923,14 @@ impl EffectParams {
                 _ => None,
             },
             Self::Reverb(p) => match id {
-                REVERB_PARAM_SHAPE => Some(p.shape.to_index() as f32),
-                REVERB_PARAM_MATERIAL => Some(p.material.to_index() as f32),
-                REVERB_PARAM_WIDTH_M => Some(p.width_m),
-                REVERB_PARAM_DEPTH_M => Some(p.depth_m),
-                REVERB_PARAM_HEIGHT_M => Some(p.height_m),
+                REVERB_PARAM_SIZE => Some(p.size),
                 REVERB_PARAM_DECAY_S => Some(p.decay_s),
-                REVERB_PARAM_CAPTURE_X => Some(p.capture_x),
-                REVERB_PARAM_CAPTURE_Y => Some(p.capture_y),
+                REVERB_PARAM_DAMPING => Some(p.damping),
+                REVERB_PARAM_PREDELAY_MS => Some(p.predelay_ms),
+                REVERB_PARAM_DIFFUSION => Some(p.diffusion),
+                REVERB_PARAM_WIDTH => Some(p.width),
+                REVERB_PARAM_MODULATION => Some(p.modulation),
+                REVERB_PARAM_LOW_CUT_HZ => Some(p.low_cut_hz),
                 _ => None,
             },
             Self::Plate(p) => match id {
@@ -2087,16 +2054,14 @@ impl EffectParams {
                 _ => return None,
             },
             Self::Reverb(p) => match id {
-                REVERB_PARAM_SHAPE => p.shape = ReverbShape::from_index(value.round() as i32),
-                REVERB_PARAM_MATERIAL => {
-                    p.material = ReverbMaterial::from_index(value.round() as i32)
-                }
-                REVERB_PARAM_WIDTH_M => p.width_m = value,
-                REVERB_PARAM_DEPTH_M => p.depth_m = value,
-                REVERB_PARAM_HEIGHT_M => p.height_m = value,
+                REVERB_PARAM_SIZE => p.size = value,
                 REVERB_PARAM_DECAY_S => p.decay_s = value,
-                REVERB_PARAM_CAPTURE_X => p.capture_x = value,
-                REVERB_PARAM_CAPTURE_Y => p.capture_y = value,
+                REVERB_PARAM_DAMPING => p.damping = value,
+                REVERB_PARAM_PREDELAY_MS => p.predelay_ms = value,
+                REVERB_PARAM_DIFFUSION => p.diffusion = value,
+                REVERB_PARAM_WIDTH => p.width = value,
+                REVERB_PARAM_MODULATION => p.modulation = value,
+                REVERB_PARAM_LOW_CUT_HZ => p.low_cut_hz = value,
                 _ => return None,
             },
             Self::Plate(p) => match id {
@@ -2413,6 +2378,66 @@ mode = \"high_pass\"
         assert_eq!(filter.slope, FilterSlope::Db12);
         assert_eq!(filter.drive, 0.0);
         assert!(!slot.bypassed);
+    }
+
+    /// A manifest written for the generated-room convolution reverb still
+    /// loads. Its geometry fields have no counterpart in the feedback delay
+    /// network that replaced it and are ignored; the one field that carries
+    /// a comparable meaning, `decay_s`, survives, and everything else takes
+    /// the new device's default. See `docs/PROJECT_FORMAT.md`.
+    #[test]
+    fn a_generated_room_manifest_loads_as_the_feedback_network() {
+        let legacy = r#"
+bypassed = false
+wet_dry = 0.25
+input_trim = 1.0
+output_trim = 1.0
+
+[params]
+type = "reverb"
+
+[params.state]
+shape = "hall"
+material = "brick"
+width_m = 18.0
+depth_m = 24.0
+height_m = 9.0
+decay_s = 3.5
+capture_x = 0.4
+capture_y = 0.8
+"#;
+        let slot: EffectSlotState = toml::from_str(legacy).unwrap();
+        let params = slot.params.reverb().expect("still a reverb");
+        assert_eq!(params.decay_s, 3.5, "the one shared field must carry over");
+        assert_eq!(params.size, ReverbParams::default().size);
+        assert_eq!(params.damping, ReverbParams::default().damping);
+        assert_eq!(params.predelay_ms, ReverbParams::default().predelay_ms);
+        assert_eq!(params.diffusion, ReverbParams::default().diffusion);
+        assert_eq!(params.width, ReverbParams::default().width);
+        assert_eq!(params.modulation, ReverbParams::default().modulation);
+        assert_eq!(params.low_cut_hz, ReverbParams::default().low_cut_hz);
+        assert_eq!(slot.wet_dry, 0.25);
+    }
+
+    /// The retired ids are retired: nothing in the current table may reuse
+    /// one, or a route saved against the old room controls would silently
+    /// land on a different knob.
+    #[test]
+    fn reverb_does_not_reuse_its_retired_descriptor_ids() {
+        for descriptor in EffectKind::Reverb.descriptors() {
+            assert!(
+                descriptor.id >= 8,
+                "{} reuses retired id {}",
+                descriptor.name,
+                descriptor.id
+            );
+        }
+        for retired in 0..8u32 {
+            assert!(
+                EffectKind::Reverb.descriptor(retired).is_none(),
+                "id {retired} belonged to the generated-room reverb and must stay unassigned"
+            );
+        }
     }
 
     #[test]

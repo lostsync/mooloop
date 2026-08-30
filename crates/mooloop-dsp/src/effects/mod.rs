@@ -27,7 +27,7 @@ pub use eq::EqEffect;
 pub use filter::FilterEffect;
 pub use modulation::ModulationEffect;
 pub use plate::PlateEffect;
-pub use reverb::{generate_room_ir, PreparedIr, ReverbEffect, StereoIr, CONVOLUTION_BLOCK_FRAMES};
+pub use reverb::ReverbEffect;
 
 use mooloop_core::EffectParams;
 

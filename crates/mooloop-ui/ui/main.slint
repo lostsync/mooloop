@@ -50,7 +50,7 @@ export { DeviceRackConcepts } from "device-concepts.slint";
 // drag regression tests can drive them directly with real pointer events
 // instead of invoking their callbacks, which would pass even if event
 // routing to the handle were broken.
-export { EqDeviceDragHarness, FilterDeviceDragHarness, ReverbDeviceDragHarness } from "device-drag-harness.slint";
+export { EqDeviceDragHarness, FilterDeviceDragHarness } from "device-drag-harness.slint";
 export { MixerStripRow }
 export { OutputTargetRow }
 export { ShortcutRow }
@@ -2834,22 +2834,22 @@ export component MainWindow inherits Window {
                                                         slot-index: index;
                                                         slot-count: root.effect-slots.length;
                                                         bypassed: slot.bypassed;
-                                                        shape: round(slot.p0 * 2);
-                                                        material: round(slot.p1 * 3);
-                                                        width-value: slot.p2;
-                                                        depth-value: slot.p3;
-                                                        height-value: slot.p4;
-                                                        decay-value: slot.p5;
-                                                        capture-x: slot.p6;
-                                                        capture-y: slot.p7;
-                                                        shape-changed(i) => { root.effect-param-changed(index, 0, i * 1.0 / 2.0); }
-                                                        material-changed(i) => { root.effect-param-changed(index, 1, i * 1.0 / 3.0); }
-                                                        width-changed(v) => { root.effect-param-changed(index, 2, v); }
-                                                        depth-changed(v) => { root.effect-param-changed(index, 3, v); }
-                                                        height-changed(v) => { root.effect-param-changed(index, 4, v); }
-                                                        decay-changed(v) => { root.effect-param-changed(index, 5, v); }
-                                                        capture-x-changed(v) => { root.effect-param-changed(index, 6, v); }
-                                                        capture-y-changed(v) => { root.effect-param-changed(index, 7, v); }
+                                                        size: slot.p0;
+                                                        decay: slot.p1;
+                                                        damping: slot.p2;
+                                                        predelay: slot.p3;
+                                                        diffusion: slot.p4;
+                                                        width-value: slot.p5;
+                                                        modulation: slot.p6;
+                                                        low-cut: slot.p7;
+                                                        size-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                        decay-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                        damping-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                        predelay-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                        diffusion-changed(v) => { root.effect-param-changed(index, 4, v); }
+                                                        width-changed(v) => { root.effect-param-changed(index, 5, v); }
+                                                        modulation-changed(v) => { root.effect-param-changed(index, 6, v); }
+                                                        low-cut-changed(v) => { root.effect-param-changed(index, 7, v); }
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 9 : ModulationDeviceFace {

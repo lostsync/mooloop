@@ -1,6 +1,39 @@
 # Reverb: replace the room-plan display, add low-cut, add a darken option, defer IR loading
 
-## Problem
+## Status: mostly resolved, August 2026
+
+The device this plan describes no longer exists. The generated-room
+convolution reverb was replaced by an eight-line feedback delay network (see
+`docs/REVERB.md`), which settled most of this file by removing its subject
+rather than by reworking it. What that change did and did not cover:
+
+- **Replace the room plan and the redundant text panel** — done. The face
+  carries a single full-width `HallResponse` display and seven other
+  controls; there is no plan view, no fixed source marker (the "green
+  square"), and no panel restating what the knobs already say. The display is
+  derived from the parameters, per `docs/UI_DESIGN.md`.
+- **Decide whether the capture-position control survives** — decided: it does
+  not. Adam took the conventional-hall face over keeping the room geometry.
+  The device has no spatial control now; `Width` and the network's two
+  orthogonal output taps carry the stereo image instead.
+- **Low cut on the input** — done, as a `Low Cut` knob (20..500 Hz) filtering
+  the input ahead of the diffusers. `docs/REVERB.md` records why it cannot
+  live in the feedback loop.
+- **IR loading dropped from this device** — done, and now stronger than
+  deferred: there is no IR player in the tree at all. `docs/REVERB.md`'s
+  "Measured IRs" section records that a loader should arrive as its own
+  device rather than as a mode of this one.
+- **Darken/dim option for the display** — **still open.** This was always an
+  appearance-preference item rather than a reverb item, and it should reuse
+  whatever toggle mechanism
+  `03-antialias-splines-with-a-prefs-toggle.md` settles on rather than
+  growing a second one-off. It applies to every device display, not just this
+  one, so it does not belong in a reverb-specific plan; move it there or to a
+  general appearance plan.
+
+The one remaining item is the only reason this file is not archived.
+
+## Original problem
 
 From `docs/EFFECTS_FEEDBACK.md`: "I dont actually know what that green
 square in the scope is for. I can't move it. Don't know what it

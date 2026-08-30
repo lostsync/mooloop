@@ -26,7 +26,7 @@ use mooloop_core::{
     ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModTimeDivision,
     ModulatorParams, MonoSynthParams, MonoSynthState, NoteEvent, NoteId, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
-    PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, ReverbParams, SampleReference,
+    PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
     SamplerParams, SamplerState, SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
@@ -35,7 +35,7 @@ use mooloop_core::{
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
-    buffer_allocation_key, build_effect, build_effect_at_tempo, DrumSynth, DryAlign, SampleData,
+    buffer_allocation_key, build_effect_at_tempo, DrumSynth, DryAlign, SampleData,
     SpectrumAnalyzer,
 };
 use mooloop_engine::{
@@ -76,17 +76,6 @@ enum PendingEngineMessage {
     /// Linear preview gain. A plain value rather than a command because the
     /// engine reads it from a shared cell, live, while a preview plays.
     PreviewGain(f32),
-}
-
-/// A prepared-room request stays off the UI and audio threads. A short
-/// coalescing interval means pointer drags regenerate the final room state,
-/// not every intermediate pixel.
-#[derive(Clone, Copy)]
-struct ReverbBuildRequest {
-    target: EffectTarget,
-    slot: u8,
-    expected_resource_key: u64,
-    params: ReverbParams,
 }
 
 /// Display subscriptions are handled by the pump, which exclusively owns the
@@ -3867,48 +3856,6 @@ impl AppUi {
         let preview_tx = PreviewSender(pending_tx.clone());
         let structural_tx = StructuralCommandSender(pending_tx);
         let sample_rate = handle.sample_rate();
-        let (reverb_build_tx, reverb_build_rx) = std::sync::mpsc::channel::<ReverbBuildRequest>();
-        let reverb_structural_tx = structural_tx.clone();
-        std::thread::spawn(move || {
-            const REGEN_SETTLE: std::time::Duration = std::time::Duration::from_millis(80);
-            while let Ok(first) = reverb_build_rx.recv() {
-                let mut pending = vec![first];
-                loop {
-                    match reverb_build_rx.recv_timeout(REGEN_SETTLE) {
-                        Ok(request) => {
-                            if let Some(existing) = pending.iter_mut().find(|existing| {
-                                existing.target == request.target && existing.slot == request.slot
-                            }) {
-                                // Preserve the first key: it is the IR that
-                                // actually owns the live slot until this
-                                // coalesced replacement lands.
-                                existing.params = request.params;
-                            } else {
-                                pending.push(request);
-                            }
-                        }
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
-                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
-                    }
-                }
-                for request in pending {
-                    let params = EffectParams::Reverb(request.params);
-                    let node = build_effect(params, sample_rate);
-                    let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
-                    if !reverb_structural_tx.send(StructuralCommand::ReplaceEffect {
-                        target: request.target,
-                        slot: request.slot,
-                        expected_kind: EffectKind::Reverb,
-                        expected_resource_key: request.expected_resource_key,
-                        resource_key: request.params.fingerprint(),
-                        node,
-                        align,
-                    }) {
-                        return;
-                    }
-                }
-            }
-        });
         // Sample slots are published out-of-band, so source replacement asks
         // the pump (which owns the EngineHandle) to restore the built-in sample.
         let (sample_reset_tx, sample_reset_rx) = std::sync::mpsc::channel::<usize>();
@@ -7085,10 +7032,7 @@ impl AppUi {
                     target,
                     slot: tail_slot as u8,
                     kind,
-                    resource_key: params
-                        .reverb()
-                        .map(|params| params.fingerprint())
-                        .or_else(|| params.buffer().copied().map(buffer_allocation_key)),
+                    resource_key: params.buffer().copied().map(buffer_allocation_key),
                     node,
                     align,
                     analyzer: Box::new(SpectrumAnalyzer::new()),
@@ -7284,7 +7228,6 @@ impl AppUi {
         }
         {
             let tx = cmd_tx.clone();
-            let reverb_tx = reverb_build_tx.clone();
             let st = state.clone();
             // One callback for every parameter of every effect kind: the
             // rack sends a descriptor index and a normalized position, and
@@ -7307,31 +7250,20 @@ impl AppUi {
                     return;
                 };
                 let id = descriptor.id;
-                let reverb_expected_key = effect.params.reverb().map(|params| params.fingerprint());
                 let Some(value) = effect
                     .params
                     .set(id, descriptor.from_normalized(normalized))
                 else {
                     return;
                 };
-                let reverb_request = reverb_expected_key.zip(effect.params.reverb().copied());
                 let row = effect_slot_row(effect);
                 st.effect_slot_model.set_row_data(slot, row);
-                if let Some((expected_resource_key, params)) = reverb_request {
-                    let _ = reverb_tx.send(ReverbBuildRequest {
-                        target,
-                        slot: slot as u8,
-                        expected_resource_key,
-                        params,
-                    });
-                } else {
-                    let _ = tx.send(EngineCommand::SetEffectParam {
-                        target,
-                        slot: slot as u8,
-                        id,
-                        value,
-                    });
-                }
+                let _ = tx.send(EngineCommand::SetEffectParam {
+                    target,
+                    slot: slot as u8,
+                    id,
+                    value,
+                });
             });
         }
 

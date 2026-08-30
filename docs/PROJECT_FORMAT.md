@@ -131,6 +131,17 @@ decay = 0.05
 punch = 0.35
 ```
 
+Reverb readers default every field of `ReverbParams` individually. The device
+was a generated-room convolution player through August 2026 and stored room
+geometry (`shape`, `material`, `width_m`, `depth_m`, `height_m`, `capture_x`,
+`capture_y`); the feedback delay network that replaced it stores `size`,
+`decay_s`, `damping`, `predelay_ms`, `diffusion`, `width`, `modulation`, and
+`low_cut_hz`. The geometry fields have no counterpart and are ignored on
+load, `decay_s` carries across unchanged, and the rest take the new device's
+defaults. The old parameter ids 0..=7 are retired rather than reused, so a
+modulation route saved against a room control resolves to nothing instead of
+landing on a different knob.
+
 Drum synth readers default `kick_character`, `snare_character`,
 `hat_character`, `punch`, `snare_tone2_hz`, `snare_tone2_mix`, and
 `snare_noise_color` for version 1 manifests written before the punch/noise

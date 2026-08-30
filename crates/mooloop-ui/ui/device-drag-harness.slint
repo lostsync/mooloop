@@ -1,9 +1,8 @@
 import { EqDeviceFace } from "eq-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
-import { ReverbDeviceFace } from "reverb-device.slint";
 
 // Slint only generates Rust bindings for exported components that inherit
-// Window - EqDeviceFace/ReverbDeviceFace inherit EffectDeviceShell (a
+// Window - EqDeviceFace inherits EffectDeviceShell (a
 // Rectangle), so they can't be instantiated directly from a test. These
 // thin Window wrappers exist purely so the drag regression tests can drive
 // the real faces with real pointer events instead of invoking their
@@ -70,47 +69,5 @@ export component FilterDeviceDragHarness inherits Window {
         cutoff-changed(v) => { root.cutoff-changed(v); }
         resonance-changed(v) => { root.resonance-changed(v); }
         mode-changed(v) => { root.mode-changed(v); }
-    }
-}
-
-export component ReverbDeviceDragHarness inherits Window {
-    in-out property <int> shape;
-    in-out property <int> material;
-    in-out property <float> width-value;
-    in-out property <float> depth-value;
-    in-out property <float> height-value;
-    in-out property <float> decay-value;
-    in-out property <float> capture-x;
-    in-out property <float> capture-y;
-    callback shape-changed(int);
-    callback material-changed(int);
-    callback width-changed(float);
-    callback depth-changed(float);
-    callback height-changed(float);
-    callback decay-changed(float);
-    callback capture-x-changed(float);
-    callback capture-y-changed(float);
-
-    preferred-width: 668px;
-    preferred-height: 268px;
-    ReverbDeviceFace {
-        width: 100%;
-        height: 100%;
-        shape <=> root.shape;
-        material <=> root.material;
-        width-value <=> root.width-value;
-        depth-value <=> root.depth-value;
-        height-value <=> root.height-value;
-        decay-value <=> root.decay-value;
-        capture-x <=> root.capture-x;
-        capture-y <=> root.capture-y;
-        shape-changed(v) => { root.shape-changed(v); }
-        material-changed(v) => { root.material-changed(v); }
-        width-changed(v) => { root.width-changed(v); }
-        depth-changed(v) => { root.depth-changed(v); }
-        height-changed(v) => { root.height-changed(v); }
-        decay-changed(v) => { root.decay-changed(v); }
-        capture-x-changed(v) => { root.capture-x-changed(v); }
-        capture-y-changed(v) => { root.capture-y-changed(v); }
     }
 }

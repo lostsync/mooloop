@@ -67,11 +67,13 @@ fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
     }
 }
 
+/// Control-side identity of an effect's asynchronously prepared resource, for
+/// the kinds that have one. Reverb was the original case and no longer is:
+/// the FDN hall reallocates nothing, so its parameters travel as ordinary
+/// `SetEffectParam` commands. The mechanism stays for the retained-audio
+/// buffer, whose ring size genuinely cannot change on the audio thread.
 fn effect_resource_key(params: mooloop_core::EffectParams) -> Option<u64> {
-    params
-        .reverb()
-        .map(|params| params.fingerprint())
-        .or_else(|| params.buffer().copied().map(buffer_allocation_key))
+    params.buffer().copied().map(buffer_allocation_key)
 }
 
 #[derive(Clone, Copy)]
@@ -3189,9 +3191,10 @@ mod tests {
                     params.set(mooloop_core::DELAY_PARAM_MIX, 1.0);
                 }
                 mooloop_core::EffectKind::Reverb => {
-                    // The convolution path is entirely wet and delayed by one
-                    // partition, so any generated response differs clearly
-                    // from the dry reference inside this render window.
+                    // Entirely wet, and its shortest delay line plus the
+                    // default pre-delay outlast this render window, so the
+                    // output here is silence — clearly different from the
+                    // nonzero dry reference.
                 }
                 mooloop_core::EffectKind::Plate => {
                     // Also entirely wet, and its shortest comb tap is longer
@@ -3605,6 +3608,9 @@ mod tests {
         );
     }
 
+    /// The prepared-resource guard is generic, but Buffer is now its only
+    /// user: reverb used to key on an IR fingerprint and no longer allocates
+    /// anything a parameter change could invalidate.
     #[test]
     fn prepared_resource_replacement_refuses_a_stale_slot_key() {
         let mut chain = EffectChain::new();
@@ -3612,7 +3618,7 @@ mod tests {
         let initial_align = DryAlign::new(initial.latency_frames()).map(Box::new);
         let displaced = chain.install(
             0,
-            mooloop_core::EffectKind::Reverb,
+            mooloop_core::EffectKind::Buffer,
             Some(10),
             initial,
             initial_align,
@@ -3624,7 +3630,7 @@ mod tests {
         let stale_align = DryAlign::new(stale.latency_frames()).map(Box::new);
         let rejected = chain.replace_if_kind(
             0,
-            mooloop_core::EffectKind::Reverb,
+            mooloop_core::EffectKind::Buffer,
             9,
             11,
             stale,
@@ -3637,7 +3643,7 @@ mod tests {
         let current_align = DryAlign::new(current.latency_frames()).map(Box::new);
         let replaced = chain.replace_if_kind(
             0,
-            mooloop_core::EffectKind::Reverb,
+            mooloop_core::EffectKind::Buffer,
             10,
             11,
             current,

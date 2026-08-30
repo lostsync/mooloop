@@ -280,8 +280,12 @@ view of the same routes, not a prerequisite for using them.
    general control source. The future rack can modulate its descriptors like
    any other effect.
 7. ~~**Reverb** — last; hardest to make good rather than merely present.~~ Done
-   as a generated-room convolution IR player. `CONVOLUTION_REVERB.md` records
-   its realtime/resource contract and measured-IR import boundary.
+   as an eight-line feedback delay network. `REVERB.md` records its realtime
+   contract. It shipped first as a generated-room convolution IR player, which
+   was the one device that could not honour "no effect changes to support
+   modulation" above: a convolution node cannot take a parameter event, so
+   routes aimed at its knobs did nothing. That is the concrete reason it was
+   replaced rather than tuned.
 
 ### The delay line is shared with the buffer device
 

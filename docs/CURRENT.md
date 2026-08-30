@@ -325,14 +325,20 @@ boundary.
   persists the division, not just its current ms result. It is joined by a gate,
   compressor, and limiter sharing one detector and gain-computer module; a
   seven-band parametric EQ with optional bounded spectrum telemetry; a
-  generated-room convolution reverb; and one five-mode modulation processor
+  feedback-delay-network hall reverb; and one five-mode modulation processor
   (chorus, flange, phaser, ensemble, and ADT). Its delay-based modes share a
   bounded fractional stereo ring; Phaser uses a stereo all-pass cascade. The
   generic host supplies their dry/wet blend, so the DSP returns the processed
-  signal only. The reverb prepares a stereo room IR off
-  the audio thread, then runs fixed-partition convolution with a host-aligned
-  512-frame latency. Device faces are width-quantized in rack units; gate and
-  compressor take 2U, while delay, EQ, reverb, and Mod take 3U.
+  signal only. The reverb runs eight modulated delay lines through a Hadamard
+  feedback matrix behind a diffused, pre-delayed input, at a fixed per-sample
+  cost independent of decay time and with no reported latency; Size, Decay,
+  Damp, Pre, Diffuse, Width and Mod are all ordinary event-driven parameters,
+  so every one of them is a working modulation destination. It replaced a
+  generated-room convolution player whose per-block cost spiked over a
+  64-frame budget at a two-second tail and which could not accept a parameter
+  change at all without an off-thread IR rebuild. Device faces are
+  width-quantized in rack units; gate and compressor take 2U, while delay,
+  EQ, reverb, and Mod take 3U.
 - The dynamics effects detect on the louder of the two channels and apply one
   gain to both, so compression cannot walk the stereo image around. The
   limiter has no lookahead on purpose: the engine has no plugin-delay

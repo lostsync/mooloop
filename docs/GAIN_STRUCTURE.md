@@ -107,11 +107,16 @@ over its own range (`TrimKnob`, -60 to +12, unity default).
 ## Wet/dry and return effects
 
 **Wet paths are level-matched to dry, and the match is anchored on
-sustained material.** The convolution reverb calibrates its IR across
-spectral probes (`IR_ENERGY_TARGET` and `IR_TONAL_CEILING` in `reverb.rs`);
-the plate sits behind a calibrated output reference (`OUTPUT_REFERENCE` in
-`plate.rs`). At 100% wet, a held note measured mid-sustain sits within
-~1 dB of dry, enforced by `steady_state_wet_path_is_level_matched`.
+sustained material.** Both reverbs sit behind a measured output reference
+(`OUTPUT_REFERENCE` in `reverb.rs` and in `plate.rs`): a feedback network has
+no natural unity, since its steady-state level depends on decay, size, and
+where the input's energy sits against its modes, so the constant is measured
+rather than derived. At 100% wet, a held note measured mid-sustain sits
+within ~1 dB of dry, enforced by `steady_state_wet_path_is_level_matched`.
+
+(The reverb was previously a convolution player and calibrated its impulse
+response across spectral probes instead. That mechanism went with it; the
+principle below did not.)
 
 One scalar cannot match tonal and broadband material at once. The diffuse
 tail's spectrum tilts low, so a narrowband partial samples a hotter point
