@@ -40,6 +40,9 @@ CHANNEL (ownership)
   property of Mono, Buffer, an insert, or the strip.
 - A device owns parameter descriptors and may publish named control outlets.
   It does not need to know which sources are connected to its parameters.
+- `COMPOSABLE_DEVICE_UNITS.md` owns the general published/private port
+  contract. This specification applies that contract to channel modulation:
+  only deliberately published, typed control outlets enter the route system.
 - The **common device frame** is the UI exposure point: it summarizes routes
   terminating in that device and opens the channel-owned shelf/inspector. It
   does not create a device-local modulator.

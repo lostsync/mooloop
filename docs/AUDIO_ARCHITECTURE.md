@@ -147,6 +147,14 @@ eventual processing contract needs to describe:
 - tail behavior and reset/transport discontinuities;
 - stable parameter descriptors and instance identity.
 
+`COMPOSABLE_DEVICE_UNITS.md` defines the recursive design contract above and
+below this adapter: primitives and composites have intentional parameters,
+typed inlets, and typed outlets, while private fixed topology stays private.
+That contract does not require every primitive to implement `AudioNode` or
+become a runtime graph node. `AudioNode` remains the prepared realtime adapter
+for a whole processing unit; discoverable metadata and editable composition
+belong to the control plane.
+
 The current in-place stereo method remains useful for ordinary instruments and
 inserts. Auxiliary input should be supplied for each process call by the
 executor; a node must not retain a borrowed bus reference received at
