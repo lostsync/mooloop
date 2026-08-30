@@ -18,16 +18,17 @@
 //!   independent legato and glide-mode switches, so note transitions are
 //!   something the player performs rather than something the synth decides.
 //!
+//! - a nonlinear four-pole [`Ladder`] with saturation *ahead* of it rather
+//!   than after it, so the oscillator mixer is a tone control: pushing more
+//!   level into the filter changes the character and not merely the gain.
+//!
 //! Still to come, and called out so the gaps read as sequencing rather than
-//! oversight: the Ladder and Acid filter models with saturation moved *ahead*
-//! of the filter, and Accent. Drive stays post-filter until the model work
-//! lands, because moving it without the makeup-gain scheme that step designs
-//! would change loudness rather than character.
+//! oversight: the Acid filter model beside the ladder, and Accent.
 
 use crate::bus::StereoBus;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
-use crate::filter::{apply_drive, Svf};
+use crate::filter::{Ladder, PreDrive};
 use crate::heldnotes::{HeldNote, HeldNotes};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::Osc;
@@ -69,7 +70,11 @@ struct Ml1Voice {
     oscs: [Osc; 3],
     current_freq: f32,
     target_freq: f32,
-    filter: Svf,
+    /// Saturation runs here, between the mix and the filter. That placement is
+    /// the whole difference between a filter with a drive knob and a filter
+    /// you play by pushing level into it.
+    pre_drive: PreDrive,
+    filter: Ladder,
     /// Velocity gain, smoothed so that a retrigger at a different velocity
     /// slides rather than steps.
     velocity_amp: Smoothed,
@@ -89,7 +94,8 @@ impl Ml1Voice {
             oscs: [Osc::new(), Osc::new(), Osc::new()],
             current_freq: 0.0,
             target_freq: 0.0,
-            filter: Svf::new(),
+            pre_drive: PreDrive::new(),
+            filter: Ladder::new(),
             velocity_amp: smoothed(0.0),
             osc_level: [smoothed(0.0), smoothed(0.0), smoothed(0.0)],
             cutoff: smoothed(1.0),
@@ -362,19 +368,25 @@ impl Ml1 {
                     );
             }
 
-            // Envelope- and keytrack-modulated low-pass, same perceptual
-            // mapping the sampler uses. Bypassed entirely when fully open and
-            // nothing is moving it — keytrack has to be in that test, or a
-            // tracking patch with the cutoff knob at the top would skip the
-            // filter it is supposed to be playing.
             let cutoff = voice.cutoff.advance();
             let drive = voice.drive.advance();
+
+            // Saturate, then filter. The pre-drive stage keeps its own level
+            // estimate, so it has to see every sample even when the filter is
+            // bypassed below — otherwise the estimate would be stale the
+            // moment a knob moved back into the filtered path.
+            let driven = voice.pre_drive.next_sample(mix, drive, sr);
+
+            // Bypassed entirely when the filter is fully open and nothing is
+            // moving it — keytrack has to be in that test, or a tracking patch
+            // with the cutoff knob at the top would skip the filter it is
+            // supposed to be playing.
             let filtered = if cutoff >= 0.999
                 && env_amount.abs() <= f32::EPSILON
                 && resonance <= f32::EPSILON
                 && keytrack <= f32::EPSILON
             {
-                mix
+                driven
             } else {
                 let base_hz = hz_from_normalized(cutoff, max_hz);
                 // Read off `current_freq` rather than the note number so a
@@ -387,13 +399,11 @@ impl Ml1 {
                 };
                 let octaves = voice.filter_env.level() * env_amount * 6.0 + keytrack_oct;
                 let cutoff_hz = (base_hz * octaves.exp2()).clamp(20.0, max_hz);
-                voice.filter.next_sample(mix, cutoff_hz, resonance, sr)
+                voice.filter.next_sample(driven, cutoff_hz, resonance, sr)
             };
 
-            let sample = apply_drive(filtered, drive)
-                * voice.amp_env.level()
-                * velocity
-                * VOICE_OUTPUT_REFERENCE;
+            let sample =
+                filtered * voice.amp_env.level() * velocity * VOICE_OUTPUT_REFERENCE;
             bus.l[i] += sample;
             bus.r[i] += sample;
         }
@@ -919,6 +929,96 @@ mod tests {
         events.push(note_off(0, 2, 67));
         synth.process(&stopped, &mut bus, &events, None);
         assert!(synth.voice.amp_env.is_releasing() || !synth.voice.active);
+    }
+
+    /// A sine so that saturation is unmistakable in the spectrum — a saw
+    /// already carries every harmonic, so driving one compresses its
+    /// structure rather than adding to it, which makes it a poor probe.
+    fn sine_patch() -> Ml1Params {
+        let mut params = saw_patch();
+        params.osc[0] = OscParams {
+            wave: OscWave::Sine,
+            level: 1.0,
+            ..OscParams::default()
+        };
+        params.sustain = 1.0;
+        params
+    }
+
+    /// Drive's contract: harmonic content moves, loudness does not.
+    #[test]
+    fn drive_adds_harmonics_without_adding_level() {
+        let mut params = sine_patch();
+        let frames = SR as usize / 4;
+        let window = SR as usize / 10..frames;
+
+        let clean = render(params, 45, frames);
+        params.drive = 1.0;
+        let driven = render(params, 45, frames);
+
+        let level_db =
+            20.0 * (rms(&driven[window.clone()]) / rms(&clean[window.clone()])).log10();
+        assert!(
+            level_db.abs() < 2.0,
+            "drive moved the level {level_db:.1} dB"
+        );
+        assert!(
+            brightness(&driven[window.clone()]) > brightness(&clean[window]) * 1.5,
+            "drive did not add harmonics"
+        );
+    }
+
+    /// The placement test, and the point of the whole step: the saturation is
+    /// *ahead* of the filter, so closing the filter removes the harmonics
+    /// drive just added. Were it after the filter, the cutoff knob could not
+    /// touch them and drive would brighten a closed patch exactly as much as
+    /// an open one.
+    #[test]
+    fn the_drive_stage_sits_ahead_of_the_filter() {
+        let frames = SR as usize / 4;
+        let window = SR as usize / 10..frames;
+
+        let added_brightness = |cutoff: f32| {
+            let mut params = sine_patch();
+            params.filter_cutoff = cutoff;
+            let clean = render(params, 45, frames);
+            params.drive = 1.0;
+            let driven = render(params, 45, frames);
+            brightness(&driven[window.clone()]) / brightness(&clean[window.clone()])
+        };
+
+        let open = added_brightness(1.0);
+        let closed = added_brightness(0.35);
+        assert!(
+            closed < open * 0.7,
+            "the filter barely touched drive's harmonics (open {open:.2}, closed {closed:.2}), \
+             which is what post-filter drive would look like"
+        );
+    }
+
+    /// The other half, and the thing post-filter drive cannot do: with drive
+    /// up, an oscillator's level knob changes the timbre and not merely the
+    /// gain, because it changes how hard the mix pushes into the shaper.
+    #[test]
+    fn an_oscillator_level_is_a_tone_control_when_drive_is_up() {
+        let frames = SR as usize / 4;
+        let window = SR as usize / 10..frames;
+
+        let timbre_at = |level: f32| {
+            let mut params = sine_patch();
+            params.drive = 1.0;
+            params.osc[0].level = level;
+            brightness(&render(params, 45, frames)[window.clone()])
+        };
+
+        // Compared as brightness, which is scale-invariant, so this is a shape
+        // difference and not the level difference that comes with it.
+        let quiet = timbre_at(0.3);
+        let loud = timbre_at(1.0);
+        assert!(
+            loud > quiet * 1.2,
+            "oscillator level did not change the timbre: {quiet:.3} -> {loud:.3}"
+        );
     }
 
     #[test]

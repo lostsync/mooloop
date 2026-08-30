@@ -147,6 +147,9 @@ export component Ml1DeviceFace inherits Rectangle {
                         FilterResponseDisplay {
                             horizontal-stretch: 1;
                             mode: 0;
+                            // The ladder is four poles, so the drawn curve is
+                            // two cascaded stages rather than one.
+                            slope: 1;
                             cutoff: root.filter-cutoff;
                             resonance: root.filter-resonance;
                             env-amount: root.filter-env;

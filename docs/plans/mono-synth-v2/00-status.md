@@ -1,4 +1,4 @@
-In progress. 02 and 03 are in, restructured; 04-08 are not started.
+In progress. 02, 03 and 04 are in, restructured; 05-08 are not started.
 
 ## The restructure, decided 2026-08-30
 

@@ -247,9 +247,411 @@ pub fn apply_drive(input: f32, drive: f32) -> f32 {
     (input * input_gain).tanh() * compensation
 }
 
+/// A nonlinear four-pole ladder low-pass: four cascaded one-pole stages with a
+/// resonance feedback path from the last stage back to the input, saturated
+/// inside the loop.
+///
+/// As a composable unit (`docs/COMPOSABLE_DEVICE_UNITS.md`):
+///
+/// ```text
+/// Ladder
+/// in:  audio, cutoff (Hz, 20..sr*0.45), resonance (0..1)
+/// out: audio
+/// ```
+///
+/// The audible difference from [`Svf`] is the slope — roughly 24 dB/oct
+/// against the SVF's 12 — and that the resonance path is nonlinear, so
+/// pushing level into it changes character rather than only gain. Circuit
+/// accuracy is explicitly not a goal.
+///
+/// Stability comes for free from the shape rather than from a limiter: the
+/// only thing the stages ever integrate is a `tanh` output, so every stage is
+/// bounded by 1 no matter what resonance, cutoff, or input level do.
+#[derive(Clone, Copy, Debug)]
+pub struct Ladder {
+    stage: [f32; 4],
+    /// Last output, delayed one sample, which is what the feedback path reads.
+    feedback: f32,
+}
+
+/// Four cascaded one-poles reach -3 dB well below a single pole's corner --
+/// at `sqrt(sqrt(2) - 1)` of it -- so the per-stage corner is pushed up by the
+/// inverse to make the Cutoff knob mean the same frequency it does on `Svf`.
+const LADDER_POLE_COMPENSATION: f32 = 1.5538;
+
+/// Feedback gain at full resonance, at a low corner frequency.
+const LADDER_MAX_FEEDBACK: f32 = 4.3;
+
+/// The feedback path is delayed a sample, and that delay costs more loop phase
+/// the higher the corner sits -- so without this the filter self-oscillates
+/// at 200 Hz and merely peaks at 2 kHz, and the Resonance knob means something
+/// different at each end of the Cutoff knob. Scaling the feedback with the
+/// stage coefficient puts the self-oscillation threshold at roughly the same
+/// knob position across the range.
+const LADDER_FEEDBACK_TRACKING: f32 = 1.5;
+
+/// Classic ladders thin out as resonance rises, because the feedback path
+/// cancels the bass along with everything else. Some of that is the character;
+/// total bass loss is not, so a fraction of the input bypasses the
+/// subtraction. Voiced by ear against the factory bank.
+const LADDER_BASS_COMPENSATION: f32 = 0.5;
+
+impl Ladder {
+    pub fn new() -> Self {
+        Self {
+            stage: [0.0; 4],
+            feedback: 0.0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.stage = [0.0; 4];
+        self.feedback = 0.0;
+    }
+
+    /// Process one sample. Safe to call with `cutoff_hz` moving every sample,
+    /// which is what an envelope-swept filter does.
+    pub fn next_sample(
+        &mut self,
+        input: f32,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> f32 {
+        let sr = sample_rate as f32;
+        let cutoff = (cutoff_hz * LADDER_POLE_COMPENSATION).clamp(20.0, sr * 0.45);
+        let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
+        let k = resonance.clamp(0.0, 1.0)
+            * LADDER_MAX_FEEDBACK
+            * (1.0 + LADDER_FEEDBACK_TRACKING * g);
+
+        let driven = input * (1.0 + k * LADDER_BASS_COMPENSATION) - k * self.feedback;
+        let shaped = driven.tanh();
+
+        self.stage[0] += g * (shaped - self.stage[0]);
+        self.stage[1] += g * (self.stage[0] - self.stage[1]);
+        self.stage[2] += g * (self.stage[1] - self.stage[2]);
+        self.stage[3] += g * (self.stage[2] - self.stage[3]);
+        self.feedback = self.stage[3];
+        self.stage[3]
+    }
+}
+
+impl Default for Ladder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Saturation that runs *ahead* of a filter rather than after it.
+///
+/// ```text
+/// PreDrive
+/// in:  audio, drive (0..1)
+/// out: audio
+/// ```
+///
+/// [`apply_drive`] anchors its makeup gain at the fixed operating level, which
+/// is right for a stage at the end of a chain where the level is known. Ahead
+/// of the filter the level is not known: it is the oscillator mix, and three
+/// oscillators at full level sum to roughly three times one. Anchoring at a
+/// constant there would make the Drive knob a volume control that happens to
+/// distort.
+///
+/// So the makeup gain follows a peak estimate of the input instead. Two
+/// consequences, and both are the point:
+///
+/// - Sweeping Drive on a fixed patch changes harmonic content and leaves the
+///   level where it was, whatever that level happens to be.
+/// - Raising an oscillator's level pushes harder into the shaper, so it
+///   changes the timbre and not merely the gain. That is what makes the mixer
+///   a tone control.
+#[derive(Clone, Copy, Debug)]
+pub struct PreDrive {
+    /// Running mean square of the input and of the shaped signal. The ratio of
+    /// their roots is the makeup gain.
+    mean_input: f32,
+    mean_shaped: f32,
+}
+
+/// Pre-gain at full drive. Much gentler than [`apply_drive`]'s, and
+/// deliberately: that stage is anchored at the operating level, roughly a
+/// quarter of full scale, while this one sees a raw oscillator mix at around
+/// unity. At `apply_drive`'s range every patch would be a square wave by a
+/// third of the way up the knob, and level would stop changing the timbre --
+/// which is the one thing this stage exists to make it do.
+const PRE_DRIVE_GAIN_RANGE: f32 = 4.0;
+
+/// Level-follower time constant. Long enough not to follow the waveform
+/// itself, short enough to keep up with an envelope.
+const PRE_DRIVE_FOLLOW_S: f32 = 0.05;
+
+impl PreDrive {
+    pub fn new() -> Self {
+        Self {
+            mean_input: 0.0,
+            mean_shaped: 0.0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.mean_input = 0.0;
+        self.mean_shaped = 0.0;
+    }
+
+    pub fn next_sample(&mut self, input: f32, drive: f32, sample_rate: u32) -> f32 {
+        let drive = drive.clamp(0.0, 1.0);
+        if drive <= f32::EPSILON {
+            return input;
+        }
+        let gain = 1.0 + drive * PRE_DRIVE_GAIN_RANGE;
+        let shaped = (input * gain).tanh();
+
+        let follow = 1.0 - (-1.0 / (PRE_DRIVE_FOLLOW_S * sample_rate as f32)).exp();
+        self.mean_input += follow * (input * input - self.mean_input);
+        self.mean_shaped += follow * (shaped * shaped - self.mean_shaped);
+
+        // Matching RMS rather than peak is what makes the knob a character
+        // control: a saturated wave carries more energy for the same peak, so
+        // peak-matching would still let Drive raise the loudness. Before the
+        // followers have anything in them the ratio tends to `1 / gain`, which
+        // cancels the pre-gain exactly, so the stage starts as a pass-through
+        // instead of a burst.
+        let compensation = if self.mean_shaped > 1.0e-12 {
+            (self.mean_input / self.mean_shaped).sqrt()
+        } else {
+            1.0 / gain
+        };
+        shaped * compensation
+    }
+}
+
+impl Default for PreDrive {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SR: u32 = 48_000;
+
+    /// Steady-state output peak for a sine of `amplitude` at `freq_hz`, in
+    /// dBFS. Absolute, not normalized: the callers that want a transfer
+    /// function take differences, and the one that wants a level reads it
+    /// directly.
+    fn response_db(filter: &mut dyn FnMut(f32) -> f32, freq_hz: f32, amplitude: f32) -> f32 {
+        let mut peak = 0.0_f32;
+        let total = SR as usize / 2;
+        for i in 0..total {
+            let t = i as f32 / SR as f32;
+            let out = filter((t * freq_hz * core::f32::consts::TAU).sin() * amplitude);
+            // Skip the transient and any follower's settling time.
+            if i > total / 2 {
+                peak = peak.max(out.abs());
+            }
+        }
+        20.0 * peak.max(1.0e-9).log10()
+    }
+
+    /// Slope and corner frequency are small-signal properties. Measuring them
+    /// at full scale would measure the `tanh` in the feedback path instead --
+    /// which is real character, but not what "24 dB/oct" describes.
+    const SMALL_SIGNAL: f32 = 0.02;
+
+    fn ladder_response_db(cutoff: f32, resonance: f32, freq: f32) -> f32 {
+        let mut ladder = Ladder::new();
+        response_db(
+            &mut |x| ladder.next_sample(x, cutoff, resonance, SR),
+            freq,
+            SMALL_SIGNAL,
+        )
+    }
+
+    fn svf_response_db(cutoff: f32, resonance: f32, freq: f32) -> f32 {
+        let mut svf = Svf::new();
+        response_db(
+            &mut |x| svf.next_sample(x, cutoff, resonance, SR),
+            freq,
+            SMALL_SIGNAL,
+        )
+    }
+
+    /// The whole reason the ladder exists: it is a four-pole where `Svf` is a
+    /// two-pole. Measured two octaves above the corner, where the asymptote
+    /// has been reached but the naive one-pole's flattening near Nyquist has
+    /// not yet set in, and with a loose tolerance because this is a nonlinear
+    /// filter and the number will not be exact.
+    #[test]
+    fn the_ladder_rolls_off_twice_as_steeply_as_the_svf() {
+        let cutoff = 500.0;
+        let fall = |at: &dyn Fn(f32, f32, f32) -> f32| {
+            at(cutoff, 0.0, cutoff * 2.0) - at(cutoff, 0.0, cutoff * 8.0)
+        };
+        let ladder = fall(&ladder_response_db);
+        let svf = fall(&svf_response_db);
+
+        // Two octaves, so an ideal 24 dB/oct is 48 dB and 12 dB/oct is 24.
+        assert!(
+            (34.0..50.0).contains(&ladder),
+            "ladder fell {ladder:.1} dB over two octaves, wanted roughly 48"
+        );
+        assert!(
+            ladder > svf * 1.6,
+            "ladder {ladder:.1} dB vs svf {svf:.1} dB is not a slope difference"
+        );
+    }
+
+    /// The Cutoff knob has to mean the same frequency on both filters, or a
+    /// patch would change pitch-of-tone when the filter behind it changes.
+    /// Both read about -6 dB at the knob's frequency at zero resonance.
+    #[test]
+    fn the_ladder_corner_matches_the_svf_corner() {
+        for cutoff in [200.0_f32, 1000.0, 4000.0] {
+            let ladder = ladder_response_db(cutoff, 0.0, cutoff / 8.0)
+                - ladder_response_db(cutoff, 0.0, cutoff);
+            let svf =
+                svf_response_db(cutoff, 0.0, cutoff / 8.0) - svf_response_db(cutoff, 0.0, cutoff);
+            assert!(
+                (ladder - svf).abs() < 1.5,
+                "at {cutoff} Hz the ladder is {ladder:.1} dB down and the svf {svf:.1} dB"
+            );
+        }
+    }
+
+    /// The tallest point of the response, wherever it sits -- the resonant
+    /// peak moves with resonance, so pinning the probe to the corner would
+    /// measure the peak sliding off it rather than the peak growing.
+    fn ladder_resonant_peak_db(cutoff: f32, resonance: f32) -> f32 {
+        let passband = ladder_response_db(cutoff, 0.0, cutoff / 16.0);
+        let mut best = f32::MIN;
+        for step in 0..24 {
+            let mult = 2.0_f32.powf(-1.0 + step as f32 * 2.0 / 23.0);
+            best = best.max(ladder_response_db(cutoff, resonance, cutoff * mult) - passband);
+        }
+        best
+    }
+
+    /// Resonance has to climb smoothly to self-oscillation and mean the same
+    /// thing wherever the Cutoff knob is -- the second half is what
+    /// `LADDER_FEEDBACK_TRACKING` exists for.
+    #[test]
+    fn ladder_resonance_climbs_smoothly_across_the_cutoff_range() {
+        for cutoff in [100.0_f32, 500.0, 2000.0] {
+            let peaks: Vec<f32> = [0.0, 0.3, 0.5, 0.7, 0.85, 1.0]
+                .iter()
+                .map(|reso| ladder_resonant_peak_db(cutoff, *reso))
+                .collect();
+            assert!(
+                peaks.windows(2).all(|pair| pair[1] > pair[0] + 1.0),
+                "at {cutoff} Hz the resonance taper is not monotonic: {peaks:?}"
+            );
+            assert!(
+                peaks[5] > 15.0,
+                "at {cutoff} Hz full resonance only reached {:.1} dB",
+                peaks[5]
+            );
+            assert!(peaks.iter().all(|peak| peak.is_finite()));
+        }
+    }
+
+    /// The stages only ever integrate a `tanh` output, so this holds for any
+    /// input at any setting -- including a cutoff swept every sample.
+    #[test]
+    fn the_ladder_stays_bounded_under_a_swept_resonant_sweep() {
+        let mut ladder = Ladder::new();
+        let mut peak = 0.0_f32;
+        for i in 0..SR as usize {
+            let t = i as f32 / SR as f32;
+            let input = (t * 110.0 * core::f32::consts::TAU).sin() * 4.0;
+            let cutoff = 200.0 + 6000.0 * (t * 40.0).sin().abs();
+            let out = ladder.next_sample(input, cutoff, 1.0, SR);
+            peak = peak.max(out.abs());
+        }
+        assert!(peak.is_finite(), "ladder went non-finite");
+        assert!(peak <= 1.0, "ladder peaked at {peak}");
+    }
+
+    /// Steady-state output RMS for a sine of `amplitude` at `freq_hz`.
+    fn response_rms(filter: &mut dyn FnMut(f32) -> f32, freq_hz: f32, amplitude: f32) -> f32 {
+        let total = SR as usize / 2;
+        let mut sum = 0.0_f32;
+        let mut counted = 0usize;
+        for i in 0..total {
+            let t = i as f32 / SR as f32;
+            let out = filter((t * freq_hz * core::f32::consts::TAU).sin() * amplitude);
+            if i > total / 2 {
+                sum += out * out;
+                counted += 1;
+            }
+        }
+        (sum / counted.max(1) as f32).sqrt()
+    }
+
+    /// The pre-drive's contract, and the reason it does not reuse
+    /// `apply_drive`'s fixed anchor: the knob is a character control at
+    /// whatever level the oscillator mix happens to sit at. Measured as RMS,
+    /// because that is what the stage matches and what loudness follows.
+    #[test]
+    fn pre_drive_holds_its_level_across_the_knob_at_any_input_level() {
+        for level in [0.05_f32, 0.25, 1.0, 2.5] {
+            let levels: Vec<f32> = [0.0_f32, 0.5, 1.0]
+                .iter()
+                .map(|drive| {
+                    let mut stage = PreDrive::new();
+                    response_rms(&mut |x| stage.next_sample(x, *drive, SR), 220.0, level)
+                })
+                .collect();
+            let quietest = levels.iter().cloned().fold(f32::MAX, f32::min);
+            let loudest = levels.iter().cloned().fold(0.0_f32, f32::max);
+            let spread_db = 20.0 * (loudest / quietest).log10();
+            assert!(
+                spread_db < 1.0,
+                "at input level {level} the drive knob moved the level {spread_db:.1} dB"
+            );
+        }
+    }
+
+    /// The other half: pushing more signal in changes the shape, which is what
+    /// makes the oscillator mixer a tone control.
+    #[test]
+    fn pre_drive_gets_dirtier_as_the_input_grows() {
+        fn harmonic_ratio(level: f32) -> f32 {
+            let mut stage = PreDrive::new();
+            let mut fundamental = 0.0_f32;
+            let mut total = 0.0_f32;
+            let frames = SR as usize / 4;
+            for i in 0..frames {
+                let phase = core::f32::consts::TAU * 220.0 * i as f32 / SR as f32;
+                let out = stage.next_sample(phase.sin() * level, 1.0, SR);
+                if i > frames / 2 {
+                    fundamental += out * phase.sin();
+                    total += out * out;
+                }
+            }
+            // Energy not explained by the fundamental, relative to the whole.
+            let frames = (frames / 2) as f32;
+            let correlated = 2.0 * fundamental / frames;
+            (total / frames - correlated * correlated / 2.0).max(0.0) / (total / frames)
+        }
+
+        let quiet = harmonic_ratio(0.1);
+        let loud = harmonic_ratio(2.0);
+        assert!(
+            loud > quiet * 1.5,
+            "input level did not change the harmonic content: {quiet:.4} -> {loud:.4}"
+        );
+    }
+
+    #[test]
+    fn pre_drive_at_zero_is_a_pass_through() {
+        let mut stage = PreDrive::new();
+        for sample in [0.0_f32, 0.3, -0.9, 2.0] {
+            assert_eq!(stage.next_sample(sample, 0.0, SR), sample);
+        }
+    }
 
     #[test]
     fn low_cutoff_attenuates_high_frequencies() {
