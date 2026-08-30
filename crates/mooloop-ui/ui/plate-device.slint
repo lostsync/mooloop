@@ -4,14 +4,17 @@ import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // A compact, parameter-derived view of the comb/allpass tail. Each tap is a
 // pair of stereo reflections: Size spaces them, Decay preserves their level,
-// Damp removes the bright inner stroke, and Width separates the two lanes.
+// Damp removes the bright inner stroke, Width separates the two lanes, and
+// Pre leaves a visible gap before the network is excited.
 component PlateTailDisplay inherits Rectangle {
     in property <float> size;
     in property <float> decay;
     in property <float> damping;
     in property <float> width-value;
+    in property <float> predelay;
 
-    private property <length> tap-spacing: 9px + root.size * 6px;
+    private property <length> predelay-gap: root.predelay * 72px;
+    private property <length> tap-spacing: (root.width - root.predelay-gap - 32px) / 10;
     private property <length> stereo-offset: root.width-value * 5px;
     private property <float> tail-retention: 0.72 + root.decay * 0.25;
 
@@ -24,7 +27,7 @@ component PlateTailDisplay inherits Rectangle {
     Text {
         x: 5px;
         y: 3px;
-        text: "PLATE TAIL";
+        text: "PLATE TAIL  /  PRE " + round(root.predelay * 200) + " ms";
         color: Theme.text-faint;
         font-size: 8px;
     }
@@ -58,7 +61,7 @@ component PlateTailDisplay inherits Rectangle {
     }
     for tap in 10 : Rectangle {
         private property <length> reflection-height: max(2px, 13px * pow(root.tail-retention, tap));
-        x: 18px + tap * root.tap-spacing;
+        x: 18px + root.predelay-gap + tap * root.tap-spacing;
         y: parent.height * 0.39 - root.stereo-offset - self.reflection-height / 2;
         width: 2px;
         height: self.reflection-height;
@@ -78,7 +81,7 @@ component PlateTailDisplay inherits Rectangle {
     }
     for tap in 10 : Rectangle {
         private property <length> reflection-height: max(2px, 13px * pow(root.tail-retention, tap));
-        x: 18px + tap * root.tap-spacing + 2px;
+        x: 18px + root.predelay-gap + tap * root.tap-spacing + 2px;
         y: parent.height * 0.67 + root.stereo-offset - self.reflection-height / 2;
         width: 2px;
         height: self.reflection-height;
@@ -97,21 +100,24 @@ component PlateTailDisplay inherits Rectangle {
 
 // One "Plate" reverb in a channel's device rack: a lightweight comb/allpass
 // feedback network, the cheap alternative to ReverbDeviceFace's generated-
-// room convolution. Four continuous knobs fit a 1U face like the other
-// simple effects; header, drag, and host actions come from the shared shell.
+// room convolution. Five continuous controls use a 2U face, preserving the
+// shared knob baseline rather than compressing them; header, drag, and host
+// actions come from the shared shell.
 export component PlateDeviceFace inherits EffectDeviceShell {
     name: "Plate";
-    kind: "FX / 1U";
+    kind: "FX / 2U";
     in-out property <float> size;     // normalized 0..1 (0.5x .. 1.5x tap length)
     in-out property <float> decay;    // normalized 0..1 (0.2 .. 10 s)
     in-out property <float> damping;  // normalized 0..1
     // Named width-value, not width: `width` is the element's own geometry
     // property (see ReverbDeviceFace's width-value for the same reason).
     in-out property <float> width-value; // normalized 0..1
+    in-out property <float> predelay;    // normalized 0..1 (0 .. 200 ms)
     callback size-changed(float);
     callback decay-changed(float);
     callback damping-changed(float);
     callback width-changed(float);
+    callback predelay-changed(float);
 
     // Normalized -> natural, matching PLATE_DESCRIPTORS in mooloop-core:
     // decay is exponential over [0.2, 10]; the rest are linear.
@@ -122,93 +128,107 @@ export component PlateDeviceFace inherits EffectDeviceShell {
         padding-top: DeviceRackMetrics.header-height + 6px;
         spacing: 4px;
         PlateTailDisplay {
-            height: 56px;
+            height: 112px;
             size: root.size;
             decay: root.decay;
             damping: root.damping;
             width-value: root.width-value;
+            predelay: root.predelay;
         }
-        VerticalLayout {
+        HorizontalLayout {
             spacing: 0px;
-            HorizontalLayout {
-                spacing: 0px;
-                ParameterKnob {
-                    width: 69px;
-                    diameter: 36px;
-                    label: "Size";
-                    tooltip: "Room size: shorter or longer taps between echoes";
-                    value <=> root.size;
-                    default-value: 0.5;
-                    value-text: round(root.size * 100) + "%";
-                    modulation-armed: root.modulation-armed;
-                    modulation-allowed: root.modulation-allowed[0];
-                    modulation-depth: root.modulation-depths[0];
-                    modulation-offset: root.modulation-offsets[0];
-                    modulation-route-count: root.modulation-route-counts[0];
-                    changed(v) => { root.size-changed(v); }
-                    modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
-                    modulation-edit-started => { root.modulation-edit-started(0); }
-                    modulation-edit-finished => { root.modulation-edit-finished(0); }
-                }
-                ParameterKnob {
-                    width: 69px;
-                    diameter: 36px;
-                    label: "Decay";
-                    tooltip: "How long the tail takes to fade";
-                    value <=> root.decay;
-                    default-value: 0.5886;
-                    value-text: root.decay-natural >= 10
-                        ? round(root.decay-natural) + " s"
-                        : round(root.decay-natural * 10) / 10 + " s";
-                    modulation-armed: root.modulation-armed;
-                    modulation-allowed: root.modulation-allowed[1];
-                    modulation-depth: root.modulation-depths[1];
-                    modulation-offset: root.modulation-offsets[1];
-                    modulation-route-count: root.modulation-route-counts[1];
-                    changed(v) => { root.decay-changed(v); }
-                    modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
-                    modulation-edit-started => { root.modulation-edit-started(1); }
-                    modulation-edit-finished => { root.modulation-edit-finished(1); }
-                }
+            alignment: start;
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Size";
+                tooltip: "Room size: shorter or longer taps between echoes";
+                value <=> root.size;
+                default-value: 0.5;
+                value-text: round(root.size * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[0];
+                modulation-depth: root.modulation-depths[0];
+                modulation-offset: root.modulation-offsets[0];
+                modulation-route-count: root.modulation-route-counts[0];
+                changed(v) => { root.size-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                modulation-edit-started => { root.modulation-edit-started(0); }
+                modulation-edit-finished => { root.modulation-edit-finished(0); }
             }
-            HorizontalLayout {
-                spacing: 0px;
-                ParameterKnob {
-                    width: 69px;
-                    diameter: 36px;
-                    label: "Damp";
-                    tooltip: "High-frequency loss per bounce: dark to open";
-                    value <=> root.damping;
-                    default-value: 0.4;
-                    value-text: round(root.damping * 100) + "%";
-                    modulation-armed: root.modulation-armed;
-                    modulation-allowed: root.modulation-allowed[2];
-                    modulation-depth: root.modulation-depths[2];
-                    modulation-offset: root.modulation-offsets[2];
-                    modulation-route-count: root.modulation-route-counts[2];
-                    changed(v) => { root.damping-changed(v); }
-                    modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
-                    modulation-edit-started => { root.modulation-edit-started(2); }
-                    modulation-edit-finished => { root.modulation-edit-finished(2); }
-                }
-                ParameterKnob {
-                    width: 69px;
-                    diameter: 36px;
-                    label: "Width";
-                    tooltip: "Stereo spread of the tail";
-                    value <=> root.width-value;
-                    default-value: 1.0;
-                    value-text: round(root.width-value * 100) + "%";
-                    modulation-armed: root.modulation-armed;
-                    modulation-allowed: root.modulation-allowed[3];
-                    modulation-depth: root.modulation-depths[3];
-                    modulation-offset: root.modulation-offsets[3];
-                    modulation-route-count: root.modulation-route-counts[3];
-                    changed(v) => { root.width-changed(v); }
-                    modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
-                    modulation-edit-started => { root.modulation-edit-started(3); }
-                    modulation-edit-finished => { root.modulation-edit-finished(3); }
-                }
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Decay";
+                tooltip: "How long the tail takes to fade";
+                value <=> root.decay;
+                default-value: 0.5886;
+                value-text: root.decay-natural >= 10
+                    ? round(root.decay-natural) + " s"
+                    : round(root.decay-natural * 10) / 10 + " s";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[1];
+                modulation-depth: root.modulation-depths[1];
+                modulation-offset: root.modulation-offsets[1];
+                modulation-route-count: root.modulation-route-counts[1];
+                changed(v) => { root.decay-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+                modulation-edit-started => { root.modulation-edit-started(1); }
+                modulation-edit-finished => { root.modulation-edit-finished(1); }
+            }
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Damp";
+                tooltip: "High-frequency loss per bounce: dark to open";
+                value <=> root.damping;
+                default-value: 0.4;
+                value-text: round(root.damping * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[2];
+                modulation-depth: root.modulation-depths[2];
+                modulation-offset: root.modulation-offsets[2];
+                modulation-route-count: root.modulation-route-counts[2];
+                changed(v) => { root.damping-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+                modulation-edit-started => { root.modulation-edit-started(2); }
+                modulation-edit-finished => { root.modulation-edit-finished(2); }
+            }
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Width";
+                tooltip: "Stereo spread of the tail";
+                value <=> root.width-value;
+                default-value: 1.0;
+                value-text: round(root.width-value * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[3];
+                modulation-depth: root.modulation-depths[3];
+                modulation-offset: root.modulation-offsets[3];
+                modulation-route-count: root.modulation-route-counts[3];
+                changed(v) => { root.width-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+                modulation-edit-started => { root.modulation-edit-started(3); }
+                modulation-edit-finished => { root.modulation-edit-finished(3); }
+            }
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Pre";
+                tooltip: "Delay before audio enters the plate network";
+                value <=> root.predelay;
+                default-value: 0.0;
+                value-text: round(root.predelay * 200) + " ms";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[4];
+                modulation-depth: root.modulation-depths[4];
+                modulation-offset: root.modulation-offsets[4];
+                modulation-route-count: root.modulation-route-counts[4];
+                changed(v) => { root.predelay-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
+                modulation-edit-started => { root.modulation-edit-started(4); }
+                modulation-edit-finished => { root.modulation-edit-finished(4); }
             }
         }
     }

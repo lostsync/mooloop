@@ -1424,8 +1424,11 @@ pub const PLATE_PARAM_SIZE: u32 = 0;
 pub const PLATE_PARAM_DECAY_S: u32 = 1;
 pub const PLATE_PARAM_DAMPING: u32 = 2;
 pub const PLATE_PARAM_WIDTH: u32 = 3;
+/// Delays entry into the plate network. Appended so existing automation and
+/// modulation routes retain their meanings.
+pub const PLATE_PARAM_PREDELAY_MS: u32 = 4;
 
-static PLATE_DESCRIPTORS: [ParamDescriptor; 4] = [
+static PLATE_DESCRIPTORS: [ParamDescriptor; 5] = [
     ParamDescriptor {
         id: PLATE_PARAM_SIZE,
         name: "Size",
@@ -1462,6 +1465,17 @@ static PLATE_DESCRIPTORS: [ParamDescriptor; 4] = [
         curve: ParamCurve::Linear,
         default: 1.0,
     },
+    // A zero default keeps old projects bit-identical. This must stay linear:
+    // the common exponential mapping requires a positive minimum.
+    ParamDescriptor {
+        id: PLATE_PARAM_PREDELAY_MS,
+        name: "Pre",
+        unit: "ms",
+        min: 0.0,
+        max: 200.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
 ];
 
 /// Parameters for the lightweight comb/allpass ("plate") reverb. A small,
@@ -1474,6 +1488,12 @@ pub struct PlateParams {
     pub decay_s: f32,
     pub damping: f32,
     pub width: f32,
+    #[serde(default = "default_plate_predelay_ms")]
+    pub predelay_ms: f32,
+}
+
+const fn default_plate_predelay_ms() -> f32 {
+    0.0
 }
 
 impl Default for PlateParams {
@@ -1483,6 +1503,7 @@ impl Default for PlateParams {
             decay_s: 2.0,
             damping: 0.4,
             width: 1.0,
+            predelay_ms: default_plate_predelay_ms(),
         }
     }
 }
@@ -2005,6 +2026,7 @@ impl EffectParams {
                 PLATE_PARAM_DECAY_S => Some(p.decay_s),
                 PLATE_PARAM_DAMPING => Some(p.damping),
                 PLATE_PARAM_WIDTH => Some(p.width),
+                PLATE_PARAM_PREDELAY_MS => Some(p.predelay_ms),
                 _ => None,
             },
             Self::Gate(p) => match id {
@@ -2137,6 +2159,7 @@ impl EffectParams {
                 PLATE_PARAM_DECAY_S => p.decay_s = value,
                 PLATE_PARAM_DAMPING => p.damping = value,
                 PLATE_PARAM_WIDTH => p.width = value,
+                PLATE_PARAM_PREDELAY_MS => p.predelay_ms = value,
                 _ => return None,
             },
             Self::Gate(p) => match id {
@@ -2485,6 +2508,25 @@ capture_y = 0.8
         assert_eq!(params.modulation, ReverbParams::default().modulation);
         assert_eq!(params.low_cut_hz, ReverbParams::default().low_cut_hz);
         assert_eq!(slot.wet_dry, 0.25);
+    }
+
+    #[test]
+    fn plate_manifest_without_predelay_keeps_the_old_sound() {
+        let legacy = r#"
+bypassed = false
+
+[params]
+type = "plate"
+
+[params.state]
+size = 0.5
+decay_s = 2.0
+damping = 0.4
+width = 1.0
+"#;
+        let slot: EffectSlotState = toml::from_str(legacy).unwrap();
+        let plate = slot.params.plate().expect("still a plate");
+        assert_eq!(plate.predelay_ms, 0.0);
     }
 
     /// The retired ids are retired: nothing in the current table may reuse

@@ -15,7 +15,8 @@
 //! `width`.
 
 use mooloop_core::{
-    PlateParams, PLATE_PARAM_DAMPING, PLATE_PARAM_DECAY_S, PLATE_PARAM_SIZE, PLATE_PARAM_WIDTH,
+    PlateParams, PLATE_PARAM_DAMPING, PLATE_PARAM_DECAY_S, PLATE_PARAM_PREDELAY_MS,
+    PLATE_PARAM_SIZE, PLATE_PARAM_WIDTH,
 };
 
 use crate::bus::StereoBus;
@@ -57,6 +58,11 @@ const DAMP_MAX_HZ: f32 = 18_000.0;
 /// rather than clearing the network or jumping to uncorrelated history.
 const WIDTH_SMOOTH_S: f32 = 0.02;
 const SIZE_GLIDE_S: f32 = 0.04;
+/// Pre-delay is a moving read head. It glides rather than crossfading two
+/// taps, so automation has the natural, brief pitch movement of a changing
+/// delay time without ever jumping to uncorrelated history.
+const PREDELAY_SMOOTH_S: f32 = 0.02;
+const PREDELAY_MAX_MS: f32 = 200.0;
 
 /// Input is mono-summed before the network (matches the convolution
 /// reverb's convention); this scales it back down before the 8-way parallel
@@ -217,6 +223,10 @@ impl SchroederAllpass {
 pub struct PlateEffect {
     params: PlateParams,
     sample_rate: u32,
+    /// Input history for pre-delay. It is allocated at the maximum supported
+    /// delay when the node is constructed, never in the audio callback.
+    predelay: Ring,
+    predelay_samples: Smoothed,
     combs_l: [Comb; NUM_COMBS],
     combs_r: [Comb; NUM_COMBS],
     allpass_l: [SchroederAllpass; NUM_ALLPASS],
@@ -228,6 +238,7 @@ pub struct PlateEffect {
 
 impl PlateEffect {
     pub fn new(params: PlateParams, sample_rate: u32) -> Self {
+        let sample_rate = sample_rate.max(1);
         let combs_l = std::array::from_fn(|i| Comb::new(COMB_TUNING_L[i], sample_rate));
         let combs_r =
             std::array::from_fn(|i| Comb::new(COMB_TUNING_L[i] + STEREO_SPREAD, sample_rate));
@@ -240,6 +251,12 @@ impl PlateEffect {
         let mut effect = Self {
             params,
             sample_rate,
+            predelay: Ring::with_capacity(predelay_capacity(sample_rate)),
+            predelay_samples: Smoothed::new(
+                predelay_samples(params.predelay_ms, sample_rate),
+                PREDELAY_SMOOTH_S,
+                sample_rate,
+            ),
             combs_l,
             combs_r,
             allpass_l,
@@ -300,13 +317,28 @@ impl PlateEffect {
                 self.wet1.set_target(0.5 + self.params.width * 0.5);
                 self.wet2.set_target(0.5 - self.params.width * 0.5);
             }
+            PLATE_PARAM_PREDELAY_MS => {
+                self.params.predelay_ms = value.clamp(0.0, PREDELAY_MAX_MS);
+                self.predelay_samples
+                    .set_target(predelay_samples(self.params.predelay_ms, self.sample_rate));
+            }
             _ => {}
         }
     }
 
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         for i in start..end {
-            let input = (bus.l[i] + bus.r[i]) * 0.5 * INPUT_GAIN;
+            let dry = (bus.l[i] + bus.r[i]) * 0.5 * INPUT_GAIN;
+            let delay = self.predelay_samples.advance();
+            // Read before writing so an N-sample pre-delay delays an impulse
+            // by exactly N frames. At 0 ms we deliberately bypass the ring:
+            // this retains the old Plate path bit-for-bit.
+            let input = if delay <= f32::EPSILON {
+                dry
+            } else {
+                self.predelay.read(delay)
+            };
+            self.predelay.write(dry);
 
             let mut wet_l = 0.0f32;
             for comb in self.combs_l.iter_mut() {
@@ -346,11 +378,15 @@ impl AudioNode for PlateEffect {
         // `DelayEffect` uses — the engine constructs nodes at the client's
         // rate, so this never actually runs.
         if ctx.sample_rate != self.sample_rate {
-            self.sample_rate = ctx.sample_rate;
+            self.sample_rate = ctx.sample_rate.max(1);
             self.rebuild_feedback();
             self.rebuild_damping();
             self.wet1.set_time(WIDTH_SMOOTH_S, ctx.sample_rate);
             self.wet2.set_time(WIDTH_SMOOTH_S, ctx.sample_rate);
+            self.predelay_samples
+                .set_time(PREDELAY_SMOOTH_S, self.sample_rate);
+            self.predelay_samples
+                .set_target(predelay_samples(self.params.predelay_ms, self.sample_rate));
             self.size_glide = glide_coeff(SIZE_GLIDE_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
@@ -370,6 +406,14 @@ impl AudioNode for PlateEffect {
 fn glide_coeff(time_s: f32, sample_rate: u32) -> f32 {
     let samples = (time_s.max(1.0e-5) * sample_rate.max(1) as f32).max(1.0);
     1.0 - (-1.0 / samples).exp()
+}
+
+fn predelay_samples(predelay_ms: f32, sample_rate: u32) -> f32 {
+    predelay_ms.clamp(0.0, PREDELAY_MAX_MS) * 0.001 * sample_rate.max(1) as f32
+}
+
+fn predelay_capacity(sample_rate: u32) -> usize {
+    (PREDELAY_MAX_MS * 0.001 * sample_rate.max(1) as f32).ceil() as usize + 4
 }
 
 #[cfg(test)]
@@ -443,6 +487,46 @@ mod tests {
         assert!(
             long_energy > short_energy,
             "decay_s=5.0 ({long_energy}) should retain more energy than decay_s=0.5 ({short_energy}) at the same late offset"
+        );
+    }
+
+    #[test]
+    fn predelay_moves_the_wet_onset_by_the_requested_frames() {
+        const PREDELAY_MS: f32 = 50.0;
+        const FRAMES: usize = 16_000;
+        let reference = impulse_response(PlateParams::default(), FRAMES);
+        let delayed = impulse_response(
+            PlateParams {
+                predelay_ms: PREDELAY_MS,
+                ..PlateParams::default()
+            },
+            FRAMES,
+        );
+        let frames = predelay_samples(PREDELAY_MS, 48_000) as usize;
+
+        assert!(
+            delayed.l[..frames].iter().all(|sample| *sample == 0.0)
+                && delayed.r[..frames].iter().all(|sample| *sample == 0.0),
+            "the wet path must remain silent before pre-delay elapses"
+        );
+        for i in 0..FRAMES - frames {
+            assert_eq!(delayed.l[i + frames], reference.l[i]);
+            assert_eq!(delayed.r[i + frames], reference.r[i]);
+        }
+    }
+
+    #[test]
+    fn zero_predelay_bypasses_the_input_history() {
+        let mut effect = PlateEffect::new(PlateParams::default(), 48_000);
+        effect.predelay.buffer.fill(1.0);
+        let mut bus = StereoBus::with_capacity(512);
+        effect.process(&context(512), &mut bus, &EventList::empty(), None);
+        assert!(
+            bus.l[..512]
+                .iter()
+                .chain(&bus.r[..512])
+                .all(|sample| *sample == 0.0),
+            "0 ms must take the legacy direct-input path, not read the ring"
         );
     }
 
@@ -546,6 +630,62 @@ mod tests {
         assert!(
             worst_step < peak * 0.1,
             "a size sweep stepped the output by {worst_step}, {:.1}% of the peak",
+            100.0 * worst_step / peak,
+        );
+    }
+
+    #[test]
+    fn sweeping_predelay_does_not_click_or_silence_the_tail() {
+        const BLOCK: usize = 256;
+        const TONE_HZ: f32 = 80.0;
+        let mut effect = PlateEffect::new(PlateParams::default(), 48_000);
+        let mut phase = 0.0f32;
+        let mut fill_tone = |bus: &mut StereoBus| {
+            for i in 0..BLOCK {
+                phase += TONE_HZ / 48_000.0;
+                if phase >= 1.0 {
+                    phase -= 1.0;
+                }
+                let value = (phase * core::f32::consts::TAU).sin();
+                bus.l[i] = value;
+                bus.r[i] = value;
+            }
+        };
+
+        for _ in 0..64 {
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            fill_tone(&mut bus);
+            effect.process(&context(BLOCK), &mut bus, &EventList::empty(), None);
+        }
+
+        let mut worst_step = 0.0f32;
+        let mut peak = 0.0f32;
+        let mut previous: Option<f32> = None;
+        for step in 0..64 {
+            let mut events = EventList::empty();
+            events.push(crate::event::TimedEvent {
+                offset: 0,
+                event: Event::ParamValue {
+                    id: PLATE_PARAM_PREDELAY_MS,
+                    value: if step % 2 == 0 { 200.0 } else { 0.0 },
+                },
+            });
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            fill_tone(&mut bus);
+            effect.process(&context(BLOCK), &mut bus, &events, None);
+            for sample in &bus.l[..BLOCK] {
+                if let Some(previous) = previous {
+                    worst_step = worst_step.max((sample - previous).abs());
+                }
+                peak = peak.max(sample.abs());
+                previous = Some(*sample);
+            }
+        }
+
+        assert!(peak > 1e-4, "the tone should have excited the network");
+        assert!(
+            worst_step < peak * 0.1,
+            "a pre-delay sweep stepped the output by {worst_step}, {:.1}% of the peak",
             100.0 * worst_step / peak,
         );
     }

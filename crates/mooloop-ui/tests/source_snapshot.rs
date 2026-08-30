@@ -587,7 +587,7 @@ fn render_effect_header_comparison() {
     .expect("initialize headless renderer");
 
     let ui = MainWindow::new().unwrap();
-    ui.window().set_size(LogicalSize::new(3200.0, 760.0));
+    ui.window().set_size(LogicalSize::new(3800.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Kick"));
@@ -597,19 +597,22 @@ fn render_effect_header_comparison() {
 
     let mut reverb = effect_slot(8, 3);
     reverb.p1 = 1.0;
+    let mut plate = effect_slot(10, 2);
+    plate.p4 = 0.25;
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
         effect_slot(0, 1),
         effect_slot(1, 1),
         effect_slot(2, 1),
         effect_slot(5, 2),
         reverb,
+        plate,
         // The buffer's own knobs, so its face is covered now that it has a
         // parameter surface and is not only a debug trigger panel.
         effect_slot(11, 1),
     ]))));
 
     let snapshot = ui.window().take_snapshot().unwrap();
-    assert_eq!((snapshot.width(), snapshot.height()), (3200, 760));
+    assert_eq!((snapshot.width(), snapshot.height()), (3800, 760));
     assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&snapshot, "MOOLOOP_EFFECT_HEADERS_SNAPSHOT");
 }

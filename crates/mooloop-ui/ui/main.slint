@@ -3280,10 +3280,12 @@ export component MainWindow inherits Window {
                                                         decay: slot.p1;
                                                         damping: slot.p2;
                                                         width-value: slot.p3;
+                                                        predelay: slot.p4;
                                                         size-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                         decay-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         damping-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                         width-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                        predelay-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 11 : BufferDeviceFace {

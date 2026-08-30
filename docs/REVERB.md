@@ -82,8 +82,8 @@ is the control that actually behaves like a low cut.
 `Size` glides rather than jumping. Moving a read head straight to a new offset
 lands it on uncorrelated history, which is a click; the lengths are one-poled
 toward their target over 50 ms so the control survives being swept or
-modulated. The plate takes the opposite trade and clears its buffers, because
-its size is not a modulation destination.
+modulated. Plate uses the same history-preserving approach for Size, over
+40 ms, instead of clearing delay buffers.
 
 ## Level
 

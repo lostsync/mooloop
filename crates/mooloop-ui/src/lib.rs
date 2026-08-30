@@ -1672,10 +1672,9 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
         EffectKind::Filter
         | EffectKind::Drive
         | EffectKind::Bitcrush
-        | EffectKind::Limiter
-        | EffectKind::Plate => 1,
+        | EffectKind::Limiter => 1,
         EffectKind::Buffer => 1,
-        EffectKind::Gate | EffectKind::Compressor => 2,
+        EffectKind::Gate | EffectKind::Compressor | EffectKind::Plate => 2,
         EffectKind::Delay => 3,
         EffectKind::Reverb => 3,
         EffectKind::Modulation => 2,
