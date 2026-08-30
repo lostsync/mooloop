@@ -1,142 +1,130 @@
 # Focus
 
-Status: working sequence, August 2026.
+Status: active working sequence.
 
-`ROADMAP.md` orders the whole product by dependency. This document is
-narrower and shorter-lived: it names what we work on *next*, in order, and
-what we are deliberately not working on yet. When the sequence below is
-finished, this document is rewritten or deleted — it is not a second
-roadmap.
+`ROADMAP.md` orders the whole product by dependency. This document is narrower:
+it names the active sequence and the work that should not interrupt it. Rewrite
+it when that sequence is exhausted; do not let it become a second roadmap.
 
-Read `PRODUCT.md` for why any of this exists and `CURRENT.md` for what
-actually ships today.
+Read `PRODUCT.md` for the product argument and `CURRENT.md` for the implemented
+surface. Source and tests settle any disagreement with either document.
+
+## The line has moved
+
+The previous focus did its job. The command layer and its editing surfaces,
+audio preferences, the effect suite, the gain contract, retained-audio Buffer,
+clip automation, and audible channel modulation all exist. The sample browser
+also loads and previews the formats users are likely to bring to it.
+
+Those are foundations to use, not projects to restart. Work should now turn
+them into a more distinctive instrument.
 
 ## The rule
 
-**Nothing is done until you can hear it, or use it.**
+**Prefer changes that produce a musical decision over changes that merely add
+capacity.**
 
-The recurring failure in this repo is not over-architecture. The
-architecture bets have paid: `delayline` served the delay and waits for the
-buffer device, `dynamics` gave three effects for the price of one,
-`EffectChain` covered channels and buses, `KnobFace` kept two knob sizes
-from drifting. The failure is vertical slices stopped one step short of the
-payoff — modulation groundwork with nothing driving it, gain-reduction and
-correlation meters with no audio behind them, solo as a button style,
-per-channel meters drawn but unfed, a ring primitive with no device on top.
-
-The filter is the counter-example and the model: core types, DSP node,
-engine path, UI face, in one pass, audible at the end.
+The engine already has more breadth than the instrument has identity. A new
+source type, graph abstraction, effect, or routing primitive is not progress by
+itself. Each step below must end in something that can be played, heard, saved,
+reopened, and rendered through the ordinary UI.
 
 ## The sequence
 
-### 1. Command layer and undo
+### 1. Make Mono a monosynth
 
-Everything in `ROADMAP.md` Phase 3's remaining work that is really one
-thing: undo/redo, cut/copy/paste, keyboard shortcuts, right-click context
-menus, and the seven `enabled: false` rows sitting in `main.slint` waiting
-for it.
+Execute `docs/plans/mono-synth-v2/` in order. Start with the shared filter
+envelope and keytracking foundation, then give Mono the note behavior and
+filter path that distinguish it from a one-voice Poly: a held-note stack,
+priority and legato behavior, pre-filter drive, ladder and acid filter models,
+and velocity accent.
 
-Do this first because every editing feature built before it has to be
-retrofitted afterward. The existing `ChannelClipboard` in
-`mooloop-ui/src/lib.rs` is the shape of the problem: it works, and it
-generalizes to nothing.
+Do not split shared descriptor or serialization work into a second Poly
+implementation. Do not add a device-local modulation system; the channel rack
+already owns modulation.
 
-Shortcuts and context menus are command *surfaces*. They dispatch the same
-commands the menu bar does. A shortcut that reaches into a widget's internal
-state is a bug, not a shortcut. **This now has a real implementation**: see
-`ACTIONS.md` for the action registry every keyboard shortcut resolves
-through, and its Preferences > Shortcuts page for (re)assignment. Pattern
-add/clone/remove route through the same undo-recorded whole-project-edit
-pipeline channel cut/copy/paste/clone/delete already used, so two of the
-seven `enabled: false` rows (Clone Pattern, Delete Pattern) are live; Clear
-Pattern and Select All remain disabled, and right-click context menus for
-patterns are still open.
+Done when: Mono plays bass and lead lines with intentional note priority and
+legato, its filter models are audibly different rather than renamed variants,
+old projects still load conservatively, automation addresses remain stable,
+and a small factory patch set proves the range from the normal UI.
 
-Done when: undo works across rack steps, notes, playlist placements,
-channels, and patterns; every menu row is either enabled or deleted; the
-channel clipboard is one case of a general mechanism.
+### 2. Make Poly a different instrument
 
-### 2. Preferences, audio device selection, metronome
+Execute `docs/plans/poly-synth-v2/` after the shared Mono foundation lands.
+Poly's identity is a deterministic voice pool: per-voice drift, a clean
+multimode filter, group-aware unison, stereo spread, and an internal
+chorus/ensemble stage after the voice sum.
 
-Days, not a phase. Take it as the palate cleanser between the two large
-pieces.
+Do not import Mono's acid semantics, held-note rules, or character filters.
+Do not reduce the three-oscillator architecture to imitate a named hardware
+synth. Mono and Poly should invite different musical gestures even when they
+start from the same waveform.
 
-The metronome matters more than it sounds like it does: `CURRENT.md`
-records that the toolbar deliberately has no click-track toggle because
-nothing in the DSP graph produces one. For an instrument aimed at rhythm,
-that is a bigger gap than the prefs dialog.
+Done when: repeated offline renders are deterministic, `drift = 0` preserves
+the old sound, voice and unison changes do not strand or click active notes,
+chords have movement and width without requiring insert effects, old projects
+load safely, and factory patches demonstrate Poly's own character.
 
-/* NOTE (from the human, with ears): this app has no ability to record. it will, probably, but it doesn't. you dont need a click yet. if you really really did you could just do one on a pattern. yall have been hilarious about this metronome. */
+### 3. Turn Buffer into a composition workflow
 
-### 3. Modulation and automation, to audible
+The retained-audio engine, insert position, collision policy, gestures,
+automation addresses, and UI face already exist. The remaining product test is
+not more Buffer DSP; it is whether a musician can deliberately route a source
+into Buffer, sequence a transformation, understand the active head, and keep
+the result as part of a project without relying on debug controls or a hidden
+MIDI mapping.
 
-`MODULATION_PLAN.md` is approved and says to implement it rather than
-re-litigate it. Take it at its word.
+Use the shared automation and modulation language. Add only the control
+vocabulary and feedback that a concrete source-to-buffer workflow proves it
+needs. Preserve Buffer as an ordinary insert whose capture point follows its
+place in the rack.
 
-Order within the step: one modulator driving one destination end to end —
-LFO to filter cutoff, knob to ear — before broadening the source taxonomy or
-building expert views. `ParamAddr` and the channel-local rack already exist;
-finish their audible path and the source-selection interaction rather than
-inventing a second address system.
+Done when: a project can generate or load sound, capture it continuously at a
+chosen insert point, sequence an audible jump/reverse/repeat transformation,
+show what the read head is doing, survive save and reload, and render the same
+result offline. If that workflow is not materially better than bouncing a
+sample and loading it again, record why before expanding the device.
 
-Done when: a modulator visibly and audibly moves a parameter, the knob and
-the modulator do not fight over the value, the channel shelf makes a source
-available to more than one device, and the result survives save and reload.
+## Fixes that may interrupt the sequence
 
-### 4. The buffer device
-
-The retained-audio device in `BUFFER_ENGINE.md`, built on the existing
-`delayline` primitive.
-
-**It is fourth on purpose.** Built now, with only a trigger input to drive
-it, it is Supatrigga or dblue Glitch — plugins that are over twenty years
-old and did that job well. The differentiator is not the buffer. It is the
-buffer *addressed by the automation language*: read heads moved with the
-same precision as notes, from a device placed anywhere in the insert chain.
-Those plugins are a fixed slot at the end of the chain with random-or-MIDI
-triggering and no parameter language underneath.
-
-So the buffer device is not delayed by step 3. It is *made worth building*
-by step 3, and it becomes the flagship demonstration of it rather than a
-separate feature.
-
-Before it ships, `CURRENT.md`'s architecture risks 3 and 4 come due: budget
-channel buffer memory and specify read/write collision behavior, and add
-deferred reclamation so a large buffer is never freed on the audio thread.
+Take a fix immediately when it blocks hearing, playing, saving, loading, or
+rendering the active step; threatens realtime safety or project compatibility;
+or is a small regression in the surface being touched. Record larger adjacent
+work instead of folding it into the current branch.
 
 ## Deliberately not now
 
-**Plugin delay compensation.** It gates limiter lookahead, parallel sends,
-and sidechain — none of which are in the sequence above. `compile_bus_graph`
-already exists, which is what makes PDC cheap whenever we want it. Do it as
-the opening move of the sends/sidechain pass. Doing it now is architecture
-ahead of a consumer, which is the habit this document exists to break.
+**More effect kinds or a broad effect-polish pass.** The rack already has ten
+effects and a common host. A synth or Buffer step may fix a concrete defect it
+exposes, but the suite does not need more breadth.
 
-**Generative: 1/f, pattern mutation.** Yes, and the cost is almost entirely
-a question of ordering. A 1/f source is a sibling of `SampleAndHold` in the
-modulator rack — nearly free after step 3. Pattern mutation needs a
-selection model and undo to be usable at all — nearly free after step 1, and
-miserable before it. That both fall out cheaply from the sequence is
-evidence the sequence is right; neither justifies reordering it.
+**More modulation taxonomy for its own sake.** LFO and envelope sources,
+direct assignment, visible movement, persistence, and parameter-wide
+destinations are enough for the active sequence. Device outlets, additional
+generators, multiple visible automation lanes, and an expert matrix should be
+pulled in only by a demonstrated workflow.
 
-**A modulation matrix or zoomed-out graph editor.** The routes need the data
-to support that view now, but the view itself is not the next payoff. The
-ordinary channel shelf, source selection, direct manipulation, and
-destination-first inspection come first. Do not turn the modulation vertical
-slice into a six-month graph-editor project.
+**Parallel sends, sidechains, and plugin delay compensation.** Compensation is
+required before parallel paths are trustworthy, but none of the active steps
+needs a new graph shape. Build them together when sends or sidechain become the
+actual product task.
 
-**Everything else in `ROADMAP.md`.** Still true, still ordered, still not
-now.
+**Broad arrangement and recovery work.** Playlist clip manipulation, explicit
+loop ranges, autosave, crash recovery, and richer missing-sample relinking
+remain important. They do not interrupt the source and Buffer sequence unless
+one becomes necessary to preserve its work.
+
+**Metronome, plugin hosting, MIDI configuration, and the graph editor.** None
+is required to prove the active instrument workflows.
 
 ## Working discipline
 
-One step at a time, to its "done when" line, before taking the next
-interesting detour. The steps are large; the branches inside them should not
-be. `AGENTS.md` governs how work is split across branches and worktrees.
+Keep one audible acceptance case per branch and run it through realtime,
+persistence, and offline rendering where the change crosses those boundaries.
+The plan files define the order inside Mono and Poly; update their status as
+steps land rather than duplicating implementation notes here.
 
-Record deferrals with their reasons, the way `MODULATION_PLAN.md` and
-`EFFECTS_PLAN.md` already do, so a later pass doesn't mistake an absence for
-an oversight.
-
-Keep writing the journal. It is the instrument that shows when we have
-drifted off this page.
+Keep branches small enough to listen to and revert independently. Preserve
+stable parameter IDs, conservative project defaults, deterministic rendering,
+and the realtime rules in `AUDIO_ARCHITECTURE.md`. `AGENTS.md` governs
+worktrees, commits, and verification.

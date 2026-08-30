@@ -190,6 +190,8 @@ work session you can recall being part of, and don't stress over precision.
   gate input, unipolar route defaults, realtime note-gate handling, and its
   compact shelf editor. Made the compact and expanded modulator faces follow
   the configured ADSR and LFO signal shapes instead of generic source icons.
+  Refocused the active work on distinct Mono and Poly identities followed by
+  the Buffer's ordinary composition workflow.
 
 ### GPT-5.6 Terra — Zed
 - First seen: 2026-08-23
