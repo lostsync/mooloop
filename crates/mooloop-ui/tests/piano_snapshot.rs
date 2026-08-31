@@ -3,7 +3,8 @@
 //! default pitch zoom can be verified without a compositor.
 
 use mooloop_ui::{
-    note_hit_test, AutomationPointCell, AutomationTargetRow, MainWindow, NoteCell,
+    default_piano_gestures, note_hit_test, AutomationPointCell, AutomationTargetRow,
+    MainWindow, NoteCell,
 };
 use slint::{ComponentHandle, LogicalSize, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
@@ -19,6 +20,9 @@ fn render_piano_snapshot() {
     )))
     .ok();
     let ui = MainWindow::new().unwrap();
+    // `run` resolves these from the user's settings; without them every
+    // gesture role is unbound and no modifier does anything.
+    ui.set_piano_gestures(default_piano_gestures());
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_editor_page(1);
     ui.set_pattern_length(16);
@@ -64,6 +68,9 @@ fn render_piano_lanes_snapshot() {
     )))
     .ok();
     let ui = MainWindow::new().unwrap();
+    // `run` resolves these from the user's settings; without them every
+    // gesture role is unbound and no modifier does anything.
+    ui.set_piano_gestures(default_piano_gestures());
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_editor_page(1);
     ui.set_pattern_length(16);

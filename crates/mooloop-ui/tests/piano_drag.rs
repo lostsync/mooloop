@@ -12,7 +12,7 @@
 //! only appears after the SECOND move event. Invoking the callbacks directly,
 //! or dispatching a single move, passes even against the broken version.
 
-use mooloop_ui::{note_hit_test, MainWindow, NoteCell};
+use mooloop_ui::{default_piano_gestures, note_hit_test, MainWindow, NoteCell};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -48,6 +48,9 @@ fn harness(notes: Vec<NoteCell>) -> MainWindow {
     )))
     .ok();
     let ui = MainWindow::new().unwrap();
+    // `run` resolves these from the user's settings; without them every
+    // gesture role is unbound and no modifier does anything.
+    ui.set_piano_gestures(default_piano_gestures());
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_editor_page(1);
     ui.set_pattern_length(16);
@@ -346,13 +349,13 @@ fn double_clicking_empty_grid_creates_and_drags_note_length() {
 }
 
 #[test]
-fn plain_click_reports_no_modifiers_but_shift_click_does() {
+fn plain_click_replaces_the_selection_but_shift_click_adds_to_it() {
     let ui = harness(two_notes());
-    let selections: Rc<RefCell<Vec<(i32, bool, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+    let selections: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
     {
         let selections = selections.clone();
-        ui.on_piano_note_selected(move |id, shift, ctrl| {
-            selections.borrow_mut().push((id, shift, ctrl));
+        ui.on_piano_note_selected(move |id, mode| {
+            selections.borrow_mut().push((id, mode));
         });
     }
 
@@ -366,9 +369,9 @@ fn plain_click_reports_no_modifiers_but_shift_click_does() {
     let selections = selections.borrow();
     assert_eq!(
         selections.as_slice(),
-        &[(7, false, false), (8, true, false)],
-        "a plain click should report no modifiers; a Shift-click should report shift=true \
-         so Rust can add to the selection instead of replacing it"
+        &[(7, 0), (8, 1)],
+        "a plain click should ask to replace the selection (0); a Shift-click should ask \
+         to add to it (1), Shift being the default add-to-selection gesture"
     );
 }
 

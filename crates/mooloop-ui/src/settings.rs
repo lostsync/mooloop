@@ -381,6 +381,16 @@ impl AppearanceSettings {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
+pub(crate) struct GestureSettings {
+    /// Gesture id -> `GestureMod::to_string()` text. Sparse for the same
+    /// reason `ShortcutSettings` is: `gestures::GESTURES` can grow without a
+    /// settings migration.
+    #[serde(default)]
+    pub overrides: std::collections::HashMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) struct ShortcutSettings {
     /// Action id -> `KeyChord::display()` text. Only entries that differ
     /// from the registry default are stored, so `actions::ACTIONS` can grow
@@ -411,6 +421,8 @@ pub(crate) struct UiSettings {
     #[serde(default)]
     pub shortcuts: ShortcutSettings,
     #[serde(default)]
+    pub gestures: GestureSettings,
+    #[serde(default)]
     pub browser: BrowserSettings,
 }
 
@@ -422,6 +434,7 @@ impl Default for UiSettings {
             appearance: AppearanceSettings::default(),
             audio: AudioSettings::default(),
             shortcuts: ShortcutSettings::default(),
+            gestures: GestureSettings::default(),
             browser: BrowserSettings::default(),
         }
     }
@@ -919,6 +932,11 @@ mod tests {
                     .into_iter()
                     .collect(),
             },
+            gestures: GestureSettings {
+                overrides: [("gesture.copy-drag".to_owned(), "Alt".to_owned())]
+                    .into_iter()
+                    .collect(),
+            },
             browser: BrowserSettings {
                 locations: vec![PathBuf::from("/sounds/one-shots")],
             },
@@ -937,6 +955,22 @@ mod tests {
         )
         .unwrap();
         assert!(UiSettings::load_from(&path).unwrap().browser.locations.is_empty());
+    }
+
+    #[test]
+    fn defaults_missing_gesture_settings_for_existing_configs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n",
+        )
+        .unwrap();
+        assert!(UiSettings::load_from(&path)
+            .unwrap()
+            .gestures
+            .overrides
+            .is_empty());
     }
 
     #[test]

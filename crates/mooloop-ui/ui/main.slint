@@ -13,13 +13,13 @@ import {
 } from "toolbar.slint";
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
-import { PreferencesDialog, AppearanceSchemeRow, OutputTargetRow, ShortcutRow } from "appearance-dialog.slint";
+import { PreferencesDialog, AppearanceSchemeRow, OutputTargetRow, ShortcutRow, GestureRow } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
 import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
-import { PianoGrid, NoteCell, NoteHit } from "piano-grid.slint";
+import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures } from "piano-grid.slint";
 import {
     DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics
 } from "device-rack.slint";
@@ -300,6 +300,8 @@ export component MainWindow inherits Window {
     in property <bool> preferences-audio-auto-reconnect;
     in property <string> preferences-audio-error;
     in property <[ShortcutRow]> preferences-shortcut-rows;
+    in property <[GestureRow]> preferences-gesture-rows;
+    in property <[string]> preferences-gesture-choices;
     in-out property <string> preferences-shortcut-capturing-id;
     callback preferences-opened();
     callback preferences-appearance-preview(string, string, string, float, float);
@@ -315,6 +317,7 @@ export component MainWindow inherits Window {
     callback preferences-shortcut-rebind-key(string, string, bool, bool, bool, bool);
     callback preferences-shortcut-reset(string);
     callback preferences-shortcut-reset-all();
+    callback preferences-gesture-rebound(string, int);
     callback preferences-open-mockup-tool();
 
     // ---- document lifecycle ----
@@ -676,10 +679,12 @@ export component MainWindow inherits Window {
     // gesture lets the history collapse those frames into the one undo step
     // the user thinks they performed; without it a single note drag costs
     // twenty undos.
+    // Resolved from `gestures.rs` plus the user's Preferences overrides.
+    in property <PianoGestures> piano-gestures;
     callback piano-gesture-begin();
     callback piano-gesture-end();
     callback piano-note-created(int, int, int) -> int;  // start tick, MIDI note, duration ticks -> stable note ID
-    callback piano-note-selected(int, bool, bool); // stable note ID, shift held, ctrl held
+    callback piano-note-selected(int, int); // stable note ID, 0 replace / 1 add / 2 remove
     // ID, start tick, MIDI note. The ID names the note under the pointer; the
     // whole selection moves with it, by the delta this note implies.
     callback piano-note-moved(int, int, int);
@@ -3344,6 +3349,7 @@ export component MainWindow inherits Window {
                                             PianoGrid {
                                                 pattern-length: root.pattern-length;
                                                 notes: root.notes;
+                                                gestures: root.piano-gestures;
                                                 low-note: root.piano-low-note;
                                                 high-note: root.piano-high-note;
                                                 note-count: root.piano-note-count;
@@ -3363,7 +3369,7 @@ export component MainWindow inherits Window {
                                                 note-created(start, note, duration) => {
                                                     return root.piano-note-created(start, note, duration);
                                                 }
-                                                note-selected(id, shift, ctrl) => { root.piano-note-selected(id, shift, ctrl); }
+                                                note-selected(id, mode) => { root.piano-note-selected(id, mode); }
                                                 note-moved(id, start, note) => { root.piano-note-moved(id, start, note); }
                                                 selection-duplicated(id) => { return root.piano-selection-duplicated(id); }
                                                 note-resized(id, duration) => { root.piano-note-resized(id, duration); }
@@ -4134,6 +4140,8 @@ export component MainWindow inherits Window {
         audio-auto-reconnect: root.preferences-audio-auto-reconnect;
         audio-error: root.preferences-audio-error;
         shortcut-rows: root.preferences-shortcut-rows;
+        gesture-rows: root.preferences-gesture-rows;
+        gesture-choices: root.preferences-gesture-choices;
         shortcut-capturing-id <=> root.preferences-shortcut-capturing-id;
         appearance-preview(base, accent, alert, contrast, roundness) => {
             root.preferences-appearance-preview(base, accent, alert, contrast, roundness);
@@ -4152,6 +4160,7 @@ export component MainWindow inherits Window {
         shortcut-rebind-key(id, key, ctrl, shift, alt, meta) => { root.preferences-shortcut-rebind-key(id, key, ctrl, shift, alt, meta); }
         shortcut-reset(id) => { root.preferences-shortcut-reset(id); }
         shortcut-reset-all => { root.preferences-shortcut-reset-all(); }
+        gesture-rebound(id, index) => { root.preferences-gesture-rebound(id, index); }
         open-mockup-tool => { root.preferences-open-mockup-tool(); }
         log-to-file-toggled(v) => { root.preferences-log-to-file-toggled(v); }
     }

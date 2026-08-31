@@ -8,6 +8,7 @@
 
 mod actions;
 mod audio_file;
+mod gestures;
 mod history;
 mod meter;
 mod settings;
@@ -320,6 +321,63 @@ fn shortcut_rows(table: &actions::ShortcutTable) -> Vec<ShortcutRow> {
             }
         })
         .collect()
+}
+
+/// Builds the Preferences > Shortcuts page's gesture rows from the gesture
+/// registry (`gestures.rs`), and pushes the resolved table onto the piano
+/// roll so its pointer handler stops hardcoding modifiers.
+///
+/// The gestures sit on the Shortcuts page but not in its recorder: that
+/// captures a whole chord ending in a key, and these roles are modifiers
+/// with no key at all.
+/// The resolved modifier for every piano-roll drag role, in the shape the
+/// grid tests against.
+fn resolve_gestures(table: &gestures::GestureTable) -> PianoGestures {
+    let resolve = |id: &str| {
+        let modifier = table.modifier(id);
+        GestureMod {
+            ctrl: modifier.ctrl,
+            shift: modifier.shift,
+            alt: modifier.alt,
+            meta: modifier.meta,
+        }
+    };
+    PianoGestures {
+        snap_override: resolve("gesture.snap-override"),
+        add_to_selection: resolve("gesture.add-to-selection"),
+        subtract_from_selection: resolve("gesture.subtract-from-selection"),
+        copy_drag: resolve("gesture.copy-drag"),
+    }
+}
+
+/// The gesture table as it stands with no user overrides.
+///
+/// `run` resolves this from the user's settings and pushes it onto the
+/// window. A harness that builds a bare `MainWindow` has to do the same, or
+/// `piano-gestures` stays all-false and every gesture role is dead -- which
+/// is correct for an unconfigured window and useless for a test.
+pub fn default_piano_gestures() -> PianoGestures {
+    resolve_gestures(&gestures::GestureTable::build(
+        &std::collections::HashMap::new(),
+    ))
+}
+
+fn sync_gesture_rows(window: &MainWindow, table: &gestures::GestureTable) {
+    let rows: Vec<GestureRow> = gestures::GESTURES
+        .iter()
+        .map(|spec| {
+            let modifier = table.modifier(spec.id);
+            GestureRow {
+                id: spec.id.into(),
+                label: spec.label.into(),
+                description: spec.description.into(),
+                choice_index: gestures::choice_index(modifier),
+                is_default: modifier == spec.default,
+            }
+        })
+        .collect();
+    window.set_preferences_gesture_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+    window.set_piano_gestures(resolve_gestures(table));
 }
 
 fn sync_shortcut_rows(window: &MainWindow, table: &actions::ShortcutTable) {
@@ -2595,6 +2653,16 @@ impl UiState {
 
     /// Drops ids that no longer exist from the selection, e.g. after a batch
     /// removal elsewhere in the rack or piano roll.
+    /// Drops one note from the selection, leaving the rest alone. The
+    /// subtract-from-selection role needs this to be idempotent: dragging a
+    /// remove-marquee back and forth over a note must not re-add it, which a
+    /// toggle would.
+    fn remove_note_from_selection(&mut self, id: NoteId) {
+        self.selected_note_ids.remove(&id);
+        self.selected_note_id = (self.selected_note_ids.len() == 1)
+            .then(|| *self.selected_note_ids.iter().next().unwrap());
+    }
+
     fn prune_note_selection(&mut self, removed: &[NoteId]) {
         self.selected_note_ids.retain(|id| !removed.contains(id));
         if self
@@ -4489,6 +4557,44 @@ impl AppUi {
             });
         }
         sync_shortcut_rows(&window, &shortcut_table.borrow());
+        let gesture_table = Rc::new(RefCell::new(gestures::GestureTable::build(
+            &ui_settings.borrow().gestures.overrides,
+        )));
+        window.set_preferences_gesture_choices(ModelRc::from(Rc::new(VecModel::from(
+            gestures::choice_labels()
+                .into_iter()
+                .map(slint::SharedString::from)
+                .collect::<Vec<_>>(),
+        ))));
+        sync_gesture_rows(&window, &gesture_table.borrow());
+        {
+            let settings = ui_settings.clone();
+            let table = gesture_table.clone();
+            let weak = window.as_weak();
+            window.on_preferences_gesture_rebound(move |gesture_id, index| {
+                let Some(window) = weak.upgrade() else { return };
+                let Some(modifier) = gestures::CHOICES.get(index.max(0) as usize) else {
+                    return;
+                };
+                // Unlike a key chord, two roles sharing a modifier is not a
+                // collision to resolve: the roles apply at different moments
+                // of a drag, and Ctrl meaning both "keep the selection" and
+                // "duplicate it" is the default arrangement.
+                let mut settings = settings.borrow_mut();
+                settings
+                    .gestures
+                    .overrides
+                    .insert(gesture_id.to_string(), modifier.to_string());
+                let result = settings.save();
+                *table.borrow_mut() = gestures::GestureTable::build(&settings.gestures.overrides);
+                drop(settings);
+                sync_gesture_rows(&window, &table.borrow());
+                window.set_status_message(match result {
+                    Ok(()) => "Gesture updated".into(),
+                    Err(error) => format!("Could not save gesture: {error}").into(),
+                });
+            });
+        }
         {
             let settings = ui_settings.clone();
             let table = shortcut_table.clone();
@@ -5509,7 +5615,7 @@ impl AppUi {
         {
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_piano_note_selected(move |id, shift, ctrl| {
+            window.on_piano_note_selected(move |id, mode| {
                 let mut st = st.borrow_mut();
                 let id = id as NoteId;
                 let pattern = st.current_pattern;
@@ -5518,12 +5624,13 @@ impl AppUi {
                     .iter()
                     .any(|note| note.id == id)
                 {
-                    // Shift/Ctrl-click builds a multi-selection; a plain
-                    // click always collapses to just this note.
-                    if shift || ctrl {
-                        st.toggle_note_selection(id);
-                    } else {
-                        st.select_note(Some(id));
+                    // The grid resolves which of the gesture roles the held
+                    // modifiers satisfied; this only applies the result.
+                    match mode {
+                        1 => st.toggle_note_selection(id),
+                        2 => st.remove_note_from_selection(id),
+                        // A plain click always collapses to just this note.
+                        _ => st.select_note(Some(id)),
                     }
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);

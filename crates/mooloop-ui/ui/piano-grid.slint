@@ -25,6 +25,27 @@ export struct NoteHit {
     duration-ticks: int,
 }
 
+// One gesture role's modifier requirement, as resolved from the registry in
+// `gestures.rs` plus the user's overrides.
+//
+// Booleans rather than a bitmask because Slint's expression language has no
+// bitwise operators: `has-gesture` below tests the requirement by
+// implication instead.
+export struct GestureMod {
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    meta: bool,
+}
+
+// Every remappable piano-roll drag role.
+export struct PianoGestures {
+    snap-override: GestureMod,
+    add-to-selection: GestureMod,
+    subtract-from-selection: GestureMod,
+    copy-drag: GestureMod,
+}
+
 // The piano roll's note canvas: row shading, grid divisions, the note
 // rectangles, and the single hit area that owns every grid gesture.
 //
@@ -50,13 +71,14 @@ export component PianoGrid inherits Rectangle {
     in property <length> scroll-y;
     in property <length> visible-w;
     in property <length> visible-h;
+    in property <PianoGestures> gestures;
     in-out property <string> hover-hint;
 
     pure callback note-hit-test(int, int) -> NoteHit; // tick, MIDI note
     callback gesture-begin();
     callback gesture-end();
     callback note-created(int, int, int) -> int;      // start tick, note, duration -> id
-    callback note-selected(int, bool, bool);          // id, shift held, ctrl held
+    callback note-selected(int, int);                 // id, 0 replace / 1 add / 2 remove
     callback note-moved(int, int, int);               // id, start tick, note
     callback selection-duplicated(int) -> int;        // anchor id -> copy of anchor
     callback note-resized(int, int);                  // id, duration ticks
@@ -76,6 +98,43 @@ export component PianoGrid inherits Rectangle {
     // geometry that moved out from under it: see
     // piano-touch for why per-note TouchAreas
     // cannot support a drag at all.
+    // True when the modifiers currently held satisfy `want`.
+    //
+    // A subset test, not an exact one: the roles are meant to compose, so
+    // holding copy (Ctrl) together with snap-override (Shift) has to do both
+    // rather than falling through to neither. Where two roles overlap --
+    // add-to-selection is Ctrl and remove-from-selection is Ctrl+Shift --
+    // the caller tests the more specific one first.
+    //
+    // An unbound role wants nothing, and `Not set` therefore has to turn the
+    // gesture off rather than matching every drag.
+    pure function has-gesture(want: GestureMod, ctrl: bool, shift: bool,
+            alt: bool, meta: bool) -> bool {
+        if (!want.ctrl && !want.shift && !want.alt && !want.meta) {
+            return false;
+        }
+        return (!want.ctrl || ctrl) && (!want.shift || shift)
+            && (!want.alt || alt) && (!want.meta || meta);
+    }
+    // 0 replace, 1 add, 2 remove. Tested most-specific first, because the
+    // roles overlap by design: remove is Ctrl+Shift and add is Shift, so a
+    // subset test alone would resolve Ctrl+Shift to whichever was asked
+    // about first.
+    //
+    // Copy-drag counts as "add" even though it is not a selection role. The
+    // whole selection is what a copy-drag duplicates, so collapsing the
+    // selection onto the pressed note would mean a copy-drag could only ever
+    // duplicate one note.
+    pure function selection-mode(ctrl: bool, shift: bool, alt: bool, meta: bool) -> int {
+        if (root.has-gesture(root.gestures.subtract-from-selection, ctrl, shift, alt, meta)) {
+            return 2;
+        }
+        if (root.has-gesture(root.gestures.add-to-selection, ctrl, shift, alt, meta)
+                || root.has-gesture(root.gestures.copy-drag, ctrl, shift, alt, meta)) {
+            return 1;
+        }
+        return 0;
+    }
     pure function note-x(start: int) -> length {
         return start * root.step-width / 24;
     }
@@ -203,7 +262,9 @@ export component PianoGrid inherits Rectangle {
                 } else if (hit.found && e.button == PointerEventButton.left) {
                     self.create-click-armed = false;
                     create-click-timeout.running = false;
-                    root.note-selected(hit.id, e.modifiers.shift, e.modifiers.control);
+                    root.note-selected(hit.id, root.selection-mode(
+                        e.modifiers.control, e.modifiers.shift,
+                        e.modifiers.alt, e.modifiers.meta));
                     self.grabbed-id = hit.id;
                     self.copied = false;
                     self.grab-mode = root.grab-mode-at(self.mouse-x, self.mouse-y);
@@ -247,13 +308,14 @@ export component PianoGrid inherits Rectangle {
                 }
             } else if (e.kind == PointerEventKind.move
                     && self.pressed && self.grabbed-id >= 0) {
-                // Shift frees the drag from the
-                // grid on both axes' time
-                // component, matching the
-                // automation lane.
+                // The snap-override role frees the drag from the grid on
+                // both axes' time component, matching the automation lane.
+                let free = root.has-gesture(root.gestures.snap-override,
+                    e.modifiers.control, e.modifiers.shift,
+                    e.modifiers.alt, e.modifiers.meta);
                 let raw-ticks = (self.mouse-x - self.origin-x)
                     * 24 / root.step-width;
-                let delta-ticks = e.modifiers.shift
+                let delta-ticks = free
                     ? round(raw-ticks)
                     : round(raw-ticks / root.snap-ticks)
                         * root.snap-ticks;
@@ -262,13 +324,16 @@ export component PianoGrid inherits Rectangle {
                         root.pattern-length * 24 - self.original-start);
                     let duration = clamp(
                         self.original-duration + delta-ticks,
-                        e.modifiers.shift
+                        free
                             ? 1
                             : min(root.snap-ticks, max-duration),
                         max-duration);
                     root.note-resized(self.grabbed-id, duration);
                 } else {
-                    if (e.modifiers.control && !self.copied) {
+                    if (root.has-gesture(root.gestures.copy-drag,
+                            e.modifiers.control, e.modifiers.shift,
+                            e.modifiers.alt, e.modifiers.meta)
+                            && !self.copied) {
                         self.copied = true;
                         let copy = root.selection-duplicated(
                             self.grabbed-id);

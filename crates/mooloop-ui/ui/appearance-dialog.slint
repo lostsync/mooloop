@@ -1,4 +1,4 @@
-import { HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
+import { ComboBox, HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
 import { Theme, Motion } from "theme.slint";
 import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { JackControlSurface, OutputTargetRow } from "audio-preferences.slint";
@@ -117,6 +117,59 @@ export struct ShortcutRow {
     chord: string,
     is-default: bool,
     is-first-in-category: bool,
+}
+
+// One row of the gesture registry (`gestures.rs`), as shown at the foot of
+// the Preferences > Shortcuts page. These are modifiers rather than chords,
+// so they get a picker instead of the key recorder below.
+export struct GestureRow {
+    id: string,
+    label: string,
+    description: string,
+    choice-index: int,
+    is-default: bool,
+}
+
+export component GestureRowView inherits Rectangle {
+    in property <GestureRow> entry;
+    in property <[string]> choices;
+    callback picked(int);
+
+    height: 34px;
+    HorizontalBox {
+        padding: 4px;
+        spacing: 8px;
+        VerticalLayout {
+            width: 190px;
+            spacing: 0px;
+            alignment: center;
+            Text {
+                text: root.entry.label;
+                color: Theme.text;
+                font-size: 11px;
+            }
+            Text {
+                text: root.entry.description;
+                color: Theme.text-muted;
+                font-size: 9px;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        ComboBox {
+            width: 120px;
+            height: 24px;
+            model: root.choices;
+            current-index: root.entry.choice-index;
+            selected(value) => { root.picked(self.current-index); }
+        }
+        Text {
+            text: root.entry.is-default ? "" : "changed";
+            color: Theme.text-faint;
+            font-size: 9px;
+            width: 50px;
+            vertical-alignment: center;
+        }
+    }
 }
 
 export component ShortcutRowView inherits Rectangle {
@@ -593,6 +646,8 @@ export component PreferencesDialog inherits Rectangle {
     in property <string> audio-error;
     in property <[ShortcutRow]> shortcut-rows;
     in-out property <string> shortcut-capturing-id;
+    in property <[GestureRow]> gesture-rows;
+    in property <[string]> gesture-choices;
     // base, accent, alert, contrast, roundness
     callback appearance-preview(string, string, string, float, float);
     callback appearance-select-scheme(string);
@@ -608,6 +663,7 @@ export component PreferencesDialog inherits Rectangle {
     callback shortcut-rebind-key(string, string, bool, bool, bool, bool);
     callback shortcut-reset(string);
     callback shortcut-reset-all();
+    callback gesture-rebound(string, int);
     callback open-mockup-tool();
     callback log-to-file-toggled(bool);
 
@@ -811,6 +867,21 @@ export component PreferencesDialog inherits Rectangle {
                                                 root.shortcut-rebind-key(row.id, key, ctrl, shift, alt, meta);
                                             }
                                         }
+                                    }
+                                    SectionLabel { text: "EDITOR GESTURES"; }
+                                    Text {
+                                        text: "Which modifier each piano-roll drag answers to. "
+                                            + "Roles compose: holding copy and snap override together does both. "
+                                            + "Alt is offered but never a default, since some window managers "
+                                            + "take Alt+drag before the app sees it.";
+                                        color: Theme.text-muted;
+                                        font-size: 10px;
+                                        wrap: word-wrap;
+                                    }
+                                    for row in root.gesture-rows : GestureRowView {
+                                        entry: row;
+                                        choices: root.gesture-choices;
+                                        picked(index) => { root.gesture-rebound(row.id, index); }
                                     }
                                 }
                             }

@@ -197,7 +197,12 @@ work session you can recall being part of, and don't stress over precision.
   and each was becoming its own undo entry -- moving a note across the grid
   cost twenty undos to take back. Frames sharing a token collapse into one
   entry spanning the whole drag; tokens rather than labels, so two separate
-  drags of the same kind stay two steps.
+  drags of the same kind stay two steps. Then made the roll's drag modifiers
+  a registry rather than literals in the pointer handler, so Preferences can
+  remap them when a window manager claims a chord -- Alt is offered but never
+  a default for exactly that reason. They cross into `.slint` as booleans
+  rather than a bitmask, since Slint's expression language has no bitwise
+  operators, and the grid tests them by implication so the roles compose.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
