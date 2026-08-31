@@ -1197,6 +1197,19 @@ fn check_sampler(doctor: &mut Doctor, who: &str, params: &mut SamplerParams) {
     ] {
         doctor.fit("channel.sampler.range", who, field, value, min, max);
     }
+    // Only when the filter envelope has its own stages: a patch still
+    // following the amplitude envelope has nothing separate to repair, and
+    // materializing one here would turn a repair pass into an edit.
+    if let Some(filter_env) = params.filter_env.as_mut() {
+        for (field, value, min, max) in [
+            ("the filter attack", &mut filter_env.attack, 0.0, f32::MAX),
+            ("the filter decay", &mut filter_env.decay, 0.0, f32::MAX),
+            ("the filter sustain", &mut filter_env.sustain, 0.0, 1.0),
+            ("the filter release", &mut filter_env.release, 0.0, f32::MAX),
+        ] {
+            doctor.fit("channel.sampler.range", who, field, value, min, max);
+        }
+    }
     doctor.fit_int(
         "channel.sampler.root",
         who,

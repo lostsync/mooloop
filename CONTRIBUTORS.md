@@ -182,6 +182,13 @@ work session you can recall being part of, and don't stress over precision.
   overhangs a loop point the read head has not reached, so `Region` says what
   is on the other side, and a forward loop reads what it is about to wrap
   into rather than silence.
+  Then split the sampler's filter envelope off the amplitude one. The
+  migration is what shaped that design: "copy the amp ADSR into the missing
+  filter ADSR" cannot be a serde default, because a default cannot see its
+  siblings, so absence had to be representable -- `Option<EnvTimes>`, where
+  `None` means "follow amp" and reproduces an old patch's filter motion
+  exactly rather than approximately. Editing one stage materializes all four,
+  seeded from where the envelope was reading, so the other three do not jump.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

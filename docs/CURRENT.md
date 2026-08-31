@@ -61,7 +61,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   mixed-format sibling navigation, trim, reverse, root note, coarse/fine tune,
   loop region and mode, ADSR, low-pass
   filter with envelope depth and resonance, drive, bit reduction, and rate
-  reduction. An Output trim in the page bar sets the patch's level ahead of
+  reduction. The filter runs its own ADSR, reached through a CURVE/ENV switch
+  on the Tone page's filter panel; a patch that never sets one follows the
+  amplitude envelope, which is what every project saved before it did. An Output trim in the page bar sets the patch's level ahead of
   the channel's inserts; a sampler created today starts at -9 dB so a
   normalized file peaks where the synths' default patches do, while projects
   saved before the trim existed load at unity. Voice controls cover one-shot/gated playback, 1-16 voices,

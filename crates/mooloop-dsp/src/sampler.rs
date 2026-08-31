@@ -25,8 +25,8 @@ use crate::node::{AudioNode, ProcessContext};
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use mooloop_core::{
-    clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_LINEAR_GAIN,
-    MAX_SAMPLER_VOICES,
+    clamp01, EnvTimes, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP,
+    MAX_LINEAR_GAIN, MAX_SAMPLER_VOICES,
 };
 
 use arc_swap::ArcSwapOption;
@@ -143,13 +143,18 @@ impl AdsrEnv {
         }
     }
 
-    /// Recompute rates from a parameter set.
-    fn configure(&mut self, p: SamplerParams) {
+    /// Recompute rates from a set of stages.
+    ///
+    /// Takes the stages rather than the whole patch because a voice runs two
+    /// of these now, from two different places in `SamplerParams`, and an
+    /// envelope that reaches into the patch to find its own times could only
+    /// ever be the amplitude one.
+    fn configure(&mut self, times: EnvTimes) {
         let sr = self.sample_rate as f32;
-        self.attack_inc = 1.0 / (p.attack.max(MIN_STAGE_S) * sr);
-        self.decay_dec = (1.0 - p.sustain) / (p.decay.max(MIN_STAGE_S) * sr);
-        self.sustain = clamp01(p.sustain);
-        self.release_s = p.release.max(MIN_STAGE_S);
+        self.attack_inc = 1.0 / (times.attack.max(MIN_STAGE_S) * sr);
+        self.decay_dec = (1.0 - times.sustain) / (times.decay.max(MIN_STAGE_S) * sr);
+        self.sustain = clamp01(times.sustain);
+        self.release_s = times.release.max(MIN_STAGE_S);
     }
 
     fn note_on(&mut self) {
@@ -217,6 +222,14 @@ struct Voice {
     playback_rate: f64,
     direction: f64,
     env: AdsrEnv,
+    /// The filter's own envelope, advanced beside the amplitude one.
+    ///
+    /// Separate state, not a second reader of `env`: a sustained amp with a
+    /// short filter decay is the whole point, and that shape cannot exist
+    /// while one envelope drives both. The amplitude envelope stays the
+    /// authority for how long the voice lives -- an unfinished filter release
+    /// never holds a silent voice open.
+    filter_env: AdsrEnv,
     velocity_amp: f32,
     filter_low: [f32; 2],
     filter_band: [f32; 2],
@@ -237,6 +250,7 @@ impl Voice {
             playback_rate: 1.0,
             direction: 1.0,
             env: AdsrEnv::new(sample_rate),
+            filter_env: AdsrEnv::new(sample_rate),
             velocity_amp: 0.0,
             filter_low: [0.0, 0.0],
             filter_band: [0.0, 0.0],
@@ -258,7 +272,9 @@ impl Voice {
         self.playback_rate = 1.0;
         self.direction = 1.0;
         self.env = AdsrEnv::new(sample_rate);
-        self.env.configure(params);
+        self.env.configure(params.amp_env());
+        self.filter_env = AdsrEnv::new(sample_rate);
+        self.filter_env.configure(params.resolved_filter_env());
         self.velocity_amp = 0.0;
         self.filter_low = [0.0, 0.0];
         self.filter_band = [0.0, 0.0];
@@ -302,7 +318,8 @@ impl Sampler {
         SincTable::shared();
         let mut voices = std::array::from_fn(|_| Voice::new(sample_rate));
         for voice in &mut voices {
-            voice.env.configure(params);
+            voice.env.configure(params.amp_env());
+            voice.filter_env.configure(params.resolved_filter_env());
         }
         Self {
             sample_slot,
@@ -335,7 +352,8 @@ impl Sampler {
             self.output_gain.reset_to(trim);
         }
         for (index, voice) in self.voices.iter_mut().enumerate() {
-            voice.env.configure(params);
+            voice.env.configure(params.amp_env());
+            voice.filter_env.configure(params.resolved_filter_env());
             if index >= params.polyphony as usize {
                 voice.active = false;
             }
@@ -461,8 +479,10 @@ impl Sampler {
         voice.held_frame = [0.0, 0.0];
         voice.hold_remaining = 0;
         voice.loop_enabled = self.params.loop_mode != LoopMode::Off;
-        voice.env.configure(self.params);
+        voice.env.configure(self.params.amp_env());
         voice.env.note_on();
+        voice.filter_env.configure(self.params.resolved_filter_env());
+        voice.filter_env.note_on();
     }
 
     fn release_note(&mut self, event_id: u64) {
@@ -473,7 +493,10 @@ impl Sampler {
             .filter(|voice| voice.active && voice.event_id == event_id)
         {
             match mode {
-                VoiceMode::Gate => voice.env.release(),
+                VoiceMode::Gate => {
+                    voice.env.release();
+                    voice.filter_env.release();
+                }
                 VoiceMode::OneShot if voice.loop_enabled => voice.loop_enabled = false,
                 VoiceMode::OneShot => {}
             }
@@ -484,6 +507,7 @@ impl Sampler {
         for voice in self.voices.iter_mut().filter(|voice| voice.active) {
             if !voice.env.is_releasing() {
                 voice.env.release();
+                voice.filter_env.release();
             }
         }
     }
@@ -492,6 +516,7 @@ impl Sampler {
         for voice in self.voices.iter_mut().filter(|voice| voice.active) {
             voice.loop_enabled = false;
             voice.env.release_with(CHOKE_RELEASE_S);
+            voice.filter_env.release_with(CHOKE_RELEASE_S);
         }
     }
 
@@ -536,7 +561,7 @@ impl Sampler {
         let max_hz = sample_rate as f32 * 0.45;
         let base_hz = hz_from_normalized(cutoff, max_hz);
         let cutoff_hz =
-            (base_hz * 2.0_f32.powf(voice.env.level * env_amount * 6.0)).clamp(20.0, max_hz);
+            (base_hz * 2.0_f32.powf(voice.filter_env.level * env_amount * 6.0)).clamp(20.0, max_hz);
         // Topology-preserving state-variable low-pass. Unlike a biquad this
         // remains well behaved while cutoff and envelope move every sample.
         let g = (core::f32::consts::PI * cutoff_hz / sample_rate as f32).tan();
@@ -627,8 +652,12 @@ impl Sampler {
                 return;
             };
 
-            // Advance envelope; if it finished during release, end voice.
+            // Advance both envelopes; only the amplitude one can end the
+            // voice. A filter release still running under a finished amp
+            // release is inaudible, and holding the voice open for it would
+            // spend a slot on silence.
             voice.env.advance();
+            voice.filter_env.advance();
             if voice.env.is_idle() {
                 voice.active = false;
                 return;
@@ -1540,6 +1569,161 @@ mod tests {
             bus.l[..frames].to_vec()
         };
         assert_eq!(render(), render());
+    }
+
+    /// A bright fixture: alternating full-scale frames put all the energy at
+    /// Nyquist, so what survives the low-pass is a direct readout of where
+    /// its cutoff is sitting.
+    fn bright_sampler(sr: u32, params: SamplerParams) -> Sampler {
+        let frames = (0..4096)
+            .map(|index| {
+                let value = if index % 2 == 0 { 1.0 } else { -1.0 };
+                [value, value]
+            })
+            .collect();
+        let sample = Arc::new(SampleData {
+            frames,
+            sample_rate: sr,
+            root_note: 60,
+        });
+        Sampler::new(Arc::new(ArcSwapOption::from(Some(sample))), params, sr)
+    }
+
+    fn window_rms(bus: &StereoBus, from: usize, to: usize) -> f32 {
+        let sum: f32 = bus.l[from..to].iter().map(|s| s * s).sum();
+        (sum / (to - from) as f32).sqrt()
+    }
+
+    /// The shape the split exists for: amplitude held flat while the filter
+    /// plucks shut underneath it. With one shared envelope a sustain of 1.0
+    /// pinned the filter open for the whole note, so this could not be
+    /// expressed at all -- the control asserts exactly that.
+    #[test]
+    fn a_sustained_amp_can_carry_a_short_filter_pluck() {
+        let sr = 48_000;
+        let frames = 4096;
+        let base = SamplerParams {
+            attack: 0.0,
+            decay: 8.0,
+            sustain: 1.0,
+            release: 0.5,
+            filter_cutoff: 0.1,
+            filter_env_amount: 1.0,
+            loop_mode: LoopMode::Forward,
+            output_gain: 1.0,
+            ..SamplerParams::default()
+        };
+        let render = |params: SamplerParams| {
+            let mut sampler = bright_sampler(sr, params);
+            let mut bus = StereoBus::with_capacity(frames);
+            let mut events = EventList::empty();
+            events.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id: 1,
+                    note: 60,
+                    velocity: 127,
+                },
+            });
+            sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+            (window_rms(&bus, 64, 512), window_rms(&bus, 3584, 4096))
+        };
+
+        // Following the amplitude envelope: sustain 1.0 holds the filter wide
+        // open, so the end is as bright as the beginning.
+        let (shared_early, shared_late) = render(base);
+        assert!(
+            shared_late > shared_early * 0.8,
+            "a shared envelope should not pluck: {shared_early} -> {shared_late}"
+        );
+
+        // Its own short decay to nothing: the filter shuts while the
+        // amplitude envelope holds.
+        let plucked = SamplerParams {
+            filter_env: Some(mooloop_core::EnvTimes {
+                attack: 0.0,
+                decay: 0.01,
+                sustain: 0.0,
+                release: 0.5,
+            }),
+            ..base
+        };
+        let (pluck_early, pluck_late) = render(plucked);
+        assert!(
+            pluck_early > pluck_late * 4.0,
+            "the filter did not pluck: {pluck_early} -> {pluck_late}"
+        );
+    }
+
+    /// The amplitude envelope owns the voice's lifetime. A filter release
+    /// still running under a finished amp release must not keep a silent
+    /// voice allocated.
+    #[test]
+    fn a_long_filter_release_does_not_hold_a_finished_voice_open() {
+        let sr = 48_000;
+        let params = SamplerParams {
+            voice_mode: VoiceMode::Gate,
+            release: 0.005,
+            filter_env: Some(mooloop_core::EnvTimes {
+                attack: 0.0,
+                decay: 0.25,
+                sustain: 1.0,
+                release: 8.0,
+            }),
+            loop_mode: LoopMode::Forward,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(sr, 512, params);
+        let mut bus = StereoBus::with_capacity(512);
+        let mut on = EventList::empty();
+        on.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(512, sr), &mut bus, &on, None);
+        let mut off = EventList::empty();
+        off.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOff { id: 1, note: 60 },
+        });
+        sampler.process(&ctx(512, sr), &mut bus, &off, None);
+        // Well past the 5 ms amp release, far short of the 8 s filter one.
+        for _ in 0..8 {
+            sampler.process(&ctx(512, sr), &mut bus, &EventList::empty(), None);
+        }
+        assert_eq!(
+            sampler.active_voice_count(),
+            0,
+            "the filter release kept a silent voice allocated"
+        );
+    }
+
+    /// A patch that never gave the filter its own stages runs the amplitude
+    /// ones, whatever they are -- which is what makes an old project's filter
+    /// motion survive exactly rather than approximately.
+    #[test]
+    fn an_unset_filter_envelope_follows_whatever_the_amp_envelope_is() {
+        let params = SamplerParams {
+            attack: 0.123,
+            decay: 0.456,
+            sustain: 0.25,
+            release: 0.789,
+            ..SamplerParams::default()
+        };
+        assert_eq!(params.resolved_filter_env(), params.amp_env());
+
+        let mut owned = params;
+        owned.filter_env_mut().decay = 0.01;
+        // Materializing seeds from the amp stages, so the three untouched
+        // stages do not jump when the first one is edited.
+        assert_eq!(owned.resolved_filter_env().attack, 0.123);
+        assert_eq!(owned.resolved_filter_env().sustain, 0.25);
+        assert_eq!(owned.resolved_filter_env().decay, 0.01);
+        assert_eq!(owned.amp_env(), params.amp_env());
     }
 
     #[test]

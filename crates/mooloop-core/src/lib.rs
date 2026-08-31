@@ -109,7 +109,8 @@ pub use project::{
     DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };
 pub use sampler::{
-    clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,
+    clamp01, EnvTimes, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP,
+    MAX_SAMPLER_VOICES,
 };
 pub use synth::{
     DrumMode, DrumSynthParams, HatCharacter, KickCharacter, LfoParams, LfoWave, MonoSynthParams,

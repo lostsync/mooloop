@@ -43,6 +43,10 @@ pub const SAMPLER_PARAM_POLYPHONY: u32 = 19;
 pub const SAMPLER_PARAM_RETRIGGER_MODE: u32 = 20;
 pub const SAMPLER_PARAM_ROOT_NOTE: u32 = 21;
 pub const SAMPLER_PARAM_OUTPUT_GAIN: u32 = 22;
+pub const SAMPLER_PARAM_FILTER_ATTACK: u32 = 23;
+pub const SAMPLER_PARAM_FILTER_DECAY: u32 = 24;
+pub const SAMPLER_PARAM_FILTER_SUSTAIN: u32 = 25;
+pub const SAMPLER_PARAM_FILTER_RELEASE: u32 = 26;
 
 /// Envelope stages share this range across every generator. Exponential, so
 /// the fast end where percussion lives gets most of the travel.
@@ -85,7 +89,7 @@ const fn stepped(id: u32, name: &'static str, steps: u8, default: f32) -> ParamD
     }
 }
 
-static SAMPLER_DESCRIPTORS: [ParamDescriptor; 23] = [
+static SAMPLER_DESCRIPTORS: [ParamDescriptor; 27] = [
     unit(SAMPLER_PARAM_START, "Start", 0.0),
     unit(SAMPLER_PARAM_END, "End", 1.0),
     stepped(SAMPLER_PARAM_REVERSE, "Reverse", 2, 0.0),
@@ -164,6 +168,14 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 23] = [
         curve: ParamCurve::Linear,
         default: 0.355_234_4,
     },
+    // The filter envelope's own stages. Their defaults match the amplitude
+    // envelope's, because a filter envelope that has never been given its own
+    // shape follows the amplitude one -- reading either through the
+    // descriptor has to agree with what the voice actually runs.
+    seconds(SAMPLER_PARAM_FILTER_ATTACK, "Filter attack", 0.001),
+    seconds(SAMPLER_PARAM_FILTER_DECAY, "Filter decay", 0.25),
+    unit(SAMPLER_PARAM_FILTER_SUSTAIN, "Filter sustain", 1.0),
+    seconds(SAMPLER_PARAM_FILTER_RELEASE, "Filter release", 0.05),
 ];
 
 // --- Shared synth voice ----------------------------------------------------
@@ -593,6 +605,13 @@ impl GeneratorParams {
                 SAMPLER_PARAM_RETRIGGER_MODE => p.retrigger_mode.to_index() as f32,
                 SAMPLER_PARAM_ROOT_NOTE => f32::from(p.root_note),
                 SAMPLER_PARAM_OUTPUT_GAIN => p.output_gain,
+                // Read through the resolution, so a lane pointed at a filter
+                // stage reads what the voice runs rather than a placeholder
+                // while the envelope is still following the amplitude one.
+                SAMPLER_PARAM_FILTER_ATTACK => p.resolved_filter_env().attack,
+                SAMPLER_PARAM_FILTER_DECAY => p.resolved_filter_env().decay,
+                SAMPLER_PARAM_FILTER_SUSTAIN => p.resolved_filter_env().sustain,
+                SAMPLER_PARAM_FILTER_RELEASE => p.resolved_filter_env().release,
                 _ => return None,
             }),
             Self::MonoSynth(p) => {
@@ -702,6 +721,12 @@ impl GeneratorParams {
                 }
                 SAMPLER_PARAM_ROOT_NOTE => p.root_note = value.round() as u8,
                 SAMPLER_PARAM_OUTPUT_GAIN => p.output_gain = value,
+                // Writing any stage gives the filter envelope its own shape,
+                // seeded from wherever it was reading.
+                SAMPLER_PARAM_FILTER_ATTACK => p.filter_env_mut().attack = value,
+                SAMPLER_PARAM_FILTER_DECAY => p.filter_env_mut().decay = value,
+                SAMPLER_PARAM_FILTER_SUSTAIN => p.filter_env_mut().sustain = value,
+                SAMPLER_PARAM_FILTER_RELEASE => p.filter_env_mut().release = value,
                 _ => return None,
             },
             Self::MonoSynth(p) => {

@@ -147,6 +147,15 @@ export component SamplerDeviceFace inherits Rectangle {
     // knob works in dB; the conversion happens at the control, as it does on
     // the oscillator strip's Level.
     in-out property <float> output-gain;
+    // The filter's own envelope, normalized like the amplitude one.
+    in-out property <float> filter-attack;
+    in-out property <float> filter-decay;
+    in-out property <float> filter-sustain: 1.0;
+    in-out property <float> filter-release;
+    // Which of the FILTER panel's two internal pages is showing. A stable
+    // index rather than a bool so a third view can be added without moving
+    // the two that exist.
+    in-out property <int> filter-view;
     in-out property <int> loop-mode;
     in-out property <int> voice-mode;
     in-out property <int> polyphony: 1;
@@ -194,6 +203,10 @@ export component SamplerDeviceFace inherits Rectangle {
     callback bit-reduction-changed(float);
     callback rate-reduction-changed(float);
     callback output-gain-changed(float);
+    callback filter-attack-changed(float);
+    callback filter-decay-changed(float);
+    callback filter-sustain-changed(float);
+    callback filter-release-changed(float);
     callback load-sample-clicked();
     callback previous-sample-clicked();
     callback next-sample-clicked();
@@ -538,15 +551,43 @@ export component SamplerDeviceFace inherits Rectangle {
                 horizontal-stretch: 3; background: Theme.panel; border-radius: Theme.radius-sm;
                 VerticalLayout {
                     padding: 6px; spacing: 4px;
-                    Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: 8px; }
-                    FilterResponseDisplay {
+                    // Two internal pages rather than a taller face: the
+                    // response curve and the envelope both want the whole
+                    // display area, and the 3U height is not negotiable.
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        SelectorBank {
+                            options: ["CURVE", "ENV"];
+                            selected-index <=> root.filter-view;
+                            segment-width: 34px;
+                            tooltip: "Filter response or filter envelope";
+                        }
+                    }
+                    if root.filter-view == 0 : FilterResponseDisplay {
                         vertical-stretch: 1;
                         mode: 0;
                         cutoff: root.filter-cutoff;
                         resonance: root.filter-resonance;
                         env-amount: root.filter-env * 2 - 1;
                     }
-                    HorizontalLayout {
+                    if root.filter-view == 1 : EnvelopeEditor {
+                        vertical-stretch: 1;
+                        fill: Theme.accent;
+                        attack <=> root.filter-attack; decay <=> root.filter-decay; sustain <=> root.filter-sustain; release <=> root.filter-release;
+                        attack-text: round(root.filter-attack * 5000) + " ms"; decay-text: round(root.filter-decay * 5000) + " ms"; sustain-text: round(root.filter-sustain * 100) + "%"; release-text: round(root.filter-release * 5000) + " ms";
+                        attack-changed(v) => { root.filter-attack-changed(v); } decay-changed(v) => { root.filter-decay-changed(v); } sustain-changed(v) => { root.filter-sustain-changed(v); } release-changed(v) => { root.filter-release-changed(v); }
+                    }
+                    if root.filter-view == 1 : HorizontalLayout {
+                        spacing: 5px;
+                        ParameterKnob { diameter: 36px; label: "Attack"; tooltip: "Filter envelope attack"; value <=> root.filter-attack; default-value: 0; value-text: round(root.filter-attack * 5000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[23]; modulation-depth: root.modulation-depths[23]; modulation-offset: root.modulation-offsets[23]; modulation-route-count: root.modulation-route-counts[23]; changed(v) => { root.filter-attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(23, v); } modulation-edit-started => { root.modulation-edit-started(23); } modulation-edit-finished => { root.modulation-edit-finished(23); } }
+                        ParameterKnob { diameter: 36px; label: "Decay"; tooltip: "Filter envelope decay"; value <=> root.filter-decay; default-value: 0.05; value-text: round(root.filter-decay * 5000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[24]; modulation-depth: root.modulation-depths[24]; modulation-offset: root.modulation-offsets[24]; modulation-route-count: root.modulation-route-counts[24]; changed(v) => { root.filter-decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(24, v); } modulation-edit-started => { root.modulation-edit-started(24); } modulation-edit-finished => { root.modulation-edit-finished(24); } }
+                        ParameterKnob { diameter: 36px; label: "Sustain"; tooltip: "Filter envelope sustain"; value <=> root.filter-sustain; default-value: 1; value-text: round(root.filter-sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[25]; modulation-depth: root.modulation-depths[25]; modulation-offset: root.modulation-offsets[25]; modulation-route-count: root.modulation-route-counts[25]; changed(v) => { root.filter-sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(25, v); } modulation-edit-started => { root.modulation-edit-started(25); } modulation-edit-finished => { root.modulation-edit-finished(25); } }
+                        ParameterKnob { diameter: 36px; label: "Release"; tooltip: "Filter envelope release"; value <=> root.filter-release; default-value: 0.01; value-text: round(root.filter-release * 5000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[26]; modulation-depth: root.modulation-depths[26]; modulation-offset: root.modulation-offsets[26]; modulation-route-count: root.modulation-route-counts[26]; changed(v) => { root.filter-release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(26, v); } modulation-edit-started => { root.modulation-edit-started(26); } modulation-edit-finished => { root.modulation-edit-finished(26); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    if root.filter-view == 0 : HorizontalLayout {
                         spacing: 5px;
                         ParameterKnob {
                             diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff";

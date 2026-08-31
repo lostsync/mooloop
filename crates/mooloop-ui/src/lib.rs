@@ -3661,6 +3661,14 @@ impl UiState {
         window.set_bit_reduction(p.bit_reduction);
         window.set_rate_reduction(p.rate_reduction);
         window.set_sampler_output_gain(p.output_gain);
+        // Published through the resolution, so a patch whose filter envelope
+        // still follows the amplitude one shows the shape it actually runs
+        // rather than an empty control group.
+        let filter_env = p.resolved_filter_env();
+        window.set_sampler_filter_attack(time_to_norm(filter_env.attack));
+        window.set_sampler_filter_decay(time_to_norm(filter_env.decay));
+        window.set_sampler_filter_sustain(filter_env.sustain);
+        window.set_sampler_filter_release(time_to_norm(filter_env.release));
         self.refresh_note_editor(window);
     }
 }
@@ -8102,6 +8110,34 @@ impl AppUi {
         // The face converts dB to linear before this runs, so the trim is an
         // ordinary linear parameter by the time it reaches the engine.
         wire_unit_param!(on_sampler_output_gain_changed, output_gain);
+        // The filter envelope's stages live behind `filter_env_mut`, which
+        // materializes the whole shape from wherever it was reading, so
+        // editing one stage cannot silently move the other three.
+        macro_rules! wire_filter_env_param {
+            ($on:ident, $field:ident, $map:expr) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$on(move |v: f32| {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    #[allow(clippy::redundant_closure_call)]
+                    let value = ($map)(v);
+                    channel.params.filter_env_mut().$field = value;
+                    let p = channel.params;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: p,
+                    });
+                });
+            }};
+        }
+        wire_filter_env_param!(on_sampler_filter_attack_changed, attack, norm_to_time);
+        wire_filter_env_param!(on_sampler_filter_decay_changed, decay, norm_to_time);
+        wire_filter_env_param!(on_sampler_filter_sustain_changed, sustain, |v: f32| v);
+        wire_filter_env_param!(on_sampler_filter_release_changed, release, norm_to_time);
 
         {
             // Pure view state: re-bin the waveform for whatever range is
