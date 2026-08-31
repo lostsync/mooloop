@@ -16,10 +16,12 @@ Scope:
 
 - Resolve remaining single-click, focus, selection, zoom, scrolling, and
   narrow-window issues.
-- Bring the piano roll closer to normal DAW behavior: fixed keyboard/header
+- Bring the piano roll closer to normal DAW behavior. Done: keyboard/header
   scroll sync, single-click selection without accidental note creation,
-  double-click note insertion, double-click-drag length entry, and independent
-  piano-roll snap.
+  double-click note insertion, double-click-drag length entry, independent
+  piano-roll snap with an on/off toggle, pointer tools, marquee selection,
+  and a selection that moves, resizes, and time-scales as one object.
+  Remaining: cut/copy/paste of notes, and keyboard-driven selection.
 - Establish consistent right-click removal and keyboard navigation.
 - Make labeled knobs draggable from their labels as well as from the knob body.
 - Finish sampler voice controls that do not require the new event model.

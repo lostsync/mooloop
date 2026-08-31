@@ -206,6 +206,33 @@ The device-chain row directly below it owns source type and generator presets:
 
 `[DEVICE CHAIN] [source type] [generator preset browser/actions]`
 
+### Piano roll gestures
+
+The roll's header reads left to right as mode, grid, then selection:
+
+`[SEL DRAW PAINT SLICE ERASE] [SNAP] [interval] | [tick/note/vel/len] | [VEL AUTO]`
+
+The tool leads because it changes what every other gesture means. The row
+clips rather than widening the window; keys 1-6 reach the tools and the snap
+toggle when it is narrow.
+
+| Gesture | Result |
+| --- | --- |
+| Drag a note's body | Moves the whole selection by that delta |
+| Drag either note edge | Changes every selected note's length by that delta |
+| Drag a frame handle | Scales the selection in time about the opposite edge |
+| Drag empty grid (Select) | Marquee, catching what it overlaps |
+| Double-click empty grid | Creates a note and drags its length |
+| Right-drag | Erases what it crosses, in any tool |
+
+One drag is one undo step regardless of how many frames it took.
+
+Modifier roles are remappable in Preferences > Shortcuts rather than fixed in
+the grid, because a window manager can claim a chord and leave the gesture
+dead with no visible cause. The roles compose — holding copy and snap
+override together does both — and where two overlap by design, the more
+specific one wins. Alt appears in the picker but is never a default.
+
 ### Channel modulation shelf
 
 The channel's modulation shelf lives immediately below the device rack and is

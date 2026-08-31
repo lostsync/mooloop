@@ -34,17 +34,40 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - Tick-addressed notes with stable IDs, start, duration, MIDI pitch, and
   velocity. Starts snap to 64ths in the piano roll while retaining PPQ tick
   precision internally.
-- A horizontally and vertically zoomable piano roll with note creation,
-  movement, length resizing, right-click removal, and exact
-  pitch/velocity/length fields. Dragging a note moves the whole selection by
-  the same delta, clamped as a group so a chord keeps its shape; Ctrl+drag
-  duplicates the selection in place and continues on the copy, and Shift+drag
-  defeats grid snap on both move and resize. Both axes use the zoom scrollbar —
-  drag the thumb to pan, drag an end grip to zoom around the fixed end — in
-  place of zoom-in/zoom-out buttons. The default pitch zoom starts three
-  steps above minimum because that is where editing comfortably begins.
-  It shares selectable straight/triplet
-  musical snap values from one bar through 1/64 with the playlist.
+- A horizontally and vertically zoomable piano roll with five pointer tools
+  (Select, Draw, Paint, Slice, Erase; keys 1-5), a snap toggle (key 6), and
+  exact pitch/velocity/length fields.
+  - **Select** builds a selection: click, Shift-click, or drag a marquee
+    across the grid. The marquee catches notes it overlaps rather than only
+    those it encloses; Shift adds to the current selection and Ctrl+Shift
+    removes. Double-clicking empty grid creates a note and drags its length.
+  - **Draw** creates on a single click. **Paint** lays one note per cell it
+    sweeps across. **Slice** cuts a note at the pointer, and with Shift held
+    joins the selection instead, per pitch row. **Erase** deletes what it
+    crosses; a right-drag does the same in any tool.
+  - A selection behaves as one object. Dragging moves it by a common delta,
+    dragging either note edge changes every selected note's length by the
+    same amount, and both clamp as a group so a chord keeps its shape.
+    Notes have a left edge as well as a right: it moves the start and holds
+    the end.
+  - A multi-note selection draws a frame with a grab handle at each time
+    edge. Dragging a handle scales the selection in time about the opposite
+    edge, lengths and gaps together, so doubling its span turns an eighth
+    into a quarter.
+  - Copy-drag duplicates the selection in place and continues on the copy.
+  - The whole of a drag is one undo step, not one per pointer frame.
+  - Both axes use the zoom scrollbar — drag the thumb to pan, drag an end
+    grip to zoom around the fixed end — in place of zoom-in/zoom-out buttons.
+    The default pitch zoom starts three steps above minimum because that is
+    where editing comfortably begins. It shares selectable straight/triplet
+    musical snap values from one bar through 1/64 with the playlist.
+- Which modifier each roll gesture answers to is remappable in
+  Preferences > Shortcuts: snap override, add to selection, remove from
+  selection, and copy on drag. Defaults are Shift, Shift, Ctrl+Shift, and
+  Ctrl. The snap override inverts the toggle rather than only defeating it,
+  so it frees a drag when snap is on and quantises one when it is off. Alt
+  is offered but is never a default, because several window managers claim
+  Alt+drag before the application sees it.
 - Two lanes sit under the roll and toggle independently: a velocity lane
   drawn as stems with drag heads, and one variable automation lane. The
   automation lane's picker lists every parameter of every effect on the

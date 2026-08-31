@@ -61,6 +61,9 @@ fn harness(tool: i32, notes: Vec<NoteCell>) -> MainWindow {
     ui
 }
 
+/// A marquee's reported bounds: start tick, end tick, low note, high note.
+type Band = Rc<RefCell<Vec<(i32, i32, i32, i32)>>>;
+
 fn cell(id: i32, start_tick: i32, duration_ticks: i32, note: i32) -> NoteCell {
     NoteCell {
         id,
@@ -133,7 +136,7 @@ fn drag(window: &slint::Window, from: (f32, f32), to: (f32, f32)) {
 #[test]
 fn dragging_empty_grid_reports_the_band_it_swept() {
     let ui = harness(TOOL_SELECT, vec![cell(7, 0, TICKS_PER_STEP, 60)]);
-    let bands: Rc<RefCell<Vec<(i32, i32, i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let bands: Band = Rc::new(RefCell::new(Vec::new()));
     let modes: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
     {
         let bands = bands.clone();
@@ -168,7 +171,7 @@ fn dragging_empty_grid_reports_the_band_it_swept() {
 #[test]
 fn a_band_drawn_backwards_reports_the_same_rectangle() {
     let ui = harness(TOOL_SELECT, vec![cell(7, 0, TICKS_PER_STEP, 60)]);
-    let bands: Rc<RefCell<Vec<(i32, i32, i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let bands: Band = Rc::new(RefCell::new(Vec::new()));
     {
         let bands = bands.clone();
         ui.on_piano_marquee_updated(move |a, b, lo, hi| bands.borrow_mut().push((a, b, lo, hi)));

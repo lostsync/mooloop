@@ -10,8 +10,19 @@ Grid lines in the piano roll - need to be at least bold on every 1beat. ideally 
 Smart grid on piano roll tied to zoom level? 
 
 Big one: Select multiple notes and drag, Edit (c/c/p) via keyboard shortcut or menu. If we could do keyboard based selection somehow that would be cool, like using the arrow keys or vim keys or something -- honestly being able to navigate this whole app by keyboard should be getting a lot more attention.
+  DONE, mouse half: marquee select, and a selection that moves, resizes, and
+  scales as one object. Still open: cut/copy/paste of notes, and keyboard
+  selection and navigation.
 
 Standard piano roll pointer tools? Select/normal, draw mode, slice/heal (heal with modifier i think?)
+  DONE: Select, Draw, Paint, Slice, Erase on keys 1-5, with heal/join as
+  Slice plus the add-to-selection modifier.
+
+Axis-constrained note drag (lock to time-only or pitch-only) is the one
+standard gesture deliberately left out. Every conventional binding for it is
+Alt, which is the chord you flagged as WM-hostile, and shipping it bound to
+nothing would be a dark feature. The gesture registry in `gestures.rs` is
+where it goes once there is a key worth giving it.
 
 Tooltip audit:
 

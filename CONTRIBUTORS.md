@@ -217,6 +217,8 @@ work session you can recall being part of, and don't stress over precision.
   quarter. The scale caches its pre-drag geometry in Rust and applies each
   frame to that, because scaling the live notes compounds its own rounding
   and a slow drag walks the selection away from where the pointer says it is.
+  Left one standard gesture out on purpose and said so in `ENHANCEMENTS.md`:
+  axis-constrained drag has no conventional binding that is not Alt.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
