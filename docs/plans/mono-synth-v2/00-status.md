@@ -32,8 +32,9 @@ Consequences for the steps below:
   `ML1_DESCRIPTORS` is built from it rather than from either v1 table.
 - **The v1 mono synth is still present and still loadable.** Deleting it is
   blocked on the poly toggles, since old projects' MonoSynth channels need
-  somewhere to land. Until then the device picker shows both, as "Mono" and
-  "Mono 2". Naming settles when the v1 device goes.
+  somewhere to land — planned in `docs/plans/poly-v1-mono-mode/`. Until then
+  the device picker shows both, as "Mono" and "ML-1". Naming settles when the
+  v1 device goes.
 - **`DeviceKind::Ml1` is a transitional name.** It takes the plain name
   when `DeviceKind::MonoSynth` is deleted.
 

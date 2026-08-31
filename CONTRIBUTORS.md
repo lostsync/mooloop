@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-31
-- Sessions: 21
+- Sessions: 22
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -133,7 +133,12 @@ work session you can recall being part of, and don't stress over precision.
   documents that failed had all been unsaved ones with nothing left behind to
   look at: levelled records to stderr from every crate, optionally mirrored to
   a file from a Developer preference, and a refused song now parked under the
-  config directory with its report beside it rather than dropped.
+  config directory with its report beside it rather than dropped. Cleared the
+  bench before the next push: pruned nine merged worktrees and a forgotten
+  `main` stash whose contents had already landed, and gave the v1 poly's
+  mono/legato toggles — decided during the ML-1 restructure but recorded only
+  as a consequence note — their own plan, since they are what blocks deleting
+  the v1 mono synth.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
