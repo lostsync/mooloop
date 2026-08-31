@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { MiniKnob, NoteFormat, ParameterKnob, SelectorBank, ToolButton, ValueScale, ZoomScrollBar } from "controls.slint";
+import { MiniKnob, NoteFormat, ParameterKnob, SelectorBank, ToggleButton, ToolButton, ValueScale, ZoomScrollBar } from "controls.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
@@ -152,6 +152,9 @@ export component SamplerDeviceFace inherits Rectangle {
     in-out property <[float]> waveform;
     in-out property <[float]> playhead-positions;
     in-out property <int> sample-frames;
+    // Global editing preference rather than saved sampler state: it changes
+    // how a marker edit resolves, not what the instrument sounds like.
+    in-out property <bool> snap-to-zero;
     in-out property <bool> can-previous-sample;
     in-out property <bool> can-next-sample;
     // Pure view state: which slice of the sample the waveform is
@@ -189,6 +192,8 @@ export component SamplerDeviceFace inherits Rectangle {
     callback previous-sample-clicked();
     callback next-sample-clicked();
     callback waveform-view-changed(float, float);
+    callback snap-to-zero-changed(bool);
+    callback snap-markers-clicked();
 
     // Maps a position normalized against the whole sample (0..1) to a
     // position normalized against the currently visible zoom window, for
@@ -432,6 +437,24 @@ export component SamplerDeviceFace inherits Rectangle {
                                 root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
                             }
                         }
+                    }
+                }
+                Rectangle { width: 1px; background: Theme.border; }
+                // Beside the marker fields rather than under them: the face is
+                // a fixed 3U and a third row falls off the bottom of it.
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    ToggleButton {
+                        text: "AUTO"; min-width: 44px; max-width: 44px; min-height: 20px;
+                        tooltip: "Snap markers to zero crossings while editing";
+                        checked <=> root.snap-to-zero;
+                        toggled(v) => { root.snap-to-zero-changed(v); }
+                    }
+                    ToolButton {
+                        text: "SNAP"; min-width: 44px; max-width: 44px; min-height: 20px;
+                        tooltip: "Snap all four markers to zero crossings now";
+                        clicked => { root.snap-markers-clicked(); }
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }

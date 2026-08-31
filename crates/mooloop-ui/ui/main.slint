@@ -745,6 +745,7 @@ export component MainWindow inherits Window {
     in-out property <float> end-pos: 1;
     in-out property <float> loop-start;
     in-out property <float> loop-end;
+    in-out property <bool> snap-to-zero;
     in-out property <bool> reverse-playback;
     in-out property <int> root-note: 60;
     in-out property <float> tune-semitones;
@@ -783,6 +784,8 @@ export component MainWindow inherits Window {
     callback end-pos-changed(float);
     callback loop-start-changed(float);
     callback loop-end-changed(float);
+    callback snap-to-zero-changed(bool);
+    callback snap-markers-clicked();
     callback reverse-playback-changed(bool);
     callback root-note-changed(int);
     callback tune-semitones-changed(float);
@@ -2419,6 +2422,7 @@ export component MainWindow inherits Window {
                                                     end-pos <=> root.end-pos;
                                                     loop-start <=> root.loop-start;
                                                     loop-end <=> root.loop-end;
+                                                    snap-to-zero <=> root.snap-to-zero;
                                                     reverse-playback <=> root.reverse-playback;
                                                     root-note <=> root.root-note;
                                                     tune-semitones <=> root.tune-semitones;
@@ -2458,6 +2462,8 @@ export component MainWindow inherits Window {
                                                     end-pos-changed(v) => { root.end-pos-changed(v); }
                                                     loop-start-changed(v) => { root.loop-start-changed(v); }
                                                     loop-end-changed(v) => { root.loop-end-changed(v); }
+                                                    snap-to-zero-changed(v) => { root.snap-to-zero-changed(v); }
+                                                    snap-markers-clicked() => { root.snap-markers-clicked(); }
                                                     reverse-playback-changed(v) => { root.reverse-playback-changed(v); }
                                                     root-note-changed(v) => { root.root-note-changed(v); }
                                                     tune-semitones-changed(v) => { root.tune-semitones-changed(v); }

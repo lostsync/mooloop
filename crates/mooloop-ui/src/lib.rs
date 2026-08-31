@@ -37,8 +37,12 @@ use mooloop_core::{
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
-    buffer_allocation_key, build_effect_at_tempo, DrumSynth, DryAlign, SampleData,
-    SpectrumAnalyzer,
+    buffer_allocation_key, build_effect_at_tempo,
+    sample_analysis::{
+        fraction_from_frame, frame_from_fraction, snap_to_zero_crossing, snap_window_frames,
+        SnapResult, DEFAULT_SNAP_WINDOW_MS,
+    },
+    DrumSynth, DryAlign, SampleData, SpectrumAnalyzer,
 };
 use mooloop_engine::{
     EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, PreviewCommand,
@@ -265,6 +269,7 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window.set_preferences_appearance_contrast(appearance.contrast);
     window.set_preferences_appearance_roundness(appearance.roundness);
     window.set_preferences_developer_mode(settings.general.developer_mode);
+    window.set_snap_to_zero(settings.general.snap_markers_to_zero);
     window.set_preferences_smooth_curves(appearance.smooth_curves);
     window
         .global::<DisplayPrefs>()
@@ -942,6 +947,109 @@ enum LoadTarget {
 pub struct AppUi {
     window: MainWindow,
     _pump: Timer,
+}
+
+/// The four sample markers a snap can move. Each one's legal range is
+/// derived from the others, so resolving a marker can never invert or
+/// collapse the region it belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SampleMarker {
+    Start,
+    End,
+    LoopStart,
+    LoopEnd,
+}
+
+impl SampleMarker {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::End => "End",
+            Self::LoopStart => "Loop start",
+            Self::LoopEnd => "Loop end",
+        }
+    }
+
+    fn get(self, params: &SamplerParams) -> f32 {
+        match self {
+            Self::Start => params.start,
+            Self::End => params.end,
+            Self::LoopStart => params.loop_start,
+            Self::LoopEnd => params.loop_end,
+        }
+    }
+
+    fn set(self, params: &mut SamplerParams, value: f32) {
+        match self {
+            Self::Start => params.start = value,
+            Self::End => params.end = value,
+            Self::LoopStart => params.loop_start = value,
+            Self::LoopEnd => params.loop_end = value,
+        }
+    }
+}
+
+/// Resolve one marker onto a zero crossing, returning the fraction to store
+/// and what happened, or `None` when there is no sample to search.
+///
+/// Runs entirely on the UI thread against decoded frames the control side
+/// already owns. Nothing here is reachable from `process()`.
+fn snap_marker(
+    params: &SamplerParams,
+    sample: &SampleData,
+    marker: SampleMarker,
+    requested: f32,
+) -> Option<(f32, SnapResult)> {
+    let len = sample.frames.len();
+    if len < 2 {
+        return None;
+    }
+    let last = len - 1;
+    let frame = |fraction: f32| frame_from_fraction(fraction, len);
+    // Each marker is penned in by its neighbours. `saturating_sub` and the
+    // `min(last)` guards keep a degenerate region (an empty or inverted one
+    // already in the params) from producing a reversed range.
+    let bounds = match marker {
+        SampleMarker::Start => 0..=frame(params.end).saturating_sub(1),
+        SampleMarker::End => (frame(params.start) + 1).min(last)..=last,
+        SampleMarker::LoopStart => frame(params.start)..=frame(params.loop_end).saturating_sub(1),
+        SampleMarker::LoopEnd => (frame(params.loop_start) + 1).min(last)..=frame(params.end),
+    };
+    let window = snap_window_frames(DEFAULT_SNAP_WINDOW_MS, sample.sample_rate);
+    let result = snap_to_zero_crossing(&sample.frames, frame(requested), window, bounds);
+    Some((fraction_from_frame(result.resolved, len), result))
+}
+
+/// What to tell the user about a snap. Silence would make a marker that moved
+/// look like drift, and a marker that did not move look like a broken button.
+fn snap_status(marker: SampleMarker, result: SnapResult) -> String {
+    if result.moved() {
+        format!(
+            "{} snapped to frame {} ({:+} frames)",
+            marker.label(),
+            result.resolved,
+            result.offset()
+        )
+    } else {
+        format!(
+            "{} kept at frame {}: no zero crossing within {} ms",
+            marker.label(),
+            result.requested,
+            DEFAULT_SNAP_WINDOW_MS as i32
+        )
+    }
+}
+
+/// Push a resolved marker back onto the face. The Slint side moves the marker
+/// optimistically as the user drags; when a snap lands somewhere else, this is
+/// what makes the control agree with the value that was actually stored.
+fn set_marker_property(window: &MainWindow, marker: SampleMarker, value: f32) {
+    match marker {
+        SampleMarker::Start => window.set_start_pos(value),
+        SampleMarker::End => window.set_end_pos(value),
+        SampleMarker::LoopStart => window.set_loop_start(value),
+        SampleMarker::LoopEnd => window.set_loop_end(value),
+    }
 }
 
 fn norm_to_time(v: f32) -> f32 {
@@ -7629,10 +7737,130 @@ impl AppUi {
         wire_time_param!(on_decay_changed, decay);
         wire_unit_param!(on_sustain_changed, sustain);
         wire_time_param!(on_release_changed, release);
-        wire_unit_param!(on_start_pos_changed, start);
-        wire_unit_param!(on_end_pos_changed, end);
-        wire_unit_param!(on_loop_start_changed, loop_start);
-        wire_unit_param!(on_loop_end_changed, loop_end);
+        // The four markers do not use `wire_unit_param!`: each one may be
+        // resolved onto a zero crossing on the way in, and the resolved value
+        // has to travel back to the face so the control agrees with what was
+        // stored.
+        macro_rules! wire_marker_param {
+            ($on:ident, $marker:expr) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                let window_weak = window.as_weak();
+                window.$on(move |v: f32| {
+                    let Some(window) = window_weak.upgrade() else {
+                        return;
+                    };
+                    let marker = $marker;
+                    let (value, status) = {
+                        let mut st = st.borrow_mut();
+                        let ch = st.selected;
+                        let Some(channel) = st.channels.get_mut(ch) else {
+                            return;
+                        };
+                        let mut value = v;
+                        let mut status = None;
+                        if window.get_snap_to_zero() {
+                            if let Some(sample) = channel.sample_data.clone() {
+                                if let Some((resolved, result)) =
+                                    snap_marker(&channel.params, &sample, marker, v)
+                                {
+                                    value = resolved;
+                                    status = Some(snap_status(marker, result));
+                                }
+                            }
+                        }
+                        marker.set(&mut channel.params, value);
+                        let p = channel.params;
+                        let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                            channel: ch as u8,
+                            params: p,
+                        });
+                        (value, status)
+                    };
+                    set_marker_property(&window, marker, value);
+                    if let Some(status) = status {
+                        window.set_status_message(status.into());
+                    }
+                });
+            }};
+        }
+
+        wire_marker_param!(on_start_pos_changed, SampleMarker::Start);
+        wire_marker_param!(on_end_pos_changed, SampleMarker::End);
+        wire_marker_param!(on_loop_start_changed, SampleMarker::LoopStart);
+        wire_marker_param!(on_loop_end_changed, SampleMarker::LoopEnd);
+
+        {
+            // The toggle is a user preference, so it outlives the project. A
+            // failed save leaves the session's choice in place rather than
+            // fighting the user over a checkbox.
+            let settings = ui_settings.clone();
+            window.on_snap_to_zero_changed(move |enabled| {
+                let mut settings = settings.borrow_mut();
+                settings.general.snap_markers_to_zero = enabled;
+                let _ = settings.save();
+            });
+        }
+
+        {
+            // The explicit action, which works whether or not the toggle is
+            // on. Markers resolve in region order so each one is bounded by
+            // its neighbours' already-resolved positions.
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let window_weak = window.as_weak();
+            window.on_snap_markers_clicked(move || {
+                let Some(window) = window_weak.upgrade() else {
+                    return;
+                };
+                let (resolved, moved, searched) = {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    let Some(sample) = channel.sample_data.clone() else {
+                        window.set_status_message("No sample to snap".into());
+                        return;
+                    };
+                    let markers = [
+                        SampleMarker::Start,
+                        SampleMarker::End,
+                        SampleMarker::LoopStart,
+                        SampleMarker::LoopEnd,
+                    ];
+                    let mut resolved = Vec::with_capacity(markers.len());
+                    let mut moved = 0usize;
+                    let mut searched = 0usize;
+                    for marker in markers {
+                        let requested = marker.get(&channel.params);
+                        let Some((value, result)) =
+                            snap_marker(&channel.params, &sample, marker, requested)
+                        else {
+                            continue;
+                        };
+                        searched += 1;
+                        if result.moved() {
+                            moved += 1;
+                        }
+                        marker.set(&mut channel.params, value);
+                        resolved.push((marker, value));
+                    }
+                    let p = channel.params;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: p,
+                    });
+                    (resolved, moved, searched)
+                };
+                for (marker, value) in resolved {
+                    set_marker_property(&window, marker, value);
+                }
+                window.set_status_message(
+                    format!("Snapped {moved} of {searched} markers to zero crossings").into(),
+                );
+            });
+        }
         wire_unit_param!(on_filter_cutoff_changed, filter_cutoff);
         wire_unit_param!(on_filter_resonance_changed, filter_resonance);
         wire_unit_param!(on_sampler_drive_changed, drive);

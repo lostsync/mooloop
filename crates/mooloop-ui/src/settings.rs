@@ -147,6 +147,12 @@ pub(crate) fn motion_easing_name(index: i32) -> &'static str {
 pub(crate) struct GeneralSettings {
     #[serde(default)]
     pub developer_mode: bool,
+    /// Whether marker edits resolve onto zero crossings. An editing
+    /// preference, not saved sampler state: it changes how an edit lands, not
+    /// what any instrument sounds like, so it belongs to the user rather than
+    /// to the project.
+    #[serde(default)]
+    pub snap_markers_to_zero: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -866,6 +872,7 @@ mod tests {
             schema_version: 1,
             general: GeneralSettings {
                 developer_mode: true,
+                snap_markers_to_zero: true,
             },
             appearance: appearance("#151617", "#F59E0B", "#38BDF8")
                 .validated()
