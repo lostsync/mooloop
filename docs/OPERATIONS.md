@@ -84,6 +84,34 @@ SLINT_BACKEND=winit-software MOOLOOP_GALLERY_SNAPSHOT=/tmp/gallery.ppm \
 magick /tmp/gallery.ppm /tmp/gallery.png
 ```
 
+## Diagnostic Log
+
+The app writes a levelled record of what it does to stderr: what it opened and
+saved, every correction the repair pass applied, xruns, and any failure. A run
+started from a terminal shows it without any setup.
+
+```sh
+MOOLOOP_LOG=debug cargo run -p mooloop-app --bin mooloop -j 2
+```
+
+`MOOLOOP_LOG` takes `error`, `warn`, `info` (the default), or `debug`. The
+older `MOOLOOP_DEBUG=1` still works and now means `debug`.
+
+Most problems are not reported from a terminal, so **Preferences → Developer →
+Write a log file** mirrors everything, `debug` included, to
+`$MOOLOOP_CONFIG_DIR/mooloop.log` (by default `~/.config/mooloop/mooloop.log`).
+It appends across runs and rolls to `mooloop.log.1` past 4 MB. The preference
+sticks, so it can be switched on before trying to reproduce something.
+
+A song that cannot be saved is written to `~/.config/mooloop/quarantine/`
+anyway, with a `.txt` beside it holding the same explanation the dialog showed.
+Assets are referenced rather than embedded, so this is fast and the file is
+small. Open one with `toml` in hand rather than the app: loading it through the
+app repairs it, which is what destroys the evidence.
+
+Nothing here may be called from the audio thread; see
+`crates/mooloop-core/src/log.rs`.
+
 ## Commit, Merge, And Tidy Up
 
 Commit small, buildable changes from the task worktree. Update your entry in

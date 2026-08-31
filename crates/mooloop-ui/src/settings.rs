@@ -147,6 +147,13 @@ pub(crate) fn motion_easing_name(index: i32) -> &'static str {
 pub(crate) struct GeneralSettings {
     #[serde(default)]
     pub developer_mode: bool,
+    /// Whether the diagnostic log is also written to a file. Off by default:
+    /// the console output costs nothing, but a file is state on the user's
+    /// disk and they should be the one to ask for it. Survives restarts on
+    /// purpose -- a problem worth logging is usually one that has to be caught
+    /// on a later run.
+    #[serde(default)]
+    pub log_to_file: bool,
     /// Whether marker edits resolve onto zero crossings. An editing
     /// preference, not saved sampler state: it changes how an edit lands, not
     /// what any instrument sounds like, so it belongs to the user rather than
@@ -485,7 +492,7 @@ fn settings_path() -> PathBuf {
 /// the platform config directory (`%APPDATA%\mooloop`,
 /// `~/Library/Application Support/mooloop`, or
 /// `$XDG_CONFIG_HOME/mooloop`/`~/.config/mooloop`).
-fn config_dir() -> PathBuf {
+pub(crate) fn config_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("MOOLOOP_CONFIG_DIR") {
         return PathBuf::from(path);
     }
@@ -514,6 +521,23 @@ pub(crate) fn generator_presets_dir(kind: DeviceKind) -> PathBuf {
 /// Directory holding whole-channel presets (`presets/channels/`).
 pub(crate) fn channel_presets_dir() -> PathBuf {
     config_dir().join("presets/channels")
+}
+
+/// The diagnostic log, when the preference to write one is on.
+///
+/// Under the config directory rather than a state or cache directory: mooloop
+/// keeps everything of its own in one place already, and someone being asked
+/// for their log should find it next to the `settings.toml` they have seen
+/// before, not in a second directory they have to be told about.
+pub(crate) fn log_path() -> PathBuf {
+    config_dir().join("mooloop.log")
+}
+
+/// Where a song that could not be saved is parked so it is not lost. Kept out
+/// of the user's own folders: these are failures, and they should not turn up
+/// mixed in with real songs.
+pub(crate) fn quarantine_dir() -> PathBuf {
+    config_dir().join("quarantine")
 }
 
 fn kind_slug(kind: DeviceKind) -> &'static str {
@@ -873,6 +897,7 @@ mod tests {
             general: GeneralSettings {
                 developer_mode: true,
                 snap_markers_to_zero: true,
+                log_to_file: true,
             },
             appearance: appearance("#151617", "#F59E0B", "#38BDF8")
                 .validated()

@@ -205,6 +205,27 @@ pub fn save_song(path: &Path, project: &Project, mode: AssetMode) -> Result<Save
     Ok(report)
 }
 
+/// Writes `project` exactly as it stands -- no repair, no validation -- with
+/// `report` alongside it as `<path>.txt` explaining why it could not be saved
+/// the ordinary way.
+///
+/// This is the escape hatch for the one case [`save_song`] cannot rescue: a
+/// document whose only fix would delete the user's work. Refusing that save is
+/// right, but refusing it *and* dropping the document leaves nothing to look
+/// at afterwards, and these problems have all turned up on unsaved songs that
+/// then could not be reproduced. So the bytes go to disk regardless, and the
+/// question of what to do about them is left for later.
+///
+/// Assets are referenced rather than embedded: this runs on a failed save, in
+/// front of a user who is already stuck, and copying a sample library first
+/// would turn a diagnostic into a wait. The samples stay wherever they already
+/// were, which is enough to read the document's structure back.
+pub fn quarantine_song(path: &Path, project: &Project, report: &str) -> Result<PathBuf, Error> {
+    save_song_file(path, project, AssetMode::Referenced)?;
+    fs::write(path.with_extension("txt"), report)?;
+    Ok(path.to_path_buf())
+}
+
 pub fn save_kit(path: &Path, kit: &Kit, mode: AssetMode) -> Result<SaveReport, Error> {
     let mut kit = kit.clone();
     let diagnosis = integrity::repair_setups(DocumentKind::Kit, &mut kit.channels);
@@ -1181,6 +1202,44 @@ mod tests {
         assert!(report.contains("channel.notes.count"), "{report}");
         assert!(report.contains("format version"), "{report}");
         assert!(!bundle.exists(), "a refused save leaves no partial file");
+    }
+
+    #[test]
+    fn a_song_that_cannot_be_saved_can_still_be_set_aside_and_read_back() {
+        let temp = tempdir().unwrap();
+        let mut project = Project::default();
+        project.channels[0].setup.channel.name = "Lead".into();
+        project.channels[0].notes[0] = (0..mooloop_core::MAX_NOTES_PER_CHANNEL_PATTERN + 2)
+            .map(|index| NoteEvent::new(index as u32 + 1, 0, 24, 60, 100))
+            .collect();
+        let error = save_song(&temp.path().join("song.mooloop"), &project, AssetMode::Embedded)
+            .expect_err("the note ceiling cannot be repaired");
+
+        // The whole point of the escape hatch: the document the ordinary save
+        // refused is the document that reaches disk here, unaltered.
+        let parked = quarantine_song(
+            &temp.path().join("quarantine/20260831-142203.mooloop"),
+            &project,
+            &error.report().unwrap(),
+        )
+        .expect("park the refused song");
+        assert!(parked.exists());
+
+        let notes = quarantine_song_notes(&parked);
+        assert_eq!(notes, mooloop_core::MAX_NOTES_PER_CHANNEL_PATTERN + 2);
+
+        let explanation =
+            fs::read_to_string(parked.with_extension("txt")).expect("the report next to it");
+        assert!(explanation.contains("channel.notes.count"), "{explanation}");
+    }
+
+    /// Reads a parked song back the only way one can be read: as the raw
+    /// envelope. `load_bundle` repairs, and repairing is exactly what would
+    /// destroy the evidence.
+    fn quarantine_song_notes(path: &Path) -> usize {
+        let text = fs::read_to_string(path).expect("read the parked song");
+        let envelope: Envelope<Project> = toml::from_str(&text).expect("parse the parked song");
+        envelope.document.channels[0].notes[0].len()
     }
 
     #[test]

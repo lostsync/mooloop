@@ -251,7 +251,12 @@ impl jack::NotificationHandler for Notifications {
         ] {
             match client.connect_ports_by_name(src, dst) {
                 Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
-                Err(e) => eprintln!("mooloop: auto-reconnect could not connect {src} -> {dst} ({e})"),
+                // JACK's graph-change notification, not the process callback:
+                // formatting and locking are both fine here.
+                Err(e) => mooloop_core::log_warn!(
+                    "audio",
+                    "auto-reconnect could not connect {src} -> {dst} ({e})"
+                ),
             }
         }
     }

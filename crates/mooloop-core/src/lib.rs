@@ -10,6 +10,7 @@ pub mod channel;
 pub mod effect;
 pub mod gain;
 pub mod generator;
+pub mod log;
 pub mod midi;
 pub mod modulation;
 pub mod mixer;

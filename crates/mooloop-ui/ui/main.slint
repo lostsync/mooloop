@@ -311,6 +311,9 @@ export component MainWindow inherits Window {
     in-out property <float> preferences-appearance-roundness: 1.0;
     in-out property <string> preferences-appearance-scheme-name;
     in-out property <bool> preferences-developer-mode;
+    in-out property <bool> preferences-log-to-file;
+    in-out property <string> preferences-log-path;
+    callback preferences-log-to-file-toggled(bool);
     in-out property <bool> preferences-smooth-curves;
     in-out property <string> preferences-error;
     in property <[OutputTargetRow]> preferences-audio-output-targets;
@@ -4336,6 +4339,8 @@ export component MainWindow inherits Window {
         appearance-scheme-name <=> root.preferences-appearance-scheme-name;
         developer-mode <=> root.preferences-developer-mode;
         smooth-curves <=> root.preferences-smooth-curves;
+        log-to-file: root.preferences-log-to-file;
+        log-path: root.preferences-log-path;
         validation-error: root.preferences-error;
         audio-output-targets: root.preferences-audio-output-targets;
         audio-buffer-size-index: root.preferences-audio-buffer-size-index;
@@ -4362,6 +4367,7 @@ export component MainWindow inherits Window {
         shortcut-reset(id) => { root.preferences-shortcut-reset(id); }
         shortcut-reset-all => { root.preferences-shortcut-reset-all(); }
         open-mockup-tool => { root.preferences-open-mockup-tool(); }
+        log-to-file-toggled(v) => { root.preferences-log-to-file-toggled(v); }
     }
     SavePresetDialog {
         width: parent.width;

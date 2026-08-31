@@ -17,6 +17,8 @@ slint::include_modules!();
 use history::{Entry as HistoryEntry, History};
 use meter::MeterBallistics;
 use mooloop_core::gain::{db_to_linear, linear_to_db, MIN_DB as METER_FLOOR_DB};
+use mooloop_core::log::Level;
+use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, strip_descriptor, would_create_cycle,
     AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup,
@@ -270,6 +272,8 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window.set_preferences_appearance_contrast(appearance.contrast);
     window.set_preferences_appearance_roundness(appearance.roundness);
     window.set_preferences_developer_mode(settings.general.developer_mode);
+    window.set_preferences_log_to_file(settings.general.log_to_file);
+    window.set_preferences_log_path(settings::log_path().display().to_string().into());
     window.set_snap_to_zero(settings.general.snap_markers_to_zero);
     window.set_preferences_smooth_curves(appearance.smooth_curves);
     window
@@ -629,6 +633,56 @@ impl From<String> for DocumentProblem {
     }
 }
 
+impl DocumentProblem {
+    /// Everything the problem knows, flattened onto one line for the log.
+    /// Both halves, because the plain-language message and the codes are the
+    /// two things a report needs and a log entry that carries one without the
+    /// other is the situation this whole pass exists to remove.
+    fn one_line(&self) -> String {
+        let joined = if self.report.is_empty() {
+            self.message.clone()
+        } else {
+            format!("{} | {}", self.message, self.report)
+        };
+        joined.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+}
+
+/// Parks a song that could not be saved, returning where it went.
+///
+/// The user has already lost the save they asked for; what they must not also
+/// lose is the document, because a problem nobody can reopen is a problem
+/// nobody can fix. The written report holds the same text as the dialog, so a
+/// file found weeks later still says what was wrong with it.
+///
+/// Failing to park is reported to the log and otherwise swallowed: this runs
+/// inside the handler for an error that is already on its way to the user, and
+/// a second error stacked on the first would only bury the first.
+fn quarantine_song(project: &Project, problem: &DocumentProblem) -> Option<PathBuf> {
+    let path = settings::quarantine_dir()
+        .join(format!("{}.mooloop", mooloop_core::log::file_stamp()));
+    let report = format!(
+        "mooloop {}\n\n{}\n\n{}\n",
+        build_description(),
+        problem.message,
+        problem.report
+    );
+    match mooloop_project::quarantine_song(&path, project, &report) {
+        Ok(path) => {
+            log_warn!("project", "song set aside at {}", path.display());
+            Some(path)
+        }
+        Err(error) => {
+            log_error!(
+                "project",
+                "could not set the song aside at {}: {error}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 enum DocumentResult {
     Cancelled,
     NewSong(Project),
@@ -964,7 +1018,7 @@ fn queue_pattern_clear(
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum LoadTarget {
     Song,
     Kit,
@@ -1473,11 +1527,74 @@ fn descriptor_route_counts(
     counts.as_slice().into()
 }
 
-/// Env-gated diagnostic logging (MOOLOOP_DEBUG=1).
-fn dbg_log(msg: &str) {
-    if std::env::var("MOOLOOP_DEBUG").is_ok() {
-        eprintln!("mooloop: {msg}");
+/// Starts diagnostic logging, honouring the saved preference for whether to
+/// write a file.
+///
+/// Separate from [`AppUi::new`] and public so the binary can call it first:
+/// bringing up the audio engine is one of the things worth having in the log,
+/// and it happens before there is any UI to attach to.
+pub fn start_logging() {
+    init_logging(UiSettings::load_or_default().general.log_to_file);
+}
+
+/// Brings up diagnostic logging for the run and says what build is running.
+///
+/// The console threshold comes from `MOOLOOP_LOG` (`error`, `warn`, `info`, or
+/// `debug`), falling back to the older `MOOLOOP_DEBUG=1`, which now means the
+/// same as `MOOLOOP_LOG=debug`. With neither set it stays at `info`, so a run
+/// started from a terminal still reports what it opened, saved, and repaired
+/// without being asked.
+///
+/// `to_file` mirrors everything, `debug` included, into [`settings::log_path`].
+/// A file that cannot be opened is reported and then dropped: no preference is
+/// worth refusing to start over.
+fn init_logging(to_file: bool) {
+    let level = match std::env::var("MOOLOOP_LOG") {
+        Ok(name) => Level::parse(&name).unwrap_or_else(|| {
+            eprintln!("mooloop: MOOLOOP_LOG={name:?} is not a level, using info");
+            Level::Info
+        }),
+        Err(_) if std::env::var_os("MOOLOOP_DEBUG").is_some() => Level::Debug,
+        Err(_) => Level::Info,
+    };
+    mooloop_core::log::set_level(level);
+    if to_file {
+        let path = settings::log_path();
+        if let Err(error) = mooloop_core::log::start_file(&path, &build_description()) {
+            eprintln!("mooloop: could not write the log to {}: {error}", path.display());
+        }
     }
+    // A panic is the one failure with no dialog and no status bar to carry it,
+    // which makes it the one that most needs to reach the file. Chained rather
+    // than replaced, so the default hook still prints its message and
+    // backtrace; this only adds a copy to wherever else records are going.
+    let inherited = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log_error!("app", "panic: {info}");
+        inherited(info);
+    }));
+    log_info!("app", "mooloop {} starting", build_description());
+    log_info!(
+        "app",
+        "settings: {}, log level: {level:?}",
+        settings::config_dir().display()
+    );
+}
+
+/// Which build this is, for the top of a log someone sends back. The profile
+/// matters as much as the version: a report about realtime behaviour means
+/// something different from a debug build than from a release one.
+fn build_description() -> String {
+    format!(
+        "{} ({} build, document format {})",
+        env!("CARGO_PKG_VERSION"),
+        if cfg!(debug_assertions) {
+            "development"
+        } else {
+            "release"
+        },
+        mooloop_project::FORMAT_VERSION,
+    )
 }
 
 /// The note under a grid position, if any.
@@ -3556,7 +3673,7 @@ impl AppUi {
         // worth refusing to start over: the bank is content, not
         // configuration, and the browser simply shows one fewer category.
         if let Err(error) = mooloop_project::seed_ml1_bank(&settings::channel_presets_dir()) {
-            eprintln!("could not write the ML-1 factory bank: {error}");
+            log_warn!("app", "could not write the ML-1 factory bank: {error}");
         }
 
         // --- Transport initial state ---
@@ -3816,8 +3933,14 @@ impl AppUi {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     };
-                    let result = mooloop_project::save_song(&path, &project, mode)
-                        .and_then(|report| {
+                    log_info!(
+                        "project",
+                        "saving song to {} ({mode:?} assets)",
+                        path.display()
+                    );
+                    let target = path.clone();
+                    let attempt = mooloop_project::save_song(&path, &project, mode).and_then(
+                        |report| {
                             let loaded = mooloop_project::load_bundle(&path)?;
                             let LoadedDocument::Song(saved) = loaded.document else {
                                 return Err(mooloop_project::Error::Invalid(
@@ -3841,11 +3964,32 @@ impl AppUi {
                                     })
                                     .collect(),
                             })
-                        })
-                        .unwrap_or_else(|error| DocumentResult::Failed {
+                        },
+                    );
+                    let result = attempt.unwrap_or_else(|error| {
+                        let mut problem = DocumentProblem::from(error);
+                        log_error!(
+                            "project",
+                            "save refused for {}: {}",
+                            target.display(),
+                            problem.one_line()
+                        );
+                        // The document the user was working on exists only in
+                        // this process, and the save that would have committed
+                        // it just failed. Park a copy before the failure is
+                        // reported, so the answer to "can I look at it later"
+                        // is yes even if they close the window in disgust.
+                        if let Some(parked) = quarantine_song(&project, &problem) {
+                            problem.message.push_str(&format!(
+                                "\n\nNothing is lost: a copy of this song was set aside at {}.",
+                                parked.display()
+                            ));
+                        }
+                        DocumentResult::Failed {
                             action: "save this song",
-                            problem: error.into(),
-                        });
+                            problem,
+                        }
+                    });
                     let _ = tx.send(result);
                 });
             };
@@ -4420,7 +4564,7 @@ impl AppUi {
                 }
                 match open_mockup_window() {
                     Ok(canvas) => *mockup_window.borrow_mut() = Some(canvas),
-                    Err(error) => eprintln!("Could not open UI mockup tool: {error}"),
+                    Err(error) => log_error!("ui", "could not open UI mockup tool: {error}"),
                 }
             });
         }
@@ -4642,7 +4786,7 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             window.on_play_clicked(move || {
-                dbg_log("UI: play clicked, queuing Play");
+                log_debug!("ui", "play clicked, queuing Play");
                 let _ = tx.send(EngineCommand::Play);
             });
         }
@@ -4650,7 +4794,7 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_stop_clicked(move || {
-                dbg_log("UI: stop clicked, queuing Stop");
+                log_debug!("ui", "stop clicked, queuing Stop");
                 if let Some(window) = weak.upgrade() {
                     window.set_playing(false);
                     window.set_playlist_position_ticks(0);
@@ -4731,11 +4875,11 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_toggle_play(move || {
                 let playing = weak.upgrade().map(|w| w.get_playing()).unwrap_or(false);
-                dbg_log(if playing {
-                    "UI: toggle-play -> Pause"
-                } else {
-                    "UI: toggle-play -> Play"
-                });
+                log_debug!(
+                    "ui",
+                    "toggle-play -> {}",
+                    if playing { "Pause" } else { "Play" }
+                );
                 if let Some(window) = weak.upgrade() {
                     window.set_playing(!playing);
                 }
@@ -4758,7 +4902,7 @@ impl AppUi {
                     return;
                 }
                 let p = p as usize;
-                dbg_log(&format!("UI: pattern {p} selected"));
+                log_debug!("ui", "pattern {p} selected");
                 {
                     let mut st = st.borrow_mut();
                     st.current_pattern = p;
@@ -6146,7 +6290,7 @@ impl AppUi {
                 if st.channels.len() >= MAX_CHANNELS {
                     return;
                 }
-                dbg_log("UI: add channel");
+                log_debug!("ui", "add channel");
                 let index = st.channels.len();
                 let mut ch = ChannelState::new(index);
                 ch.notes.resize_with(st.pattern_lengths.len(), Vec::new);
@@ -7834,6 +7978,51 @@ impl AppUi {
         wire_marker_param!(on_loop_end_changed, SampleMarker::LoopEnd);
 
         {
+            // Applied now, not on OK: someone turning this on is about to go
+            // and reproduce something, and a log that only starts after they
+            // confirm a dialog can miss the very run they wanted.
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_log_to_file_toggled(move |enabled| {
+                let path = settings::log_path();
+                let started = if enabled {
+                    match mooloop_core::log::start_file(&path, &build_description()) {
+                        Ok(()) => {
+                            log_info!("app", "logging to {}", path.display());
+                            true
+                        }
+                        Err(error) => {
+                            log_error!(
+                                "app",
+                                "could not write the log to {}: {error}",
+                                path.display()
+                            );
+                            if let Some(window) = weak.upgrade() {
+                                window.set_preferences_error(
+                                    format!("Could not write {}: {error}", path.display()).into(),
+                                );
+                            }
+                            false
+                        }
+                    }
+                } else {
+                    log_info!("app", "logging to file switched off");
+                    mooloop_core::log::stop_file();
+                    false
+                };
+                // Persist what actually happened, not what was asked for: a
+                // preference recorded as on when the file could not be opened
+                // would fail again silently on every future run.
+                let mut settings = settings.borrow_mut();
+                settings.general.log_to_file = started;
+                let _ = settings.save();
+                if let Some(window) = weak.upgrade() {
+                    window.set_preferences_log_to_file(started);
+                }
+            });
+        }
+
+        {
             // The toggle is a user preference, so it outlives the project. A
             // failed save leaves the session's choice in place rather than
             // fighting the user over a checkbox.
@@ -8702,7 +8891,7 @@ impl AppUi {
                     (st.selected, st.source_revision)
                 };
                 let tx = load_tx.clone();
-                dbg_log(&format!("UI: loading sample for channel {channel}"));
+                log_debug!("ui", "loading sample for channel {channel}");
                 std::thread::spawn(move || {
                     let result = pick_sample_via_zenity().map(|path| load_sample_at_path(&path));
                     let _ = tx.send(LoadResult {
@@ -8897,6 +9086,14 @@ impl AppUi {
                             }
                             state.update_document_title(&window);
                             window.set_embed_assets(mode == AssetMode::Embedded);
+                            log_info!(
+                                "project",
+                                "song saved: {} ({} warnings, {} repairs)",
+                                path.display(),
+                                report.warnings.len(),
+                                report.repairs.len()
+                            );
+                            log_repairs("saving the song", &report.repairs);
                             window.set_status_message(
                                 operation_status(
                                     "Song saved",
@@ -8908,6 +9105,8 @@ impl AppUi {
                             );
                         }
                         DocumentResult::SavedOther { label, report } => {
+                            log_info!("project", "{label}");
+                            log_repairs(label, &report.repairs);
                             window.set_status_message(
                                 format!(
                                     "{label}{}{}",
@@ -8918,6 +9117,8 @@ impl AppUi {
                             );
                         }
                         DocumentResult::SavedPreset { label, report } => {
+                            log_info!("project", "{label}");
+                            log_repairs(label, &report.repairs);
                             window.set_status_message(
                                 format!(
                                     "{label}{}{}",
@@ -8930,6 +9131,7 @@ impl AppUi {
                             refresh_preset_menus(&st, &window);
                         }
                         DocumentResult::Exported { path } => {
+                            log_info!("project", "exported {}", path.display());
                             window
                                 .set_status_message(format!("Exported {}", path.display()).into());
                         }
@@ -8938,6 +9140,11 @@ impl AppUi {
                         // little to go on as one that will not save, and the
                         // status bar cannot hold a located, copyable answer.
                         DocumentResult::Failed { action, problem } => {
+                            // Logged here rather than at each failing call
+                            // site: this arm is the one place every document
+                            // failure passes through, so nothing new can be
+                            // added later that forgets to record itself.
+                            log_error!("project", "could not {action}: {}", problem.one_line());
                             window.set_save_error_title(format!("Could not {action}").into());
                             window.set_save_error_detail(problem.message.into());
                             window.set_save_error_report(problem.report.into());
@@ -8959,6 +9166,14 @@ impl AppUi {
                                 warnings,
                                 repairs,
                             } = report;
+                            log_info!(
+                                "project",
+                                "opened {} as {target:?} ({asset_mode:?} assets, {} warnings, {} repairs)",
+                                path.display(),
+                                warnings.len(),
+                                repairs.len()
+                            );
+                            log_repairs("opening the file", &repairs);
                             let current = st
                                 .borrow()
                                 .project_snapshot(window.get_bpm(), window.get_swing_percent());
@@ -9121,7 +9336,7 @@ impl AppUi {
                     let Some(loaded) = (match load.result {
                         Some(Ok(loaded)) => Some(loaded),
                         Some(Err(e)) => {
-                            eprintln!("mooloop: failed to load sample: {e}");
+                            log_error!("ui", "failed to load sample: {e}");
                             None
                         }
                         None => None, // dialog cancelled
@@ -9272,15 +9487,17 @@ impl AppUi {
                                 AudioAction::ApplyPersisted(config) => {
                                     if let Some(target) = config.output_target.clone() {
                                         if let Err(error) = handle.set_output_target(Some(target)) {
-                                            eprintln!(
-                                                "mooloop: could not apply saved output target: {error}"
+                                            log_warn!(
+                                                "audio",
+                                                "could not apply saved output target: {error}"
                                             );
                                         }
                                     }
                                     if let Some(frames) = config.buffer_size {
                                         if let Err(error) = handle.set_buffer_size(frames) {
-                                            eprintln!(
-                                                "mooloop: could not apply saved buffer size: {error}"
+                                            log_warn!(
+                                                "audio",
+                                                "could not apply saved buffer size: {error}"
                                             );
                                         }
                                     }
@@ -9397,7 +9614,10 @@ impl AppUi {
                             }
                         }
                         EngineEvent::Xrun => {
-                            eprintln!("mooloop: JACK reported an xrun (audio dropout)");
+                            // Read off the event queue on the UI thread. The
+                            // audio thread only ever pushes the marker; it
+                            // does no formatting and takes no lock.
+                            log_warn!("audio", "JACK reported an xrun (audio dropout)");
                         }
                         EngineEvent::ProjectInstalled { .. } => {
                             unreachable!("EngineHandle filters project acknowledgements")
@@ -9923,6 +10143,19 @@ fn repair_suffix(count: usize) -> String {
     }
 }
 
+/// Writes every correction to the log, one line each.
+///
+/// The status bar has room for a count and nothing else, but the count is not
+/// the useful part: the code says which invariant the edit layer let through,
+/// and that is the only lead there is on a bug that corrected itself. At
+/// `warn` because a document needing repair is never expected, even though the
+/// user's save went through.
+fn log_repairs(what: &str, repairs: &[Issue]) {
+    for issue in repairs {
+        log_warn!("project", "{what}: [{}] {issue}", issue.code);
+    }
+}
+
 fn operation_status(
     label: &str,
     path: &Path,
@@ -10290,7 +10523,7 @@ fn apply_loaded_sample(
         .and_then(|n| n.to_str())
         .unwrap_or("loaded")
         .to_string();
-    dbg_log(&format!("UI: channel {channel} loaded {name}"));
+    log_debug!("ui", "channel {channel} loaded {name}");
     let waveform = waveform_peaks(&loaded.sample, WAVEFORM_BINS);
     let description = sample_description(&loaded.sample);
     let duration = sample_duration(&loaded.sample);

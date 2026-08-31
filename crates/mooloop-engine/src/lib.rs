@@ -174,8 +174,9 @@ impl Engine {
 
         if let Some(frames) = config.buffer_size {
             if let Err(e) = client.set_buffer_size(frames) {
-                eprintln!(
-                    "mooloop: could not set JACK buffer size to {frames} frames ({e}); \
+                mooloop_core::log_warn!(
+                    "audio",
+                    "could not set JACK buffer size to {frames} frames ({e}); \
                      leaving the server's current buffer size in place"
                 );
             }
@@ -262,8 +263,9 @@ impl Engine {
         for (src, dst) in sources.iter().zip(destinations.iter()) {
             match c.connect_ports_by_name(src, dst) {
                 Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
-                Err(e) => eprintln!(
-                    "mooloop: could not auto-connect {src} -> {dst} ({e}); \
+                Err(e) => mooloop_core::log_warn!(
+                    "audio",
+                    "could not auto-connect {src} -> {dst} ({e}); \
                      connect it manually in a patchbay (e.g. qpwgraph, qjackctl, Helvum)"
                 ),
             }

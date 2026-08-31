@@ -579,6 +579,12 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <string> appearance-scheme-name;
     in-out property <bool> developer-mode;
     in-out property <bool> smooth-curves;
+    // Applied the moment it is toggled rather than on OK, like the audio page:
+    // a diagnostic is wanted for the very next thing the user does, and making
+    // them confirm a dialog first is one more step between a problem and the
+    // record of it.
+    in property <bool> log-to-file;
+    in property <string> log-path;
     in property <string> validation-error;
     in property <[OutputTargetRow]> audio-output-targets;
     in property <int> audio-buffer-size-index;
@@ -603,6 +609,7 @@ export component PreferencesDialog inherits Rectangle {
     callback shortcut-reset(string);
     callback shortcut-reset-all();
     callback open-mockup-tool();
+    callback log-to-file-toggled(bool);
 
     private property <int> page: 0;
 
@@ -822,6 +829,42 @@ export component PreferencesDialog inherits Rectangle {
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 ToolButton { text: "Open"; clicked => { root.open-mockup-tool(); } }
+                            }
+                            SectionLabel { text: "DIAGNOSTICS"; }
+                            HorizontalBox {
+                                height: 36px;
+                                spacing: 8px;
+                                VerticalBox {
+                                    spacing: 0px;
+                                    Text { text: "Write a log file"; color: Theme.text; font-size: 11px; }
+                                    Text { text: "Keep what the console reports, so a problem can be read back later"; color: Theme.text-muted; font-size: 10px; }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                ToggleButton {
+                                    text: "Enabled";
+                                    tooltip: "Mirror the diagnostic log to a file";
+                                    checked: root.log-to-file;
+                                    toggled(v) => { root.log-to-file-toggled(v); }
+                                }
+                            }
+                            // Wrapped so it picks up the same horizontal
+                            // padding as the rows above; a bare child of the
+                            // column sits against the panel edge instead.
+                            HorizontalBox {
+                                // Selectable rather than a plain label:
+                                // someone being asked for their log has to get
+                                // the path into a file manager or a message,
+                                // and retyping it is where that goes wrong.
+                                TextInput {
+                                    text: root.log-path;
+                                    read-only: true;
+                                    single-line: false;
+                                    wrap: word-wrap;
+                                    color: Theme.text-muted;
+                                    font-size: 10px;
+                                    font-family: "monospace";
+                                    selection-background-color: Theme.accent;
+                                }
                             }
                         }
                         // Pads out the short, non-scrolling pages. A page

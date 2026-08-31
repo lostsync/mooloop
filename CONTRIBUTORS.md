@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-31
-- Sessions: 20
+- Sessions: 21
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -129,7 +129,11 @@ work session you can recall being part of, and don't stress over precision.
   reissues rather than refusing, loading does the same instead of leaving a
   song unopenable, and what genuinely cannot be fixed without deleting music
   is reported with its channel, pattern, and the count to delete, next to a
-  copyable machine report.
+  copyable machine report. Then gave the app a diagnostic log, since the
+  documents that failed had all been unsaved ones with nothing left behind to
+  look at: levelled records to stderr from every crate, optionally mirrored to
+  a file from a Developer preference, and a refused song now parked under the
+  config directory with its report beside it rather than dropped.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
