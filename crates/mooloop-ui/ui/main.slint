@@ -19,6 +19,7 @@ import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
 import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
+import { PianoGrid, NoteCell, NoteHit } from "piano-grid.slint";
 import {
     DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics
 } from "device-rack.slint";
@@ -68,16 +69,6 @@ struct StepCell {
     onsets: int,
 }
 
-// One tick-addressed note event for the selected channel's piano roll.
-struct NoteCell {
-    id: int,
-    start-tick: int,
-    duration-ticks: int,
-    note: int,
-    velocity: int,
-    selected: bool,
-}
-
 // One breakpoint in the piano roll's automation lane. `value` is normalised
 // 0..1 against the destination's descriptor, matching how the lane is stored
 // and sent to the engine; the readout converts to natural units for display.
@@ -104,19 +95,6 @@ struct AutomationTargetRow {
     open: bool,
     // True when this is the lane currently shown.
     current: bool,
-}
-
-// Result of asking Rust which note (if any) covers a given tick/MIDI-note
-// cell. The search itself lives in Rust because Slint's imperative language
-// has no loop or recursion construct that survives its binding-loop checker
-// (a self-recursive `pure function` is flagged as a cyclic binding even
-// when it terminates), so there is no way to scan a variable-length note
-// list from within .slint code.
-struct NoteHit {
-    found: bool,
-    id: int,
-    start-tick: int,
-    duration-ticks: int,
 }
 
 // One channel row in the rack.
@@ -3357,263 +3335,38 @@ export component MainWindow inherits Window {
                                             // full MIDI range. Subsequent pan/zoom
                                             // interactions take ownership of this value.
                                             viewport-y: -(root.piano-high-note - 84) * root.piano-row-height;
-                                            Rectangle {
-                                                x: 0px;
-                                                width: root.pattern-length * root.piano-step-width;
-                                                height: root.piano-note-count * root.piano-row-height;
-                                                background: Theme.surface;
-
-                                                // Tick/note <-> pixel conversions and note
-                                                // hit-testing, shared by the cursor and the
-                                                // single hit area below. Kept as functions
-                                                // (not per-note state) so a drag never reads
-                                                // geometry that moved out from under it: see
-                                                // piano-touch for why per-note TouchAreas
-                                                // cannot support a drag at all.
-                                                pure function note-x(start: int) -> length {
-                                                    return start * root.piano-step-width / 24;
+                                            PianoGrid {
+                                                pattern-length: root.pattern-length;
+                                                notes: root.notes;
+                                                low-note: root.piano-low-note;
+                                                high-note: root.piano-high-note;
+                                                note-count: root.piano-note-count;
+                                                snap-ticks: root.piano-snap-ticks;
+                                                step-width <=> root.piano-step-width;
+                                                row-height <=> root.piano-row-height;
+                                                content-w: root.piano-content-w;
+                                                content-h: root.piano-content-h;
+                                                scroll-x: piano-scroll.viewport-x;
+                                                scroll-y: piano-scroll.viewport-y;
+                                                visible-w: piano-scroll.visible-width;
+                                                visible-h: piano-scroll.visible-height;
+                                                hover-hint <=> root.hover-hint;
+                                                note-hit-test(tick, note) => { return root.piano-note-hit-test(tick, note); }
+                                                note-created(start, note, duration) => {
+                                                    return root.piano-note-created(start, note, duration);
                                                 }
-                                                pure function note-width(duration: int) -> length {
-                                                    return max(root.piano-snap-ticks * root.piano-step-width / 24,
-                                                        duration * root.piano-step-width / 24);
-                                                }
-                                                pure function tick-at(x: length) -> int {
-                                                    return floor(x * 24 / root.piano-step-width);
-                                                }
-                                                pure function note-at(y: length) -> int {
-                                                    return clamp(root.piano-high-note - floor(y / root.piano-row-height),
-                                                        root.piano-low-note, root.piano-high-note);
-                                                }
-                                                // 0 = empty grid, 1 = note body (move), 2 = right edge (resize).
-                                                // The edge zone scales with the note so it stays
-                                                // grabbable on a minimum-width note instead of the
-                                                // fixed 5px that used to eat the whole note.
-                                                pure function grab-mode-at(x: length, y: length) -> int {
-                                                    let hit = root.piano-note-hit-test(self.tick-at(x), self.note-at(y));
-                                                    if (!hit.found) {
-                                                        return 0;
-                                                    }
-                                                    let edge = clamp(self.note-width(hit.duration-ticks) / 4, 3px, 8px);
-                                                    return x >= self.note-x(hit.start-tick)
-                                                            + self.note-width(hit.duration-ticks) - edge
-                                                        ? 2 : 1;
-                                                }
-
-                                                for key in root.piano-note-count : Rectangle {
-                                                    y: key * root.piano-row-height;
-                                                    height: root.piano-row-height;
-                                                    width: parent.width;
-                                                    property <int> note-number: root.piano-high-note - key;
-                                                    background: (mod(note-number, 12) == 1
-                                                        || mod(note-number, 12) == 3
-                                                        || mod(note-number, 12) == 6
-                                                        || mod(note-number, 12) == 8
-                                                        || mod(note-number, 12) == 10)
-                                                        ? Theme.surface : Theme.surface-raised;
-                                                }
-
-                                                for division in root.pattern-length * 24 / root.piano-snap-ticks : Rectangle {
-                                                    x: division * root.piano-snap-ticks
-                                                        * root.piano-step-width / 24;
-                                                    width: 1px;
-                                                    height: parent.height;
-                                                    background: mod(division * root.piano-snap-ticks, 24) == 0
-                                                        ? Theme.text-faint : Theme.border;
-                                                    opacity: mod(division * root.piano-snap-ticks, 24) == 0
-                                                        ? 0.8 : 0.5;
-                                                }
-
-                                                for cell in root.notes : Rectangle {
-                                                    x: cell.start-tick * root.piano-step-width / 24;
-                                                    y: (root.piano-high-note - cell.note) * root.piano-row-height;
-                                                    width: max(root.piano-snap-ticks * root.piano-step-width / 24,
-                                                        cell.duration-ticks * root.piano-step-width / 24);
-                                                    height: root.piano-row-height;
-                                                    background: cell.selected ? Theme.focus : Theme.accent;
-                                                    opacity: 0.55 + 0.45 * cell.velocity / 127;
-                                                    border-width: cell.selected ? 1px : 0px;
-                                                    border-color: Theme.text;
-                                                }
-
-                                                // ONE hit area for the whole note grid, exactly
-                                                // like the rack's grid-touch. A TouchArea living
-                                                // inside a per-note Rectangle whose x/width is
-                                                // bound to that note's own tick/duration moves out
-                                                // from under the cursor as soon as the drag updates
-                                                // the model, so mouse-x re-measures against the
-                                                // moved rectangle and the delta collapses to zero
-                                                // after one snap step. Hit-testing from here instead,
-                                                // in this Rectangle's stable coordinates, means the
-                                                // origin never moves during a drag.
-                                                piano-touch := TouchArea {
-                                                    property <int> grabbed-id: -1;
-                                                    property <int> grab-mode: 0; // 0 none, 1 move, 2 resize
-                                                    property <length> origin-x;
-                                                    property <length> origin-y;
-                                                    property <int> original-start;
-                                                    property <int> original-note;
-                                                    property <int> original-duration;
-                                                    // A Ctrl-drag duplicates once, at the
-                                                    // first move rather than on press:
-                                                    // Ctrl-click still has to be able to
-                                                    // mean "toggle selection".
-                                                    property <bool> copied;
-                                                    property <bool> create-click-armed;
-                                                    property <length> create-click-x;
-                                                    property <length> create-click-y;
-                                                    property <int> create-click-start;
-                                                    property <int> create-click-note;
-                                                    property <int> create-click-duration;
-                                                    create-click-timeout := Timer {
-                                                        interval: 350ms;
-                                                        running: false;
-                                                        triggered => {
-                                                            self.running = false;
-                                                            piano-touch.create-click-armed = false;
-                                                        }
-                                                    }
-                                                    mouse-cursor: parent.grab-mode-at(self.mouse-x, self.mouse-y) == 2 ? ew-resize
-                                                        : parent.grab-mode-at(self.mouse-x, self.mouse-y) == 1 ? move
-                                                        : crosshair;
-
-                                                    pointer-event(e) => {
-                                                        if (e.kind == PointerEventKind.down) {
-                                                            let tick = parent.tick-at(self.mouse-x);
-                                                            let note = parent.note-at(self.mouse-y);
-                                                            let hit = root.piano-note-hit-test(tick, note);
-                                                            if (hit.found && e.button == PointerEventButton.right) {
-                                                                self.create-click-armed = false;
-                                                                create-click-timeout.running = false;
-                                                                root.piano-note-removed(hit.id);
-                                                            } else if (hit.found && e.button == PointerEventButton.left) {
-                                                                self.create-click-armed = false;
-                                                                create-click-timeout.running = false;
-                                                                root.piano-note-selected(hit.id, e.modifiers.shift, e.modifiers.control);
-                                                                self.grabbed-id = hit.id;
-                                                                self.copied = false;
-                                                                self.grab-mode = parent.grab-mode-at(self.mouse-x, self.mouse-y);
-                                                                self.origin-x = self.mouse-x;
-                                                                self.origin-y = self.mouse-y;
-                                                                self.original-start = hit.start-tick;
-                                                                self.original-note = note;
-                                                                self.original-duration = hit.duration-ticks;
-                                                            } else if (!hit.found && e.button == PointerEventButton.left) {
-                                                                let start-tick = clamp(
-                                                                    floor(tick / root.piano-snap-ticks) * root.piano-snap-ticks,
-                                                                    0, max(0, root.pattern-length * 24
-                                                                        - root.piano-snap-ticks));
-                                                                let duration = min(root.piano-snap-ticks,
-                                                                    root.pattern-length * 24 - start-tick);
-                                                                if (self.create-click-armed
-                                                                        && abs(self.mouse-x - self.create-click-x) <= 6px
-                                                                        && abs(self.mouse-y - self.create-click-y) <= 6px
-                                                                        && self.create-click-start == start-tick
-                                                                        && self.create-click-note == note) {
-                                                                    let id = root.piano-note-created(start-tick, note, duration);
-                                                                    self.grabbed-id = id;
-                                                                    self.copied = false;
-                                                                    self.grab-mode = 2;
-                                                                    self.origin-x = self.mouse-x;
-                                                                    self.origin-y = self.mouse-y;
-                                                                    self.original-start = start-tick;
-                                                                    self.original-note = note;
-                                                                    self.original-duration = duration;
-                                                                    self.create-click-armed = false;
-                                                                    create-click-timeout.running = false;
-                                                                } else {
-                                                                    self.create-click-armed = true;
-                                                                    self.create-click-x = self.mouse-x;
-                                                                    self.create-click-y = self.mouse-y;
-                                                                    self.create-click-start = start-tick;
-                                                                    self.create-click-note = note;
-                                                                    self.create-click-duration = duration;
-                                                                    create-click-timeout.running = true;
-                                                                }
-                                                            }
-                                                        } else if (e.kind == PointerEventKind.move
-                                                                && self.pressed && self.grabbed-id >= 0) {
-                                                            // Shift frees the drag from the
-                                                            // grid on both axes' time
-                                                            // component, matching the
-                                                            // automation lane.
-                                                            let raw-ticks = (self.mouse-x - self.origin-x)
-                                                                * 24 / root.piano-step-width;
-                                                            let delta-ticks = e.modifiers.shift
-                                                                ? round(raw-ticks)
-                                                                : round(raw-ticks / root.piano-snap-ticks)
-                                                                    * root.piano-snap-ticks;
-                                                            if (self.grab-mode == 2) {
-                                                                let max-duration = max(root.piano-snap-ticks,
-                                                                    root.pattern-length * 24 - self.original-start);
-                                                                let duration = clamp(
-                                                                    self.original-duration + delta-ticks,
-                                                                    e.modifiers.shift
-                                                                        ? 1
-                                                                        : min(root.piano-snap-ticks, max-duration),
-                                                                    max-duration);
-                                                                root.piano-note-resized(self.grabbed-id, duration);
-                                                            } else {
-                                                                if (e.modifiers.control && !self.copied) {
-                                                                    self.copied = true;
-                                                                    let copy = root.piano-selection-duplicated(
-                                                                        self.grabbed-id);
-                                                                    if (copy >= 0) {
-                                                                        self.grabbed-id = copy;
-                                                                    }
-                                                                }
-                                                                let tick = clamp(self.original-start + delta-ticks,
-                                                                    0, max(0, root.pattern-length * 24 - self.original-duration));
-                                                                let note = clamp(self.original-note
-                                                                        + round((self.origin-y - self.mouse-y)
-                                                                            / root.piano-row-height),
-                                                                    root.piano-low-note, root.piano-high-note);
-                                                                root.piano-note-moved(self.grabbed-id, tick, note);
-                                                            }
-                                                        } else if (e.kind == PointerEventKind.up) {
-                                                            self.grabbed-id = -1;
-                                                            self.grab-mode = 0;
-                                                            self.copied = false;
-                                                        }
-                                                    }
-                                                    // Ctrl+wheel zooms pitch under the pointer.
-                                                    // Add Shift to zoom time instead. Ordinary wheel
-                                                    // input is left to ScrollView for panning.
-                                                    scroll-event(e) => {
-                                                        if (e.modifiers.control && e.delta-y != 0px) {
-                                                            let factor = e.delta-y < 0px ? 1.15 : 0.87;
-                                                            if (e.modifiers.shift) {
-                                                                let old-width = root.piano-step-width;
-                                                                let next-width = clamp(old-width * factor, 20px, 72px);
-                                                                let content-x = self.mouse-x - piano-scroll.viewport-x;
-                                                                root.piano-step-width = next-width;
-                                                                piano-scroll.viewport-x = clamp(
-                                                                    self.mouse-x - content-x * next-width / old-width,
-                                                                    min(0px, piano-scroll.visible-width - root.piano-content-w),
-                                                                    0px);
-                                                            } else {
-                                                                let old-height = root.piano-row-height;
-                                                                let next-height = clamp(old-height * factor, 5px, 16px);
-                                                                let content-y = self.mouse-y - piano-scroll.viewport-y;
-                                                                root.piano-row-height = next-height;
-                                                                piano-scroll.viewport-y = clamp(
-                                                                    self.mouse-y - content-y * next-height / old-height,
-                                                                    min(0px, piano-scroll.visible-height - root.piano-content-h),
-                                                                    0px);
-                                                            }
-                                                            accept
-                                                        } else { reject }
-                                                    }
-                                                    // A Tooltip here would hover-linger for as long as
-                                                    // the piano roll is in use, since this one TouchArea
-                                                    // covers the whole note canvas. Use the status bar
-                                                    // instead, which clears the moment the pointer moves
-                                                    // to something else.
-                                                    changed has-hover => {
-                                                        root.hover-hint = self.has-hover
-                                                            ? "Drag moves the selection. Ctrl+drag copies, Shift+drag defeats snap. Ctrl+wheel zooms pitch, Ctrl+Shift+wheel zooms time."
-                                                            : root.hover-hint == "Drag moves the selection. Ctrl+drag copies, Shift+drag defeats snap. Ctrl+wheel zooms pitch, Ctrl+Shift+wheel zooms time."
-                                                                ? "" : root.hover-hint;
-                                                    }
+                                                note-selected(id, shift, ctrl) => { root.piano-note-selected(id, shift, ctrl); }
+                                                note-moved(id, start, note) => { root.piano-note-moved(id, start, note); }
+                                                selection-duplicated(id) => { return root.piano-selection-duplicated(id); }
+                                                note-resized(id, duration) => { root.piano-note-resized(id, duration); }
+                                                note-removed(id) => { root.piano-note-removed(id); }
+                                                // Assigning over `viewport-y`'s initial binding is deliberate and
+                                                // is what the inline handler did before: the first pan or zoom
+                                                // takes ownership of the scroll position from the default
+                                                // register the roll opens on.
+                                                pan(x, y) => {
+                                                    piano-scroll.viewport-x = x;
+                                                    piano-scroll.viewport-y = y;
                                                 }
                                             }
                                             }

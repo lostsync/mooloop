@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-31
-- Sessions: 25
+- Sessions: 26
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -189,6 +189,10 @@ work session you can recall being part of, and don't stress over precision.
   `None` means "follow amp" and reproduces an old patch's filter motion
   exactly rather than approximately. Editing one stage materializes all four,
   seeded from where the envelope was reading, so the other three do not jump.
+  Started the piano roll's mouse-editing pass by lifting the note canvas out
+  of `main.slint` into its own `PianoGrid`: the one hit area that owns every
+  grid gesture was sitting at 48 columns of indent, which is not somewhere
+  marquee, tool modes, and scale handles can be added legibly.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
