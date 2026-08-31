@@ -193,6 +193,12 @@ routing, groups, sends, and resampling-source selection.
   source, destination, route, rate, and latency model must remain capable of
   this view, but the normal ordered rack and direct-manipulation modulation UI
   come first.
+- Node-based patching in the device rack, with devices staying opinionated
+  instruments and user-assembled objects wired around them. Recorded in
+  `docs/NODE_MODEL.md`, which is a direction rather than a plan: it is wanted
+  for its own sake rather than pulled in by a workflow, and the audio domain
+  needs latency compensation first. What keeps it reachable is the three
+  habits in `COMPOSABLE_DEVICE_UNITS.md`, not infrastructure built ahead of it.
 - MIDI input/output and controller mapping.
 - Plugin hosting.
 - Multiple time signatures and tempo maps.

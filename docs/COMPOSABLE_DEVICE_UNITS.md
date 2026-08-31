@@ -399,6 +399,47 @@ When adding or extracting a reusable unit, answer:
 If the last answer is only theoretical, keep the boundary conceptual until a
 second real use makes the shared unit honest.
 
+## What we actually do now
+
+Everything above is a target. Most of it is unimplemented: there is no port
+table, no `unit.inputs()`, no published outlet, and `AudioNode` is still just
+latency plus an in-place stereo process call. That gap is deliberate — the
+contract is a design rule, and building its infrastructure ahead of a
+demonstrated workflow is how it would turn into ceremony.
+
+Three of its habits are load-bearing today, though, and they are cheap. They
+are the difference between a contract that stays reachable and one that has to
+be retrofitted against fused code. Follow them whether or not the port
+metadata ever exists:
+
+**1. A value that matters gets a name and a stable identity, not a local.**
+If a signal has musical meaning — a phase, an envelope output, an oscillator
+tap, a read head position — it must be reachable by something other than the
+expression that computed it. Naming a value later is cheap when it is already
+a field with a defined meaning, and impossible when it only ever existed
+halfway through a line of arithmetic.
+
+`Osc` is the live counter-example: its `phase` is private with no reset, no
+wrap event, and no way to read it. That is why hard sync cannot be built on
+it without changing the primitive, and why sine and saw cannot be tapped from
+one phase at the same time.
+
+**2. Do not fuse topology that costs nothing to keep separable.**
+A voice may hold oscillator, filter, and amplifier in a fixed internal order
+and still be a well-formed unit. It stops being one when those stages are
+inlined into a single unsplittable expression for no measured reason. Fixed
+topology is fine; fused topology is not.
+
+**3. Address things relatively, never absolutely.**
+Anything a fragment might be saved and reloaded elsewhere must not name its
+neighbours by index. `ModRoute` named its destination channel absolutely, so a
+channel preset saved from channel 3 modulated channel 3 wherever it was
+loaded; `rescope_modulation` exists to undo that. Assume any unit may be moved.
+
+None of the three is a bet on a node editor. They are ordinary hygiene, they
+make the code better if no graph view is ever built, and they are the reason
+the option stays open at close to zero cost.
+
 ## Long-term consequence
 
 Maintaining this contract lets mooloop eventually support a node editor

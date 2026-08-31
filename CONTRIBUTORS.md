@@ -152,7 +152,17 @@ work session you can recall being part of, and don't stress over precision.
   feedback gain. Found on the way that Acid's corner sits three quarters of an
   octave below the other two, and that correcting it breaks the filter's
   resonance taper outright -- so the miscalibration is load-bearing, and it is
-  recorded rather than fixed.
+  recorded rather than fixed. Then captured a design conversation without
+  building any of it: Adam wants node-based patching because he likes it, not
+  because a workflow demanded it, so it went to `docs/NODE_MODEL.md` as a
+  recorded direction — devices staying opinionated externals with objects
+  wired around them in the rack, and a note/control/audio cost table showing
+  the audio case needs delay compensation first. What that conversation did
+  surface as real is the preset system: device-level presets were asked for
+  and never delivered, effect presets do not exist, and the ML-M1 bank already
+  paid for it. Queued in `docs/plans/preset-system/`. The part adopted now is
+  three cheap habits in `COMPOSABLE_DEVICE_UNITS.md` that keep a node view
+  reachable without betting on one.
   Then gave the sampler its own output trim. Two things only the code could
   settle: the builtin kick looked like it would be quietened by a trimmed
   default until it turned out to be reachable only through the legacy
