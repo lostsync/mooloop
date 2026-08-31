@@ -61,6 +61,16 @@ impl WsolaConfig {
         corr_decim: 4,
         transient_snap: true,
     };
+    /// Intermediate window: between FAST's transient accuracy and NO_SNAP's
+    /// tonal stability. Added after the first run showed 512 winning on the
+    /// break and 1024 winning on a steady tone.
+    pub const BREAK: Self = Self {
+        name: "wsola_break",
+        window: 768,
+        search: 384,
+        corr_decim: 2,
+        transient_snap: false,
+    };
     /// Ablation: MUSIC with the onset table switched off, to isolate how much
     /// of the transient result comes from snapping rather than from WSOLA.
     pub const NO_SNAP: Self = Self {

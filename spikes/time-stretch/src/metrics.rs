@@ -59,6 +59,7 @@ pub fn onsets(frames: &[[f32; 2]], sample_rate: u32) -> Vec<usize> {
         return Vec::new();
     }
     let mut flux = vec![0.0f32; spec.len()];
+    let mut total = 0.0f32;
     for t in 1..spec.len() {
         let mut sum = 0.0f32;
         for k in 0..spec[t].len() {
@@ -69,9 +70,16 @@ pub fn onsets(frames: &[[f32; 2]], sample_rate: u32) -> Vec<usize> {
         }
         flux[t] = sum;
     }
-    let peak = flux.iter().cloned().fold(0.0f32, f32::max).max(1.0e-9);
+    for frame in &spec {
+        total += frame.iter().sum::<f32>();
+    }
+    // Normalizing by the *average frame magnitude* rather than by the peak
+    // flux is what keeps a steady tone from reading as a stream of onsets:
+    // peak normalization rescales window-leakage wobble up to full scale as
+    // soon as the signal has no real onsets in it at all.
+    let norm = (total / spec.len() as f32).max(1.0e-9);
     for v in flux.iter_mut() {
-        *v /= peak;
+        *v /= norm;
     }
 
     let median_span = 12usize;
@@ -85,7 +93,7 @@ pub fn onsets(frames: &[[f32; 2]], sample_rate: u32) -> Vec<usize> {
         scratch.extend_from_slice(&flux[lo..hi]);
         scratch.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let median = scratch[scratch.len() / 2];
-        let threshold = median * 2.2 + 0.035;
+        let threshold = median * 2.0 + 0.22;
         let is_local_max = (t.saturating_sub(2)..(t + 3).min(flux.len()))
             .all(|j| flux[t] >= flux[j]);
         if flux[t] > threshold && is_local_max {
@@ -376,22 +384,82 @@ pub fn side_mid_db(frames: &[[f32; 2]]) -> f32 {
     (10.0 * ((s.max(1.0e-18)) / (m.max(1.0e-18))).log10()) as f32
 }
 
-/// How far the largest sample-to-sample step near `at` sticks out above the
-/// signal's own 99.9th-percentile step, in dB. Above roughly +6 dB there is an
-/// audible click.
-pub fn discontinuity_db(x: &[f32], at: usize) -> f32 {
-    if x.len() < 8 {
+/// Second difference of the signal: flat for a smooth waveform, spiky at any
+/// splice discontinuity. Used instead of a first difference because a first
+/// difference is large wherever the signal is simply loud.
+fn curvature(x: &[f32]) -> Vec<f32> {
+    if x.len() < 3 {
+        return vec![0.0; x.len()];
+    }
+    let mut d = vec![0.0f32; x.len()];
+    for i in 1..x.len() - 1 {
+        d[i] = (x[i + 1] - 2.0 * x[i] + x[i - 1]).abs();
+    }
+    d
+}
+
+/// Worst curvature inside `+/- radius` of `at`, in dB above the signal's own
+/// 99th-percentile curvature.
+///
+/// The radius has to be wide: WSOLA's similarity search moves the actual join
+/// by up to `search` frames either side of the nominal position, so a narrow
+/// probe measures whatever happens to sit at the nominal index instead of the
+/// join. Callers subtract the same statistic taken at a control position so
+/// that material which is naturally spiky does not read as a glitch.
+pub fn glitch_db(x: &[f32], at: usize, radius: usize) -> f32 {
+    if x.len() < 32 {
         return 0.0;
     }
-    let mut steps: Vec<f32> = x.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
-    let local_lo = at.saturating_sub(3).min(steps.len().saturating_sub(1));
-    let local_hi = (at + 3).min(steps.len());
-    let local = steps[local_lo..local_hi.max(local_lo + 1)]
-        .iter()
-        .fold(0.0f32, |a, v| a.max(*v));
-    steps.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let p999 = steps[(steps.len() as f32 * 0.999) as usize % steps.len()];
-    db(local) - db(p999.max(1.0e-9))
+    let d = curvature(x);
+    let lo = at.saturating_sub(radius);
+    let hi = (at + radius).min(d.len());
+    if lo >= hi {
+        return 0.0;
+    }
+    let local = d[lo..hi].iter().fold(0.0f32, |a, v| a.max(*v));
+    let mut sorted = d.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let p99 = sorted[((sorted.len() as f32 * 0.99) as usize).min(sorted.len() - 1)];
+    db(local) - db(p99.max(1.0e-9))
+}
+
+/// Fraction of total energy still sitting within `+/- 20 Hz` of `f0`, in dB.
+///
+/// On a pure input tone this is the single most direct read on the artifacts
+/// people describe as phasiness, roughness, or warble: every one of them moves
+/// energy out of the fundamental and into sidebands or splice noise. A perfect
+/// stretcher scores 0 dB.
+pub fn tonal_purity_db(x: &[f32], sample_rate: u32, f0: f32) -> Option<f32> {
+    let n = 32768usize;
+    if x.len() < n {
+        return None;
+    }
+    let offset = (x.len() - n) / 2;
+    let window = hann(n);
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(n);
+    let mut scratch = vec![Complex::new(0.0, 0.0); fft.get_inplace_scratch_len()];
+    let mut buf: Vec<Complex<f32>> = (0..n)
+        .map(|i| Complex::new(x[offset + i] * window[i], 0.0))
+        .collect();
+    fft.process_with_scratch(&mut buf, &mut scratch);
+    let bins = n / 2;
+    let hz_per_bin = sample_rate as f32 / n as f32;
+    let k0 = ((f0 - 20.0) / hz_per_bin).floor().max(1.0) as usize;
+    let k1 = (((f0 + 20.0) / hz_per_bin).ceil() as usize).min(bins - 1);
+    let mut band = 0.0f64;
+    let mut total = 0.0f64;
+    for k in 1..bins {
+        let e = buf[k].norm_sqr() as f64;
+        total += e;
+        if k >= k0 && k <= k1 {
+            band += e;
+        }
+    }
+    if total <= 1.0e-20 {
+        return None;
+    }
+    Some((10.0 * (band / total).log10()) as f32)
 }
 
 /// Time until a steady signal's short-time level first reaches 90% of its

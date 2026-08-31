@@ -203,7 +203,9 @@ pub fn bass_line() -> Fixture {
         name: "bass_line",
         frames,
         true_onsets: onsets,
-        f0: Some(55.0),
+        // Deliberately `None`: this fixture changes note, so a whole-render
+        // spectral peak does not correspond to any single nominal pitch.
+        f0: None,
     }
 }
 
@@ -296,12 +298,28 @@ pub fn stereo_wide() -> Fixture {
     }
 }
 
+/// One sustained bass note. `bass_line` cannot be used for pitch error because
+/// it contains several different notes, so the strongest partial over the whole
+/// render belongs to whichever note is longest, not to the nominal root.
+pub fn bass_note() -> Fixture {
+    let len = secs(2.5);
+    let mut frames = vec![[0.0f32; 2]; len];
+    saw(&mut frames, 0, len, 55.0, 0.8, 0.15);
+    Fixture {
+        name: "bass_note",
+        frames,
+        true_onsets: vec![0],
+        f0: Some(55.0),
+    }
+}
+
 pub fn all() -> Vec<Fixture> {
     vec![
         drum_break(),
         percussive_oneshot(),
         click_train(),
         bass_line(),
+        bass_note(),
         sine_tone(),
         mixed_loop(),
         stereo_wide(),

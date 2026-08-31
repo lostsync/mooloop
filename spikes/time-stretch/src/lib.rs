@@ -1,3 +1,8 @@
+#![allow(clippy::needless_range_loop)]
+// Spectral code indexes several parallel arrays by bin number at once. The
+// iterator rewrite clippy suggests needs a zip chain per loop and reads worse
+// than `for k in 0..bins`, so the lint is off for this throwaway crate.
+
 //! Time-stretch spike harness for issue #32.
 //!
 //! Throwaway comparison code. Nothing here is meant to ship; the point is to

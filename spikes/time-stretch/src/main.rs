@@ -1,3 +1,8 @@
+#![allow(clippy::needless_range_loop)]
+// Spectral code indexes several parallel arrays by bin number at once. The
+// iterator rewrite clippy suggests needs a zip chain per loop and reads worse
+// than `for k in 0..bins`, so the lint is off for this throwaway crate.
+
 //! Comparison harness for issue #32.
 //!
 //! Run with `scripts/antibox cargo run --release -p mooloop-spike-time-stretch`.
@@ -70,6 +75,9 @@ fn candidates() -> Vec<(&'static str, Factory)> {
         ("wsola_smooth", |r| {
             Box::new(Wsola::new(WsolaConfig::SMOOTH, r))
         }),
+        ("wsola_break", |r| {
+            Box::new(Wsola::new(WsolaConfig::BREAK, r))
+        }),
         ("wsola_nosnap", |r| {
             Box::new(Wsola::new(WsolaConfig::NO_SNAP, r))
         }),
@@ -125,7 +133,7 @@ fn quality_matrix(prepared: &[Prepared]) {
     println!(
         "fixture,candidate,ratio,out_frames,dur_err_frames,onset_matched,onset_missed,\
 onset_spurious,onset_mean_err_ms,onset_max_err_ms,rise_ratio,crest_delta_db,ltas_dist_db,\
-pitch_err_cents,corr_delta,side_delta_db"
+pitch_err_cents,tonal_purity_db,corr_delta,side_delta_db"
     );
     for p in prepared {
         let src = Source::whole(&p.fixture.frames, &p.onsets);
@@ -200,11 +208,15 @@ pitch_err_cents,corr_delta,side_delta_db"
                         .unwrap_or(f32::NAN),
                     None => f32::NAN,
                 };
+                let purity = match p.fixture.f0 {
+                    Some(f0) => metrics::tonal_purity_db(&out_mid, SR, f0).unwrap_or(f32::NAN),
+                    None => f32::NAN,
+                };
                 let corr_delta = metrics::stereo_correlation(&out) - p.src_corr;
                 let side_delta = metrics::side_mid_db(&out) - p.src_side_db;
 
                 println!(
-                    "{},{},{:.3},{},{},{},{},{},{:.2},{:.2},{:.3},{:.2},{:.2},{:.1},{:.3},{:.2}",
+                    "{},{},{:.3},{},{},{},{},{},{:.2},{:.2},{:.3},{:.2},{:.2},{:.1},{:.2},{:.3},{:.2}",
                     p.fixture.name,
                     name,
                     ratio,
@@ -219,6 +231,7 @@ pitch_err_cents,corr_delta,side_delta_db"
                     crest_delta,
                     ltas_dist,
                     pitch_err,
+                    purity,
                     corr_delta,
                     side_delta,
                 );
@@ -324,11 +337,17 @@ budget_us,worst_pct_of_budget,state_bytes"
     }
 }
 
-fn ratio_change(prepared: &Prepared) {
+fn ratio_change() {
     println!();
-    println!("## live_ratio_change (discontinuity above the signal's own 99.9th-pct step)");
-    println!("candidate,from,to,discontinuity_db");
-    let src = Source::looped(&prepared.fixture.frames, &prepared.onsets);
+    println!("## live_ratio_change");
+    println!("# Measured on a looped 440 Hz tone, where the only thing that can");
+    println!("# produce curvature at the change point is the algorithm itself.");
+    println!("# `excess_db` is the glitch at the change minus the same statistic");
+    println!("# at an untouched control point. Roughly: >6 dB is an audible click.");
+    println!("candidate,from,to,seam_db,control_db,excess_db");
+    let tone = fixtures::sine_tone();
+    let onsets: Vec<usize> = Vec::new();
+    let src = Source::looped(&tone.frames, &onsets);
     for (name, factory) in candidates() {
         for (from, to) in [(1.0f64, 1.5f64), (1.0, 0.75), (1.25, 1.26), (0.5, 2.0)] {
             let mut st = factory(from);
@@ -346,32 +365,56 @@ fn ratio_change(prepared: &Prepared) {
                 pos += n;
             }
             let m = metrics::mid(&out);
-            let d = metrics::discontinuity_db(&m, half);
-            println!("{name},{from:.2},{to:.2},{d:.1}");
+            let radius = 2048usize;
+            let seam = metrics::glitch_db(&m, half, radius);
+            let control = metrics::glitch_db(&m, half / 2, radius);
+            println!("{name},{from:.2},{to:.2},{seam:.1},{control:.1},{:.1}", seam - control);
         }
     }
 }
 
-fn loop_seam(prepared: &Prepared) {
+fn loop_seam() {
     println!();
-    println!("## loop_seam (discontinuity at the wrap, dB above 99.9th-pct step)");
-    println!("candidate,ratio,worst_seam_db");
-    let src = Source::looped(&prepared.fixture.frames, &prepared.onsets);
-    let loop_len = prepared.fixture.frames.len();
-    for (name, factory) in candidates() {
-        for ratio in [0.75f64, 1.0, 1.5] {
-            let mut st = factory(ratio);
-            let out_len = (loop_len as f64 * ratio * 2.6) as usize;
-            let out = render_all(st.as_mut(), &src, 0, out_len);
-            let m = metrics::mid(&out);
-            let mut worst = f32::NEG_INFINITY;
-            for k in 1..=2 {
-                let at = (loop_len as f64 * ratio * k as f64).round() as usize;
-                if at + 8 < m.len() {
-                    worst = worst.max(metrics::discontinuity_db(&m, at));
+    println!("## loop_seam");
+    println!("# Stationary loop material, so any curvature spike at the wrap is");
+    println!("# the algorithm's join and nothing else. Same excess_db reading.");
+    println!("candidate,material,ratio,seam_db,control_db,excess_db");
+    let materials = [fixtures::sine_tone(), fixtures::stereo_wide()];
+    for material in &materials {
+        let onsets: Vec<usize> = Vec::new();
+        let src = Source::looped(&material.frames, &onsets);
+        let loop_len = material.frames.len();
+        for (name, factory) in candidates() {
+            for ratio in [0.75f64, 1.0, 1.5] {
+                let mut st = factory(ratio);
+                let out_len = (loop_len as f64 * ratio * 2.6) as usize;
+                let out = render_all(st.as_mut(), &src, 0, out_len);
+                let m = metrics::mid(&out);
+                let radius = 2048usize;
+                let mut worst = f32::NEG_INFINITY;
+                for k in 1..=2 {
+                    let at = (loop_len as f64 * ratio * k as f64).round() as usize;
+                    if at + radius < m.len() {
+                        worst = worst.max(metrics::glitch_db(&m, at, radius));
+                    }
                 }
+                // Control point deliberately half a loop away from any wrap.
+                let control_at = (loop_len as f64 * ratio * 1.5).round() as usize;
+                let control = if control_at + radius < m.len() {
+                    metrics::glitch_db(&m, control_at, radius)
+                } else {
+                    0.0
+                };
+                println!(
+                    "{},{},{:.2},{:.1},{:.1},{:.1}",
+                    name,
+                    material.name,
+                    ratio,
+                    worst,
+                    control,
+                    worst - control
+                );
             }
-            println!("{name},{ratio:.2},{worst:.1}");
         }
     }
 }
@@ -503,8 +546,8 @@ fn main() {
     block_agreement(brk);
     allocation_gate(brk);
     cpu_budget(brk);
-    ratio_change(brk);
-    loop_seam(brk);
+    ratio_change();
+    loop_seam();
     note_on_ramp();
     prepare_cost();
     write_renders(&prepared);
