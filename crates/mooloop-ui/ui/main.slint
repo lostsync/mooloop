@@ -672,6 +672,12 @@ export component MainWindow inherits Window {
     property <length> piano-content-w: root.pattern-length * root.piano-step-width;
     property <length> piano-content-h: root.piano-note-count * root.piano-row-height;
 
+    // A pointer gesture reports an edit on every move frame. Bracketing the
+    // gesture lets the history collapse those frames into the one undo step
+    // the user thinks they performed; without it a single note drag costs
+    // twenty undos.
+    callback piano-gesture-begin();
+    callback piano-gesture-end();
     callback piano-note-created(int, int, int) -> int;  // start tick, MIDI note, duration ticks -> stable note ID
     callback piano-note-selected(int, bool, bool); // stable note ID, shift held, ctrl held
     // ID, start tick, MIDI note. The ID names the note under the pointer; the
@@ -3352,6 +3358,8 @@ export component MainWindow inherits Window {
                                                 visible-h: piano-scroll.visible-height;
                                                 hover-hint <=> root.hover-hint;
                                                 note-hit-test(tick, note) => { return root.piano-note-hit-test(tick, note); }
+                                                gesture-begin() => { root.piano-gesture-begin(); }
+                                                gesture-end() => { root.piano-gesture-end(); }
                                                 note-created(start, note, duration) => {
                                                     return root.piano-note-created(start, note, duration);
                                                 }

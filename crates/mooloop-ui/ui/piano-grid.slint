@@ -53,6 +53,8 @@ export component PianoGrid inherits Rectangle {
     in-out property <string> hover-hint;
 
     pure callback note-hit-test(int, int) -> NoteHit; // tick, MIDI note
+    callback gesture-begin();
+    callback gesture-end();
     callback note-created(int, int, int) -> int;      // start tick, note, duration -> id
     callback note-selected(int, bool, bool);          // id, shift held, ctrl held
     callback note-moved(int, int, int);               // id, start tick, note
@@ -187,6 +189,10 @@ export component PianoGrid inherits Rectangle {
 
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
+                // Opened before anything is edited, so the note a
+                // double-click creates belongs to the same gesture as the
+                // length drag that immediately follows it.
+                root.gesture-begin();
                 let tick = root.tick-at(self.mouse-x);
                 let note = root.note-at(self.mouse-y);
                 let hit = root.note-hit-test(tick, note);
@@ -282,6 +288,7 @@ export component PianoGrid inherits Rectangle {
                 self.grabbed-id = -1;
                 self.grab-mode = 0;
                 self.copied = false;
+                root.gesture-end();
             }
         }
         // Ctrl+wheel zooms pitch under the pointer.

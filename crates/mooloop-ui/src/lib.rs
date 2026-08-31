@@ -529,6 +529,13 @@ struct CommandState {
     history: History<ProjectSnapshot>,
     project_edit_pending: bool,
     pane: Pane,
+    /// Token identifying the pointer gesture currently in flight, if one is.
+    /// A drag reports an edit on every move frame; stamping them all with the
+    /// same token is what collapses them into one undo step.
+    gesture: Option<u64>,
+    /// Source of the next token. Monotonic rather than a bool so that two
+    /// drags separated by a release never look like one continuous gesture.
+    next_gesture: u64,
 }
 
 /// The work-surface/lower-dock combination a `view.pane-*` shortcut
@@ -796,6 +803,7 @@ fn queue_project_edit(
         before,
         after: after.clone(),
         label: status,
+        gesture: None,
     };
     tx.send(ProjectEdit {
         project: after.project,
@@ -854,11 +862,16 @@ fn record_project_history(
     label: &'static str,
 ) {
     let after = project_snapshot(&state.borrow(), window);
-    commands.borrow_mut().history.record(HistoryEntry {
-        before,
-        after,
-        label,
-    });
+    {
+        let mut open = commands.borrow_mut();
+        let gesture = open.gesture;
+        open.history.record(HistoryEntry {
+            before,
+            after,
+            label,
+            gesture,
+        });
+    }
     sync_command_availability(window, &commands.borrow());
 }
 
@@ -5416,6 +5429,23 @@ impl AppUi {
         }
 
         // Tick-addressed piano-roll editing.
+        {
+            // A drag's move frames each record an edit. Bracketing them with
+            // one token collapses them into a single undo step; see
+            // `History::record`.
+            let commands = command_state.clone();
+            window.on_piano_gesture_begin(move || {
+                let mut commands = commands.borrow_mut();
+                commands.next_gesture = commands.next_gesture.wrapping_add(1);
+                commands.gesture = Some(commands.next_gesture);
+            });
+        }
+        {
+            let commands = command_state.clone();
+            window.on_piano_gesture_end(move || {
+                commands.borrow_mut().gesture = None;
+            });
+        }
         {
             let tx = cmd_tx.clone();
             let st = state.clone();

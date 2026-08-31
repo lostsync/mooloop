@@ -462,3 +462,58 @@ fn shift_drag_leaves_the_grid() {
         "Shift-drag still snapped to the grid: {moves:?}"
     );
 }
+
+/// A drag reports an edit on every move frame, and each of those used to
+/// become its own undo entry, so moving a note across the grid cost twenty
+/// undos to take back. The history collapses frames that share a gesture
+/// token (`History::record`); this asserts the grid actually brackets a drag
+/// with exactly one token, which is what makes that collapsing apply.
+#[test]
+fn a_drag_opens_and_closes_exactly_one_gesture() {
+    let ui = harness(one_note());
+    let marks: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let marks = marks.clone();
+        ui.on_piano_gesture_begin(move || marks.borrow_mut().push("begin"));
+    }
+    {
+        let marks = marks.clone();
+        ui.on_piano_gesture_end(move || marks.borrow_mut().push("end"));
+    }
+    let moves = Rc::new(RefCell::new(0usize));
+    {
+        let moves = moves.clone();
+        ui.on_piano_note_moved(move |_, _, _| *moves.borrow_mut() += 1);
+    }
+
+    let start = (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60));
+    drag(ui.window(), start, (start.0 + 4.0 * STEP_WIDTH, note_centre_y(62)));
+
+    assert!(
+        *moves.borrow() > 1,
+        "the drag needs several move frames for coalescing to mean anything"
+    );
+    assert_eq!(
+        *marks.borrow(),
+        vec!["begin", "end"],
+        "one press-to-release drag is one gesture, however many frames it took"
+    );
+}
+
+/// Two separate drags have to stay two undo steps, so the grid must close its
+/// gesture on release rather than leaving one open across the gap.
+#[test]
+fn two_drags_are_two_gestures() {
+    let ui = harness(one_note());
+    let begins = Rc::new(RefCell::new(0usize));
+    {
+        let begins = begins.clone();
+        ui.on_piano_gesture_begin(move || *begins.borrow_mut() += 1);
+    }
+
+    let start = (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60));
+    drag(ui.window(), start, (start.0 + 2.0 * STEP_WIDTH, note_centre_y(60)));
+    drag(ui.window(), start, (start.0 + 2.0 * STEP_WIDTH, note_centre_y(60)));
+
+    assert_eq!(*begins.borrow(), 2);
+}

@@ -192,7 +192,12 @@ work session you can recall being part of, and don't stress over precision.
   Started the piano roll's mouse-editing pass by lifting the note canvas out
   of `main.slint` into its own `PianoGrid`: the one hit area that owns every
   grid gesture was sitting at 48 columns of indent, which is not somewhere
-  marquee, tool modes, and scale handles can be added legibly.
+  marquee, tool modes, and scale handles can be added legibly. Then gave the
+  undo history a gesture token, because a drag records an edit per move frame
+  and each was becoming its own undo entry -- moving a note across the grid
+  cost twenty undos to take back. Frames sharing a token collapse into one
+  entry spanning the whole drag; tokens rather than labels, so two separate
+  drags of the same kind stay two steps.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
