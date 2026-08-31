@@ -541,7 +541,7 @@ mod tests {
             let peak_out = bus.l[..frames].iter().fold(0.0f32, |a, s| a.max(s.abs()));
             let max_error = bus.l[..frames]
                 .iter()
-                .map(|out| *out)
+                .copied()
                 .zip(quiet_sine(frames).l[..frames].iter())
                 .map(|(out, dry)| (out - dry).abs())
                 .fold(0.0f32, f32::max);
