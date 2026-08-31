@@ -337,6 +337,59 @@ budget_us,worst_pct_of_budget,state_bytes"
     }
 }
 
+fn voice_scaling(prepared: &Prepared) {
+    println!();
+    println!("## polyphony_budget (block 128 = 2667 us, ratio 1.25, one core)");
+    println!("# Real instances rendering into the same block, so this includes");
+    println!("# the cache pressure a per-voice state footprint actually causes.");
+    println!("candidate,voices,mean_block_us,worst_block_us,mean_pct,worst_pct,total_state_kib");
+    let src = Source::looped(&prepared.fixture.frames, &prepared.onsets);
+    let block = 128usize;
+    let budget_us = block as f64 / SR as f64 * 1.0e6;
+    for (name, factory) in candidates() {
+        for voices in [1usize, 4, 8, 16] {
+            let mut pool: Vec<Box<dyn Stretcher>> = (0..voices).map(|_| factory(1.25)).collect();
+            // Stagger the start positions so the voices are not producing their
+            // internal frames on the same block, which is the realistic case.
+            for (i, st) in pool.iter_mut().enumerate() {
+                st.reset(i * 977);
+            }
+            let mut buf = vec![[0.0f32; 2]; block];
+            for _ in 0..100 {
+                for st in pool.iter_mut() {
+                    st.render(&src, &mut buf);
+                }
+            }
+            let blocks = 3000usize;
+            let mut worst = 0u128;
+            let start = Instant::now();
+            for _ in 0..blocks {
+                let t = Instant::now();
+                for st in pool.iter_mut() {
+                    st.render(&src, &mut buf);
+                }
+                let e = t.elapsed().as_nanos();
+                if e > worst {
+                    worst = e;
+                }
+            }
+            let mean_us = start.elapsed().as_secs_f64() / blocks as f64 * 1.0e6;
+            let worst_us = worst as f64 / 1000.0;
+            let total_state: usize = pool.iter().map(|s| s.state_bytes()).sum();
+            println!(
+                "{},{},{:.1},{:.1},{:.1},{:.1},{}",
+                name,
+                voices,
+                mean_us,
+                worst_us,
+                mean_us / budget_us * 100.0,
+                worst_us / budget_us * 100.0,
+                total_state / 1024,
+            );
+        }
+    }
+}
+
 fn ratio_change() {
     println!();
     println!("## live_ratio_change");
@@ -546,6 +599,7 @@ fn main() {
     block_agreement(brk);
     allocation_gate(brk);
     cpu_budget(brk);
+    voice_scaling(brk);
     ratio_change();
     loop_seam();
     note_on_ramp();

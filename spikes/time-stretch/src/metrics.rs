@@ -58,11 +58,17 @@ pub fn onsets(frames: &[[f32; 2]], sample_rate: u32) -> Vec<usize> {
     if spec.len() < 3 {
         return Vec::new();
     }
+    // Ignore everything below ~200 Hz. A 1024-point window is shorter than two
+    // periods of a 55 Hz fundamental, so the low bins of sustained bass swing
+    // wildly frame to frame and read as a continuous stream of onsets. Real
+    // onset detectors weight towards the high end for exactly this reason, and
+    // percussive attacks are broadband anyway.
+    let low_cut = (200.0 * n as f32 / sample_rate as f32).round() as usize;
     let mut flux = vec![0.0f32; spec.len()];
     let mut total = 0.0f32;
     for t in 1..spec.len() {
         let mut sum = 0.0f32;
-        for k in 0..spec[t].len() {
+        for k in low_cut..spec[t].len() {
             let d = spec[t][k] - spec[t - 1][k];
             if d > 0.0 {
                 sum += d;
@@ -71,7 +77,7 @@ pub fn onsets(frames: &[[f32; 2]], sample_rate: u32) -> Vec<usize> {
         flux[t] = sum;
     }
     for frame in &spec {
-        total += frame.iter().sum::<f32>();
+        total += frame[low_cut..].iter().sum::<f32>();
     }
     // Normalizing by the *average frame magnitude* rather than by the peak
     // flux is what keeps a steady tone from reading as a stream of onsets:
