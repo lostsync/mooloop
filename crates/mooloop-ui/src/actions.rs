@@ -116,6 +116,12 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         "Edit",
         "delete"
     ),
+    action!("notes.tool-select", "Select Tool", "Notes", "1"),
+    action!("notes.tool-draw", "Draw Tool", "Notes", "2"),
+    action!("notes.tool-paint", "Paint Tool", "Notes", "3"),
+    action!("notes.tool-slice", "Slice Tool", "Notes", "4"),
+    action!("notes.tool-erase", "Erase Tool", "Notes", "5"),
+    action!("notes.snap-toggle", "Toggle Snap", "Notes", "6"),
     action!("view.pane-next", "Next Pane", "View", ctrl + "right"),
     action!("view.pane-prev", "Previous Pane", "View", ctrl + "left"),
     action!("view.pane-steps", "Show Steps", "View", ctrl + "1"),

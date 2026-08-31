@@ -60,6 +60,9 @@ export component PianoGrid inherits Rectangle {
     in property <int> high-note;
     in property <int> note-count;
     in property <int> snap-ticks;
+    in property <bool> snap-enabled;
+    // 0 select, 1 draw, 2 paint, 3 slice, 4 erase.
+    in property <int> tool;
     // Zoom is two-way: the wheel handler below writes these, and so do the
     // parent's zoom scrollbars and the View > Zoom actions.
     in-out property <length> step-width;
@@ -84,6 +87,11 @@ export component PianoGrid inherits Rectangle {
     callback note-resized(int, int);                  // id, duration ticks
     callback note-removed(int);                       // id
     callback pan(length, length);                     // requested scroll-x, scroll-y
+    callback marquee-begin(int);                      // 0 replace / 1 add / 2 remove
+    callback marquee-updated(int, int, int, int);     // start tick, end tick, low note, high note
+    callback note-sliced(int, int);                   // id, tick to cut at
+    callback selection-joined();
+    callback cell-painted(int, int, int);             // start tick, note, duration
 
     x: 0px;
     width: root.pattern-length * root.step-width;
@@ -116,6 +124,40 @@ export component PianoGrid inherits Rectangle {
         return (!want.ctrl || ctrl) && (!want.shift || shift)
             && (!want.alt || alt) && (!want.meta || meta);
     }
+    // Lays one note at the pointer's cell, unless that cell is the one the
+    // stroke last painted or already holds a note. Called from the press and
+    // from every move frame; the dedupe is what makes a slow sweep across
+    // one cell produce one note rather than a stack of them.
+    function paint-at(x: length, y: length, quantise: bool) {
+        let tick = root.tick-at(x);
+        let note = root.note-at(y);
+        let start = clamp(
+            quantise ? floor(tick / root.snap-ticks) * root.snap-ticks : tick,
+            0, max(0, root.pattern-length * 24 - root.snap-ticks));
+        if (start == piano-touch.painted-tick && note == piano-touch.painted-note) {
+            return;
+        }
+        piano-touch.painted-tick = start;
+        piano-touch.painted-note = note;
+        if (root.note-hit-test(start, note).found) {
+            return;
+        }
+        root.cell-painted(start, note,
+            min(root.snap-ticks, root.pattern-length * 24 - start));
+    }
+
+    // Whether this gesture should quantise, given the toggle and whatever
+    // the snap-override role is holding.
+    //
+    // The override inverts rather than only defeating, so it reads the same
+    // way in both directions: with snap on it frees the drag, with snap off
+    // it snaps just this one. That is the Live/Bitwig convention, and it
+    // means the existing Shift-drag habit keeps its old meaning.
+    pure function snapping(ctrl: bool, shift: bool, alt: bool, meta: bool) -> bool {
+        return root.has-gesture(root.gestures.snap-override, ctrl, shift, alt, meta)
+            ? !root.snap-enabled : root.snap-enabled;
+    }
+
     // 0 replace, 1 add, 2 remove. Tested most-specific first, because the
     // roles overlap by design: remove is Ctrl+Shift and add is Shift, so a
     // subset test alone would resolve Ctrl+Shift to whichever was asked
@@ -200,6 +242,22 @@ export component PianoGrid inherits Rectangle {
         border-color: Theme.text;
     }
 
+    // The rubber band. Drawn above the notes and in the same canvas
+    // coordinates the gesture measures in, so it does not slide under the
+    // pointer as the selection it is building changes underneath.
+    if piano-touch.marqueeing
+            && (abs(piano-touch.marquee-x - piano-touch.marquee-anchor-x) > 3px
+                || abs(piano-touch.marquee-y - piano-touch.marquee-anchor-y) > 3px)
+        : Rectangle {
+        x: min(piano-touch.marquee-anchor-x, piano-touch.marquee-x);
+        y: min(piano-touch.marquee-anchor-y, piano-touch.marquee-y);
+        width: abs(piano-touch.marquee-x - piano-touch.marquee-anchor-x);
+        height: abs(piano-touch.marquee-y - piano-touch.marquee-anchor-y);
+        background: Theme.focus.transparentize(0.85);
+        border-width: 1px;
+        border-color: Theme.focus;
+    }
+
     // ONE hit area for the whole note grid, exactly
     // like the rack's grid-touch. A TouchArea living
     // inside a per-note Rectangle whose x/width is
@@ -229,6 +287,22 @@ export component PianoGrid inherits Rectangle {
         property <int> create-click-start;
         property <int> create-click-note;
         property <int> create-click-duration;
+        // A sweep that deletes whatever it crosses: the erase tool, and a
+        // right-drag in every other tool.
+        property <bool> erasing;
+        // Paint lays one note per newly-crossed cell. The last cell is
+        // remembered so re-crossing it does nothing rather than stacking
+        // duplicates on top of each other.
+        property <bool> painting;
+        property <int> painted-tick: -1;
+        property <int> painted-note: -1;
+        // Rubber-band selection, in canvas coordinates so the band does not
+        // move under the pointer while the model changes beneath it.
+        property <bool> marqueeing;
+        property <length> marquee-anchor-x;
+        property <length> marquee-anchor-y;
+        property <length> marquee-x;
+        property <length> marquee-y;
         create-click-timeout := Timer {
             interval: 350ms;
             running: false;
@@ -252,14 +326,63 @@ export component PianoGrid inherits Rectangle {
                 // double-click creates belongs to the same gesture as the
                 // length drag that immediately follows it.
                 root.gesture-begin();
+                // `pressed` is a left-button notion, so a right-drag sweep
+                // cannot lean on it and these flags are the only record that
+                // a gesture is in flight. Clear them here as well as on
+                // release, so a press whose matching release never arrived
+                // cannot leave a sweep armed.
+                self.erasing = false;
+                self.painting = false;
+                self.marqueeing = false;
                 let tick = root.tick-at(self.mouse-x);
                 let note = root.note-at(self.mouse-y);
                 let hit = root.note-hit-test(tick, note);
-                if (hit.found && e.button == PointerEventButton.right) {
+                let quantise = root.snapping(e.modifiers.control,
+                    e.modifiers.shift, e.modifiers.alt, e.modifiers.meta);
+                if (e.button == PointerEventButton.right || root.tool == 4) {
+                    // A right-drag erases whatever it crosses, in every
+                    // tool. Sweeping is the only reason erase needs a mode
+                    // of its own; a single delete never did.
                     self.create-click-armed = false;
                     create-click-timeout.running = false;
-                    root.note-removed(hit.id);
-                } else if (hit.found && e.button == PointerEventButton.left) {
+                    self.erasing = true;
+                    if (hit.found) {
+                        root.note-removed(hit.id);
+                    }
+                } else if (e.button != PointerEventButton.left) {
+                    // Middle button and the rest stay unclaimed.
+                } else if (root.tool == 3) {
+                    // Slice, or join when the add-to-selection role is held:
+                    // one tool for "make this two notes" and its inverse.
+                    self.create-click-armed = false;
+                    create-click-timeout.running = false;
+                    if (root.has-gesture(root.gestures.add-to-selection,
+                            e.modifiers.control, e.modifiers.shift,
+                            e.modifiers.alt, e.modifiers.meta)) {
+                        root.selection-joined();
+                    } else if (hit.found) {
+                        let cut = quantise
+                            ? round(tick / root.snap-ticks) * root.snap-ticks
+                            : tick;
+                        // A cut at either end would produce a zero-length
+                        // half, which is a delete the user did not ask for.
+                        if (cut > hit.start-tick
+                                && cut < hit.start-tick + hit.duration-ticks) {
+                            root.note-sliced(hit.id, cut);
+                        }
+                    }
+                } else if (root.tool == 2) {
+                    self.create-click-armed = false;
+                    create-click-timeout.running = false;
+                    self.painting = true;
+                    self.painted-tick = -1;
+                    self.painted-note = -1;
+                    root.paint-at(self.mouse-x, self.mouse-y, quantise);
+                } else if (hit.found) {
+                    // Pressing an existing note moves or resizes it in every
+                    // tool except erase and slice, which claimed the press
+                    // above. Draw and paint would otherwise have no way to
+                    // adjust what they just laid down.
                     self.create-click-armed = false;
                     create-click-timeout.running = false;
                     root.note-selected(hit.id, root.selection-mode(
@@ -273,18 +396,25 @@ export component PianoGrid inherits Rectangle {
                     self.original-start = hit.start-tick;
                     self.original-note = note;
                     self.original-duration = hit.duration-ticks;
-                } else if (!hit.found && e.button == PointerEventButton.left) {
+                } else {
                     let start-tick = clamp(
-                        floor(tick / root.snap-ticks) * root.snap-ticks,
+                        quantise
+                            ? floor(tick / root.snap-ticks) * root.snap-ticks
+                            : tick,
                         0, max(0, root.pattern-length * 24
                             - root.snap-ticks));
                     let duration = min(root.snap-ticks,
                         root.pattern-length * 24 - start-tick);
-                    if (self.create-click-armed
+                    // Draw creates on the first click. Select needs a second
+                    // one, so that a press on empty grid is free to start a
+                    // marquee instead.
+                    let draw-now = root.tool == 1
+                        || (self.create-click-armed
                             && abs(self.mouse-x - self.create-click-x) <= 6px
                             && abs(self.mouse-y - self.create-click-y) <= 6px
                             && self.create-click-start == start-tick
-                            && self.create-click-note == note) {
+                            && self.create-click-note == note);
+                    if (draw-now) {
                         let id = root.note-created(start-tick, note, duration);
                         self.grabbed-id = id;
                         self.copied = false;
@@ -304,14 +434,56 @@ export component PianoGrid inherits Rectangle {
                         self.create-click-note = note;
                         self.create-click-duration = duration;
                         create-click-timeout.running = true;
+                        // The marquee only commits once the pointer travels;
+                        // a click that turns out to be the first half of a
+                        // double-click must not clear the selection.
+                        self.marqueeing = true;
+                        self.marquee-anchor-x = self.mouse-x;
+                        self.marquee-anchor-y = self.mouse-y;
+                        self.marquee-x = self.mouse-x;
+                        self.marquee-y = self.mouse-y;
                     }
+                }
+            } else if (e.kind == PointerEventKind.move && self.erasing) {
+                let hit = root.note-hit-test(root.tick-at(self.mouse-x),
+                    root.note-at(self.mouse-y));
+                if (hit.found) {
+                    root.note-removed(hit.id);
+                }
+            } else if (e.kind == PointerEventKind.move && self.painting) {
+                root.paint-at(self.mouse-x, self.mouse-y,
+                    root.snapping(e.modifiers.control, e.modifiers.shift,
+                        e.modifiers.alt, e.modifiers.meta));
+            } else if (e.kind == PointerEventKind.move && self.marqueeing) {
+                self.marquee-x = self.mouse-x;
+                self.marquee-y = self.mouse-y;
+                // The band has to travel before it means anything: a press
+                // that becomes the second half of a double-click would
+                // otherwise clear the selection on its way to creating a
+                // note.
+                if (abs(self.marquee-x - self.marquee-anchor-x) > 3px
+                        || abs(self.marquee-y - self.marquee-anchor-y) > 3px) {
+                    if (self.create-click-armed) {
+                        self.create-click-armed = false;
+                        create-click-timeout.running = false;
+                        root.marquee-begin(root.selection-mode(
+                            e.modifiers.control, e.modifiers.shift,
+                            e.modifiers.alt, e.modifiers.meta));
+                    }
+                    // Overlap, not containment: a marquee that clipped a
+                    // long note's tail should still catch it, which is what
+                    // every other editor does.
+                    root.marquee-updated(
+                        root.tick-at(min(self.marquee-anchor-x, self.marquee-x)),
+                        root.tick-at(max(self.marquee-anchor-x, self.marquee-x)),
+                        root.note-at(max(self.marquee-anchor-y, self.marquee-y)),
+                        root.note-at(min(self.marquee-anchor-y, self.marquee-y)));
                 }
             } else if (e.kind == PointerEventKind.move
                     && self.pressed && self.grabbed-id >= 0) {
-                // The snap-override role frees the drag from the grid on
-                // both axes' time component, matching the automation lane.
-                let free = root.has-gesture(root.gestures.snap-override,
-                    e.modifiers.control, e.modifiers.shift,
+                // A free drag leaves the grid on both axes' time component,
+                // matching the automation lane.
+                let free = !root.snapping(e.modifiers.control, e.modifiers.shift,
                     e.modifiers.alt, e.modifiers.meta);
                 let raw-ticks = (self.mouse-x - self.origin-x)
                     * 24 / root.step-width;
@@ -353,6 +525,9 @@ export component PianoGrid inherits Rectangle {
                 self.grabbed-id = -1;
                 self.grab-mode = 0;
                 self.copied = false;
+                self.erasing = false;
+                self.painting = false;
+                self.marqueeing = false;
                 root.gesture-end();
             }
         }

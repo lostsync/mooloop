@@ -203,6 +203,14 @@ work session you can recall being part of, and don't stress over precision.
   a default for exactly that reason. They cross into `.slint` as booleans
   rather than a bitmask, since Slint's expression language has no bitwise
   operators, and the grid tests them by implication so the roles compose.
+  Then gave the roll pointer tools -- select, draw, paint, slice/join, erase --
+  a snap toggle whose override modifier inverts rather than only defeating,
+  and marquee selection with additive and subtractive bands. Two things that
+  only showed up in the doing: Slint's `pressed` is a left-button notion, so
+  a right-drag erase sweep stalled after one frame until the gesture flags
+  became the only record of a drag in flight; and the new header controls
+  propagated a window minimum width that cost the sidebar most of its resize
+  range, so the row clips and leads with the tool selector instead.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

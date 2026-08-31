@@ -58,7 +58,7 @@ use mooloop_project::{
 use settings::{AppearanceSettings, ThemePalette, ThemeScheme, UiSettings};
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1841,6 +1841,9 @@ struct UiState {
     /// (`refresh_selected_note_controls`) only shows fields when this has
     /// settled on exactly one member, since it edits one note, not a group.
     selected_note_ids: HashSet<NoteId>,
+    /// The selection a marquee started from, plus how it should combine with
+    /// what the band catches. `None` when no band is in flight.
+    marquee_base: Option<(i32, HashSet<NoteId>)>,
     bundle_path: Option<PathBuf>,
     dirty: bool,
     revision: u64,
@@ -3885,6 +3888,7 @@ impl AppUi {
             effect_target: EffectTarget::Channel(0),
             selected_note_id: None,
             selected_note_ids: HashSet::new(),
+            marquee_base: None,
             automation_point_model,
             automation_target_model,
             automation_target: Cell::new(None),
@@ -4519,6 +4523,31 @@ impl AppUi {
                     "pattern.clear" => window.invoke_pattern_clear_requested(),
                     "edit.select-all" => window.invoke_select_all_requested(),
                     "edit.delete-note" => window.invoke_delete_selected_notes_requested(),
+                    // Bare digits, and only while the roll is on screen: a
+                    // number key means something else on every other page,
+                    // and an unconditional binding would be a trap there.
+                    "notes.tool-select"
+                    | "notes.tool-draw"
+                    | "notes.tool-paint"
+                    | "notes.tool-slice"
+                    | "notes.tool-erase" => {
+                        if window.get_editor_page() != 1 {
+                            return false;
+                        }
+                        window.set_piano_tool(match action_id {
+                            "notes.tool-draw" => 1,
+                            "notes.tool-paint" => 2,
+                            "notes.tool-slice" => 3,
+                            "notes.tool-erase" => 4,
+                            _ => 0,
+                        });
+                    }
+                    "notes.snap-toggle" => {
+                        if window.get_editor_page() != 1 {
+                            return false;
+                        }
+                        window.set_piano_snap_enabled(!window.get_piano_snap_enabled());
+                    }
                     "view.zoom-in" => window.invoke_zoom_in_requested(),
                     "view.zoom-out" => window.invoke_zoom_out_requested(),
                     "view.pane-steps" => {
@@ -5836,6 +5865,242 @@ impl AppUi {
                 });
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Note resized");
+            });
+        }
+        {
+            // The band updates live, so "add to the selection" has to mean
+            // "add to what was selected when the drag started". Recomputing
+            // from the live selection each frame would make the band's own
+            // previous frame part of its base and the selection would only
+            // ever grow.
+            let st = state.clone();
+            window.on_piano_marquee_begin(move |mode| {
+                let mut st = st.borrow_mut();
+                let base = st.selected_note_ids.clone();
+                st.marquee_base = Some((mode, base));
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_piano_marquee_updated(
+                move |start_tick, end_tick, low_note, high_note| {
+                    let Some(window) = weak.upgrade() else { return };
+                    let mut st = st.borrow_mut();
+                    let Some((mode, base)) = st.marquee_base.clone() else {
+                        return;
+                    };
+                    let pattern = st.current_pattern;
+                    let channel = st.selected;
+                    let (start_tick, end_tick) = (start_tick.min(end_tick), start_tick.max(end_tick));
+                    let (low_note, high_note) = (low_note.min(high_note), low_note.max(high_note));
+                    let caught: HashSet<NoteId> = st.channels[channel].notes[pattern]
+                        .iter()
+                        .filter(|note| {
+                            // Overlap, not containment: clipping a long
+                            // note's tail catches it, which is what every
+                            // other editor does and what a band drawn across
+                            // a bar of held chords has to do to be useful.
+                            let note_start = note.start_tick as i32;
+                            let note_end = note.end_tick() as i32;
+                            let pitch = note.note as i32;
+                            note_start <= end_tick
+                                && note_end > start_tick
+                                && pitch >= low_note
+                                && pitch <= high_note
+                        })
+                        .map(|note| note.id)
+                        .collect();
+                    st.selected_note_ids = match mode {
+                        1 => base.union(&caught).copied().collect(),
+                        2 => base.difference(&caught).copied().collect(),
+                        _ => caught,
+                    };
+                    st.selected_note_id = (st.selected_note_ids.len() == 1)
+                        .then(|| *st.selected_note_ids.iter().next().unwrap());
+                    st.refresh_note_editor(&window);
+                },
+            );
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_piano_note_sliced(move |id, tick| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let Some(original) = st.channels[channel].notes[pattern]
+                    .iter()
+                    .copied()
+                    .find(|note| note.id == id as NoteId)
+                else {
+                    return;
+                };
+                let cut = tick.max(0) as u32;
+                // The grid guards this too, but a cut at either end would
+                // silently delete half a note, so it is worth refusing here
+                // as well rather than trusting one caller.
+                if cut <= original.start_tick || cut >= original.end_tick() {
+                    return;
+                }
+                let tail_id = st.channels[channel].next_note_id;
+                st.channels[channel].next_note_id = tail_id.wrapping_add(1).max(1);
+                let tail = NoteEvent {
+                    id: tail_id,
+                    start_tick: cut,
+                    duration_ticks: original.end_tick() - cut,
+                    ..original
+                };
+                let mut head = original;
+                head.duration_ticks = cut - original.start_tick;
+                for note in st.channels[channel].notes[pattern].iter_mut() {
+                    if note.id == head.id {
+                        *note = head;
+                    }
+                }
+                st.channels[channel].notes[pattern].push(tail);
+                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                // Both halves selected, so the next gesture can act on the
+                // whole of what used to be one note.
+                st.selected_note_ids = HashSet::from([head.id, tail.id]);
+                st.selected_note_id = None;
+                st.refresh_rack_row(channel);
+                st.refresh_note_editor(&window);
+                for note in [head, tail] {
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                }
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Note sliced");
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_piano_selection_joined(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let selected: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                    .iter()
+                    .copied()
+                    .filter(|note| st.selected_note_ids.contains(&note.id))
+                    .collect();
+                if selected.len() < 2 {
+                    return;
+                }
+                // Per pitch row, not across the whole selection: joining a
+                // chord into one note would throw away every pitch but one.
+                let mut rows: BTreeMap<u8, Vec<NoteEvent>> = BTreeMap::new();
+                for note in selected {
+                    rows.entry(note.note).or_default().push(note);
+                }
+                let mut kept = Vec::new();
+                let mut removed = Vec::new();
+                for (_, mut row) in rows {
+                    if row.len() < 2 {
+                        kept.extend(row.iter().map(|note| note.id));
+                        continue;
+                    }
+                    row.sort_by_key(|note| (note.start_tick, note.id));
+                    let end = row.iter().map(|note| note.end_tick()).max().unwrap_or(0);
+                    let mut merged = row[0];
+                    merged.duration_ticks = end.saturating_sub(merged.start_tick).max(1);
+                    // The earliest note survives, so the join keeps a stable
+                    // id and whatever velocity the phrase started on.
+                    for note in st.channels[channel].notes[pattern].iter_mut() {
+                        if note.id == merged.id {
+                            *note = merged;
+                        }
+                    }
+                    kept.push(merged.id);
+                    removed.extend(row[1..].iter().map(|note| note.id));
+                }
+                if removed.is_empty() {
+                    return;
+                }
+                st.channels[channel].notes[pattern].retain(|note| !removed.contains(&note.id));
+                let edited: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                    .iter()
+                    .copied()
+                    .filter(|note| kept.contains(&note.id))
+                    .collect();
+                st.prune_note_selection(&removed);
+                st.refresh_rack_row(channel);
+                st.refresh_note_editor(&window);
+                for id in removed {
+                    let _ = tx.send(EngineCommand::RemoveNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        id,
+                    });
+                }
+                for note in edited {
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                }
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Notes joined");
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_piano_cell_painted(move |start_tick, midi_note, duration_ticks| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let start_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
+                let mut note = st.channels[channel].create_note(
+                    pattern,
+                    start_tick,
+                    duration_ticks.max(1) as u32,
+                    midi_note.clamp(0, 127) as u8,
+                );
+                note.duration_ticks = note
+                    .duration_ticks
+                    .min(length_ticks.saturating_sub(start_tick).max(1));
+                if let Some(stored) = st.channels[channel].notes[pattern]
+                    .iter_mut()
+                    .find(|stored| stored.id == note.id)
+                {
+                    *stored = note;
+                }
+                // A stroke selects what it laid down, so the run can be
+                // moved or lengthened without re-selecting it by hand.
+                st.selected_note_ids.insert(note.id);
+                st.selected_note_id = (st.selected_note_ids.len() == 1).then_some(note.id);
+                st.refresh_rack_cell(channel, (start_tick / TICKS_PER_STEP) as usize);
+                st.refresh_note_editor(&window);
+                let _ = tx.send(EngineCommand::UpsertNote {
+                    pattern: pattern as u8,
+                    channel: channel as u8,
+                    note,
+                });
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Notes painted");
             });
         }
         {

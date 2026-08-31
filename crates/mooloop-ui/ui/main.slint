@@ -412,6 +412,13 @@ export component MainWindow inherits Window {
     callback step-length-dragged(int, int, int); // channel, step, length in steps
     property <int> playlist-snap-ticks: root.snap-ticks(root.playlist-snap-index);
     property <int> piano-snap-ticks: root.snap-ticks(root.piano-snap-index);
+    // Whether the roll quantises at all. The snap-override gesture inverts
+    // this for a single drag, in either direction.
+    in-out property <bool> piano-snap-enabled: true;
+    // Which pointer tool the note grid is in: 0 select, 1 draw, 2 paint,
+    // 3 slice, 4 erase. Select is the default because it is the only one
+    // that is safe to land on by accident.
+    in-out property <int> piano-tool;
 
     pure function snap-ticks(index: int) -> int {
         index == 0 ? 384 : index == 1 ? 192 : index == 2 ? 96
@@ -694,6 +701,14 @@ export component MainWindow inherits Window {
     callback piano-selection-duplicated(int) -> int;
     callback piano-note-resized(int, int);  // ID, duration ticks
     callback piano-note-removed(int);       // stable note ID
+    // Marquee selection. Begin snapshots the base selection in Rust, because
+    // the band updates live and would otherwise clobber its own base every
+    // frame when adding to or removing from an existing selection.
+    callback piano-marquee-begin(int);      // 0 replace / 1 add / 2 remove
+    callback piano-marquee-updated(int, int, int, int); // start tick, end tick, low note, high note
+    callback piano-note-sliced(int, int);   // stable note ID, tick to cut at
+    callback piano-selection-joined();
+    callback piano-cell-painted(int, int, int); // start tick, MIDI note, duration ticks
     // Pure so it can be read from the cursor-shape binding below. Rust owns the
     // note list, so the scan lives there.
     pure callback piano-note-hit-test(int, int) -> NoteHit; // tick, MIDI note -> note under it, if any
@@ -1149,6 +1164,14 @@ export component MainWindow inherits Window {
                 // reported reliably via `event.modifiers.control` on this
                 // backend, so no sentinel decoding is needed for them.
                 root.shortcut-key(event.text.to-lowercase(), true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            // Unmodified digits, for the piano roll's tool selector. Safe to
+            // forward unconditionally: a focused text field consumes the key
+            // before this scope ever sees it, and the dispatcher rejects the
+            // action unless the roll is the current page, which lets the
+            // keypress fall through to whatever else wants it.
+            } else if (event.text == "1" || event.text == "2" || event.text == "3"
+                    || event.text == "4" || event.text == "5" || event.text == "6") {
+                root.shortcut-key(event.text, false, false, event.modifiers.alt, event.modifiers.meta) ? accept : reject
             } else {
                 reject
             }
@@ -3163,10 +3186,43 @@ export component MainWindow inherits Window {
                                 Rectangle {
                                     height: 34px;
                                     background: Theme.surface-raised;
+                                    // The row carries enough fixed-width
+                                    // controls to be wider than a narrow
+                                    // window, and letting that propagate cost
+                                    // the sidebar most of its resize range.
+                                    // It clips instead; the tool selector
+                                    // leads so the first thing lost to a
+                                    // narrow window is a readout rather than
+                                    // a mode, and 1-6 reach the tools and the
+                                    // snap toggle from the keyboard anyway.
+                                    min-width: 0px;
+                                    clip: true;
                                     HorizontalBox {
                                         padding: 4px;
                                         spacing: 6px;
                                         alignment: start;
+                                        SegmentedControl {
+                                            options: ["SEL", "DRAW", "PAINT", "SLICE", "ERASE"];
+                                            selected-index <=> root.piano-tool;
+                                            width: 206px;
+                                            height: 24px;
+                                        }
+                                        ToggleButton {
+                                            text: "SNAP";
+                                            checked: root.piano-snap-enabled;
+                                            width: 50px;
+                                            height: 24px;
+                                            toggled => { root.piano-snap-enabled = !root.piano-snap-enabled; }
+                                            Tooltip { text: @markdown("Quantise edits to the grid. Hold the snap-override modifier to invert this for one drag."); }
+                                        }
+                                        ComboBox {
+                                            model: root.musical-snap-options;
+                                            current-index <=> root.piano-snap-index;
+                                            enabled: root.piano-snap-enabled;
+                                            width: 84px;
+                                            height: 24px;
+                                        }
+                                        Rectangle { width: 8px; }
                                         Text {
                                             text: root.has-selected-note ? "TICK " + root.selected-note-step : "NO NOTE";
                                             color: Theme.text-muted;
@@ -3240,18 +3296,6 @@ export component MainWindow inherits Window {
                                             height: 24px;
                                             toggled => { root.automation-lane-visible = !root.automation-lane-visible; }
                                             Tooltip { text: @markdown("Automation lane"); }
-                                        }
-                                        Text {
-                                            text: "SNAP";
-                                            color: Theme.text-faint;
-                                            font-size: 9px;
-                                            vertical-alignment: center;
-                                        }
-                                        ComboBox {
-                                            model: root.musical-snap-options;
-                                            current-index <=> root.piano-snap-index;
-                                            width: 84px;
-                                            height: 24px;
                                         }
                                         Rectangle { horizontal-stretch: 1; }
                                     }
@@ -3354,6 +3398,8 @@ export component MainWindow inherits Window {
                                                 high-note: root.piano-high-note;
                                                 note-count: root.piano-note-count;
                                                 snap-ticks: root.piano-snap-ticks;
+                                                snap-enabled: root.piano-snap-enabled;
+                                                tool: root.piano-tool;
                                                 step-width <=> root.piano-step-width;
                                                 row-height <=> root.piano-row-height;
                                                 content-w: root.piano-content-w;
@@ -3374,6 +3420,15 @@ export component MainWindow inherits Window {
                                                 selection-duplicated(id) => { return root.piano-selection-duplicated(id); }
                                                 note-resized(id, duration) => { root.piano-note-resized(id, duration); }
                                                 note-removed(id) => { root.piano-note-removed(id); }
+                                                marquee-begin(mode) => { root.piano-marquee-begin(mode); }
+                                                marquee-updated(a, b, lo, hi) => {
+                                                    root.piano-marquee-updated(a, b, lo, hi);
+                                                }
+                                                note-sliced(id, tick) => { root.piano-note-sliced(id, tick); }
+                                                selection-joined => { root.piano-selection-joined(); }
+                                                cell-painted(start, note, duration) => {
+                                                    root.piano-cell-painted(start, note, duration);
+                                                }
                                                 // Assigning over `viewport-y`'s initial binding is deliberate and
                                                 // is what the inline handler did before: the first pan or zoom
                                                 // takes ownership of the scroll position from the default
