@@ -1,114 +1,137 @@
-# Unison groups
+# Native modulation
 
-The largest structural change in this plan. It replaces voice allocation, and
-voice allocation is where a polysynth's bugs live.
+ML-P8 has its own modulation because a polysynth needs per-voice sources and a
+saved patch must stand on its own. The channel modulation rack remains the way
+to bring in other channel sources and to send ML-P8 outlets elsewhere.
 
-## The decision
+## The ML-P8 LFO
 
-**Unison is a real voice multiplier, not an oscillator-detune macro.** A
-played note owns a *group* of physical voices that share note and gate state
-and receive symmetric detune and pan offsets. Effective note polyphony is
-`floor(physical_voices / unison)`.
+The device owns one global, audio-rate LFO with:
 
-The macro alternative — detuning the three oscillators harder — is cheaper and
-wrong. It cannot produce the density of eight independently drifting voices,
-and it consumes the oscillator section that Poly's identity depends on.
+- Wave: sine, triangle, ramp, pulse, sample-and-hold, chaos;
+- Rate: free Hz or the shared musical-division vocabulary;
+- Phase;
+- Warp: phase asymmetry for periodic waves and probability bias for stepped
+  waves;
+- Slew: rounds discontinuities and turns random targets into wandering motion;
+- Retrigger: Free / Chord / Note.
 
-## What is wrong today
+`Chord` retriggers only when a Note On arrives while no note gate is already
+held. `Note` deliberately resets the global LFO on every Note On, including
+inside a chord; status text must warn that later notes move modulation on
+earlier ones. Free is the default.
 
-Allocation is per-note and flat. `select_voice` (`polysynth.rs:195`) finds a
-free slot or steals the lowest `age`; `note_off` releases every voice matching
-the `event_id` (`polysynth.rs:242`) — which is already group-shaped and is the
-one piece that survives unchanged.
+Chaos is deterministic, bounded, and continuous. It must not call a runtime
+RNG or merely rename sample-and-hold. A small fixed-state chaotic recurrence
+or feedback oscillator is appropriate if its range and sample-rate behavior
+are tested. Warp and Slew should make this LFO identifiable in motion without
+requiring a novel waveform for novelty's sake.
 
-`apply_params_to_voices` (`polysynth.rs:147`) handles a polyphony reduction by
-setting `active = false` on out-of-range slots. That cuts a sounding voice
-dead with no release — an audible click today, and with groups it becomes a
-partially-killed note. Fix it in this step: out-of-range voices get a fast
-release (`STOP_RELEASE_S`, as `release_all` uses), not an instant kill.
+The `ML-P8 / LFO` outlet in step 06 samples this same LFO state at its declared
+control ticks. Do not run a second reduced or UI-only oscillator for the
+outlet.
 
-## Do this
+## Per-voice sources
 
-### 1. Group allocation
+The internal route system exposes:
 
-A group is `unison` consecutive-or-not physical voices sharing an `event_id`.
-Since `event_id` is already the identity used by `note_off`, the group is
-implicit — no separate group table is needed, and adding one would be state
-that can disagree with the voices.
+| Source | Shape | Scope |
+| --- | --- | --- |
+| LFO | Bipolar | One global value applied to each voice |
+| Amp Envelope | Unipolar | Current physical voice |
+| Filter Envelope | Unipolar | Current physical voice |
+| Velocity | Unipolar | Current note/group |
+| Key | Bipolar around middle C | Current note/group |
+| Gate | Gate | High while that note event is held |
 
-What has to change:
+A Trigger is a momentary event and belongs on trigger/reset inlets, not as a
+continuously sampled modulation value. It is nevertheless published in step
+06.
 
-- **Allocation is all-or-nothing.** `select_voice` becomes
-  `select_voices(count)`, returning `count` slots. Prefer free slots; make up
-  the shortfall by stealing.
-- **Stealing operates on groups.** Steal the oldest *group* — every voice
-  sharing the oldest `event_id` — not the `count` oldest individual voices.
-  Stealing half of an 8× unison note is the specific failure the spec calls
-  out, and it is what a naive implementation does.
-- **`age` is per-group.** Every voice in a group gets the same `age`, so
-  `min_by_key` over ages picks a whole group cleanly.
-- If `unison` exceeds the polyphony limit, clamp: allocate what exists rather
-  than dropping the note.
+Oscillator and noise signals do not appear in this control-rate source list.
+They already have the audio-rate XMOD paths from step 02. Collapsing them to a
+slow value would create a misleading form of FM.
 
-### 2. Detune and pan within a group
+## Internal routes
 
-Symmetric spread around the note. For a group of N, member `i` gets a
-normalized position in `[-1, 1]`, the same shape `voice_pan` already computes
-(`polysynth.rs:34`):
+An internal route is:
 
-- **Detune** scales that position into a cent offset. The knob is 0-100%
-  mapped to a musically bounded spread — tune the maximum by ear; do not
-  expose cents directly.
-- **Pan** places group members across the field, scaled by Spread.
+```text
+source -> polarity/amount -> per-voice destination offset
+```
 
-This is where Spread's meaning changes. Today it pans by *physical slot index*
-against the polyphony count (`voice_pan(voice_index, polyphony, spread)`), so
-which side a note comes from depends on which slot the allocator happened to
-pick — a note is on the left because it was played fourth. With unison groups
-the useful semantic is: **Spread pans the members of a group across the
-field**, so a unison note is wide and a chord is centred-but-detailed.
+The initial destination vocabulary includes:
 
-At `unison = 1` there is no group to spread, so fall back to today's
-slot-based panning to keep 1× behaviour recognizable. Say so in the tooltip's
-status-bar text. If listening says a chord should also spread by note, revisit
-and record it here.
+- oscillator 1/2/3 pitch and pulse width;
+- oscillator 1/2/3 source level;
+- Sub level and Noise level/color;
+- every XMOD, noise-mod, oscillator-feedback, and Voice Feedback amount;
+- filter cutoff, resonance, env amount, and drive;
+- VCA level and pan.
 
-Group-member offsets stack with the per-voice drift offsets from step 02.
-Drift is the slot's fixed character; detune is the group's deliberate spread.
-They are independent and both apply.
+Only continuous destinations are legal. Waveform, sync source, filter mode,
+Sub source/octave, Unison, and Chorus mode are structural and cannot be
+flapped by an internal route.
 
-### 3. Parameters
+Filter Env Amount, keytrack, Amp Velocity, and Filter Velocity remain dedicated
+controls because they are fundamental playing behavior. The route list is for
+additional relationships: Filter Envelope to XMOD, Velocity to feedback, LFO
+to noise color, Amp Envelope to oscillator balance, and so on.
 
-| Field    | Kind / range              | Default | ID |
-|----------|---------------------------|---------|----|
-| `unison` | 1 / 2 / 4 / 8, stepped    | 1       | 42 |
-| `detune` | 0-1                       | 0.0     | 43 |
+Resolve each destination as authored base plus the sum of internal route
+offsets, then clamp through the destination's descriptor mapping. Channel
+automation/modulation resolves the authored base before ML-P8 applies its
+per-voice offsets. This preserves one understandable center value.
 
-`polyphony` keeps ID 15 and its 1-16 range; `spread` keeps ID 16. Unison as a
-four-value stepped descriptor rather than a free 1-8 integer: 3× and 5× unison
-are not musically interesting and the constraint keeps the allocator simple.
+## Timing and prepared topology
 
-### 4. UI
+Envelope and LFO values are already available per sample, so internal routes
+are evaluated at audio rate. Route topology is compiled on the control thread
+into flat fixed-capacity operations grouped by destination. The audio callback
+does not search descriptors, allocate rows, or match strings.
 
-VOICE page, Allocation section, beside the existing Polyphony stepper: a
-Unison selector (`1×` / `2×` / `4×` / `8×`) and a Detune knob. Show the
-effective note polyphony — `floor(polyphony / unison)` — as derived text next
-to the stepper; without it, "why can I only play two notes" is a support
-question.
+Persist a dynamic list with durable route IDs. The first realtime compiler may
+have an explicit measured safety boundary, initially proposed as 16 active
+routes. That number is a callback-work limit, not a panel with sixteen empty
+slots or a permanent product promise. The UI shows authored routes plus **Add
+route**. If the compiler rejects an over-capacity patch, it reports the reason
+and preserves the authored route rather than silently dropping it.
+
+Route source and destination changes are structural edits prepared off the
+audio thread. Signed amount is an ordinary automatable parameter with a stable
+address tied to the durable route identity. An internal route cannot target
+its own amount; that prevents an undeclared control feedback cycle.
+
+## UI
+
+The MOD page has a compact ML-P8 LFO editor followed by the route list. Adding
+a route creates one row with Source, Destination, polarity, signed Amount, and
+remove. Selecting a source and touching a destination may be added as a direct
+assignment gesture if it edits this same route data; no second hidden routing
+model is allowed.
+
+The heading must say **ML-P8 MOD** or equivalent. The common frame continues to
+say **MOD** for the channel shelf. This small naming distinction prevents a
+saved instrument route from being mistaken for a channel route.
+
+Reserve ML-P8 IDs 55-63 for LFO controls. Route amount addresses use their
+durable route IDs through an explicit internal-route owner/address form rather
+than consuming an arbitrary permanent block of generator parameter IDs.
 
 ## Done when
 
-- 2×, 4×, and 8× consume exactly that many physical voices per note.
-- Stealing takes a whole group. Test: 8 voices, 4× unison, play three notes —
-  the third steals the first entirely and the second is untouched.
-- NoteOff releases the whole group.
-- No orphans: changing unison, polyphony, or both mid-chord leaves no voice
-  active without a group and no voice cut off without a release. Assert that
-  after a polyphony reduction, previously-sounding voices are releasing rather
-  than instantly silent.
-- Detune at 100% on an 8× unison note produces a measurably wider pitch spread
-  than at 0%, without changing the perceived fundamental.
-- Spread across a group produces a stable stereo field and does not change
-  pitch or total gain. Extend `spread_pans_voices_outward` to the group case.
-- `unison = 1` with `detune = 0` is bit-identical to the pre-step build.
-- No allocation in group selection.
+- A patch using only ML-P8 state can route its Filter Envelope to oscillator
+  XMOD, Velocity to Voice Feedback, and LFO to filter cutoff simultaneously.
+- Two notes with different velocities and envelope phases receive different
+  per-voice results; neither is collapsed to a last-note channel value.
+- Free, Chord, and Note retrigger policies differ exactly at documented Note On
+  boundaries.
+- Chaos, random, and every periodic mode render bit-identically twice and stay
+  bounded for long offline renders.
+- Internal base-plus-offset resolution agrees with descriptor ranges and with
+  a simultaneously channel-modulated base.
+- Route amount automation is sample-timed through the ordinary event path and
+  does not rebuild topology.
+- Structural edits prepare outside the callback, swap safely, and produce no
+  allocation or descriptor lookup in `process()`.
+- A complete moving patch works with the channel MOD shelf empty.

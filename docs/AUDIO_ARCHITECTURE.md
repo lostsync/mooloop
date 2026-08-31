@@ -65,7 +65,11 @@ The normal audio topology of a channel remains an ordered source-and-insert
 rack. Its modulation topology is explicit channel state: a `ModRack` owns
 control sources and routes, while sources, inserts, and the strip own their
 parameters. A device must not hold a private copy of the channel's LFOs or
-know which external control signals currently target it.
+know which external control signals currently target it. It may own authored
+modulation that is part of its own DSP contract -- for example per-voice
+envelopes, oscillator cross-modulation, or an instrument-specific LFO -- and
+publish selected signals through typed outlets. Cross-device consumption then
+uses the channel route and timing rules below.
 
 Each route joins a stable source or outlet reference to a stable `ParamAddr`
 destination through a bounded transform (depth, polarity, and later shaping).

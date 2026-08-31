@@ -326,10 +326,11 @@ Published device outlets use the timing contract in
 and cross-device consumers currently read them with one declared block of
 latency. Display telemetry is never silently promoted into a control source.
 
-True audio-rate FM, sidechain audio, and feedback require typed graph edges,
-buffer ownership, cycle policy, and latency compensation from
-`AUDIO_ARCHITECTURE.md`. The conceptual unit interface does not bypass that
-work.
+Audio-rate FM, sidechain audio, and feedback **between public units** require
+typed graph edges, buffer ownership, cycle policy, and latency compensation
+from `AUDIO_ARCHITECTURE.md`. A composite may still implement an explicit
+fixed/delayed audio-rate network internally. The conceptual public interface
+does not bypass the graph work for an external connection.
 
 ## UI independence
 

@@ -39,31 +39,38 @@ filter path that distinguish it from a one-voice Poly: a held-note stack,
 priority and legato behavior, pre-filter drive, ladder and acid filter models,
 and velocity accent.
 
-Do not split shared descriptor or serialization work into a second Poly
-implementation. Do not add a device-local modulation system; the channel rack
-already owns modulation.
+Do not split shared descriptor or serialization work into a second instrument
+implementation. Keep ML-1's authored instrument modulation separate from the
+channel rack's general-purpose and cross-device modulation; neither should
+duplicate the other's routes.
 
 Done when: Mono plays bass and lead lines with intentional note priority and
 legato, its filter models are audibly different rather than renamed variants,
 old projects still load conservatively, automation addresses remain stable,
 and a small factory patch set proves the range from the normal UI.
 
-### 2. Make Poly a different instrument
+### 2. Build ML-P8 as the deep polysynth
 
-Execute `docs/plans/poly-synth-v2/` after the shared Mono foundation lands.
-Poly's identity is a deterministic voice pool: per-voice drift, a clean
-multimode filter, group-aware unison, stereo spread, and an internal
-chorus/ensemble stage after the voice sum.
+Execute `docs/plans/poly-synth-v2/` as a new instrument beside the retained
+original Poly. ML-P8 is exactly eight physical voices built around a
+three-oscillator audio-rate network, derived sub, colored noise, sync,
+cross-modulation, oscillator and filter feedback, separate envelopes, and
+native per-voice modulation. Its useful internal LFO, envelopes, note values,
+gate/trigger, and oscillator taps publish through typed device outlets.
 
-Do not import Mono's acid semantics, held-note rules, or character filters.
-Do not reduce the three-oscillator architecture to imitate a named hardware
-synth. Mono and Poly should invite different musical gestures even when they
-start from the same waveform.
+Do not import ML-1's acid semantics, held-note rules, or character filters.
+Do not make Drift, Unison, Spread, or Chorus carry ML-P8's identity; they are
+finishers around an oscillator and modulation architecture that must already
+stand on its own. The channel modulation rack extends the instrument and
+routes its published signals elsewhere; it is not a prerequisite for a
+complete ML-P8 patch.
 
-Done when: repeated offline renders are deterministic, `drift = 0` preserves
-the old sound, voice and unison changes do not strand or click active notes,
-chords have movement and width without requiring insert effects, old projects
-load safely, and factory patches demonstrate Poly's own character.
+Done when: ML-P8 plays eight ordinary notes, the oscillator/feedback network
+remains deterministic and bounded under automation, native per-voice routes
+work independently across a chord, voice groups never strand or click, typed
+outlets obey their rate and latency contracts, old Poly projects remain
+unchanged, and the non-unison/non-chorus factory patches prove ML-P8's
+character.
 
 ### 3. Turn Buffer into a composition workflow
 

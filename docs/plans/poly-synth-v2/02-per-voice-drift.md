@@ -1,117 +1,143 @@
-# Per-voice drift
+# The oscillator network, sub, and noise
 
-Do this first. It is a small amount of code and it is the change that makes a
-chord stop sounding like one timbre stacked five times.
+This is the first defining implementation step. It turns the existing three
+oscillators from parallel layers into a voice-level signal network.
 
-## What is wrong
+## Three complete oscillators
 
-Every voice is identical in every respect that matters:
+Keep the existing waveform, coarse tune, fine tune, level, and pulse-width
+controls on all three oscillators. Extend the oscillator primitive only where
+the network requires a phase-modulation input, a visible wrap event for hard
+sync, and a reset-to-phase operation.
 
-- `PolyVoice::note_on` calls `osc.reset()` on a fresh slot
-  (`crates/mooloop-dsp/src/polysynth.rs:228`), so every note in a chord starts
-  every oscillator at phase 0. Three saws at phase 0 across five voices means
-  the attack transients sum coherently — a hard, artificial edge — and the
-  detune beating starts from a fixed relationship rather than a natural one.
-- Every voice reads the same `params.filter_cutoff`, the same envelope times,
-  and the same pitch ratios. There is no analog-poly variation because there
-  is no variation at all.
+Each oscillator exposes two internal taps:
 
-## Do this
+- **modulation tap:** waveform output before its Level control;
+- **mixer tap:** the same waveform multiplied by Level.
 
-### 1. Deterministic per-slot seeds
+Level at `-inf` therefore mutes an oscillator from the source mix without
+turning off its XMOD or sync duty. Do not skip an oscillator's DSP merely
+because its audible level is zero when another active route consumes its tap.
+The prepared route topology may still skip a genuinely unused oscillator.
 
-The requirement is repeatability: the same project, patch, note data, and
-render settings produce the same audio, offline or live. So the offsets are a
-**pure function of the voice slot index**, computed once at construction and
-stored on the voice — not drawn from a runtime RNG, not reseeded on note-on,
-not derived from time or allocation order.
+## Six-way XMOD
 
-A small fixed table of pseudo-random constants for 16 slots, or a cheap
-integer hash of the slot index, both satisfy this. Prefer whichever reads more
-obviously deterministic to someone auditing it later; a literal table is hard
-to get wrong.
+Add one bipolar amount for every directed pair:
 
-Each slot needs, as normalized bipolar values in `[-1, 1]`:
+```text
+1 -> 2    1 -> 3
+2 -> 1    2 -> 3
+3 -> 1    3 -> 2
+```
 
-- one pitch offset per oscillator (3 values)
-- one filter cutoff offset
-- one envelope-time offset
-- one starting phase per oscillator (3 values, in `[0, 1)`)
+The implementation is audio-rate phase modulation. The panel calls the
+section **XMOD**, and status text says `phase modulation`; do not label the DSP
+as analog exponential FM. Phase modulation keeps the carrier's center pitch
+stable and supports deep, automatable harmonic movement without a separate
+tuning-compensation system.
 
-Store them as fixed fields on `PolyVoice`, computed in `PolyVoice::new` from
-the slot index. Note `PolyVoice::new` currently takes only `sample_rate` and
-the voices are built with `std::array::from_fn(|_| ...)`
-(`polysynth.rs:108`) — pass the index in.
+Every route reads the source oscillator's previous sample. All six routes are
+therefore causal, can be active simultaneously, and sound the same regardless
+of the order in which oscillator structs happen to be stored. Amount is
+bipolar so one automation lane can pass through zero and invert the modulation
+phase.
 
-### 2. Scale by the Drift knob
+Tune the maximum phase deviation by ear in step 07. It must travel from subtle
+animation through metallic spectra before its final quarter becomes hostile;
+the useful range may not be compressed into the first few percent.
 
-At `drift = 1.0`, applied to the base offsets:
+## Noise modulation and oscillator self-feedback
 
-| Target           | Maximum deviation                                       |
-|------------------|---------------------------------------------------------|
-| Oscillator pitch | ≈ ±5 cents per voice, with smaller independent per-osc offsets on top |
-| Filter cutoff    | ≈ ±0.15 octave                                          |
-| Envelope times   | ≈ ±7% on attack, decay, and release — **not sustain**   |
-| Oscillator phase | Non-identical start phase                               |
+Noise has three bipolar audio-rate routes, one to each oscillator's phase-
+modulation sum. This enables roughened pitch, unstable attacks, and broadband
+spectra without making Noise Level audible in the source mixer.
 
-These are starting points for listening tests, not constants to defend. Record
-what they end up as, here.
+Each oscillator also has a bipolar **Feedback** amount. It phase-modulates the
+oscillator from its own previous sample. Self-feedback uses exactly the same
+one-sample state and bounded scaling as cross-modulation; do not introduce a
+special recursion path.
 
-Two implementation notes that are not negotiable:
+All modulation inputs are summed, then limited by a documented smooth bounded
+function before they move phase. The bound prevents numeric failure; it must
+not flatten the musically useful range.
 
-- **Sustain is a level, not a time.** Varying it would make voices in a
-  sustained chord sit at different volumes, which reads as a bug. Vary
-  attack/decay/release only.
-- Cutoff drift is an octave offset added to the same `octaves` expression that
-  the filter envelope and keytrack already feed — not a separate filter
-  coefficient path. Channel modulation reaches the addressable filter
-  parameters through the descriptor event path, not through a Poly-owned LFO
-  term in each voice.
+## Hard sync is part of the network
 
-Envelope-time drift means `Adsr::configure` gets per-voice values, so
-`apply_params_to_voices` (`polysynth.rs:147`) computes them per slot rather
-than passing `self.params.attack` to all sixteen.
+Each oscillator gets a Sync Source selector: `OFF`, `1`, `2`, `3`, excluding
+itself in the UI. When the selected source wraps, the destination resets its
+phase at the sample's fractional wrap position.
 
-### 3. Phase
+A naive reset aliases. Apply a BLEP correction for the introduced waveform
+discontinuity and verify it on high notes. Sync and XMOD may be active at the
+same time: XMOD shapes the slave between master wraps. Changing sync source on
+a sounding voice crossfades or applies another proven click-free transition.
 
-Replace the unconditional `osc.reset()` for a fresh slot with a seek to the
-slot's stored start phase. `Osc` (`crates/mooloop-dsp/src/osc.rs`) needs a
-`reset_to_phase(phase)` alongside `reset()`; `reset()` stays for the mono
-synth and the drum synth.
+## Sub oscillator
 
-At `drift = 0`, phase offsets go to zero and behaviour is exactly today's —
-which keeps the change null-testable and keeps the door open for an explicit
-phase-reset mode later.
+Sub is a derived per-voice source, not a fourth independently tuned oscillator.
+It has:
 
-### 4. Parameter
+- Source: Osc 1 / 2 / 3;
+- Octave: -1 / -2;
+- Wave: sine / square;
+- Level: `-inf` to 0 dB.
 
-| Field   | Range | Default | ID |
-|---------|-------|---------|----|
-| `drift` | 0-1   | 0.1     | 40 |
+It follows the selected oscillator's base pitch and hard-sync phase reference,
+but not that oscillator's XMOD distortion. This keeps Sub a dependable
+fundamental underneath a mangled carrier. Changing source or octave on a
+sounding voice must not produce a DC step.
 
-Default 0.1 rather than 0: a small amount of variation is what the instrument
-should *be*, and 10% is below the threshold where anyone would call it
-detuned. An old project loading at 0.1 will sound very slightly different from
-before; that is inside the spec's "exact pre-v2 timbre is secondary" allowance
-and it is the right trade. If a listening test disagrees, default to 0 and say
-so here.
+## Noise source
 
-### 5. UI
+Noise is generated independently in each physical voice from a fixed seed
+derived from the voice-slot index. It has:
 
-The VOICE page gets its real structure now (see 01): an **Allocation** section
-holding Polyphony and, later, Unison and Detune; a **Character** section
-holding Drift, Spread, and later the Chorus mode. Drift is a knob in Character
-beside Spread, which already exists.
+- Level: `-inf` to 0 dB;
+- Color: continuously dark through white to bright.
+
+Color must be a stable, inexpensive filter with no allocation and no shared
+global random state. A voice reset restores the same sequence, so a project
+renders identically twice. If repeated notes become objectionably identical,
+advance a deterministic per-slot note counter rather than introducing runtime
+entropy.
+
+## Reserved parameter IDs
+
+ML-P8 is a new generator kind, so these IDs form its own append-only namespace.
+The existing oscillator controls occupy the first reviewed block. Reserve the
+next block in this step for:
+
+| IDs | Parameters |
+| --- | --- |
+| 20-24 | Sub level, octave, wave, source, reserved expansion |
+| 25-26 | Noise level and color |
+| 27-32 | Six directed oscillator XMOD amounts |
+| 33-35 | Noise-to-oscillator amounts |
+| 36-38 | Three oscillator self-feedback amounts |
+| 39-41 | Three oscillator sync-source selectors |
+
+Record the exact constants beside the descriptor table when implemented. Do
+not expose XMOD, self-feedback, or noise modulation in raw radians; their
+natural UI value is signed percent mapped through one documented musical
+curve.
 
 ## Done when
 
-- Rendering the same chord twice in the same process gives bit-identical
-  output; so does rendering it in a fresh process. Assert both.
-- A five-note chord with drift at 100% differs measurably from the same chord
-  at 0% — not just in phase, but in the beating over a two-second sustain.
-- Fresh voices in a chord no longer all start at phase 0. Assert directly on
-  oscillator phase after a simultaneous three-note NoteOn.
-- Voice slot 3 always gets slot 3's offsets, whichever note lands on it.
-- Sustained chord voices reach the same sustain level; only their times differ.
-- `drift = 0` is bit-identical to the pre-drift build.
-- Existing tests pass, in particular the polyphony, stealing, and spread tests.
+- A muted oscillator can audibly modulate another oscillator but contributes
+  no direct mixer signal.
+- Every one of the six XMOD directions works, and activating a reverse route
+  creates a stable causal loop rather than order-dependent output.
+- Noise can modulate each oscillator while remaining inaudible in the source
+  mix.
+- Oscillator self-feedback travels from subtle reshaping to aggressive spectra
+  and stays finite at both polarities.
+- All legal hard-sync pairs work with XMOD active; high-note alias energy stays
+  within the chosen oscillator quality bound.
+- Sub tracks the intended fundamental under deep XMOD and contributes exactly
+  zero when its level is `-inf`.
+- Noise sequences and the complete oscillator network render bit-identically
+  across fresh processes.
+- One oscillator at 0 dB still hits the generator reference level; adding
+  sources sums honestly and does not normalize existing sources.
+- Full eight-note chords at worst-case XMOD/self-feedback remain finite and
+  complete within the realtime budget.

@@ -1,25 +1,35 @@
+# ML-P8 plan status
+
 Not started.
 
-**The prerequisite changed.** This plan used to name
-`docs/plans/mono-synth-v2/02-split-the-filter-envelope.md` as shared
-foundation landing on both devices. It no longer is: per
-`docs/plans/mono-synth-v2/00-status.md`, Mono v2 is a new instrument with its
-own parameter struct, so 02 landed only there. Poly v2 needs its own
-equivalent — a separate filter ADSR and filter keytracking — and it is still a
-prerequisite for everything below, because Drift has no envelope times to vary
-and the filter modes have no independent sweep to demonstrate without it.
+This plan now defines **ML-P8**, a new eight-voice polysynth. It replaces the
+earlier Poly v2 design, whose identity depended too heavily on three stacked
+oscillators, per-voice drift, unison, and chorus. Those can all make a sound
+wider; none makes the oscillator section more programmable.
 
-Note also that the original poly synth is being *kept* as a third device and
-gaining a mono/poly toggle and a legato toggle; Poly v2 is a new instrument
-beside it, not a rewrite of it.
+The original Poly synth remains as its own device. ML-P8 is not a rename or an
+in-place migration of it, and old Poly projects continue to load unchanged.
 
-Then work 01 → 07 in order. 01 is the contract every other step refers to and
-should be read first even when picking up a later step.
+Read 01 first, then work 02 through 07 in order:
 
-02 (drift) is the step that makes Poly immediately sound like a different
-instrument and is worth doing first for that reason alone. 03 (filter modes)
-is independent of 04 (unison) and 05 (chorus) and can be reordered if
-something blocks. 06 (oscillator sync) is genuinely optional for v2 — it is
-character on top of an identity that is already complete after 05.
+1. `01-what-poly-is.md` is the product and DSP contract.
+2. `02-per-voice-drift.md` builds the oscillator network, sub, and noise.
+3. `03-the-multimode-filter.md` adds the two envelopes, multimode filter, and
+   per-voice feedback loop.
+4. `04-unison-groups.md` adds ML-P8's native LFO and internal modulation
+   routes.
+5. `05-internal-chorus.md` finishes allocation, optional drift, unison, and
+   chorus without making duplication the instrument's identity.
+6. `06-oscillator-sync.md` publishes the instrument's typed control and audio
+   outlets.
+7. `07-poly-factory-patches.md` is the listening, range-tuning, and identity
+   pass.
 
-Source spec: `~/Downloads/mooloop_synth_v2_spec.md`, sections 4, 6, 8-13.
+The filenames are retained so existing references to this plan do not break;
+their headings describe their new scope.
+
+The separate filter ADSR and keytracking that used to be an unnamed
+prerequisite are now part of step 03. The device's own modulation is part of
+step 04. The channel modulation rack remains useful for reaching other devices
+and for adding channel-level sources, but ML-P8 must make complete patches with
+no channel routes at all.

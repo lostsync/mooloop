@@ -1,16 +1,18 @@
+# ML-1 plan status
+
 In progress. 02-07 are in, restructured. 08's bank and its automated checks
 are in; **08's listening pass is not done and cannot be done without Adam** —
 see "What is not".
 
 ## The restructure, decided 2026-08-30
 
-Adam's call, and it changes the shape of the whole plan: **Mono v2 and Poly v2
-are new instruments, not edits of the existing ones.** The original poly synth
-is *kept* — it is a simple three-oscillator synth that sounds good, and losing
-it is not worth it — and will get a mono/poly toggle and a legato toggle so it
-covers the "sometimes that is all you need" case. The original mono synth is
-deleted once its channels have somewhere to migrate to, which is that toggled
-poly. Three synths end up in the project, not two.
+Adam's call, and it changes the shape of the whole plan: **Mono v2 (ML-1) and
+ML-P8 are new instruments, not edits of the existing ones.** The original
+poly synth is *kept* — it is a simple three-oscillator synth that sounds good,
+and losing it is not worth it — and will get a mono/poly toggle and a legato
+toggle so it covers the "sometimes that is all you need" case. The original
+mono synth is deleted once its channels have somewhere to migrate to, which is
+that toggled poly. Three synths end up in the project, not two.
 
 Consequences for the steps below:
 
@@ -19,8 +21,9 @@ Consequences for the steps below:
   `#[serde(default)]` from the start, so the "make `MonoSynthParams` safe to
   extend first" work in 02 is moot here and the pre-v2 migration in 02.5 does
   not apply — there is no pre-v2 form of this device on disk.
-  `docs/plans/poly-synth-v2/00-status.md` names 02 as its prerequisite; that
-  is no longer true, and Poly v2 will need its own equivalent.
+  ML-P8's plan folds its separate filter envelope and keytracking into
+  `docs/plans/poly-synth-v2/03-the-multimode-filter.md`; ML-1 step 02 is not a
+  prerequisite.
 - **The descriptor split happened differently.** `MONO_DESCRIPTORS` and
   `POLY_DESCRIPTORS` still have their inheritance (`POLY_DESCRIPTORS` copies
   `MONO_DESCRIPTORS`), because those are the v1 devices and are on their way

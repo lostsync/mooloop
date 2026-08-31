@@ -1,85 +1,100 @@
-# Oscillator sync
+# Published signals
 
-Optional for v2. Poly's identity is complete after 05; this is character on
-top of it. Do it if there is appetite, skip it without guilt, but do not do it
-before 05.
+ML-P8 is a complete instrument and a composable device. This step publishes
+the useful parts of its internal behavior with explicit signal types, timing,
+and reduction rules. It does not expose every implementation field.
 
-## Why it belongs here
+## Control outlets
 
-Hard sync is the first "advanced" oscillator feature that is specifically
-Poly's. It pushes the instrument into Prophet-like hard, bright, clangy
-territory — sync stabs and sweeping leads — and it does so without making Mono
-more complicated. Mono's step 05 (`mono-synth-v2/05-the-acid-filter.md`) gets
-its aggression from the filter; Poly gets a different aggression from the
-oscillators.
+Publish stable named outlets:
 
-## Do this
+| Outlet | Type/range | Reduction |
+| --- | --- | --- |
+| `LFO` | bipolar control, -1..1 | exact device-global LFO value |
+| `Amp Envelope` | unipolar control, 0..1 | mean across the focus unison group |
+| `Filter Envelope` | unipolar control, 0..1 | focus-group mean |
+| `Velocity` | unipolar control, 0..1 | focus note velocity |
+| `Note` | unipolar control, MIDI 0..127 normalized | focus note number |
+| `Gate` | gate | high while any scheduled ML-P8 note is held |
+| `Trigger` | trigger | one declared control tick for every Note On |
 
-### 1. One fixed routing
+The **focus group** is the group created by the most recent Note On. It remains
+the focus through its release so envelope outlets have a coherent tail. When
+it becomes idle, its envelope, Velocity, and Note outlets return to zero; they
+do not jump backward to an older held chord note. A new Note On immediately
+becomes focus. Voice stealing follows the same rule because the stealing Note
+On is the new focus event.
 
-**OSC 2 hard-syncs to OSC 1.** One pair, one direction, one toggle. No matrix,
-no source/destination selectors. When OSC 1's phase wraps, OSC 2's phase
-resets.
+Gate is intentionally not the focus note's gate. `Gate = any held note` is the
+useful channel-level contract and does not fall low when the newest note is
+released while an older one remains held. Gate follows scheduled Note On/Off,
+not the VCA release tail. Trigger and Gate therefore communicate different
+facts.
 
-The musical move this enables is: sync on, OSC 2's Semi/Fine swept by hand or
-by the filter envelope, producing the classic sync sweep. That means OSC 2's
-pitch controls stay live and meaningful while its perceived pitch follows OSC
-1 — which is the whole effect.
+Control outlets enter the prepared per-channel control table. Cross-device
+consumers see the documented one-block latency from
+`MODULATOR_SYSTEM_SPEC.md`; ML-P8's own native routes read their sources
+directly with no such delay. Publication is never sampled from display
+telemetry.
 
-### 2. Implementation
+## Audio outlets
 
-`Osc` (`crates/mooloop-dsp/src/osc.rs`) advances phase internally and returns
-a sample. Sync needs the master's wrap to be visible to the slave. Two
-workable shapes:
+Publish stereo audio-rate port metadata and prepared taps for:
 
-- `next_sample` returns whether it wrapped this sample, and the caller resets
-  the slave; or
-- `Osc` exposes its phase and a `sync_to`/`hard_sync` entry point.
+- `Osc 1`, `Osc 2`, `Osc 3`: sums of the pre-Level modulation taps across
+  active voices, with voice pan applied;
+- `Sub` and `Noise`: their pre-Level source taps, with voice pan applied;
+- `Pre-Filter Mix`: source levels, voice feedback, and drive applied, before
+  the filter;
+- `Filter`: filter output before VCA.
 
-Prefer the first — it keeps the phase private and the sync logic in the voice,
-where it is one visible line.
+Pre-Level oscillator/source outlets deliberately continue to signal when that
+source is muted in ML-P8's own mix. This makes a silent internal modulator
+available to an external subscriber. The port status text must say `pre-level`
+so the behavior is not surprising.
 
-**Aliasing is the real work.** A naive phase reset produces a hard
-discontinuity and broadband aliasing, and OSC 2 uses PolyBLEP for saw and
-pulse (`crates/mooloop-dsp/src/osc.rs`) precisely to avoid that. The reset
-edge needs the same treatment: a BLEP correction at the sync discontinuity,
-scaled by the height of the step being introduced. Getting this wrong sounds
-like the effect working plus a layer of fizz, so listen at high notes where
-aliasing is worst.
+These are audio ports, not control outlets. The current one-block control table
+cannot carry them, and downsampling them would destroy their purpose. Delivery
+requires the typed auxiliary audio-edge/process-buffer work described by
+`AUDIO_ARCHITECTURE.md`. Implement this step in two honest slices if needed:
 
-Sync interacts with the per-voice phase offsets from step 02: the slave's
-phase is being reset by the master anyway, so its drift offset stops mattering
-while sync is on. That is correct and expected — the master's offset still
-varies per voice, so voices remain non-identical.
+1. land control outlets plus stable audio-port descriptors and the internal
+   taps without claiming the audio ports are connectable;
+2. make the audio outlets subscribable when prepared typed audio edges exist,
+   with declared latency and cycle policy.
 
-### 3. Parameter and UI
+Do not add a private bus pointer or same-block callback escape hatch to make an
+ML-P8 demo work. External audio feedback cycles need the graph compiler's
+general delay/cycle policy. The internal oscillator and voice feedback paths
+remain zero-graph, explicitly delayed ML-P8 topology.
 
-| Field       | Kind | Default | ID |
-|-------------|------|---------|----|
-| `osc_sync`  | bool | false   | 45 |
+## Discoverability and identity
 
-UI: a `ToggleButton` on the OSC page, in or beside the OSC 2 strip, labelled
-`SYNC` — it is unambiguous which oscillator is the slave if the control lives
-on it. `OscillatorTrace` (`crates/mooloop-ui/ui/device-displays.slint`) draws
-OSC 2's waveform; showing the synced shape is a nice-to-have, not a
-requirement.
+Every outlet has a stable ID, user-facing name, direction, type/domain, range
+or level convention, update rate, and latency. IDs belong to the ML-P8 device
+interface and cannot be casually renumbered after a project saves a route.
 
-Note that `OscillatorDeviceStrip` is defined in both device faces — Mono's
-step 07 extracts it to a shared component. If that has landed, the Sync
-control has to be optional in the shared strip so Mono's face does not grow
-it. If it has not landed, add it to Poly's copy and leave a note in Mono
-step 07.
+The channel modulation source picker groups control outlets under `ML-P8`.
+Audio outlets appear only in a surface that can create a compatible audio
+edge. A control destination never accepts `Osc 1` merely because both are
+numeric samples; an explicit follower or other adapter is required.
 
 ## Done when
 
-- Sync on produces the characteristic bright, fixed-pitch-with-changing-timbre
-  result: sweeping OSC 2's pitch changes harmonic content while the perceived
-  fundamental follows OSC 1. Assert the fundamental is stable across an OSC 2
-  pitch sweep.
-- Aliasing is controlled. Assert that high-note sync output has no significant
-  energy at frequencies that could only be aliases — the same kind of check
-  the PolyBLEP oscillators should already justify.
-- Sync off is bit-identical to the pre-step build.
-- Toggling sync on a sounding voice does not click.
-- Sync works across the whole voice pool with drift active, and the render
-  stays deterministic.
+- The seven control outlets are discoverable without special-casing ML-P8 in
+  the channel modulation UI.
+- LFO publication is the same signal used internally, and focus-envelope
+  reduction matches a tested unison group sample for sample before the
+  declared cross-device latency.
+- Gate stays high across overlapping held notes; Trigger fires once per Note
+  On; envelope outlets continue through the focus group's release.
+- Offline and live outlet timing agree exactly, including one-block
+  cross-device latency.
+- Audio-port descriptors distinguish audio from control and clearly declare
+  their pre-Level/pre-VCA taps.
+- Once typed audio edges are available, a muted Osc 3 can feed another
+  compatible unit while remaining absent from ML-P8's main mix.
+- Incompatible routes are rejected visibly and retained as inspectable orphan
+  state when a project cannot resolve them.
+- Publication adds no allocation, locks, I/O, telemetry dependency, or hidden
+  same-block feedback to the callback.

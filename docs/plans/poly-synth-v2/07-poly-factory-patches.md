@@ -1,77 +1,103 @@
-# Poly factory patches
+# ML-P8 factory patches and listening pass
 
-The listening pass, and where several deliberately-deferred decisions get
-made.
-
-## Why this is a step and not a checklist item
-
-Four things in this plan are explicitly "tune by ear" and one is "decide by
-listening":
-
-- Drift's maximum deviations (02)
-- LP24's resonance placement and cutoff compensation (03)
-- Detune's cent range (04)
-- Chorus modes I and II's rate/depth/color/spread, and whether Amount is
-  needed at all (05)
-- **Where Drive goes** — post-filter as today, or a mild pre-filter stage (03)
-
-Doing that tuning against six concrete patches is what settles them. Expect to
-change 02-05 during this step and to record the results there.
+This step tunes the deliberately musical ranges and proves that ML-P8 is more
+than a supersaw followed by chorus.
 
 ## The bank
 
-| Patch        | What it proves                                          |
-|--------------|---------------------------------------------------------|
-| Warm Saw     | Basic analog-poly body — the default a user starts from |
-| Brass        | Independent filter envelope plus velocity expression    |
-| PWM Pad      | PWM, drift, and stereo working together                 |
-| Wide Strings | Voice spread plus chorus/ensemble                       |
-| Sync Stab    | Oscillator hard sync and filter punch (needs 06)        |
-| Unison Lead  | Real voice-stack detune and spread                      |
+| Patch | What it proves |
+| --- | --- |
+| Init Saw | One oscillator, eight clean voices, honest reference level |
+| Crosswire Brass | Filter Env drives XMOD; velocity shapes filter and amp |
+| Furnace Stab | Voice Feedback, drive, and LP24 make a hard percussive stab |
+| Cold Metal | Bidirectional XMOD plus sync reaches stable inharmonic spectra |
+| Sub Pressure | Derived sub remains solid beneath noise-modulated carriers |
+| Servo Pad | Local LFO and per-voice envelopes move without channel routes |
+| Broken Choir | Differently tuned oscillators interact, not merely stack |
+| Wide Machine | Unison, Drift, Spread, and Chorus demonstrate the finishers |
 
-Each has to be reachable quickly from the default saw. If a patch needs
-fifteen precise settings, the defaults or the ranges are wrong and that is the
-finding, not the patch's fault.
+At least the first seven patches use **Unison 1x** and **Chorus OFF**. At least
+four use **Drift 0**. If those patches do not sound clearly distinct, fix the
+network, modulation destinations, or ranges; do not turn on a duplicator.
 
-If step 06 was skipped, Sync Stab is deferred with it — note that here rather
-than substituting a different patch.
+Each patch must be reachable from Init Saw without hidden channel modulation
+or insert effects. The saved patch includes all native routes it needs.
 
-## Velocity as a channel source
+## Decisions to tune and record
 
-Poly's control surface has no device-local MOD page. Velocity continues to
-scale amplitude natively through `velocity_amp` (`polysynth.rs:234`). If Brass
-needs velocity to open the filter to be playable, publish the generator's
-reduced velocity as a named channel outlet and route it to Cutoff through the
-channel modulation shelf. Its trim, smoothing, and depth then use the ordinary
-source-to-`ParamAddr` contract rather than adding a Poly-only parameter ID or
-expression panel.
+Use the bank to settle these ranges, then replace the provisional language in
+the corresponding step with measured values:
 
-This is the milder, expression-shaped counterpart to Mono's native Accent: no
-drive push, no per-note character change, just a channel control signal
-derived from velocity. If Brass plays well without it, do not publish the
-outlet. Record which, and why, here.
+- maximum XMOD phase deviation and its knob curve;
+- oscillator self-feedback and noise-mod scaling;
+- Sub balance and Noise Color range;
+- LP24 resonance distribution and cutoff compensation;
+- positive/negative Voice Feedback bounds and drive compensation;
+- ML-P8 LFO Warp, Slew, and Chaos behavior;
+- Unison Detune maximum and Drift deviations;
+- Chorus I/II fixed policies and whether a Mix control is genuinely needed.
 
-## Checks against the whole instrument
+The upper quarter of destructive controls should be wild but navigable. If a
+one-percent knob move traverses all useful timbres, change the curve. If the
+maximum is merely louder, change the topology or compensation.
 
-- Every patch at maximum velocity, full polyphony, and 8× unison stays within
-  the peak bound. This is the case where sixteen voices sum, and it is the
-  most likely place for the instrument to clip. Cross-reference
-  `docs/plans/gain-structure/` — honest summing is the intended behaviour, so
-  the answer may be "the default level is too high", not "add a limiter".
-- Determinism end to end: render the full bank offline twice and diff.
-- Transport stop during each patch releases cleanly, including the chorus tail.
-- Automating cutoff, resonance, drift, detune, and spread across their full
-  range mid-chord produces no clicks.
-- A pre-v2 project loads alongside the new bank and still sounds close to what
-  it did.
+## Automation and modulation abuse pass
+
+The point of exposing these controls is to move them. Exercise full-range,
+sample-timed automation on:
+
+- every directed XMOD amount and the three self-feedback amounts;
+- Noise Color and noise-to-oscillator amounts;
+- Voice Feedback, drive, cutoff, resonance, and Filter Env Amount;
+- internal route amounts, LFO Rate/Warp/Slew, and envelope times;
+- Sub Level, Detune, Spread, and Drift.
+
+Automate several together on an eight-note chord. The result may be abrasive;
+it may not click accidentally, diverge, allocate, depend on oscillator
+iteration order, or produce non-finite samples.
+
+Structural automation gets separate transition tests for waveform, sync
+source, filter mode, Sub source/octave, Unison, and Chorus mode. If a selector
+cannot switch safely on a live voice, mark it non-automatable and document the
+note-boundary behavior rather than pretending smoothing solves topology.
+
+## Published-interface patches
+
+Add two small routing fixtures outside the factory bank:
+
+1. `ML-P8 / LFO` modulates a downstream delay or filter while continuing to
+   modulate ML-P8 internally.
+2. Gate resets a compatible downstream source, Trigger advances a step source,
+   and the focus Filter Envelope modulates a downstream parameter with the
+   documented one-block latency.
+
+When typed audio edges are implemented, add a third fixture in which muted Osc
+3 feeds a compatible audio consumer through its published pre-Level outlet.
+
+## Whole-instrument checks
+
+- Render the full bank twice in one process and once in a fresh process; all
+  three renders are bit-identical.
+- Measure eight-note worst cases under the gain contract. Honest summing may
+  exceed 0 dBFS; the node must remain finite and must not normalize other
+  voices or sources. Factory patches should still leave intentional headroom.
+- Verify callback cost at the supported sample rates with eight active voices,
+  the measured internal-route safety boundary, filter feedback, and outlet
+  publication. No Cargo or live-audio procedure bypasses
+  `docs/AGENT_OPERATIONS.md`.
+- Transport stop and choke release envelopes and clear feedback/chorus tails
+  according to their documented behavior.
+- The original Poly device and old projects remain unchanged beside ML-P8.
 
 ## Done when
 
-- All six patches (five if 06 was skipped) exist, load, and reach their
-  intended territory.
-- Warm Saw and Wide Strings are unmistakably the same instrument; Warm Saw and
-  a Mono bass are unmistakably not.
-- Every deferred decision listed above has an answer written into its step.
-- **The definition of done holds:** Mono and Poly loaded with the same saw
-  lead to two clearly different workflows within a few knob moves. Poly
-  invites voicing, drift, chords, unison, spread, and chorus.
+- All eight patches exist and reach their named territory.
+- The seven non-finish patches remain convincing at Unison 1x and Chorus OFF.
+- Crosswire Brass, Cold Metal, Furnace Stab, and Servo Pad use four materially
+  different internal modulation relationships.
+- Every provisional range above has a measured answer recorded in its step.
+- ML-P8 plays eight ordinary notes, steals complete groups, remains
+  deterministic, and meets the realtime callback budget.
+- A musician can make a moving, velocity-responsive, feedback-heavy patch
+  without opening the channel modulation shelf, then publish ML-P8's own
+  signals to make the rest of the channel move with it.

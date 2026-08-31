@@ -85,6 +85,16 @@ those parameters. One channel source can therefore affect its source, several
 inserts, and strip controls at once without being visually or architecturally
 attached to one device.
 
+Channel ownership of **general-purpose and cross-device** modulation does not
+forbid authored modulation inside an instrument. A synth should keep the
+per-voice envelopes, note expression, audio-rate relationships, and
+device-specific LFO or sequencer behavior that make it a complete playable
+instrument. Those sources and routes persist with the device, work without a
+channel shelf, and may publish deliberately typed outlets so the channel can
+use the same musical signal elsewhere. An instrument-local LFO is not a
+private copy of a channel LFO; it is part of that instrument's synthesis
+contract.
+
 For a musician, a modulation source is simply something that produces a
 bounded control signal over time. LFOs and step sequences are the first
 examples, not the definition. Note-derived values, macros, named device
@@ -148,6 +158,8 @@ Mooloop should include:
 - Parameter automation, channel inserts, sends, groups, and useful routing.
 - A channel-owned modulation rack with direct manipulation on ordinary device
   controls, rather than a separate patching mode for routine use.
+- Authored instruments that stand on their own and publish musically useful
+  internal control/audio signals through typed device outlets.
 - Project and kit persistence with ordinary audio assets.
 - Offline WAV rendering and JACK output. Compressed export can be added through
   a proven encoder after WAV rendering is correct.

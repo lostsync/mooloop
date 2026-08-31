@@ -37,7 +37,13 @@ CHANNEL (ownership)
 ```
 
 - A **channel** owns its modulation sources and routes. A source is not the
-  property of Mono, Buffer, an insert, or the strip.
+  property of Mono, Buffer, an insert, or the strip when it is a reusable
+  channel source or crosses a device boundary.
+- A device may own modulation that is endemic to its synthesis algorithm:
+  per-voice envelopes and note values, audio-rate oscillator relationships,
+  or an authored instrument LFO. It persists those local routes with the
+  device and may publish selected sources as typed outlets. This does not
+  duplicate or transfer ownership of the channel rack.
 - A device owns parameter descriptors and may publish named control outlets.
   It does not need to know which sources are connected to its parameters.
 - `COMPOSABLE_DEVICE_UNITS.md` owns the general published/private port
@@ -72,6 +78,13 @@ random waves. The envelope is unipolar and currently binds its gate inlet to
 the scheduled Note On/Off stream of an explicitly selected piano-roll channel.
 That note stream is the first adapter for a future typed generator `Gate`
 outlet; envelope destinations already use ordinary routes.
+
+This implemented local LFO is a channel-rack source. It does not prohibit a
+future instrument from owning a different LFO as part of its saved synthesis
+topology. Once such an instrument publishes that signal, the outlet is a
+channel source for cross-device routing under the timing contract below; the
+instrument's own per-voice routes remain internal and do not take a one-block
+trip through the channel control table.
 
 Do not replace `ParamAddr`, descriptor IDs, natural-unit events, or the
 timed-event path. They are the seam shared by knobs, automation, and
@@ -234,11 +247,13 @@ graph-order accidents, and avoids same-block feedback exceptions. A generator
 reduces per-voice values to a single named signal; the first policy may be
 last-note, with alternatives added as explicit outlet modes.
 
-True audio-rate FM and true audio sidechain are excluded. `AudioNode`
-currently has one in-place stereo bus; true sidechain requires prepared typed
-auxiliary edges/process buffers and graph latency compensation. Do not retain a
-borrowed source bus inside an effect. A control-rate envelope follower exposed
-as an outlet is the correct first audio-derived-control form.
+True audio-rate FM **through a channel route** and true audio sidechain are
+excluded. A device's fixed/internal oscillator network is outside this
+control-rate route contract. `AudioNode` currently has one in-place stereo bus;
+true sidechain requires prepared typed auxiliary edges/process buffers and
+graph latency compensation. Do not retain a borrowed source bus inside an
+effect. A control-rate envelope follower exposed as an outlet is the correct
+first audio-derived-control form.
 
 ## User experience
 
@@ -332,12 +347,16 @@ This work includes the channel-owned model, destination metadata,
 base-plus-offset resolution, current LFO continuity, the shelf/common-frame
 interaction, and the direct-assignment inspector.
 
-It excludes a general visual-programming environment; device-local general LFO
-pages; general cross-channel/global routing beyond the explicit channel-note
-gate adapter; true audio sidechain, audio-rate FM, and control feedback cycles;
-and treating display telemetry as control data. Existing transitional synth
-LFO pages should migrate into channel sources rather than grow a parallel
-system.
+It excludes a general visual-programming environment; copying the same
+general-purpose channel LFO into every device; general cross-channel/global
+routing beyond the explicit channel-note gate adapter; true audio sidechain,
+cross-device audio-rate FM, and control feedback cycles; and treating display
+telemetry as control data. A device-specific LFO or per-voice modulation
+system may remain local when it is an authored part of the instrument, works
+without the channel rack, persists with the device, and publishes any
+cross-device signal through the ordinary outlet contract. Transitional synth
+LFOs that are merely generic channel modulators should still migrate instead
+of growing a parallel system.
 
 1. Preserve `ModRack`/`ParamAddr`; add destination metadata and expose LFO
    routes in the channel shelf.

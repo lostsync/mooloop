@@ -1,112 +1,115 @@
-# The multimode filter
+# Envelopes, multimode filter, and voice feedback
 
-## Why this belongs on Poly and not Mono
+This step gives the oscillator network a complete subtractive voice and a
+second nonlinear loop. It also folds in the independent filter-envelope work
+that the previous plan left as a prerequisite.
 
-`Svf` (`crates/mooloop-dsp/src/filter.rs:22`) already computes low-pass,
-band-pass, and high-pass from the same state-variable stage —
-`next_sample_lp_bp_hp` returns all three
-(`crates/mooloop-dsp/src/filter.rs:69`) and Poly currently throws two of them
-away, calling `next_sample_lp_hp(...).0` (`polysynth.rs:351`). The capability
-is already paid for.
+## Two envelopes with separate jobs
 
-Mono deliberately does *not* get a mode menu, because a clean multimode filter
-is the opposite of a character filter. On Poly it is exactly right: a flexible
-per-voice tone shaper across pads, brass, strings, and stabs.
+Each physical voice owns:
 
-## Do this
+- an amplitude ADSR, applied only to the VCA unless explicitly routed
+  elsewhere on the MOD page;
+- a filter ADSR, with a bipolar dedicated Filter Env Amount and availability
+  as an internal modulation source.
 
-### 1. Four modes
+Both envelopes are evaluated per sample and per voice. One envelope must never
+be reduced to a channel value and then reapplied to every note in a chord.
+
+Add native expression controls:
+
+- **Amp Velocity:** 0-100%, crossfading from fixed unity response to full note
+  velocity at the VCA;
+- **Filter Velocity:** bipolar amount added to the filter-envelope depth;
+- **Keytrack:** 0-200%, with 100% moving cutoff one octave per played octave.
+
+These are normal instrument controls, saved with the patch and automatable.
+They do not require channel modulation routes. Sustain is a level; any later
+Drift control may vary envelope times but never sustain.
+
+## Four filter modes
+
+Use the existing topology-preserving SVF as the basis:
 
 ```rust
-pub enum PolyFilterMode { Lp12, Lp24, Bp12, Hp12 }  // default Lp12
+pub enum MlP8FilterMode { Lp12, Lp24, Bp12, Hp12 }
 ```
 
-| Mode | Response                          | Implementation                              |
-|------|-----------------------------------|---------------------------------------------|
-| LP12 | Open, smooth two-pole low-pass    | The existing single `Svf` stage             |
-| LP24 | Classic four-pole poly response   | Two cascaded stable 12 dB stages            |
-| BP12 | Nasal, swept textures             | The existing BP output                      |
-| HP12 | Thin, brassy, string patches      | The existing HP output                      |
+| Mode | Response | Implementation |
+| --- | --- | --- |
+| LP12 | Open two-pole low-pass | One SVF stage |
+| LP24 | Four-pole low-pass | Two compensated cascaded stages |
+| BP12 | Band-pass | First-stage BP output |
+| HP12 | High-pass | First-stage HP output |
 
-`PolyVoice` owns the SVF state for both stages as concrete fields — enum-based
-state with static storage, no heap, no trait objects. The second stage's state
-is dead weight in the three 12 dB modes and that is fine; it is two floats.
+For LP24, tune resonance distribution and cutoff compensation so the Cutoff
+knob refers to approximately the same corner in LP12 and LP24. Switching mode
+mid-note must not clear filter state or step the output. Match once per
+render range or use a prepared function path; do not branch on an unchanged
+mode for every sample of every voice unnecessarily.
 
-Match on the mode once per block, not per sample.
+## The feedback loop
 
-### 2. LP24 specifics
+Add a bipolar **Voice Feedback** control. For each voice:
 
-Cascading two SVFs is not simply calling the stage twice. Two things to get
-right:
+```text
+source mix + bounded(previous filter output * feedback)
+    -> drive/color
+    -> multimode filter
+    -> store for next sample
+    -> VCA
+```
 
-- **Resonance placement.** Applying the full resonance to both stages gives a
-  peak roughly twice as tall in dB and a filter that self-oscillates far too
-  easily. The usual answer is resonance on one stage with the other running
-  flat, or a reduced Q on each. Pick one, listen, record it here.
-- **Cutoff compensation.** Two cascaded 12 dB stages at the same cutoff have a
-  -6 dB point noticeably below either stage's individually. Compensate so that
-  the Cutoff knob means roughly the same frequency in LP12 and LP24 — the user
-  is comparing modes, not stages.
+The one-sample delay is explicit. Feedback is per voice, not a loop around the
+eight-voice sum, so notes do not secretly modulate one another. The feedback
+state resets when a slot is truly idle and is cleared before that slot is
+reassigned; it is not cleared merely because a held note enters release.
 
-If a dedicated 4-pole path turns out cleaner than a cascade, that is an
-acceptable substitution; the requirement is the response, not the topology.
-Note that the Mono plan's step 04 builds a nonlinear ladder — **do not reuse
-it here.** Poly's LP24 is clean by design; that difference is the point.
+Drive moves to the pre-filter position and sits inside the loop. This is a
+design decision, not a listening-pass placeholder: the drive stage is what
+bounds loop energy and makes feedback change tone rather than only gain. Keep
+it level-compensated around the project reference and add a DC blocker if the
+feedback/filter combination develops a bias.
 
-### 3. Stability under changing cutoff
+Maximum positive and negative feedback should approach sustained or
+self-oscillating behavior without NaNs, denormals, or unbounded output. Do not
+hide a limiter after the voice sum. The explicit drive and loop bound are the
+safety mechanism and part of the instrument's sound.
 
-This is the real risk. Cutoff moves every sample from the per-voice filter
-envelope and keytracking/drift, while channel modulation changes the
-descriptor value at its declared control rate. `Svf` is topology-preserving
-specifically so that it stays well behaved when cutoff moves per sample (see
-the comment at `crates/mooloop-dsp/src/filter.rs:19`) — a cascade of two must
-keep that property, and the HP output in particular is the one that blows up
-if resonance and cutoff changes are handled carelessly.
+## Parameter IDs and UI
 
-Switching mode mid-note must not click. Do not reset stage state on a live
-switch; let the 5 ms parameter smoothing cover it, and cross-fade only if a
-listening test shows a pop. Switching from HP to LP is the worst case, since
-the outputs are near-complementary.
+Reserve ML-P8 IDs 42-54 for filter mode, cutoff, resonance, Filter Env Amount,
+drive, keytrack, filter ADSR, Amp Velocity, Filter Velocity, and Voice
+Feedback. Reuse no provisional Poly-v2 ID: ML-P8 has a new parameter kind and
+one reviewed descriptor table.
 
-### 4. Decide where Drive goes
+The AMP/FILTER page contains three visibly separate sections: Amplitude,
+Filter, and Filter Envelope. Voice Feedback lives on ROUTE beside oscillator
+self-feedback because it is heard as part of the network, even though its DSP
+tap is after the filter.
 
-Per 01, Poly's Drive is a color control and its placement is a listening call,
-not a defining requirement. It is post-filter today
-(`apply_drive(filtered, drive)`, `polysynth.rs:355`). Try a mild pre-filter
-stage; keep whichever sounds better as a gentle color across all four modes,
-and **write the decision and the reason into this file.**
-
-Bear in mind BP12 and HP12 remove a lot of energy, so post-filter drive on
-those modes is quiet and pre-filter drive is not. That asymmetry is itself an
-argument, in whichever direction the listening goes.
-
-### 5. Parameter and UI
-
-| Field         | Kind                   | Default | ID |
-|---------------|------------------------|---------|----|
-| `filter_mode` | `PolyFilterMode` enum  | `Lp12`  | 41 |
-
-LP12 is the migration default and matches what old patches actually were.
-
-UI: a `SelectorBank` in the FILTER panel header on AMP/FILTER — the slot Mono
-step 02 left when it restructured both faces. `LP12` / `LP24` / `BP` / `HP`.
-`FilterResponseDisplay` takes a `mode` property that Poly currently hardcodes
-to 0 (`crates/mooloop-ui/ui/poly-device.slint:174`); drive it from the mode so
-the displayed curve is honest — check whether the component already draws all
-four shapes and extend it if not.
+Every continuous control in this step is a legal channel modulation
+destination except envelope sustain where a later destination audit finds a
+specific reason to exclude it. Filter mode is structural and defaults to
+ineligible.
 
 ## Done when
 
-- Each of the four modes produces its expected response. Assert against a
-  rendered sweep: LP24 rolls off roughly twice as steeply as LP12, BP12
-  attenuates both extremes, HP12 attenuates the low end.
-- LP12 and LP24 at the same Cutoff knob position have comparable corner
-  frequencies.
-- All four stay finite and bounded at maximum resonance with the cutoff swept
-  by the per-voice envelope and a rapid channel LFO route. Extend
-  `resonant_filter_and_drive_stay_bounded` to run per mode.
-- Switching mode on a sounding voice produces no step. Reuse the `max_step`
-  helper from `parameter_changes_mid_note_do_not_step`.
-- `filter_mode = Lp12` with drive unchanged is bit-identical to the pre-step
-  build, or the difference is explained by the Drive placement decision and
-  recorded here.
+- Amplitude and filter envelopes have independent times and levels on all
+  eight voices.
+- Amp Velocity at 0 produces equal VCA peaks across velocities; at 100 it
+  follows note velocity. Filter Velocity is bipolar and never changes VCA
+  gain by itself.
+- Keytrack at 100% follows played pitch by one octave per octave.
+- Each filter mode produces the expected response; LP12 and LP24 have
+  comparable corner frequencies and clearly different slopes.
+- Rapid per-voice envelope sweeps and channel-routed cutoff modulation remain
+  finite at maximum resonance in all modes.
+- Voice Feedback changes each mode materially, reaches unstable/industrial
+  territory in its upper range, and remains numerically bounded at both
+  polarities.
+- Eight simultaneously held notes do not leak filter or feedback state into
+  one another.
+- Reassigning a stolen slot cannot emit the previous note's feedback tail.
+- Mode, feedback, drive, velocity amount, and envelope-amount automation do
+  not click.

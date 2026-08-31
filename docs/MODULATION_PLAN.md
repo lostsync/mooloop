@@ -71,6 +71,14 @@ an individual source or insert. A device supplies parameters and may publish
 named control outlets; the channel owns the source collection that can use
 those outlets and the routes that terminate in devices or the strip.
 
+This governs reusable channel sources and every route that crosses a device
+boundary. It does not strip an authored instrument of endemic modulation. A
+polysynth may own per-voice envelopes, velocity/key/gate relationships,
+audio-rate oscillator routing, and a device-specific LFO with saved internal
+routes. Those cannot in general be reproduced after the channel has reduced a
+chord to one control value. Selected internal signals become channel sources
+only by being published through the typed outlet contract below.
+
 The realtime implementation may use a fixed, bounded array (currently four
 local source positions) because it makes the callback predictable. That is an
 engine protocol boundary, not the product abstraction: the UI presents a
@@ -127,19 +135,24 @@ Modulation is evaluated on a fixed subdivision of the block (32 or 64 frames),
 not once per block and not per sample. Once per block stair-steps audibly on
 fast LFOs; per sample is a cost we don't need.
 
-This means no audio-rate FM of a filter cutoff. That is a deliberate limit.
-Stepped, sequenced modulation is stylistically correct for the music this
-instrument targets, and audio-rate modulation is a much larger engine change
-that can come later if it earns its way in.
+This means no audio-rate FM of a filter cutoff **through a channel route**.
+That is a deliberate limit. Stepped, sequenced modulation is stylistically
+correct for the music this instrument targets, and cross-device audio-rate
+modulation is a much larger engine change that can come later if it earns its
+way in. Fixed or authored audio-rate paths inside one prepared DSP device are
+not routed by this matrix and are not prohibited by it.
 
 ### Rack semantics, graph-capable model
 
 The ordered device rack remains the normal presentation and audio workflow.
 The modulation model is graph-capable only in the useful, narrow sense that
-sources, destinations, routes, timing, and latency are explicit data rather
-than hidden device-local behavior. A future zoomed-out graph view can
-visualize and edit that same data alongside the audio chain; it must not
-introduce a parallel modulation engine or redefine the rack model.
+cross-device sources, destinations, routes, timing, and latency are explicit
+data. Authored device-local modulation also has persisted, inspectable source
+and destination identities, but may execute inside a voice where channel-rate
+routing cannot preserve its semantics. A future zoomed-out graph view can
+visualize published boundaries and the channel routes alongside the audio
+chain; it must not introduce a parallel cross-device modulation engine or
+redefine the rack model.
 
 Do not build that graph editor in this pass. Routine modulation is a
 source-selection and direct-manipulation interaction, not a matrix or a field
