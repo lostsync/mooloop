@@ -65,11 +65,12 @@ pub use gain::{
     METER_WARNING_DB, MIN_DB, REFERENCE_PEAK_DBFS,
 };
 pub use effect::{
-    BitcrushParams, BufferParams, CompressorParams, DelayMode, DelayParams, DelayTimeDivision, DriveCurve,
-    DriveParams, EffectKind, EffectParams, EffectSlotState, EqBand, EqBandKind, EqParams,
-    EqPassFilter, EqQProfile, EqSlope, FilterMode, FilterParams, FilterSlope, GateParams, LimiterParams,
-    ModulationMode, ModulationParams, ParamCurve, ParamDescriptor, PlateParams,
-    ReverbParams, BITCRUSH_PARAM_BITS, BITCRUSH_PARAM_DOWNSAMPLE, BITCRUSH_PARAM_MIX,
+    BitcrushParams, BitcrushStyle, BufferParams, CompressorParams, DelayMode, DelayParams,
+    DelayTimeDivision, DriveCurve, DriveParams, EffectKind, EffectParams, EffectSlotState, EqBand,
+    EqBandKind, EqParams, EqPassFilter, EqQProfile, EqSlope, FilterMode, FilterParams, FilterSlope,
+    GateParams, LimiterParams, ModulationMode, ModulationParams, ParamCurve, ParamDescriptor,
+    PlateParams, ReverbParams, BITCRUSH_PARAM_BITS, BITCRUSH_PARAM_DOWNSAMPLE, BITCRUSH_PARAM_MIX,
+    BITCRUSH_PARAM_STYLE,
     BUFFER_PARAM_CROSSFADE_MS, BUFFER_PARAM_OFFSET_BEATS,
     COMP_PARAM_ATTACK_MS, COMP_PARAM_KNEE_DB, COMP_PARAM_MAKEUP_DB, COMP_PARAM_RATIO,
     COMP_PARAM_RELEASE_MS, COMP_PARAM_THRESHOLD_DB, DELAY_MAX_TIME_MS, DELAY_PARAM_CROSS,

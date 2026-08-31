@@ -760,8 +760,9 @@ impl Default for DriveParams {
 pub const BITCRUSH_PARAM_BITS: u32 = 0;
 pub const BITCRUSH_PARAM_DOWNSAMPLE: u32 = 1;
 pub const BITCRUSH_PARAM_MIX: u32 = 2;
+pub const BITCRUSH_PARAM_STYLE: u32 = 3;
 
-static BITCRUSH_DESCRIPTORS: [ParamDescriptor; 3] = [
+static BITCRUSH_DESCRIPTORS: [ParamDescriptor; 4] = [
     ParamDescriptor {
         id: BITCRUSH_PARAM_BITS,
         name: "Bits",
@@ -789,7 +790,68 @@ static BITCRUSH_DESCRIPTORS: [ParamDescriptor; 3] = [
         curve: ParamCurve::Linear,
         default: 1.0,
     },
+    ParamDescriptor {
+        id: BITCRUSH_PARAM_STYLE,
+        name: "Style",
+        unit: "",
+        min: 0.0,
+        max: 3.0,
+        curve: ParamCurve::Stepped(4),
+        default: 0.0,
+    },
 ];
+
+/// Which quantization/decimation math the bitcrusher runs. All styles share
+/// the `bits` and `downsample` inputs; they differ in how coarsely the held
+/// sample is snapped and how the hold is drawn between latch points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BitcrushStyle {
+    /// Round-to-nearest quantization of a hard-held sample — the classic
+    /// crusher, and the behaviour everything shipped with until styles
+    /// existed.
+    #[default]
+    Crush,
+    /// TPDF noise added before quantization, so the depth collapses into
+    /// modulated noise instead of hard distortion. The signal hides inside
+    /// the grain rather than breaking up.
+    Dither,
+    /// Companding quantizer: fine steps near silence, coarse at peaks, so
+    /// quiet material keeps its detail while loud material crushes hardest.
+    Mu,
+    /// Linear interpolation between latch points instead of a hard hold —
+    /// the same sample rate, but a softer, duller alias character.
+    Glide,
+}
+
+impl BitcrushStyle {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Dither,
+            2 => Self::Mu,
+            3 => Self::Glide,
+            _ => Self::Crush,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Crush => 0,
+            Self::Dither => 1,
+            Self::Mu => 2,
+            Self::Glide => 3,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Crush => "CRUSH",
+            Self::Dither => "DITH",
+            Self::Mu => "MU",
+            Self::Glide => "GLIDE",
+        }
+    }
+}
 
 /// Parameters for the bitcrush effect (`BitcrushEffect` in `mooloop-dsp`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -801,6 +863,9 @@ pub struct BitcrushParams {
     pub downsample: f32,
     /// Dry/wet blend in `[0, 1]`.
     pub mix: f32,
+    /// Which crusher math runs (see [`BitcrushStyle`]).
+    #[serde(default)]
+    pub style: BitcrushStyle,
 }
 
 impl Default for BitcrushParams {
@@ -809,6 +874,7 @@ impl Default for BitcrushParams {
             bits: 16.0,
             downsample: 1.0,
             mix: 1.0,
+            style: BitcrushStyle::default(),
         }
     }
 }
@@ -1911,6 +1977,7 @@ impl EffectParams {
                 BITCRUSH_PARAM_BITS => Some(p.bits),
                 BITCRUSH_PARAM_DOWNSAMPLE => Some(p.downsample),
                 BITCRUSH_PARAM_MIX => Some(p.mix),
+                BITCRUSH_PARAM_STYLE => Some(p.style.to_index() as f32),
                 _ => None,
             },
             Self::Delay(p) => match id {
@@ -2042,6 +2109,7 @@ impl EffectParams {
                 BITCRUSH_PARAM_BITS => p.bits = value,
                 BITCRUSH_PARAM_DOWNSAMPLE => p.downsample = value,
                 BITCRUSH_PARAM_MIX => p.mix = value,
+                BITCRUSH_PARAM_STYLE => p.style = BitcrushStyle::from_index(value.round() as i32),
                 _ => return None,
             },
             Self::Delay(p) => match id {

@@ -163,7 +163,7 @@ work session you can recall being part of, and don't stress over precision.
 ### GLM 5.3 Flash (glm-5.3-flash) — opencode
 - First seen: 2026-08-23
 - Last seen: 2026-08-30
-- Sessions: 15
+- Sessions: 16
 - Notes: Effect-container refactor: latency-aligned dry path, one dB trim
   knob everywhere, bus-effect metering, and the shared effect-device shell.
   Extracted the shared DraggablePoint handle and gave the EQ band points
@@ -199,6 +199,10 @@ work session you can recall being part of, and don't stress over precision.
    source descriptors (shape, rate, latency, trigger), a legacy local-slot
    LFO decode, and `ModDestinationDescriptor` defaults that derive from each
    `ParamCurve` so stepped targets refuse modulation until they opt in.
+   Added the bitcrush style row: a `BitcrushStyle` param (crush, TPDF
+   dither, µ-law companding, interpolated hold) threading core descriptors,
+   the DSP branch, and the device-face SelectorBank, with per-style DSP
+   tests pinning the signal behaviors the styles exist for.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21

@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob } from "controls.slint";
+import { ParameterKnob, SelectorBank } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { BitcrushTrace } from "device-displays.slint";
 
@@ -9,9 +9,11 @@ import { BitcrushTrace } from "device-displays.slint";
 export component BitcrushDeviceFace inherits EffectDeviceShell {
     name: "Bitcrush";
     kind: "FX / 1U";
+    in-out property <int> style;         // 0 = crush, 1 = dither, 2 = mu, 3 = glide
     in-out property <float> bits;        // normalized 0..1 (1 .. 16 bits)
     in-out property <float> downsample;  // normalized 0..1 (1x .. 64x)
     in-out property <float> mix;         // normalized 0..1
+    callback style-changed(int);
     callback bits-changed(float);
     callback downsample-changed(float);
     callback mix-changed(float);
@@ -25,6 +27,18 @@ export component BitcrushDeviceFace inherits EffectDeviceShell {
         padding: 6px;
         padding-top: DeviceRackMetrics.header-height + 6px;
         spacing: 4px;
+        HorizontalLayout {
+            alignment: start;
+            spacing: 4px;
+            SelectorBank {
+                options: ["CRUSH", "DITH", "MU", "GLIDE"];
+                selected-index <=> root.style;
+                segment-width: 34px;
+                tooltip: "Crusher math";
+                selected(i) => { root.style-changed(i); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
         Rectangle {
             height: 104px;
             background: Theme.panel;

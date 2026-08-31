@@ -2750,9 +2750,11 @@ export component MainWindow inherits Window {
                                                         slot-index: index;
                                                         slot-count: root.effect-slots.length;
                                                         bypassed: slot.bypassed;
+                                                        style: round(slot.p3 * 3);
                                                         bits: slot.p0;
                                                         downsample: slot.p1;
                                                         mix: slot.p2;
+                                                        style-changed(i) => { root.effect-param-changed(index, 3, i * 1.0 / 3.0); }
                                                         bits-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                         downsample-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         mix-changed(v) => { root.effect-param-changed(index, 2, v); }
