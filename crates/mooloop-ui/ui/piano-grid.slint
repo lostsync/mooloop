@@ -312,9 +312,12 @@ export component PianoGrid inherits Rectangle {
         border-width: 1px;
         border-color: Theme.focus.transparentize(0.4);
 
+        // 8px wide because `scale-handle-at` accepts 4px either side of the
+        // edge: an affordance that is not the size of its hit zone teaches
+        // the wrong target.
         for side in 2 : Rectangle {
-            x: side == 0 ? -3px : parent.width - 3px;
-            width: 6px;
+            x: side == 0 ? -4px : parent.width - 4px;
+            width: 8px;
             height: parent.height;
             background: Theme.focus.transparentize(
                 piano-touch.scaling != 0
