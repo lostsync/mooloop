@@ -6,7 +6,9 @@
 //! - The voice runs through an ADSR amplitude envelope. In loop mode `Off`,
 //!   reaching `loop_end` enters release; in `Forward`/`Pingpong`, the voice
 //!   loops until retrigged or released.
-//! - Sample rate conversion is linear-interpolated; can be upgraded later.
+//! - Sample rate conversion goes through the band-limited reader in
+//!   `crate::interpolate`, which is told the region the head is in so an
+//!   overhanging kernel folds across a loop instead of reading silence.
 //!
 //! Processing is **segment-based**: the block is split at each event's
 //! sample offset, the voice renders the segment, then the event is applied.
@@ -18,6 +20,7 @@ use std::sync::Arc;
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::filter::apply_drive;
+use crate::interpolate::{Region, RegionEdge, SincTable};
 use crate::node::{AudioNode, ProcessContext};
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
@@ -293,6 +296,10 @@ impl Sampler {
     ) -> Self {
         params.polyphony = params.polyphony.clamp(1, MAX_SAMPLER_VOICES);
         params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
+        // Build the shared interpolation table here, on whatever thread
+        // constructs the device, so no `process()` call is ever the first to
+        // touch it.
+        SincTable::shared();
         let mut voices = std::array::from_fn(|_| Voice::new(sample_rate));
         for voice in &mut voices {
             voice.env.configure(params);
@@ -595,16 +602,30 @@ impl Sampler {
         if !voice.active {
             return;
         }
+        // The sample, the resolved bounds, and the loop mode are all fixed
+        // for the whole segment -- events are what change them, and the block
+        // is already split at every event. Resolving them once here is both
+        // cheaper than the per-frame recomputation this replaces and what
+        // lets the read below know its region before it reads.
+        let Some(len) = voice.sample.as_ref().map(|sample| sample.len()).filter(|len| *len > 0)
+        else {
+            voice.active = false;
+            return;
+        };
+        let (play_start, play_end) = Self::resolve_playback_bounds(params, len);
+        let (ls, le) = Self::resolve_loop_bounds(params, len);
+        let loop_mode = if voice.loop_enabled {
+            params.loop_mode
+        } else {
+            LoopMode::Off
+        };
+        let table = SincTable::shared();
+
         for i in start..end {
             let Some(sample) = voice.sample.as_ref() else {
                 voice.active = false;
                 return;
             };
-            let len = sample.len();
-            if len == 0 {
-                voice.active = false;
-                return;
-            }
 
             // Advance envelope; if it finished during release, end voice.
             voice.env.advance();
@@ -617,31 +638,33 @@ impl Sampler {
             // colour control.
             let amp = voice.env.level * voice.velocity_amp * output_gain.advance();
 
-            // Fetch interpolated frame.
+            // Fetch the frame through the band-limited reader. The region
+            // it is told about is the one the head is actually in: a looping
+            // voice still plays its run-in from the region start up to the
+            // loop, and only inside the loop does an overhanging kernel wrap
+            // or turn around rather than reading real neighbouring material.
             let pos = voice.play_pos;
-            let idx = pos.floor() as isize;
-            let frac = pos - idx as f64;
-            let frame_at = |k: isize| -> [f32; 2] {
-                if k < 0 {
-                    return [0.0, 0.0];
+            let region = if loop_mode != LoopMode::Off && pos >= ls {
+                Region {
+                    start: ls,
+                    end: le,
+                    edge: match loop_mode {
+                        LoopMode::Pingpong => RegionEdge::Mirror,
+                        _ => RegionEdge::Wrap,
+                    },
                 }
-                let k = k as usize;
-                if k >= len {
-                    sample.frames[len - 1]
-                } else {
-                    sample.frames[k]
+            } else {
+                Region {
+                    start: play_start,
+                    end: play_end,
+                    edge: RegionEdge::Silent,
                 }
             };
-            let f0 = frame_at(idx);
-            let f1 = frame_at(idx + 1);
             let frame = Self::shape_frame(
                 params,
                 sample_rate,
                 voice,
-                [
-                    f0[0] + (f1[0] - f0[0]) * frac as f32,
-                    f0[1] + (f1[1] - f0[1]) * frac as f32,
-                ],
+                table.read(&sample.frames, pos, voice.playback_rate, region),
             );
             bus.l[i] += amp * frame[0];
             bus.r[i] += amp * frame[1];
@@ -649,13 +672,6 @@ impl Sampler {
             // Advance the read position and handle looping / end-of-region.
             voice.play_pos += voice.direction * voice.playback_rate;
 
-            let (play_start, play_end) = Self::resolve_playback_bounds(params, len);
-            let (ls, le) = Self::resolve_loop_bounds(params, len);
-            let loop_mode = if voice.loop_enabled {
-                params.loop_mode
-            } else {
-                LoopMode::Off
-            };
             match loop_mode {
                 LoopMode::Off => {
                     let reached_end = voice.direction > 0.0 && voice.play_pos >= play_end;
@@ -1399,6 +1415,131 @@ mod tests {
             "three voices at half trim summed to {halved}, want {}",
             unity * 0.5
         );
+    }
+
+    /// Playing a sample at its root note asks for no rate conversion at all,
+    /// and the reader has to notice: every frame comes back as it was
+    /// written, not as a filtered approximation. This is the property that
+    /// makes upgrading the interpolator safe for existing projects, since a
+    /// one-shot at its own pitch is unchanged.
+    #[test]
+    fn unity_rate_playback_is_sample_exact() {
+        let sr = 48_000;
+        let frames = 512;
+        let params = SamplerParams {
+            attack: 0.0,
+            decay: 8.0,
+            sustain: 1.0,
+            output_gain: 1.0,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(sr, 1024, params);
+        let source: Vec<f32> = (0..1024).map(|index| index as f32 / 1024.0).collect();
+
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+
+        // The envelope still shapes the first frames, so compare where it has
+        // reached full: the claim is about the reader, not the envelope.
+        for (frame, (played, expected)) in bus.l[64..frames]
+            .iter()
+            .zip(source[64..frames].iter())
+            .enumerate()
+        {
+            assert!(
+                (played - expected).abs() < 1.0e-4,
+                "frame {}: played {played} vs source {expected}",
+                frame + 64
+            );
+        }
+    }
+
+    /// Reverse, forward-loop and ping-pong playback all run the kernel over
+    /// region edges it has to fold across. Whatever it reads there, it must
+    /// stay finite and inside the sample.
+    #[test]
+    fn every_playback_direction_stays_finite_across_its_boundaries() {
+        let sr = 48_000;
+        let frames = 2048;
+        for loop_mode in LoopMode::all() {
+            for reverse in [false, true] {
+                for note in [36u8, 60, 96] {
+                    let params = SamplerParams {
+                        loop_mode,
+                        reverse,
+                        start: 0.1,
+                        end: 0.6,
+                        loop_start: 0.2,
+                        loop_end: 0.3,
+                        output_gain: 1.0,
+                        ..SamplerParams::default()
+                    };
+                    let mut sampler = sampler_with_frames(sr, 256, params);
+                    let mut bus = StereoBus::with_capacity(frames);
+                    let mut events = EventList::empty();
+                    events.push(TimedEvent {
+                        offset: 0,
+                        event: Event::NoteOn {
+                            id: 1,
+                            note,
+                            velocity: 127,
+                        },
+                    });
+                    sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+                    for frame in 0..frames {
+                        assert!(
+                            bus.l[frame].is_finite() && bus.r[frame].is_finite(),
+                            "{loop_mode:?} reverse={reverse} note={note} frame {frame}: {}",
+                            bus.l[frame]
+                        );
+                        assert!(
+                            bus.l[frame].abs() <= 2.0,
+                            "{loop_mode:?} reverse={reverse} note={note} frame {frame}: {}",
+                            bus.l[frame]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Rendering the same note twice has to give the same samples: the
+    /// reader carries no state of its own, so realtime and offline runs of
+    /// one project cannot diverge.
+    #[test]
+    fn repeated_renders_of_one_note_are_identical() {
+        let sr = 48_000;
+        let frames = 1024;
+        let render = || {
+            let params = SamplerParams {
+                loop_mode: LoopMode::Pingpong,
+                output_gain: 1.0,
+                ..SamplerParams::default()
+            };
+            let mut sampler = sampler_with_frames(sr, 300, params);
+            let mut bus = StereoBus::with_capacity(frames);
+            let mut events = EventList::empty();
+            events.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id: 1,
+                    note: 67,
+                    velocity: 110,
+                },
+            });
+            sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+            bus.l[..frames].to_vec()
+        };
+        assert_eq!(render(), render());
     }
 
     #[test]

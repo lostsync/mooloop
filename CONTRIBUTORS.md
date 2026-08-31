@@ -173,7 +173,15 @@ work session you can recall being part of, and don't stress over precision.
   gain serves every voice: each copies the smoother and walks its own copy,
   the original is caught up once per segment by a closed-form `advance_by`,
   and installing a patch onto a silent device snaps rather than ramps, since
-  the ramp was otherwise paid for by the first note's attack.
+  the ramp was otherwise paid for by the first note's attack. Then replaced
+  the sampler's linear interpolation with a band-limited reader, as its own
+  unit: one windowed-sinc prototype read at rate-dependent spacing, so
+  pitching up narrows the cutoff instead of folding back, and unity rate
+  stays sample-exact because sinc is zero at every non-zero integer. The part
+  that needed designing was not the kernel but the region -- a 16-tap kernel
+  overhangs a loop point the read head has not reached, so `Region` says what
+  is on the other side, and a forward loop reads what it is about to wrap
+  into rather than silence.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

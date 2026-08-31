@@ -225,6 +225,10 @@ boundary.
 - Realtime state is preallocated outside the audio callback. The channel and
   effect banks each cover their complete 256-value `u8` address space; these
   are bridge-format boundaries rather than small product caps.
+- Sampler playback resamples through a band-limited windowed-sinc reader:
+  unity rate is sample-exact, pitching up narrows the kernel's cutoff to
+  keep foldback down, and the kernel folds across loop and ping-pong
+  boundaries rather than filtering against silence.
 - DSP tests cover sampler pitch, trim, loops, envelopes, filter behavior,
   reverse playback, and lo-fi stages, plus drum synth, v1 mono, ML-M1, and poly
   voice, envelope, glide, filter, and modulation behavior. V1 mono tests also
