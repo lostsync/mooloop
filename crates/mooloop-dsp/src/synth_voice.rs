@@ -1,7 +1,7 @@
 //! Small voice conventions genuinely shared by the three oscillator synths.
 //!
 //! These are mechanics, not an invitation to share the instruments' voice
-//! implementations. The ML-1, v1 mono synth, and poly synth deliberately own
+//! implementations. The ML-M1, v1 mono synth, and poly synth deliberately own
 //! their envelopes, filters, note handling, and output calibration.
 
 /// Minimum glide time; at or below this, pitch changes are instant.

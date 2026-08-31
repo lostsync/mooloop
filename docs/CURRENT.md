@@ -22,7 +22,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - The complete 256-channel addressable bank. A new song starts with a lightly randomized four-channel
   drum kit (kick, snare, closed hat, and open hat); creating another new song
   generates a new variation. Channels can use the sampler, drum synth, v1 mono
-  synth, ML-1, or poly synth and every rack row exposes mute, output volume, and
+  synth, ML-M1, or poly synth and every rack row exposes mute, output volume, and
   constant-power stereo pan.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
@@ -74,12 +74,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   by a chainable effect chain (filter, drive, bitcrush, delay, gate,
   compressor, and limiter; slots are added by kind from the rack's add slot,
   bypassed or removed from their shared host header, and reordered by dragging
-  a header). Sampler, drum synth, v1 mono synth, ML-1, and
+  a header). Sampler, drum synth, v1 mono synth, ML-M1, and
   poly synth faces share the same rack chrome and preserve their dimensions at
   narrow widths through horizontal scrolling. Sampler controls are divided
   into Sample, Voice, and Tone pages; the v1 mono controls into Osc,
   Amp/Filter, and Mod pages; and poly controls add a VOICE page for polyphony
-  and stereo spread. The ML-1 is a distinct mono filter/performance instrument:
+  and stereo spread. The ML-M1 is a distinct mono filter/performance instrument:
   Osc, Amp/Filter, and Perf pages expose separate amplitude and filter ADSRs,
   three low-pass filter characters, pre-filter drive, keytracking, a held-note
   priority stack, legato/retrigger and glide modes, and velocity Accent. The
@@ -171,7 +171,7 @@ UI commands -> rtrb queue -> shared render state -> transport + sequencer
                          timed events/channel
                                   |
                                   v
-selected source (sampler / drum synth / v1 mono / ML-1 / poly synth) -> effect chain -> gain/pan/mute
+selected source (sampler / drum synth / v1 mono / ML-M1 / poly synth) -> effect chain -> gain/pan/mute
                                                            |
                                                            v
                                              assigned mixer bus (0-16)
@@ -210,7 +210,7 @@ boundary.
 
 - `AudioNode` provides one in-place DSP interface for instruments and effects.
 - `DrumSynth` (kick/snare/hat), the v1 `MonoSynth`, the filter/performance-led
-  `Ml1`, and `PolySynth` use the same timed note path as the sampler in realtime
+  `MlM1`, and `PolySynth` use the same timed note path as the sampler in realtime
   and offline renders. Their oscillator and envelope types are shared DSP
   primitives; their voice engines are deliberately separate.
 - `EventList` carries fixed-capacity, sample-timed NoteOn, NoteOff, and generic
@@ -223,7 +223,7 @@ boundary.
   effect banks each cover their complete 256-value `u8` address space; these
   are bridge-format boundaries rather than small product caps.
 - DSP tests cover sampler pitch, trim, loops, envelopes, filter behavior,
-  reverse playback, and lo-fi stages, plus drum synth, v1 mono, ML-1, and poly
+  reverse playback, and lo-fi stages, plus drum synth, v1 mono, ML-M1, and poly
   voice, envelope, glide, filter, and modulation behavior. V1 mono tests also
   bound the largest sample-to-sample step across note retriggers and parameter
   changes, which is what the declicking work is defended by.
@@ -375,7 +375,7 @@ boundary.
   not a parameter: resizing the ring reallocates, which happens off-thread.
   The JUMP/REV/STUT gestures are unchanged and outrank the offset while they
   run; the offset re-asserts on the next control tick after one ends.
-- The sampler, v1 mono synth, ML-1, and poly synth are descriptor-addressed through
+- The sampler, v1 mono synth, ML-M1, and poly synth are descriptor-addressed through
   `GeneratorParams`, so their parameters automate and modulate like an
   effect's. The three-oscillator synths reserve ten parameter ids per
   oscillator, starting at 100. The drum synth is not addressable: its

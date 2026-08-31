@@ -40,7 +40,7 @@ priority and legato behavior, pre-filter drive, ladder and acid filter models,
 and velocity accent.
 
 Do not split shared descriptor or serialization work into a second instrument
-implementation. Keep ML-1's authored instrument modulation separate from the
+implementation. Keep ML-M1's authored instrument modulation separate from the
 channel rack's general-purpose and cross-device modulation; neither should
 duplicate the other's routes.
 
@@ -58,7 +58,7 @@ cross-modulation, oscillator and filter feedback, separate envelopes, and
 native per-voice modulation. Its useful internal LFO, envelopes, note values,
 gate/trigger, and oscillator taps publish through typed device outlets.
 
-Do not import ML-1's acid semantics, held-note rules, or character filters.
+Do not import ML-M1's acid semantics, held-note rules, or character filters.
 Do not make Drift, Unison, Spread, or Chorus carry ML-P8's identity; they are
 finishers around an oscillator and modulation architecture that must already
 stand on its own. The channel modulation rack extends the instrument and

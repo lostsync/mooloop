@@ -22,9 +22,9 @@ pub const SYNTH_PARAM_POLY_GLIDE_MODE: u32 = 18;
 pub const SYNTH_PARAM_POLY_NOTE_PRIORITY: u32 = 19;
 ```
 
-They are separate constants from the ML-1's `SYNTH_PARAM_GLIDE_MODE` (25) and
+They are separate constants from the ML-M1's `SYNTH_PARAM_GLIDE_MODE` (25) and
 `SYNTH_PARAM_NOTE_PRIORITY` (27) even though they carry the same meaning,
-because ids are per-device and the ML-1 block must stay clear of the v1
+because ids are per-device and the ML-M1 block must stay clear of the v1
 synths. The duplicate-id test walks each table independently, so this is
 legal; the naming should make the parallel obvious to a reader.
 
@@ -61,7 +61,7 @@ each voice) and use it **only** when `mono_mode` is true:
   pitch and leave both envelopes running.
 - `note_off`: remove by `event_id`. If the stack is now empty, release. If it
   is not, move voice 0 to the new `winner` as a **pitch change, never a
-  retrigger** — this is the rule 03 settled for the ML-1 and it should not be
+  retrigger** — this is the rule 03 settled for the ML-M1 and it should not be
   re-litigated here.
 - `release_all` and transport stop must clear the stack, or a stale held note
   survives a stop and steals the next note's pitch.

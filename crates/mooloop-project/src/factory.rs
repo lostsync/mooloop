@@ -16,7 +16,7 @@
 use std::fs;
 use std::path::Path;
 
-use mooloop_core::ml1_factory::{self, FactoryPatch};
+use mooloop_core::mlm1_factory::{self, FactoryPatch};
 use mooloop_core::modulation::ParamOwner;
 use mooloop_core::{ChannelSetup, EffectTarget};
 
@@ -28,13 +28,16 @@ use crate::{sanitize_preset_name, save_channel_preset, AssetMode, Error, PresetI
 ///
 /// Versioned in the name so a later bank can be added without a second
 /// mechanism, and without re-writing patches the user has since edited.
+// Frozen at the device's old ML-1 spelling: this file already exists in
+// users' preset directories, and renaming it would re-seed a bank they
+// may have deliberately pruned.
 const MARKER_FILE: &str = ".ml1-factory-v1";
 
 /// Bundle extension for a whole-channel preset, matching what the save
 /// dialog writes.
 const CHANNEL_BUNDLE_EXTENSION: &str = "mooloop-channel";
 
-/// Writes the ML-1 factory bank into `dir` unless it has been seeded before.
+/// Writes the ML-M1 factory bank into `dir` unless it has been seeded before.
 ///
 /// Returns how many patches were written: `0` when the marker is already
 /// there, which is the normal case on every launch after the first.
@@ -44,7 +47,7 @@ const CHANNEL_BUNDLE_EXTENSION: &str = "mooloop-channel";
 /// put a [`mooloop_core::ModRack`], and Sequence Bleep is nothing without
 /// one. Splitting the bank across both menus to avoid that would trade a
 /// coherent bank for a tidier category.
-pub fn seed_ml1_bank(dir: &Path) -> Result<usize, Error> {
+pub fn seed_mlm1_bank(dir: &Path) -> Result<usize, Error> {
     let marker = dir.join(MARKER_FILE);
     if marker.exists() {
         return Ok(0);
@@ -52,7 +55,7 @@ pub fn seed_ml1_bank(dir: &Path) -> Result<usize, Error> {
     fs::create_dir_all(dir)?;
 
     let mut written = 0;
-    for patch in ml1_factory::patches() {
+    for patch in mlm1_factory::patches() {
         let stem = sanitize_preset_name(patch.name);
         let path = dir.join(format!("{stem}.{CHANNEL_BUNDLE_EXTENSION}"));
         // A name collision means the user already has something under that
@@ -78,7 +81,7 @@ pub fn seed_ml1_bank(dir: &Path) -> Result<usize, Error> {
 }
 
 fn channel_setup(patch: &FactoryPatch) -> ChannelSetup {
-    let mut setup = ChannelSetup::ml1_with_params(patch.name, patch.params);
+    let mut setup = ChannelSetup::mlm1_with_params(patch.name, patch.params);
     setup.modulation = patch.modulation;
     setup
 }
@@ -138,16 +141,16 @@ mod tests {
         let temp = tempdir().unwrap();
         let dir = temp.path().join("channels");
 
-        assert_eq!(seed_ml1_bank(&dir).unwrap(), 6);
+        assert_eq!(seed_mlm1_bank(&dir).unwrap(), 6);
 
         let listed = list_presets(&dir);
         assert_eq!(listed.len(), 6);
         for summary in &listed {
-            assert_eq!(summary.category, "ML-1");
-            assert_eq!(summary.kind, DeviceKind::Ml1);
+            assert_eq!(summary.category, "ML-M1");
+            assert_eq!(summary.kind, DeviceKind::MlM1);
         }
 
-        for patch in ml1_factory::patches() {
+        for patch in mlm1_factory::patches() {
             let summary = listed
                 .iter()
                 .find(|found| found.name == patch.name)
@@ -156,8 +159,8 @@ mod tests {
             let LoadedDocument::Channel(setup) = report.document else {
                 panic!("{} did not load as a channel", patch.name);
             };
-            let ChannelSource::Ml1(state) = setup.source else {
-                panic!("{} did not load as an ML-1", patch.name);
+            let ChannelSource::MlM1(state) = setup.source else {
+                panic!("{} did not load as an ML-M1", patch.name);
             };
             assert_eq!(state.params, patch.params, "{} changed on disk", patch.name);
             assert_eq!(
@@ -175,8 +178,8 @@ mod tests {
     fn seeding_twice_writes_nothing_the_second_time() {
         let temp = tempdir().unwrap();
         let dir = temp.path().join("channels");
-        assert_eq!(seed_ml1_bank(&dir).unwrap(), 6);
-        assert_eq!(seed_ml1_bank(&dir).unwrap(), 0);
+        assert_eq!(seed_mlm1_bank(&dir).unwrap(), 6);
+        assert_eq!(seed_mlm1_bank(&dir).unwrap(), 0);
     }
 
     /// Deleting a factory patch has to stick. The marker file is what makes
@@ -185,12 +188,12 @@ mod tests {
     fn a_deleted_patch_does_not_come_back() {
         let temp = tempdir().unwrap();
         let dir = temp.path().join("channels");
-        seed_ml1_bank(&dir).unwrap();
+        seed_mlm1_bank(&dir).unwrap();
 
         let doomed = list_presets(&dir)[0].path.clone();
         fs::remove_dir_all(&doomed).unwrap();
 
-        assert_eq!(seed_ml1_bank(&dir).unwrap(), 0);
+        assert_eq!(seed_mlm1_bank(&dir).unwrap(), 0);
         assert_eq!(list_presets(&dir).len(), 5);
     }
 
@@ -204,7 +207,7 @@ mod tests {
         let dir = temp.path().join("channels");
         fs::create_dir_all(&dir).unwrap();
 
-        let mut mine = ChannelSetup::ml1("Acid Line");
+        let mut mine = ChannelSetup::mlm1("Acid Line");
         mine.channel.volume = 0.123;
         let path = dir.join("Acid_Line.mooloop-channel");
         save_channel_preset(
@@ -219,7 +222,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(seed_ml1_bank(&dir).unwrap(), 5);
+        assert_eq!(seed_mlm1_bank(&dir).unwrap(), 5);
 
         let LoadedDocument::Channel(reloaded) = load_bundle(&path).unwrap().document else {
             panic!("the user's preset stopped being a channel");
@@ -232,7 +235,7 @@ mod tests {
     /// reconciled.
     #[test]
     fn loading_points_a_saved_rack_at_the_channel_it_lands_on() {
-        let mut setup = ChannelSetup::ml1("test");
+        let mut setup = ChannelSetup::mlm1("test");
         setup.modulation.routes[0] = Some(ModRoute {
             source_slot: 0,
             destination: ParamAddr {
@@ -274,7 +277,7 @@ mod tests {
     fn the_one_patch_with_a_rack_survives_seeding_and_reloading_onto_any_channel() {
         let temp = tempdir().unwrap();
         let dir = temp.path().join("channels");
-        seed_ml1_bank(&dir).unwrap();
+        seed_mlm1_bank(&dir).unwrap();
 
         let summary = list_presets(&dir)
             .into_iter()

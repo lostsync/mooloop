@@ -22,7 +22,7 @@ use std::fmt;
 
 use mooloop_core::{
     sanitize_route, BusSetup, ChannelSetup, ChannelSource, DrumSynthParams, EffectSlotState,
-    Ml1Params, ModRack, MonoSynthParams, NoteId, PolySynthParams, Project, ProjectChannel,
+    MlM1Params, ModRack, MonoSynthParams, NoteId, PolySynthParams, Project, ProjectChannel,
     SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL,
     MAX_AUTOMATION_POINTS_PER_LANE, MAX_BUSES, MAX_CHANNELS, MAX_CHOKE_GROUP,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS,
@@ -1151,7 +1151,7 @@ fn check_source(doctor: &mut Doctor, who: &str, source: &mut ChannelSource) {
         ChannelSource::DrumSynth(state) => check_drum_synth(doctor, who, &mut state.params),
         ChannelSource::MonoSynth(state) => check_mono_synth(doctor, who, &mut state.params),
         ChannelSource::PolySynth(state) => check_poly_synth(doctor, who, &mut state.params),
-        ChannelSource::Ml1(state) => check_ml1(doctor, who, &mut state.params),
+        ChannelSource::MlM1(state) => check_mlm1(doctor, who, &mut state.params),
     }
 }
 
@@ -1385,10 +1385,10 @@ fn check_poly_synth(doctor: &mut Doctor, who: &str, params: &mut PolySynthParams
     );
 }
 
-/// The ML-1 has no device-local LFO and two envelopes, so it gets its own
+/// The ML-M1 has no device-local LFO and two envelopes, so it gets its own
 /// field list rather than being squeezed through the shared one.
-fn check_ml1(doctor: &mut Doctor, who: &str, params: &mut Ml1Params) {
-    check_oscillators(doctor, who, "ML-1", &mut params.osc);
+fn check_mlm1(doctor: &mut Doctor, who: &str, params: &mut MlM1Params) {
+    check_oscillators(doctor, who, "ML-M1", &mut params.osc);
     for (field, value, min, max) in [
         ("the glide", &mut params.glide, 0.0, 10.0),
         ("the attack", &mut params.attack, 0.0, 10.0),
@@ -1419,7 +1419,7 @@ fn check_ml1(doctor: &mut Doctor, who: &str, params: &mut Ml1Params) {
         doctor.fit(
             "channel.ml1.range",
             who,
-            &format!("{field} (ML-1)"),
+            &format!("{field} (ML-M1)"),
             value,
             min,
             max,

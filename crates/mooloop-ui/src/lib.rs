@@ -27,7 +27,7 @@ use mooloop_core::{
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
     ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModTimeDivision,
-    ModulatorParams, MonoSynthParams, MonoSynthState, Ml1Params, Ml1State, NoteEvent,
+    ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State, NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
@@ -396,7 +396,7 @@ struct ChannelState {
     params: SamplerParams,
     drum_params: DrumSynthParams,
     mono_params: MonoSynthParams,
-    ml1_params: Ml1Params,
+    mlm1_params: MlM1Params,
     poly_params: PolySynthParams,
     sample_name: String,
     sample_description: String,
@@ -428,7 +428,7 @@ impl ChannelState {
             DeviceKind::Sampler => GeneratorParams::Sampler(self.params),
             DeviceKind::MonoSynth => GeneratorParams::MonoSynth(self.mono_params),
             DeviceKind::PolySynth => GeneratorParams::PolySynth(self.poly_params),
-            DeviceKind::Ml1 => GeneratorParams::Ml1(self.ml1_params),
+            DeviceKind::MlM1 => GeneratorParams::MlM1(self.mlm1_params),
             DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
         }
     }
@@ -445,7 +445,7 @@ impl ChannelState {
             params: SamplerParams::default(),
             drum_params: DrumSynthParams::default(),
             mono_params: MonoSynthParams::default(),
-            ml1_params: Ml1Params::default(),
+            mlm1_params: MlM1Params::default(),
             poly_params: PolySynthParams::default(),
             sample_name: String::new(),
             sample_description: String::new(),
@@ -1332,7 +1332,7 @@ fn device_kind_from_int(value: i32) -> DeviceKind {
         1 => DeviceKind::DrumSynth,
         2 => DeviceKind::MonoSynth,
         3 => DeviceKind::PolySynth,
-        4 => DeviceKind::Ml1,
+        4 => DeviceKind::MlM1,
         _ => DeviceKind::Sampler,
     }
 }
@@ -1343,7 +1343,7 @@ fn device_kind_to_int(kind: DeviceKind) -> i32 {
         DeviceKind::DrumSynth => 1,
         DeviceKind::MonoSynth => 2,
         DeviceKind::PolySynth => 3,
-        DeviceKind::Ml1 => 4,
+        DeviceKind::MlM1 => 4,
     }
 }
 
@@ -1797,7 +1797,7 @@ impl UiState {
             DeviceKind::DrumSynth => format!("Drum {}", index + 1),
             DeviceKind::MonoSynth => format!("Mono {}", index + 1),
             DeviceKind::PolySynth => format!("Poly {}", index + 1),
-            DeviceKind::Ml1 => format!("ML-1 {}", index + 1),
+            DeviceKind::MlM1 => format!("ML-M1 {}", index + 1),
         };
         match kind {
             DeviceKind::Sampler => {
@@ -1824,8 +1824,8 @@ impl UiState {
                 channel.can_previous_sample = false;
                 channel.can_next_sample = false;
             }
-            DeviceKind::Ml1 => {
-                channel.ml1_params = Ml1Params::default();
+            DeviceKind::MlM1 => {
+                channel.mlm1_params = MlM1Params::default();
                 channel.sample_name.clear();
                 channel.sample_description.clear();
                 channel.sample_duration = 0.0;
@@ -1892,8 +1892,8 @@ impl UiState {
                     DeviceKind::PolySynth => ChannelSource::PolySynth(PolySynthState {
                         params: channel.poly_params,
                     }),
-                    DeviceKind::Ml1 => ChannelSource::Ml1(Ml1State {
-                        params: channel.ml1_params,
+                    DeviceKind::MlM1 => ChannelSource::MlM1(MlM1State {
+                        params: channel.mlm1_params,
                     }),
                 };
                 ProjectChannel {
@@ -1964,37 +1964,37 @@ impl UiState {
             .enumerate()
             .map(|(index, project_channel)| {
                 let setup = &project_channel.setup;
-                let (sampler, drum_params, mono_params, poly_params, ml1_params) =
+                let (sampler, drum_params, mono_params, poly_params, mlm1_params) =
                     match &setup.source {
                         ChannelSource::Sampler(sampler) => (
                             Some(sampler),
                             DrumSynthParams::default(),
                             MonoSynthParams::default(),
                             PolySynthParams::default(),
-                            Ml1Params::default(),
+                            MlM1Params::default(),
                         ),
                         ChannelSource::DrumSynth(drum) => (
                             None,
                             drum.params,
                             MonoSynthParams::default(),
                             PolySynthParams::default(),
-                            Ml1Params::default(),
+                            MlM1Params::default(),
                         ),
                         ChannelSource::MonoSynth(mono) => (
                             None,
                             DrumSynthParams::default(),
                             mono.params,
                             PolySynthParams::default(),
-                            Ml1Params::default(),
+                            MlM1Params::default(),
                         ),
                         ChannelSource::PolySynth(poly) => (
                             None,
                             DrumSynthParams::default(),
                             MonoSynthParams::default(),
                             poly.params,
-                            Ml1Params::default(),
+                            MlM1Params::default(),
                         ),
-                        ChannelSource::Ml1(mono) => (
+                        ChannelSource::MlM1(mono) => (
                             None,
                             DrumSynthParams::default(),
                             MonoSynthParams::default(),
@@ -2097,7 +2097,7 @@ impl UiState {
                     drum_params,
                     mono_params,
                     poly_params,
-                    ml1_params,
+                    mlm1_params,
                     sample_name,
                     sample_description: description,
                     sample_duration: duration,
@@ -3540,41 +3540,41 @@ impl UiState {
         window.set_mono_lfo_filter(mono.lfo.to_filter);
         window.set_mono_lfo_pulse_width(mono.lfo.to_pulse_width);
         window.set_mono_lfo_amp(mono.lfo.to_amp);
-        let ml1 = ch.ml1_params;
-        window.set_ml1_osc1_wave(osc_wave_to_int(ml1.osc[0].wave));
-        window.set_ml1_osc1_semitones(ml1.osc[0].semitones);
-        window.set_ml1_osc1_cents(ml1.osc[0].cents);
-        window.set_ml1_osc1_level(ml1.osc[0].level);
-        window.set_ml1_osc1_pulse_width(ml1.osc[0].pulse_width);
-        window.set_ml1_osc2_wave(osc_wave_to_int(ml1.osc[1].wave));
-        window.set_ml1_osc2_semitones(ml1.osc[1].semitones);
-        window.set_ml1_osc2_cents(ml1.osc[1].cents);
-        window.set_ml1_osc2_level(ml1.osc[1].level);
-        window.set_ml1_osc2_pulse_width(ml1.osc[1].pulse_width);
-        window.set_ml1_osc3_wave(osc_wave_to_int(ml1.osc[2].wave));
-        window.set_ml1_osc3_semitones(ml1.osc[2].semitones);
-        window.set_ml1_osc3_cents(ml1.osc[2].cents);
-        window.set_ml1_osc3_level(ml1.osc[2].level);
-        window.set_ml1_osc3_pulse_width(ml1.osc[2].pulse_width);
-        window.set_ml1_glide(ml1.glide);
-        window.set_ml1_attack(ml1.attack);
-        window.set_ml1_decay(ml1.decay);
-        window.set_ml1_sustain(ml1.sustain);
-        window.set_ml1_release(ml1.release);
-        window.set_ml1_filter_cutoff(ml1.filter_cutoff);
-        window.set_ml1_filter_resonance(ml1.filter_resonance);
-        window.set_ml1_filter_env(ml1.filter_env_amount);
-        window.set_ml1_drive(ml1.drive);
-        window.set_ml1_filter_attack(ml1.filter_attack);
-        window.set_ml1_filter_decay(ml1.filter_decay);
-        window.set_ml1_filter_sustain(ml1.filter_sustain);
-        window.set_ml1_filter_release(ml1.filter_release);
-        window.set_ml1_filter_keytrack(ml1.filter_keytrack);
-        window.set_ml1_accent(ml1.accent);
-        window.set_ml1_glide_mode(ml1.glide_mode.to_index());
-        window.set_ml1_env_trigger(ml1.env_trigger.to_index());
-        window.set_ml1_priority(ml1.priority.to_index());
-        window.set_ml1_filter_model(ml1.filter_model.to_index());
+        let mlm1 = ch.mlm1_params;
+        window.set_mlm1_osc1_wave(osc_wave_to_int(mlm1.osc[0].wave));
+        window.set_mlm1_osc1_semitones(mlm1.osc[0].semitones);
+        window.set_mlm1_osc1_cents(mlm1.osc[0].cents);
+        window.set_mlm1_osc1_level(mlm1.osc[0].level);
+        window.set_mlm1_osc1_pulse_width(mlm1.osc[0].pulse_width);
+        window.set_mlm1_osc2_wave(osc_wave_to_int(mlm1.osc[1].wave));
+        window.set_mlm1_osc2_semitones(mlm1.osc[1].semitones);
+        window.set_mlm1_osc2_cents(mlm1.osc[1].cents);
+        window.set_mlm1_osc2_level(mlm1.osc[1].level);
+        window.set_mlm1_osc2_pulse_width(mlm1.osc[1].pulse_width);
+        window.set_mlm1_osc3_wave(osc_wave_to_int(mlm1.osc[2].wave));
+        window.set_mlm1_osc3_semitones(mlm1.osc[2].semitones);
+        window.set_mlm1_osc3_cents(mlm1.osc[2].cents);
+        window.set_mlm1_osc3_level(mlm1.osc[2].level);
+        window.set_mlm1_osc3_pulse_width(mlm1.osc[2].pulse_width);
+        window.set_mlm1_glide(mlm1.glide);
+        window.set_mlm1_attack(mlm1.attack);
+        window.set_mlm1_decay(mlm1.decay);
+        window.set_mlm1_sustain(mlm1.sustain);
+        window.set_mlm1_release(mlm1.release);
+        window.set_mlm1_filter_cutoff(mlm1.filter_cutoff);
+        window.set_mlm1_filter_resonance(mlm1.filter_resonance);
+        window.set_mlm1_filter_env(mlm1.filter_env_amount);
+        window.set_mlm1_drive(mlm1.drive);
+        window.set_mlm1_filter_attack(mlm1.filter_attack);
+        window.set_mlm1_filter_decay(mlm1.filter_decay);
+        window.set_mlm1_filter_sustain(mlm1.filter_sustain);
+        window.set_mlm1_filter_release(mlm1.filter_release);
+        window.set_mlm1_filter_keytrack(mlm1.filter_keytrack);
+        window.set_mlm1_accent(mlm1.accent);
+        window.set_mlm1_glide_mode(mlm1.glide_mode.to_index());
+        window.set_mlm1_env_trigger(mlm1.env_trigger.to_index());
+        window.set_mlm1_priority(mlm1.priority.to_index());
+        window.set_mlm1_filter_model(mlm1.filter_model.to_index());
         let poly = ch.poly_params;
         window.set_poly_osc1_wave(osc_wave_to_int(poly.osc[0].wave));
         window.set_poly_osc1_semitones(poly.osc[0].semitones);
@@ -3672,8 +3672,8 @@ impl AppUi {
         // the app runs, and are not touched again. A failure here is not
         // worth refusing to start over: the bank is content, not
         // configuration, and the browser simply shows one fewer category.
-        if let Err(error) = mooloop_project::seed_ml1_bank(&settings::channel_presets_dir()) {
-            log_warn!("app", "could not write the ML-1 factory bank: {error}");
+        if let Err(error) = mooloop_project::seed_mlm1_bank(&settings::channel_presets_dir()) {
+            log_warn!("app", "could not write the ML-M1 factory bank: {error}");
         }
 
         // --- Transport initial state ---
@@ -3960,7 +3960,7 @@ impl AppUi {
                                         ChannelSource::DrumSynth(_)
                                         | ChannelSource::MonoSynth(_)
                                         | ChannelSource::PolySynth(_)
-                                        | ChannelSource::Ml1(_) => None,
+                                        | ChannelSource::MlM1(_) => None,
                                     })
                                     .collect(),
                             })
@@ -8479,7 +8479,7 @@ impl AppUi {
             });
         }
 
-        macro_rules! wire_ml1_param {
+        macro_rules! wire_mlm1_param {
             ($callback:ident, $($field:ident).+) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
@@ -8487,34 +8487,34 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.selected;
                     let channel = &mut st.channels[channel_index];
-                    channel.ml1_params.$($field).+ = value;
-                    let _ = tx.send(EngineCommand::SetChannelMl1Params {
+                    channel.mlm1_params.$($field).+ = value;
+                    let _ = tx.send(EngineCommand::SetChannelMlM1Params {
                         channel: channel_index as u8,
-                        params: channel.ml1_params,
+                        params: channel.mlm1_params,
                     });
                 });
             }};
         }
 
-        wire_ml1_param!(on_ml1_glide_changed, glide);
-        wire_ml1_param!(on_ml1_attack_changed, attack);
-        wire_ml1_param!(on_ml1_decay_changed, decay);
-        wire_ml1_param!(on_ml1_sustain_changed, sustain);
-        wire_ml1_param!(on_ml1_release_changed, release);
-        wire_ml1_param!(on_ml1_filter_cutoff_changed, filter_cutoff);
-        wire_ml1_param!(on_ml1_filter_resonance_changed, filter_resonance);
-        wire_ml1_param!(on_ml1_filter_env_changed, filter_env_amount);
-        wire_ml1_param!(on_ml1_drive_changed, drive);
-        wire_ml1_param!(on_ml1_filter_attack_changed, filter_attack);
-        wire_ml1_param!(on_ml1_filter_decay_changed, filter_decay);
-        wire_ml1_param!(on_ml1_filter_sustain_changed, filter_sustain);
-        wire_ml1_param!(on_ml1_filter_release_changed, filter_release);
-        wire_ml1_param!(on_ml1_filter_keytrack_changed, filter_keytrack);
-        wire_ml1_param!(on_ml1_accent_changed, accent);
+        wire_mlm1_param!(on_mlm1_glide_changed, glide);
+        wire_mlm1_param!(on_mlm1_attack_changed, attack);
+        wire_mlm1_param!(on_mlm1_decay_changed, decay);
+        wire_mlm1_param!(on_mlm1_sustain_changed, sustain);
+        wire_mlm1_param!(on_mlm1_release_changed, release);
+        wire_mlm1_param!(on_mlm1_filter_cutoff_changed, filter_cutoff);
+        wire_mlm1_param!(on_mlm1_filter_resonance_changed, filter_resonance);
+        wire_mlm1_param!(on_mlm1_filter_env_changed, filter_env_amount);
+        wire_mlm1_param!(on_mlm1_drive_changed, drive);
+        wire_mlm1_param!(on_mlm1_filter_attack_changed, filter_attack);
+        wire_mlm1_param!(on_mlm1_filter_decay_changed, filter_decay);
+        wire_mlm1_param!(on_mlm1_filter_sustain_changed, filter_sustain);
+        wire_mlm1_param!(on_mlm1_filter_release_changed, filter_release);
+        wire_mlm1_param!(on_mlm1_filter_keytrack_changed, filter_keytrack);
+        wire_mlm1_param!(on_mlm1_accent_changed, accent);
 
         /// The three performance switches arrive as selector indices rather
         /// than floats, so they take the same shape with a conversion.
-        macro_rules! wire_ml1_enum {
+        macro_rules! wire_mlm1_enum {
             ($callback:ident, $field:ident, $from_index:path) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
@@ -8522,33 +8522,33 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.selected;
                     let channel = &mut st.channels[channel_index];
-                    channel.ml1_params.$field = $from_index(value);
-                    let _ = tx.send(EngineCommand::SetChannelMl1Params {
+                    channel.mlm1_params.$field = $from_index(value);
+                    let _ = tx.send(EngineCommand::SetChannelMlM1Params {
                         channel: channel_index as u8,
-                        params: channel.ml1_params,
+                        params: channel.mlm1_params,
                     });
                 });
             }};
         }
 
-        wire_ml1_enum!(on_ml1_glide_mode_changed, glide_mode, GlideMode::from_index);
-        wire_ml1_enum!(
-            on_ml1_env_trigger_changed,
+        wire_mlm1_enum!(on_mlm1_glide_mode_changed, glide_mode, GlideMode::from_index);
+        wire_mlm1_enum!(
+            on_mlm1_env_trigger_changed,
             env_trigger,
             EnvTrigger::from_index
         );
-        wire_ml1_enum!(
-            on_ml1_priority_changed,
+        wire_mlm1_enum!(
+            on_mlm1_priority_changed,
             priority,
             NotePriority::from_index
         );
-        wire_ml1_enum!(
-            on_ml1_filter_model_changed,
+        wire_mlm1_enum!(
+            on_mlm1_filter_model_changed,
             filter_model,
             FilterModel::from_index
         );
 
-        macro_rules! wire_ml1_osc_float {
+        macro_rules! wire_mlm1_osc_float {
             ($callback:ident, $index:expr, $field:ident) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
@@ -8556,15 +8556,15 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.selected;
                     let channel = &mut st.channels[channel_index];
-                    channel.ml1_params.osc[$index].$field = value;
-                    let _ = tx.send(EngineCommand::SetChannelMl1Params {
+                    channel.mlm1_params.osc[$index].$field = value;
+                    let _ = tx.send(EngineCommand::SetChannelMlM1Params {
                         channel: channel_index as u8,
-                        params: channel.ml1_params,
+                        params: channel.mlm1_params,
                     });
                 });
             }};
         }
-        macro_rules! wire_ml1_osc_wave {
+        macro_rules! wire_mlm1_osc_wave {
             ($callback:ident, $index:expr) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
@@ -8572,30 +8572,30 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.selected;
                     let channel = &mut st.channels[channel_index];
-                    channel.ml1_params.osc[$index].wave = osc_wave_from_int(value);
-                    let _ = tx.send(EngineCommand::SetChannelMl1Params {
+                    channel.mlm1_params.osc[$index].wave = osc_wave_from_int(value);
+                    let _ = tx.send(EngineCommand::SetChannelMlM1Params {
                         channel: channel_index as u8,
-                        params: channel.ml1_params,
+                        params: channel.mlm1_params,
                     });
                 });
             }};
         }
 
-        wire_ml1_osc_wave!(on_ml1_osc1_wave_changed, 0);
-        wire_ml1_osc_float!(on_ml1_osc1_semitones_changed, 0, semitones);
-        wire_ml1_osc_float!(on_ml1_osc1_cents_changed, 0, cents);
-        wire_ml1_osc_float!(on_ml1_osc1_level_changed, 0, level);
-        wire_ml1_osc_float!(on_ml1_osc1_pulse_width_changed, 0, pulse_width);
-        wire_ml1_osc_wave!(on_ml1_osc2_wave_changed, 1);
-        wire_ml1_osc_float!(on_ml1_osc2_semitones_changed, 1, semitones);
-        wire_ml1_osc_float!(on_ml1_osc2_cents_changed, 1, cents);
-        wire_ml1_osc_float!(on_ml1_osc2_level_changed, 1, level);
-        wire_ml1_osc_float!(on_ml1_osc2_pulse_width_changed, 1, pulse_width);
-        wire_ml1_osc_wave!(on_ml1_osc3_wave_changed, 2);
-        wire_ml1_osc_float!(on_ml1_osc3_semitones_changed, 2, semitones);
-        wire_ml1_osc_float!(on_ml1_osc3_cents_changed, 2, cents);
-        wire_ml1_osc_float!(on_ml1_osc3_level_changed, 2, level);
-        wire_ml1_osc_float!(on_ml1_osc3_pulse_width_changed, 2, pulse_width);
+        wire_mlm1_osc_wave!(on_mlm1_osc1_wave_changed, 0);
+        wire_mlm1_osc_float!(on_mlm1_osc1_semitones_changed, 0, semitones);
+        wire_mlm1_osc_float!(on_mlm1_osc1_cents_changed, 0, cents);
+        wire_mlm1_osc_float!(on_mlm1_osc1_level_changed, 0, level);
+        wire_mlm1_osc_float!(on_mlm1_osc1_pulse_width_changed, 0, pulse_width);
+        wire_mlm1_osc_wave!(on_mlm1_osc2_wave_changed, 1);
+        wire_mlm1_osc_float!(on_mlm1_osc2_semitones_changed, 1, semitones);
+        wire_mlm1_osc_float!(on_mlm1_osc2_cents_changed, 1, cents);
+        wire_mlm1_osc_float!(on_mlm1_osc2_level_changed, 1, level);
+        wire_mlm1_osc_float!(on_mlm1_osc2_pulse_width_changed, 1, pulse_width);
+        wire_mlm1_osc_wave!(on_mlm1_osc3_wave_changed, 2);
+        wire_mlm1_osc_float!(on_mlm1_osc3_semitones_changed, 2, semitones);
+        wire_mlm1_osc_float!(on_mlm1_osc3_cents_changed, 2, cents);
+        wire_mlm1_osc_float!(on_mlm1_osc3_level_changed, 2, level);
+        wire_mlm1_osc_float!(on_mlm1_osc3_pulse_width_changed, 2, pulse_width);
 
         macro_rules! wire_mono_osc_float {
             ($callback:ident, $index:expr, $field:ident) => {{
@@ -10200,7 +10200,7 @@ fn install_project_in_ui(
                 ChannelSource::DrumSynth(_)
                 | ChannelSource::MonoSynth(_)
                 | ChannelSource::PolySynth(_)
-                | ChannelSource::Ml1(_) => default_sample.cloned(),
+                | ChannelSource::MlM1(_) => default_sample.cloned(),
             });
         if let Some(sample) = sample {
             handle.load_sample(index, sample);
@@ -10285,7 +10285,7 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem> {
                 ChannelSource::DrumSynth(_)
                 | ChannelSource::MonoSynth(_)
                 | ChannelSource::PolySynth(_)
-                | ChannelSource::Ml1(_) => None,
+                | ChannelSource::MlM1(_) => None,
             })
             .collect::<Vec<_>>(),
         LoadedDocument::Kit(kit) => kit
@@ -10296,7 +10296,7 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem> {
                 ChannelSource::DrumSynth(_)
                 | ChannelSource::MonoSynth(_)
                 | ChannelSource::PolySynth(_)
-                | ChannelSource::Ml1(_) => None,
+                | ChannelSource::MlM1(_) => None,
             })
             .collect(),
         LoadedDocument::Channel(channel) => vec![match &channel.source {
@@ -10304,14 +10304,14 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem> {
             ChannelSource::DrumSynth(_)
             | ChannelSource::MonoSynth(_)
             | ChannelSource::PolySynth(_)
-            | ChannelSource::Ml1(_) => None,
+            | ChannelSource::MlM1(_) => None,
         }],
         LoadedDocument::Generator(source) => vec![match source {
             ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
             ChannelSource::DrumSynth(_)
             | ChannelSource::MonoSynth(_)
             | ChannelSource::PolySynth(_)
-            | ChannelSource::Ml1(_) => None,
+            | ChannelSource::MlM1(_) => None,
         }],
     };
     let mut samples = Vec::with_capacity(sample_references.len());

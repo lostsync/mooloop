@@ -30,10 +30,18 @@ pub enum DeviceKind {
     DrumSynth,
     MonoSynth,
     PolySynth,
-    /// The ML-1: the mono synth built around its filter and its note
+    /// The ML-M1: the mono synth built around its filter and its note
     /// behaviour. `MonoSynth` is the older device it replaces, kept loadable
     /// until its channels have somewhere to migrate to.
-    Ml1,
+    ///
+    /// Serialized as `ml1`, not as the `rename_all` default `ml_m1`. The
+    /// device shipped under the wrong name, and projects and channel presets
+    /// saved before it was corrected carry the old spelling. A serialized
+    /// variant name is an on-disk identifier like a parameter id, so it is
+    /// frozen rather than corrected; the rename is a source and UI change
+    /// only.
+    #[serde(rename = "ml1")]
+    MlM1,
 }
 
 /// One mixer channel.

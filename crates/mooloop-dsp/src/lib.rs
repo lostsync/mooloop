@@ -6,7 +6,7 @@
 //! - [`sampler`]: the sample-playback instrument.
 //! - [`drumsynth`]: the percussive synth (kick / snare / hat).
 //! - [`monosynth`]: the three-oscillator mono synth.
-//! - [`ml1`]: the ML-1, built around its filter and its note
+//! - [`mlm1`]: the ML-M1, built around its filter and its note
 //!   behaviour rather than around being the poly synth with one voice.
 //! - [`polysynth`]: the three-oscillator poly synth.
 //! - [`effects`]: chainable effects that run after a channel's generator
@@ -36,7 +36,7 @@ pub mod filter;
 pub mod heldnotes;
 pub mod lfo;
 pub mod modulator;
-pub mod ml1;
+pub mod mlm1;
 pub mod monosynth;
 pub mod node;
 pub mod osc;
@@ -60,7 +60,7 @@ pub use effects::{
     DriveEffect, FilterEffect, GateEffect, LimiterEffect, ModulationEffect, ReverbEffect,
 };
 pub use event::{Event, EventList, TimedEvent};
-pub use ml1::Ml1;
+pub use mlm1::MlM1;
 pub use monosynth::MonoSynth;
 pub use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 pub use node::{AudioNode, ProcessContext};

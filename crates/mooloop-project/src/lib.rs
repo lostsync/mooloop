@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub mod factory;
 pub mod integrity;
 
-pub use factory::{rescope_modulation, seed_ml1_bank};
+pub use factory::{rescope_modulation, seed_mlm1_bank};
 pub use integrity::{Diagnosis, Issue, Remedy};
 
 pub const FORMAT_VERSION: u32 = 1;
@@ -919,7 +919,7 @@ pub fn validate_setups(setups: &[ChannelSetup]) -> Result<(), Error> {
 mod tests {
     use super::*;
     use mooloop_core::{
-        AutomationLane, AutomationPoint, DrumSynthParams, Ml1Params, MonoSynthParams, NoteEvent,
+        AutomationLane, AutomationPoint, DrumSynthParams, MlM1Params, MonoSynthParams, NoteEvent,
         ParamAddr, PatternPlacement, MAX_CHOKE_GROUP,
     };
     use tempfile::tempdir;
@@ -1606,27 +1606,27 @@ id = "default_kick"
         assert_eq!(loaded, MonoSynthParams::default());
     }
 
-    /// The ML-1 carries `#[serde(default)]` from the start, so a
+    /// The ML-M1 carries `#[serde(default)]` from the start, so a
     /// manifest written by a build that predates any given field still loads.
     /// Asserted by truncating the table at the filter envelope, which is the
     /// shape a project saved before that block existed would have.
     #[test]
-    fn ml1_params_load_from_a_manifest_missing_later_fields() {
-        let written = toml::to_string(&Ml1Params::default()).unwrap();
+    fn mlm1_params_load_from_a_manifest_missing_later_fields() {
+        let written = toml::to_string(&MlM1Params::default()).unwrap();
         let (before_filter_env, _) = written.split_once("filter_attack").unwrap();
-        let loaded: Ml1Params = toml::from_str(before_filter_env).unwrap();
-        assert_eq!(loaded, Ml1Params::default());
+        let loaded: MlM1Params = toml::from_str(before_filter_env).unwrap();
+        assert_eq!(loaded, MlM1Params::default());
     }
 
     #[test]
-    fn ml1_source_round_trips_in_a_song() {
+    fn mlm1_source_round_trips_in_a_song() {
         let temp = tempdir().unwrap();
-        let bundle = temp.path().join("ml1.mooloop");
+        let bundle = temp.path().join("mlm1.mooloop");
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::ml1(0, 1);
+        project.channels[0] = mooloop_core::ProjectChannel::mlm1(0, 1);
         let params = &mut project.channels[0]
             .setup
-            .ml1_state_mut()
+            .mlm1_state_mut()
             .unwrap()
             .params;
         params.filter_decay = 0.08;
@@ -1643,13 +1643,37 @@ id = "default_kick"
         );
     }
 
+    /// The device shipped as "ML-1" and was renamed to "ML-M1" after songs and
+    /// channel presets had already been saved. Those files tag the source
+    /// `ml1`, and the round-trip above cannot catch a break here because it
+    /// writes and reads with the same build — rename both ends and it still
+    /// passes. This pins the reader against a literal old manifest instead.
     #[test]
-    fn ml1_validation_rejects_an_out_of_range_filter_envelope() {
+    fn a_source_saved_under_the_old_ml1_name_still_loads() {
+        let source: ChannelSource = toml::from_str(
+            r#"
+            type = "ml1"
+
+            [state.params]
+            filter_decay = 0.08
+            "#,
+        )
+        .expect("a source tagged with the pre-rename name must still load");
+
+        assert_eq!(source.kind(), DeviceKind::MlM1);
+        let ChannelSource::MlM1(state) = source else {
+            panic!("`type = \"ml1\"` must load as the ML-M1");
+        };
+        assert_eq!(state.params.filter_decay, 0.08);
+    }
+
+    #[test]
+    fn mlm1_validation_rejects_an_out_of_range_filter_envelope() {
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::ml1(0, 1);
+        project.channels[0] = mooloop_core::ProjectChannel::mlm1(0, 1);
         project.channels[0]
             .setup
-            .ml1_state_mut()
+            .mlm1_state_mut()
             .unwrap()
             .params
             .filter_keytrack = 4.0;
@@ -1664,7 +1688,7 @@ id = "default_kick"
             ChannelSource::DrumSynth(mooloop_core::DrumSynthState::default()),
             ChannelSource::MonoSynth(mooloop_core::MonoSynthState::default()),
             ChannelSource::PolySynth(mooloop_core::PolySynthState::default()),
-            ChannelSource::Ml1(mooloop_core::Ml1State::default()),
+            ChannelSource::MlM1(mooloop_core::MlM1State::default()),
         ];
         for (index, source) in sources.into_iter().enumerate() {
             let info = PresetInfo {

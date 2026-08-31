@@ -374,7 +374,7 @@ impl Default for Ladder {
 }
 
 /// A nonlinear three-pole ladder with an asymmetric resonance path: the other
-/// half of the ML-1's filter, and a genuinely different circuit rather than
+/// half of the ML-M1's filter, and a genuinely different circuit rather than
 /// the same one with different constants.
 ///
 /// ```text
@@ -860,7 +860,7 @@ mod tests {
         }
         // That the bound is low enough for a voice to stay under full scale
         // once the output reference is applied is asserted where the reference
-        // lives, by `ml1::tests::resonant_filter_and_drive_stay_bounded`.
+        // lives, by `mlm1::tests::resonant_filter_and_drive_stay_bounded`.
     }
 
     #[test]

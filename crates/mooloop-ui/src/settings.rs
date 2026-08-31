@@ -546,7 +546,10 @@ fn kind_slug(kind: DeviceKind) -> &'static str {
         DeviceKind::DrumSynth => "drum_synth",
         DeviceKind::MonoSynth => "mono_synth",
         DeviceKind::PolySynth => "poly_synth",
-        DeviceKind::Ml1 => "ml1",
+        // On-disk directory name, frozen at the device's old ML-1 spelling.
+        // Renaming it would orphan every generator preset already saved
+        // under presets/generators/mlm1/.
+        DeviceKind::MlM1 => "ml1",
     }
 }
 

@@ -1,10 +1,10 @@
-//! The ML-1 factory bank.
+//! The ML-M1 factory bank.
 //!
 //! Six patches, defined here as data rather than as files, for two reasons.
 //! The DSP tests need the same values the preset seeder writes — a bank that
 //! only existed as TOML would have to be parsed back to be tested, and the
 //! thing under test would be the parser. And a patch is a set of parameters,
-//! so `Ml1Params` is its natural form; the bundle on disk is a serialization
+//! so `MlM1Params` is its natural form; the bundle on disk is a serialization
 //! of it, not the other way round.
 //!
 //! Each patch exists to prove something, per
@@ -19,7 +19,7 @@ use crate::modulation::{
     ParamAddr, ParamOwner,
 };
 use crate::{
-    synth_osc_param, EffectTarget, EnvTrigger, FilterModel, GlideMode, Ml1Params, NotePriority,
+    synth_osc_param, EffectTarget, EnvTrigger, FilterModel, GlideMode, MlM1Params, NotePriority,
     OscWave, OSC_OFFSET_PULSE_WIDTH, SYNTH_PARAM_FILTER_CUTOFF,
 };
 
@@ -32,11 +32,11 @@ use crate::{
 const AUTHORED_SCOPE: EffectTarget = EffectTarget::Channel(0);
 
 /// One factory patch: presentation metadata plus the complete channel-level
-/// state an ML-1 instrument needs.
+/// state an ML-M1 instrument needs.
 ///
 /// `modulation` is part of the patch rather than an afterthought because the
-/// ML-1 has no device-local LFO by design — general modulation is channel
-/// state (`crate::ml1`). A bank that could not carry a rack could not ship
+/// ML-M1 has no device-local LFO by design — general modulation is channel
+/// state (`crate::mlm1`). A bank that could not carry a rack could not ship
 /// Sequence Bleep at all.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FactoryPatch {
@@ -45,7 +45,7 @@ pub struct FactoryPatch {
     pub tags: &'static [&'static str],
     /// One line on what the patch is for, and what it demonstrates.
     pub description: &'static str,
-    pub params: Ml1Params,
+    pub params: MlM1Params,
     pub modulation: ModRack,
 }
 
@@ -62,10 +62,10 @@ pub fn patches() -> [FactoryPatch; 6] {
 }
 
 /// Every patch starts from the default and changes what it needs, so the diff
-/// between this file and `Ml1Params::default()` *is* the "few knob moves"
+/// between this file and `MlM1Params::default()` *is* the "few knob moves"
 /// claim, checkable by reading rather than by trusting a comment.
-fn base() -> Ml1Params {
-    Ml1Params::default()
+fn base() -> MlM1Params {
+    MlM1Params::default()
 }
 
 /// Ladder weight and low-end stability under resonance.
@@ -88,7 +88,7 @@ fn round_bass() -> FactoryPatch {
     params.sustain = 0.85;
     FactoryPatch {
         name: "Round Bass",
-        category: "ML-1",
+        category: "ML-M1",
         tags: &["bass", "ladder"],
         description: "Ladder weight: low cutoff, high resonance, bass intact.",
         params,
@@ -117,7 +117,7 @@ fn rubber_bass() -> FactoryPatch {
     params.sustain = 0.9;
     FactoryPatch {
         name: "Rubber Bass",
-        category: "ML-1",
+        category: "ML-M1",
         tags: &["bass", "ladder", "envelope"],
         description: "Envelope into resonance, with drive setting how hard it lands.",
         params,
@@ -149,7 +149,7 @@ fn acid_line() -> FactoryPatch {
     params.release = 0.06;
     FactoryPatch {
         name: "Acid Line",
-        category: "ML-1",
+        category: "ML-M1",
         tags: &["bass", "acid", "accent", "legato"],
         description: "Acid model with accent and slide; overlap notes to play it.",
         params,
@@ -178,7 +178,7 @@ fn snap_pluck() -> FactoryPatch {
     params.sustain = 0.0;
     FactoryPatch {
         name: "Snap Pluck",
-        category: "ML-1",
+        category: "ML-M1",
         tags: &["pluck", "keytrack", "short"],
         description: "Short and focused, cutoff tracking the keyboard.",
         params,
@@ -210,7 +210,7 @@ fn porta_lead() -> FactoryPatch {
     params.release = 0.25;
     FactoryPatch {
         name: "Porta Lead",
-        category: "ML-1",
+        category: "ML-M1",
         tags: &["lead", "glide", "legato", "priority"],
         description: "Sliding lead; hold a note under it and release to hear the stack.",
         params,
@@ -222,7 +222,7 @@ fn porta_lead() -> FactoryPatch {
 /// source-to-destination route.
 ///
 /// The one patch in the bank with a rack, and the reason the bank is
-/// channel-scoped: the ML-1 has no device-local LFO, so this movement can
+/// channel-scoped: the ML-M1 has no device-local LFO, so this movement can
 /// only come from channel modulation. Two slots, because one route would not
 /// show that the matrix takes more than one.
 fn sequence_bleep() -> FactoryPatch {
@@ -282,7 +282,7 @@ fn sequence_bleep() -> FactoryPatch {
 
     FactoryPatch {
         name: "Sequence Bleep",
-        category: "ML-1",
+        category: "ML-M1",
         tags: &["sequence", "modulation", "pwm"],
         description: "Sample-and-hold cutoff and drifting pulse width, from the channel rack.",
         params,
@@ -290,7 +290,7 @@ fn sequence_bleep() -> FactoryPatch {
     }
 }
 
-/// How many parameters a patch changes from [`Ml1Params::default`].
+/// How many parameters a patch changes from [`MlM1Params::default`].
 ///
 /// The plan's standing requirement on the bank is that every patch is a few
 /// knob moves from the default saw, with fifteen precise settings named as
@@ -299,8 +299,8 @@ fn sequence_bleep() -> FactoryPatch {
 ///
 /// Oscillators count per changed field, not per oscillator: turning up a sub
 /// is one move, and retuning it as well is two.
-pub fn moves_from_default(params: &Ml1Params) -> usize {
-    let base = Ml1Params::default();
+pub fn moves_from_default(params: &MlM1Params) -> usize {
+    let base = MlM1Params::default();
     let mut moves = 0;
 
     for (osc, default) in params.osc.iter().zip(base.osc.iter()) {
@@ -366,7 +366,7 @@ mod tests {
         for (index, patch) in patches.iter().enumerate() {
             assert!(!patch.name.is_empty());
             assert!(!patch.description.is_empty());
-            assert_eq!(patch.category, "ML-1");
+            assert_eq!(patch.category, "ML-M1");
             assert!(
                 !patches[..index]
                     .iter()

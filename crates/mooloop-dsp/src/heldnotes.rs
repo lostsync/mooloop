@@ -2,7 +2,7 @@
 //! rather than like a synth with one voice.
 //!
 //! Kept separate from any one instrument because it is not one instrument's
-//! problem: the ML-1 uses it now, and the poly synth needs the same
+//! problem: the ML-M1 uses it now, and the poly synth needs the same
 //! behaviour the moment it grows a mono mode.
 //!
 //! Two rules the rest of the engine depends on:

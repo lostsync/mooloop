@@ -7,7 +7,7 @@ use arc_swap::ArcSwapOption;
 use mooloop_core::{
     compile_bus_graph, AutomationLane, ChannelSource, CompiledBusGraph, DeviceKind,
     DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams, ModDestinationDescriptor,
-    ModRack, MonoSynthParams, Ml1Params, ParamAddr, ParamOwner, PolySynthParams, Project,
+    ModRack, MonoSynthParams, MlM1Params, ParamAddr, ParamOwner, PolySynthParams, Project,
     SamplerParams,
     DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
@@ -16,7 +16,7 @@ use mooloop_core::{
 use mooloop_dsp::build_effect;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, DrumSynth,
-    DryAlign, Event, EventList, ModulatorRack, MonoSynth, Ml1, NoteGateEvents, PolySynth,
+    DryAlign, Event, EventList, ModulatorRack, MonoSynth, MlM1, NoteGateEvents, PolySynth,
     ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
 };
@@ -64,7 +64,7 @@ fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
         DeviceKind::Sampler => GeneratorParams::Sampler(SamplerParams::default()),
         DeviceKind::MonoSynth => GeneratorParams::MonoSynth(MonoSynthParams::default()),
         DeviceKind::PolySynth => GeneratorParams::PolySynth(PolySynthParams::default()),
-        DeviceKind::Ml1 => GeneratorParams::Ml1(Ml1Params::default()),
+        DeviceKind::MlM1 => GeneratorParams::MlM1(MlM1Params::default()),
         DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
     }
 }
@@ -822,7 +822,7 @@ struct ChannelStrip {
     drum_synth: DrumSynth,
     mono_synth: MonoSynth,
     poly_synth: PolySynth,
-    ml1: Ml1,
+    mlm1: MlM1,
     active_source: DeviceKind,
     /// The knob value for the active generator's parameters. The device
     /// retains only the value it was last sent, so this is what lets a knob
@@ -843,7 +843,7 @@ impl ChannelStrip {
             drum_synth: DrumSynth::new(DrumSynthParams::default(), sample_rate),
             mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
             poly_synth: PolySynth::new(PolySynthParams::default(), sample_rate),
-            ml1: Ml1::new(Ml1Params::default(), sample_rate),
+            mlm1: MlM1::new(MlM1Params::default(), sample_rate),
             active_source: DeviceKind::Sampler,
             source_base: GeneratorParams::Sampler(SamplerParams::default()),
             effects: EffectChain::new(),
@@ -859,12 +859,12 @@ impl ChannelStrip {
         self.drum_synth.reset();
         self.mono_synth.reset();
         self.poly_synth.reset();
-        self.ml1.reset();
+        self.mlm1.reset();
         self.sampler.set_params(SamplerParams::default());
         self.drum_synth.set_params(DrumSynthParams::default());
         self.mono_synth.set_params(MonoSynthParams::default());
         self.poly_synth.set_params(PolySynthParams::default());
-        self.ml1.set_params(Ml1Params::default());
+        self.mlm1.set_params(MlM1Params::default());
         self.active_source = source;
     }
 
@@ -894,9 +894,9 @@ impl ChannelStrip {
                 self.poly_synth.set_params(state.params);
                 GeneratorParams::PolySynth(state.params)
             }
-            ChannelSource::Ml1(state) => {
-                self.ml1.set_params(state.params);
-                GeneratorParams::Ml1(state.params)
+            ChannelSource::MlM1(state) => {
+                self.mlm1.set_params(state.params);
+                GeneratorParams::MlM1(state.params)
             }
         };
     }
@@ -905,7 +905,7 @@ impl ChannelStrip {
         match self.active_source {
             DeviceKind::Sampler => self.sampler.choke_group(),
             DeviceKind::DrumSynth => self.drum_synth.choke_group(),
-            DeviceKind::MonoSynth | DeviceKind::PolySynth | DeviceKind::Ml1 => 0,
+            DeviceKind::MonoSynth | DeviceKind::PolySynth | DeviceKind::MlM1 => 0,
         }
     }
 
@@ -921,7 +921,7 @@ impl ChannelStrip {
             DeviceKind::PolySynth => self
                 .poly_synth
                 .process(context, &mut self.bus, events, None),
-            DeviceKind::Ml1 => self.ml1.process(context, &mut self.bus, events, None),
+            DeviceKind::MlM1 => self.mlm1.process(context, &mut self.bus, events, None),
         }
     }
 }
@@ -1365,7 +1365,7 @@ impl RenderState {
                     GeneratorParams::Sampler(params) => strip.sampler.set_params(params),
                     GeneratorParams::MonoSynth(params) => strip.mono_synth.set_params(params),
                     GeneratorParams::PolySynth(params) => strip.poly_synth.set_params(params),
-                    GeneratorParams::Ml1(params) => strip.ml1.set_params(params),
+                    GeneratorParams::MlM1(params) => strip.mlm1.set_params(params),
                     GeneratorParams::DrumSynth => {}
                 }
             }
@@ -1696,10 +1696,10 @@ impl RenderState {
                     strip.source_base = GeneratorParams::MonoSynth(params);
                 }
             }
-            EngineCommand::SetChannelMl1Params { channel, params } => {
+            EngineCommand::SetChannelMlM1Params { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.ml1.set_params(params);
-                    strip.source_base = GeneratorParams::Ml1(params);
+                    strip.mlm1.set_params(params);
+                    strip.source_base = GeneratorParams::MlM1(params);
                 }
             }
             EngineCommand::SetChannelPolySynthParams { channel, params } => {

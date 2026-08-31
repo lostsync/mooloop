@@ -1,12 +1,43 @@
-# ML-1 plan status
+# ML-M1 plan status
 
 In progress. 02-07 are in, restructured. 08's bank and its automated checks
-are in; **08's listening pass is not done and cannot be done without Adam** —
-see "What is not".
+are in. **Adam played the bank on 2026-08-31**, so 08's listening pass has
+happened; his verdict was that the synth sounds very good. The findings it
+produced are being worked on their own branches and are not yet folded back
+into 04, 05 and 06 — the first is that the three filter models differ in
+apparent loudness. "What is not" is still accurate until that lands.
+
+## The name, corrected 2026-08-31
+
+The device was always meant to be the **ML-M1**. An agent misread the name as
+"ML-1" when the device was created, it was not caught at the time, and it
+shipped that way through the whole plan. Source, UI copy, and these documents
+now say ML-M1.
+
+**Three on-disk identifiers keep the old `ml1` spelling and must not be
+"fixed".** Projects, channel presets, and preset directories were written
+before the correction, and a serialized name is an on-disk identifier like a
+parameter id:
+
+- `ChannelSource::MlM1` is `#[serde(rename = "ml1")]` — this is the `type`
+  field in every saved song and channel preset.
+- `DeviceKind::MlM1` is `#[serde(rename = "ml1")]`, for `Channel::kind`.
+- `kind_slug` returns `"ml1"`, the `presets/generators/ml1/` directory name,
+  and `MARKER_FILE` stays `.ml1-factory-v1`.
+
+`a_source_saved_under_the_old_ml1_name_still_loads` pins the reader against a
+literal pre-rename manifest. The round-trip test alone cannot catch a break
+here, because renaming both ends at once still passes it.
+
+One consequence Adam should know: **factory patches already seeded to disk
+keep their old `ML-1` category label.** They became ordinary user presets on
+first run and the marker file stops re-seeding. Deleting the bank and its
+`.ml1-factory-v1` marker re-seeds them under `ML-M1`; leaving them alone is
+also fine.
 
 ## The restructure, decided 2026-08-30
 
-Adam's call, and it changes the shape of the whole plan: **Mono v2 (ML-1) and
+Adam's call, and it changes the shape of the whole plan: **Mono v2 (ML-M1) and
 ML-P8 are new instruments, not edits of the existing ones.** The original
 poly synth is *kept* — it is a simple three-oscillator synth that sounds good,
 and losing it is not worth it — and will get a mono/poly toggle and a legato
@@ -17,12 +48,12 @@ that toggled poly. Three synths end up in the project, not two.
 Consequences for the steps below:
 
 - **02 no longer "lands on both synths".** The v1 synths are untouched.
-  `Ml1Params` is a new struct in `crates/mooloop-core/src/ml1.rs` with
+  `MlM1Params` is a new struct in `crates/mooloop-core/src/mlm1.rs` with
   `#[serde(default)]` from the start, so the "make `MonoSynthParams` safe to
   extend first" work in 02 is moot here and the pre-v2 migration in 02.5 does
   not apply — there is no pre-v2 form of this device on disk.
   ML-P8's plan folds its separate filter envelope and keytracking into
-  `docs/plans/poly-synth-v2/03-the-multimode-filter.md`; ML-1 step 02 is not a
+  `docs/plans/poly-synth-v2/03-the-multimode-filter.md`; ML-M1 step 02 is not a
   prerequisite.
 - **The descriptor split happened differently.** `MONO_DESCRIPTORS` and
   `POLY_DESCRIPTORS` still have their inheritance (`POLY_DESCRIPTORS` copies
@@ -33,9 +64,9 @@ Consequences for the steps below:
 - **The v1 mono synth is still present and still loadable.** Deleting it is
   blocked on the poly toggles, since old projects' MonoSynth channels need
   somewhere to land — planned in `docs/plans/poly-v1-mono-mode/`. Until then
-  the device picker shows both, as "Mono" and "ML-1". Naming settles when the
+  the device picker shows both, as "Mono" and "ML-M1". Naming settles when the
   v1 device goes.
-- **`DeviceKind::Ml1` is a transitional name.** It takes the plain name
+- **`DeviceKind::MlM1` is a transitional name.** It takes the plain name
   when `DeviceKind::MonoSynth` is deleted.
 
 ## What is in
@@ -66,16 +97,16 @@ Consequences for the steps below:
   priority fallback's winning-note velocity, and the legato slide without any
   new state at all. It scales `filter_env_amount` by up to 4/3 and adds up to
   0.35 to the smoothed drive.
-- **08, the bank:** six patches in `crates/mooloop-core/src/ml1_factory.rs`,
+- **08, the bank:** six patches in `crates/mooloop-core/src/mlm1_factory.rs`,
   defined as data rather than as files so the DSP tests and the preset seeder
-  share one source of truth. `mooloop_project::seed_ml1_bank` writes them into
+  share one source of truth. `mooloop_project::seed_mlm1_bank` writes them into
   the user's channel-preset directory on first run, after which they are
   ordinary editable user presets. The whole-instrument checks the step asks
   for run over the shipped patches: peak bound at full velocity across each
   patch's register, prompt release on transport stop, no step when cutoff,
   resonance, drive or accent is jumped end-to-end mid-note, and Round Bass
   against Acid Line as two instruments.
-- **The face:** `ml1-device.slint`, three pages, the third being PERF.
+- **The face:** `mlm1-device.slint`, three pages, the third being PERF.
   `OscillatorDeviceStrip` was extracted to `device-oscillator.slint` — the
   part of 07 that could not wait, since a third face would have been a third
   copy.
@@ -110,18 +141,18 @@ reason, per the step.
   envelopes, and output calibrations remain local.
 - `ML1_DESCRIPTORS` is built independently from the shared core and oscillator
   descriptor blocks. The v1 `POLY_DESCRIPTORS` still copies the v1 Mono table
-  by design until the later v1 migration; ML-1 parameter ids 20-29 do not enter
+  by design until the later v1 migration; ML-M1 parameter ids 20-29 do not enter
   either legacy table. A test walks every generator table and rejects duplicate
   ids within a device.
 - The shared cutoff/resonance and oscillator descriptor defaults, plus Poly's
   spread default, were stale. They now match all three parameter structs, with
   a test pinning that contract. The descriptor ranges remain correct for both
   linear and nonlinear filters.
-- The v1 Mono, ML-1, and Poly validators cover every numeric parameter. Their
+- The v1 Mono, ML-M1, and Poly validators cover every numeric parameter. Their
   bool and enum fields are valid by construction after deserialization and do
   not need numeric range checks.
 - `OscillatorDeviceStrip` already lives once in `device-oscillator.slint` and
-  is imported by all three faces. The ML-1 copy and status text make no
+  is imported by all three faces. The ML-M1 copy and status text make no
   hardware-emulation claim. `docs/AUDIO_ARCHITECTURE.md` did not describe a
   shared synth voice architecture, so it needed no change.
 
@@ -134,9 +165,9 @@ reason, per the step.
 - **08's bank is channel-scoped, not generator-scoped.** A generator preset is
   a bare `ChannelSource` with nowhere to put a `ModRack`, and Sequence Bleep is
   an S&H LFO routed to cutoff — it is nothing without one. That is a
-  consequence of the ML-1 having no device-local LFO by design, not a
+  consequence of the ML-M1 having no device-local LFO by design, not a
   workaround. The cost is that the bank appears in the channel-preset menu
-  alongside other device kinds rather than in the ML-1-filtered generator menu.
+  alongside other device kinds rather than in the ML-M1-filtered generator menu.
 - **06 asks for a `Theme.warning` fill on the Accent knob**, "matching Drive
   and the other character controls". No knob in the project uses that fill —
   Drive included — so it would have made Accent the only warning-coloured
@@ -148,7 +179,7 @@ reason, per the step.
 
 The step says a patch needing fifteen precise settings means the defaults or
 the ranges are wrong, and that this is the finding rather than the patch's
-problem. `ml1_factory::moves_from_default` counts, and a test holds every
+problem. `mlm1_factory::moves_from_default` counts, and a test holds every
 patch under fifteen. Three things came out of getting there:
 
 - **There was no factory-bank mechanism at all.** Presets only existed as
@@ -163,7 +194,7 @@ patch under fifteen. Three things came out of getting there:
   A `ModRoute` names its destination channel absolutely, which is right for a
   project and wrong for a preset. A channel preset saved from channel 3 and
   loaded onto channel 0 kept modulating channel 3. Pre-existing, and not
-  specific to the ML-1 — it applied to every channel preset already savable —
+  specific to the ML-M1 — it applied to every channel preset already savable —
   but the bank could not ship without fixing it. `rescope_modulation` runs on
   the channel-preset load path; kits are unaffected, since their channels land
   on the indices they were saved from.

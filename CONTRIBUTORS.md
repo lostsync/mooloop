@@ -138,7 +138,13 @@ work session you can recall being part of, and don't stress over precision.
   `main` stash whose contents had already landed, and gave the v1 poly's
   mono/legato toggles — decided during the ML-1 restructure but recorded only
   as a consequence note — their own plan, since they are what blocks deleting
-  the v1 mono synth.
+  the v1 mono synth. Then corrected the ML-M1's name, which had shipped as
+  "ML-1" because an agent misread it: a mechanical source and UI rename, with
+  the serialized `ml1` tag, the preset directory, and the factory marker file
+  deliberately frozen at the old spelling, since a serialized name is an
+  on-disk identifier and Adam already had songs and a seeded bank written
+  under it. Added the backward-compatibility test the existing round-trip
+  could not provide, because renaming both ends at once still passes it.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

@@ -13,7 +13,7 @@
 //! adding an oscillator parameter later does not disturb the others.
 
 use crate::{
-    DeviceKind, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode, MonoSynthParams, Ml1Params,
+    DeviceKind, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode, MonoSynthParams, MlM1Params,
     NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PolySynthParams, RetriggerMode,
     SamplerParams, VoiceMode, MAX_POLY_VOICES, MAX_SAMPLER_VOICES,
 };
@@ -183,9 +183,9 @@ pub const SYNTH_PARAM_POLYPHONY: u32 = 15;
 pub const SYNTH_PARAM_SPREAD: u32 = 16;
 
 // 17-19 are deliberately unused, so the v1 synths keep room to grow without
-// reaching into the ML-1 block below.
+// reaching into the ML-M1 block below.
 
-/// The ML-1's own ids, starting clear of everything above.
+/// The ML-M1's own ids, starting clear of everything above.
 pub const SYNTH_PARAM_FILTER_ATTACK: u32 = 20;
 pub const SYNTH_PARAM_FILTER_DECAY: u32 = 21;
 pub const SYNTH_PARAM_FILTER_SUSTAIN: u32 = 22;
@@ -241,7 +241,7 @@ const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
 
 /// The voice parameters every synth in the project shares: glide, one ADSR,
 /// and the filter's cutoff, resonance, envelope depth, and drive. Split out
-/// from the LFO block so the ML-1, which has no device-local LFO, can
+/// from the LFO block so the ML-M1, which has no device-local LFO, can
 /// build its table from the same entries rather than a near-copy of them.
 const SYNTH_CORE_DESCRIPTORS: [ParamDescriptor; 9] = [
     ParamDescriptor {
@@ -271,7 +271,7 @@ const SYNTH_CORE_DESCRIPTORS: [ParamDescriptor; 9] = [
     unit(SYNTH_PARAM_DRIVE, "Drive", 0.0),
 ];
 
-/// The v1 synths' device-local LFO. The ML-1 does not have one; its
+/// The v1 synths' device-local LFO. The ML-M1 does not have one; its
 /// modulation comes from the channel's `ModRack` through these same
 /// descriptor ids on the parameters themselves.
 const LFO_DESCRIPTORS: [ParamDescriptor; 6] = [
@@ -336,9 +336,9 @@ const fn concat_core_lfo(
     out
 }
 
-/// The ML-1's second envelope, its keytracking, and the three
+/// The ML-M1's second envelope, its keytracking, and the three
 /// switches that make its note behaviour a performance rather than a lookup.
-const ML1_VOICE_DESCRIPTORS: [ParamDescriptor; 10] = [
+const MLM1_VOICE_DESCRIPTORS: [ParamDescriptor; 10] = [
     seconds(SYNTH_PARAM_FILTER_ATTACK, "F attack", 0.005),
     seconds(SYNTH_PARAM_FILTER_DECAY, "F decay", 0.2),
     unit(SYNTH_PARAM_FILTER_SUSTAIN, "F sustain", 0.7),
@@ -364,15 +364,15 @@ static MONO_DESCRIPTORS: [ParamDescriptor; 30] = concat_synth(
 /// Built from the shared core rather than from `MONO_DESCRIPTORS`: the v2
 /// mono synth is a different instrument, and a table that inherits from
 /// another one quietly becomes a lie the moment the two diverge.
-static ML1_DESCRIPTORS: [ParamDescriptor; 34] = concat_ml1(
+static MLM1_DESCRIPTORS: [ParamDescriptor; 34] = concat_mlm1(
     SYNTH_CORE_DESCRIPTORS,
-    ML1_VOICE_DESCRIPTORS,
+    MLM1_VOICE_DESCRIPTORS,
     osc_descriptors(0, "Osc 1 wave"),
     osc_descriptors(1, "Osc 2 wave"),
     osc_descriptors(2, "Osc 3 wave"),
 );
 
-const fn concat_ml1(
+const fn concat_mlm1(
     core: [ParamDescriptor; 9],
     voice: [ParamDescriptor; 10],
     a: [ParamDescriptor; 5],
@@ -456,7 +456,7 @@ impl DeviceKind {
             Self::Sampler => &SAMPLER_DESCRIPTORS,
             Self::MonoSynth => &MONO_DESCRIPTORS,
             Self::PolySynth => &POLY_DESCRIPTORS,
-            Self::Ml1 => &ML1_DESCRIPTORS,
+            Self::MlM1 => &MLM1_DESCRIPTORS,
             Self::DrumSynth => &[],
         }
     }
@@ -533,7 +533,7 @@ pub enum GeneratorParams {
     Sampler(SamplerParams),
     MonoSynth(MonoSynthParams),
     PolySynth(PolySynthParams),
-    Ml1(Ml1Params),
+    MlM1(MlM1Params),
     /// Not addressable yet; every `get`/`set` misses.
     DrumSynth,
 }
@@ -544,7 +544,7 @@ impl GeneratorParams {
             Self::Sampler(_) => DeviceKind::Sampler,
             Self::MonoSynth(_) => DeviceKind::MonoSynth,
             Self::PolySynth(_) => DeviceKind::PolySynth,
-            Self::Ml1(_) => DeviceKind::Ml1,
+            Self::MlM1(_) => DeviceKind::MlM1,
             Self::DrumSynth => DeviceKind::DrumSynth,
         }
     }
@@ -619,7 +619,7 @@ impl GeneratorParams {
                     _ => return None,
                 })
             }
-            Self::Ml1(p) => {
+            Self::MlM1(p) => {
                 if let Some((oscillator, offset)) = osc_slot(id) {
                     return osc_get(&p.osc[oscillator], offset);
                 }
@@ -727,7 +727,7 @@ impl GeneratorParams {
                     }
                 }
             }
-            Self::Ml1(p) => {
+            Self::MlM1(p) => {
                 if let Some((oscillator, offset)) = osc_slot(id) {
                     if !osc_set(&mut p.osc[oscillator], offset, value) {
                         return None;
@@ -781,7 +781,7 @@ mod tests {
             GeneratorParams::Sampler(SamplerParams::default()),
             GeneratorParams::MonoSynth(MonoSynthParams::default()),
             GeneratorParams::PolySynth(PolySynthParams::default()),
-            GeneratorParams::Ml1(Ml1Params::default()),
+            GeneratorParams::MlM1(MlM1Params::default()),
         ]
     }
 
@@ -834,7 +834,7 @@ mod tests {
         for params in [
             GeneratorParams::MonoSynth(MonoSynthParams::default()),
             GeneratorParams::PolySynth(PolySynthParams::default()),
-            GeneratorParams::Ml1(Ml1Params::default()),
+            GeneratorParams::MlM1(MlM1Params::default()),
         ] {
             let kind = params.kind();
             for descriptor in kind.descriptors() {

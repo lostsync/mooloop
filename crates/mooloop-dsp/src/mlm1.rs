@@ -1,4 +1,4 @@
-//! The ML-1: one voice, two envelopes, and a filter that tracks the
+//! The ML-M1: one voice, two envelopes, and a filter that tracks the
 //! keyboard.
 //!
 //! Deliberately not a variant of [`crate::monosynth`]. That device is the poly
@@ -37,7 +37,7 @@ use crate::osc::Osc;
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
-use mooloop_core::{EnvTrigger, FilterModel, GlideMode, Ml1Params};
+use mooloop_core::{EnvTrigger, FilterModel, GlideMode, MlM1Params};
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
 /// top (which the default patch runs at) peaks within a dB of
@@ -105,7 +105,7 @@ impl VoiceFilter {
     }
 }
 
-struct Ml1Voice {
+struct MlM1Voice {
     active: bool,
     event_id: u64,
     /// Scales the VCA and decides when the voice goes idle.
@@ -129,7 +129,7 @@ struct Ml1Voice {
     drive: Smoothed,
 }
 
-impl Ml1Voice {
+impl MlM1Voice {
     fn new(sample_rate: u32) -> Self {
         let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, sample_rate);
         Self {
@@ -153,7 +153,7 @@ impl Ml1Voice {
     /// together everywhere, so they are configured together here too — the
     /// bug this avoids is a filter envelope left on stale times after a knob
     /// move.
-    fn configure_envelopes(&mut self, params: &Ml1Params) {
+    fn configure_envelopes(&mut self, params: &MlM1Params) {
         self.amp_env
             .configure(params.attack, params.decay, params.sustain, params.release);
         self.filter_env.configure(
@@ -166,7 +166,7 @@ impl Ml1Voice {
 
     /// Adopt the current parameters without a ramp. Only safe when the voice
     /// is silent — there is nothing to click.
-    fn snap_to(&mut self, params: &Ml1Params, velocity_amp: f32) {
+    fn snap_to(&mut self, params: &MlM1Params, velocity_amp: f32) {
         self.velocity_amp.reset_to(velocity_amp);
         for (smoothed, osc) in self.osc_level.iter_mut().zip(params.osc.iter()) {
             smoothed.reset_to(osc.level.clamp(0.0, 1.0));
@@ -176,19 +176,19 @@ impl Ml1Voice {
     }
 }
 
-/// The ML-1 node.
-pub struct Ml1 {
-    params: Ml1Params,
+/// The ML-M1 node.
+pub struct MlM1 {
+    params: MlM1Params,
     sample_rate: u32,
-    voice: Ml1Voice,
+    voice: MlM1Voice,
     /// Every note currently down, not just the one sounding. This is what
     /// makes trills, fallback, and note priority possible at all.
     held: HeldNotes,
 }
 
-impl Ml1 {
-    pub fn new(params: Ml1Params, sample_rate: u32) -> Self {
-        let mut voice = Ml1Voice::new(sample_rate);
+impl MlM1 {
+    pub fn new(params: MlM1Params, sample_rate: u32) -> Self {
+        let mut voice = MlM1Voice::new(sample_rate);
         voice.configure_envelopes(&params);
         voice.snap_to(&params, 0.0);
         Self {
@@ -200,7 +200,7 @@ impl Ml1 {
     }
 
     /// Replace the parameter set. Called from the RT command drain.
-    pub fn set_params(&mut self, params: Ml1Params) {
+    pub fn set_params(&mut self, params: MlM1Params) {
         self.params = params;
         self.voice.configure_envelopes(&params);
     }
@@ -210,11 +210,11 @@ impl Ml1 {
     /// Routed through `set_params` so a control-rate change gets exactly the
     /// same clamping and voice reconfiguration a whole-struct update does.
     fn apply_param(&mut self, id: u32, value: f32) {
-        let mut params = mooloop_core::GeneratorParams::Ml1(self.params);
+        let mut params = mooloop_core::GeneratorParams::MlM1(self.params);
         if params.set(id, value).is_none() {
             return;
         }
-        if let mooloop_core::GeneratorParams::Ml1(params) = params {
+        if let mooloop_core::GeneratorParams::MlM1(params) = params {
             self.set_params(params);
         }
     }
@@ -222,7 +222,7 @@ impl Ml1 {
     /// Immediately invalidate the active voice and return every oscillator
     /// and filter to its initial state.
     pub fn reset(&mut self) {
-        self.voice = Ml1Voice::new(self.sample_rate);
+        self.voice = MlM1Voice::new(self.sample_rate);
         self.voice.configure_envelopes(&self.params);
         self.voice.snap_to(&self.params, 0.0);
         self.held.clear();
@@ -480,7 +480,7 @@ impl Ml1 {
     }
 }
 
-impl AudioNode for Ml1 {
+impl AudioNode for MlM1 {
     fn process(
         &mut self,
         ctx: &ProcessContext,
@@ -544,8 +544,8 @@ mod tests {
 
     /// A saw at a fixed level, so every test hears the filter rather than the
     /// oscillator mix.
-    fn saw_patch() -> Ml1Params {
-        let mut params = Ml1Params::default();
+    fn saw_patch() -> MlM1Params {
+        let mut params = MlM1Params::default();
         params.osc[0] = OscParams {
             wave: OscWave::Saw,
             level: 1.0,
@@ -565,12 +565,12 @@ mod tests {
         }
     }
 
-    fn render(params: Ml1Params, note: u8, frames: usize) -> Vec<f32> {
+    fn render(params: MlM1Params, note: u8, frames: usize) -> Vec<f32> {
         render_at(params, note, 127, frames)
     }
 
-    fn render_at(params: Ml1Params, note: u8, velocity: u8, frames: usize) -> Vec<f32> {
-        let mut synth = Ml1::new(params, SR);
+    fn render_at(params: MlM1Params, note: u8, velocity: u8, frames: usize) -> Vec<f32> {
+        let mut synth = MlM1::new(params, SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
         events.push(note_on_at(0, 1, note, velocity));
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn idle_is_silent() {
-        let mut synth = Ml1::new(Ml1Params::default(), SR);
+        let mut synth = MlM1::new(MlM1Params::default(), SR);
         let mut bus = StereoBus::with_capacity(256);
         synth.process(&ctx(256), &mut bus, &EventList::empty(), None);
         assert_eq!(bus.peak(256), (0.0, 0.0));
@@ -622,7 +622,7 @@ mod tests {
     fn note_on_at_offset_is_sample_accurate() {
         let frames = 512;
         let k = 200usize;
-        let mut synth = Ml1::new(saw_patch(), SR);
+        let mut synth = MlM1::new(saw_patch(), SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
         events.push(note_on(k as u32, 0, 60));
@@ -651,7 +651,7 @@ mod tests {
         params.filter_env_amount = 0.5;
 
         let frames = (SR as f32 * 0.2) as usize;
-        let mut synth = Ml1::new(params, SR);
+        let mut synth = MlM1::new(params, SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
         events.push(note_on(0, 1, 48));
@@ -695,7 +695,7 @@ mod tests {
         params.filter_release = 0.02;
         params.filter_env_amount = 0.6;
 
-        let mut synth = Ml1::new(params, SR);
+        let mut synth = MlM1::new(params, SR);
         let frames = SR as usize / 2;
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
@@ -748,7 +748,7 @@ mod tests {
 
     #[test]
     fn a_stale_note_off_does_not_release_a_retriggered_voice() {
-        let mut synth = Ml1::new(saw_patch(), SR);
+        let mut synth = MlM1::new(saw_patch(), SR);
         let mut bus = StereoBus::with_capacity(1024);
         let mut events = EventList::empty();
         events.push(note_on(0, 1, 60));
@@ -776,7 +776,7 @@ mod tests {
     /// wherever the envelope already is, so a retrigger over a sounding voice
     /// does not click. So a restart is not a dip to zero; it is a *climb back
     /// to the peak* from sustain. These tests measure that climb.
-    fn sustained(params: impl FnOnce(&mut Ml1Params)) -> Ml1 {
+    fn sustained(params: impl FnOnce(&mut MlM1Params)) -> MlM1 {
         let mut p = saw_patch();
         p.attack = 0.005;
         p.decay = 0.01;
@@ -787,7 +787,7 @@ mod tests {
         p.filter_sustain = SUSTAIN;
         p.filter_release = 0.5;
         params(&mut p);
-        Ml1::new(p, SR)
+        MlM1::new(p, SR)
     }
 
     const SUSTAIN: f32 = 0.4;
@@ -795,7 +795,7 @@ mod tests {
     /// Feed the events one sample at a time and report the highest level each
     /// envelope reaches after `from`. Above sustain means it restarted.
     fn envelope_peaks(
-        synth: &mut Ml1,
+        synth: &mut MlM1,
         events: &EventList,
         frames: usize,
         from: usize,
@@ -1019,7 +1019,7 @@ mod tests {
     /// A sine so that saturation is unmistakable in the spectrum — a saw
     /// already carries every harmonic, so driving one compresses its
     /// structure rather than adding to it, which makes it a poor probe.
-    fn sine_patch() -> Ml1Params {
+    fn sine_patch() -> MlM1Params {
         let mut params = saw_patch();
         params.osc[0] = OscParams {
             wave: OscWave::Sine,
@@ -1183,7 +1183,7 @@ mod tests {
         params.filter_cutoff = 0.4;
         params.filter_resonance = 0.5;
 
-        let mut synth = Ml1::new(params, SR);
+        let mut synth = MlM1::new(params, SR);
         let frames = 4096;
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
@@ -1325,7 +1325,7 @@ mod tests {
 
         let frames = SR as usize * 3 / 4;
         let segment = SR as usize / 4;
-        let mut synth = Ml1::new(params, SR);
+        let mut synth = MlM1::new(params, SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
         events.push(note_on_at(0, 1, 45, 127));
@@ -1371,7 +1371,7 @@ mod tests {
 
         let frames = SR as usize / 2;
         let landing = SR as usize / 4;
-        let mut synth = Ml1::new(params, SR);
+        let mut synth = MlM1::new(params, SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
         events.push(note_on_at(0, 1, 45, 30));
@@ -1403,7 +1403,7 @@ mod tests {
     // ones deliberately: a bound that holds for a test patch and not for
     // Round Bass has told nobody anything.
 
-    use mooloop_core::ml1_factory;
+    use mooloop_core::mlm1_factory;
     use mooloop_core::generator::SYNTH_PARAM_ACCENT;
     use mooloop_core::{
         SYNTH_PARAM_DRIVE, SYNTH_PARAM_FILTER_CUTOFF, SYNTH_PARAM_FILTER_RESONANCE,
@@ -1426,7 +1426,7 @@ mod tests {
     /// ones a user will actually drive.
     #[test]
     fn every_factory_patch_stays_within_the_peak_bound() {
-        for patch in ml1_factory::patches() {
+        for patch in mlm1_factory::patches() {
             for &note in audition_notes(patch.name) {
                 let frames = SR as usize;
                 let rendered = render_at(patch.params, note, 127, frames);
@@ -1442,7 +1442,7 @@ mod tests {
     /// of the more specific tests below get a chance to be confusing.
     #[test]
     fn every_factory_patch_makes_a_sound() {
-        for patch in ml1_factory::patches() {
+        for patch in mlm1_factory::patches() {
             let rendered = render_at(patch.params, 48, 100, (SR / 4) as usize);
             let level = rms(&rendered);
             assert!(
@@ -1463,8 +1463,8 @@ mod tests {
         // to reach silence and not merely start heading there. Still far
         // shorter than the longest release in the bank, which is the point.
         let allowed_frames = (SR as f32 * 0.05) as usize;
-        for patch in ml1_factory::patches() {
-            let mut synth = Ml1::new(patch.params, SR);
+        for patch in mlm1_factory::patches() {
+            let mut synth = MlM1::new(patch.params, SR);
             let mut bus = StereoBus::with_capacity(allowed_frames.max(512));
             let mut events = EventList::empty();
             events.push(note_on_at(0, 1, 48, 127));
@@ -1506,14 +1506,14 @@ mod tests {
     /// honest in either direction: opening a filter genuinely raises the slew,
     /// so the after-state is the fair reference going up, and the before-state
     /// is the fair reference coming back down.
-    fn jump_step_ratio(params: Ml1Params, param_id: u32, from: f32, to: f32) -> f32 {
+    fn jump_step_ratio(params: MlM1Params, param_id: u32, from: f32, to: f32) -> f32 {
         let frames = SR as usize / 2;
         let jump_at = frames / 2;
         // Comfortably longer than `PARAM_SMOOTH_S`, so the window contains the
         // whole of the smoothed transition and not a slice of it.
         let settle = (SR as f32 * 0.05) as usize;
 
-        let mut synth = Ml1::new(params, SR);
+        let mut synth = MlM1::new(params, SR);
         let mut bus = StereoBus::with_capacity(frames);
         let mut events = EventList::empty();
         events.push(note_on_at(0, 1, 48, 110));
@@ -1551,7 +1551,7 @@ mod tests {
     /// amplitude envelope does not touch.
     #[test]
     fn automating_the_character_controls_mid_note_does_not_click() {
-        for patch in ml1_factory::patches() {
+        for patch in mlm1_factory::patches() {
             let mut params = patch.params;
             params.sustain = 1.0;
             params.decay = 0.05;
@@ -1580,7 +1580,7 @@ mod tests {
     /// the filter, and that is exactly what step 05 built the models for.
     #[test]
     fn round_bass_and_acid_line_are_different_instruments() {
-        let patches = ml1_factory::patches();
+        let patches = mlm1_factory::patches();
         let round = patches[0];
         let acid = patches[2];
         assert_eq!(round.name, "Round Bass");

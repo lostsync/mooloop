@@ -133,7 +133,7 @@ fn render_drum_and_mono_source_editors() {
 }
 
 #[test]
-fn render_ml1_source_editor() {
+fn render_mlm1_source_editor() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
         i_slint_backend_testing::TestingBackendOptions {
             mock_time: true,
@@ -147,38 +147,38 @@ fn render_ml1_source_editor() {
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
-    ui.set_selected_channel_name(SharedString::from("ML-1"));
+    ui.set_selected_channel_name(SharedString::from("ML-M1"));
     ui.set_editor_page(0);
     ui.set_source_kind(4);
 
     let osc = ui.window().take_snapshot().unwrap();
     assert_eq!((osc.width(), osc.height()), (960, 760));
     assert!(osc.as_bytes().iter().any(|byte| *byte != 0));
-    write_snapshot(&osc, "MOOLOOP_ML1_OSC_SOURCE_SNAPSHOT");
+    write_snapshot(&osc, "MOOLOOP_MLM1_OSC_SOURCE_SNAPSHOT");
 
     // AMP/FILTER carries two envelope editors, which is the layout call the
     // whole face is built around; moving the filter envelope has to redraw.
-    ui.set_ml1_device_page(1);
-    ui.set_ml1_filter_cutoff(0.35);
-    ui.set_ml1_filter_resonance(0.8);
-    ui.set_ml1_filter_env(0.6);
+    ui.set_mlm1_device_page(1);
+    ui.set_mlm1_filter_cutoff(0.35);
+    ui.set_mlm1_filter_resonance(0.8);
+    ui.set_mlm1_filter_env(0.6);
     let amp_filter = ui.window().take_snapshot().unwrap();
     assert_ne!(osc.as_bytes(), amp_filter.as_bytes());
-    write_snapshot(&amp_filter, "MOOLOOP_ML1_AMP_SOURCE_SNAPSHOT");
+    write_snapshot(&amp_filter, "MOOLOOP_MLM1_AMP_SOURCE_SNAPSHOT");
 
-    ui.set_ml1_filter_decay(0.05);
-    ui.set_ml1_filter_sustain(0.0);
+    ui.set_mlm1_filter_decay(0.05);
+    ui.set_mlm1_filter_sustain(0.0);
     let plucked = ui.window().take_snapshot().unwrap();
     assert_ne!(
         amp_filter.as_bytes(),
         plucked.as_bytes(),
         "the filter envelope editor should redraw independently of the amp one"
     );
-    write_snapshot(&plucked, "MOOLOOP_ML1_PLUCK_SOURCE_SNAPSHOT");
+    write_snapshot(&plucked, "MOOLOOP_MLM1_PLUCK_SOURCE_SNAPSHOT");
 
     // Each model draws its own slope, so switching has to redraw the curve.
     for model in [1, 2] {
-        ui.set_ml1_filter_model(model);
+        ui.set_mlm1_filter_model(model);
         let switched = ui.window().take_snapshot().unwrap();
         assert_ne!(
             plucked.as_bytes(),
@@ -186,32 +186,32 @@ fn render_ml1_source_editor() {
             "filter model {model} drew the same response curve as the ladder"
         );
         if model == 1 {
-            write_snapshot(&switched, "MOOLOOP_ML1_ACID_SOURCE_SNAPSHOT");
+            write_snapshot(&switched, "MOOLOOP_MLM1_ACID_SOURCE_SNAPSHOT");
         }
     }
-    ui.set_ml1_filter_model(0);
+    ui.set_mlm1_filter_model(0);
 
-    ui.set_ml1_device_page(2);
+    ui.set_mlm1_device_page(2);
     let perf = ui.window().take_snapshot().unwrap();
     assert_ne!(plucked.as_bytes(), perf.as_bytes());
-    write_snapshot(&perf, "MOOLOOP_ML1_PERF_SOURCE_SNAPSHOT");
+    write_snapshot(&perf, "MOOLOOP_MLM1_PERF_SOURCE_SNAPSHOT");
 
-    ui.set_ml1_priority(2);
+    ui.set_mlm1_priority(2);
     let high_priority = ui.window().take_snapshot().unwrap();
     assert_ne!(perf.as_bytes(), high_priority.as_bytes());
 
     // Accent shares the column with Glide, so this also proves the two knobs
     // are laid out as two knobs rather than drawn over each other.
-    ui.set_ml1_accent(1.0);
+    ui.set_mlm1_accent(1.0);
     let accented = ui.window().take_snapshot().unwrap();
     assert_ne!(high_priority.as_bytes(), accented.as_bytes());
-    write_snapshot(&accented, "MOOLOOP_ML1_ACCENT_SOURCE_SNAPSHOT");
+    write_snapshot(&accented, "MOOLOOP_MLM1_ACCENT_SOURCE_SNAPSHOT");
 
     ui.window().set_size(LogicalSize::new(720.0, 760.0));
     let narrow = ui.window().take_snapshot().unwrap();
     assert_eq!((narrow.width(), narrow.height()), (720, 760));
     assert!(narrow.as_bytes().iter().any(|byte| *byte != 0));
-    write_snapshot(&narrow, "MOOLOOP_ML1_PERF_NARROW_SNAPSHOT");
+    write_snapshot(&narrow, "MOOLOOP_MLM1_PERF_NARROW_SNAPSHOT");
 }
 
 #[test]

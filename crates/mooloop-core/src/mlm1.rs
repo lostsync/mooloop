@@ -1,4 +1,4 @@
-//! Parameters for the ML-1.
+//! Parameters for the ML-M1.
 //!
 //! A separate instrument from [`crate::MonoSynthParams`], not an extension of
 //! it. The v1 mono synth is Poly with the voice count set to one; this one is
@@ -139,10 +139,10 @@ impl FilterModel {
     }
 }
 
-/// All ML-1 parameters, in the units the DSP and UI share.
+/// All ML-M1 parameters, in the units the DSP and UI share.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct Ml1Params {
+pub struct MlM1Params {
     pub osc: [OscParams; 3],
     /// Portamento time (seconds). `0` is instant pitch changes.
     pub glide: f32,
@@ -189,7 +189,7 @@ pub struct Ml1Params {
     pub accent: f32,
 }
 
-impl Default for Ml1Params {
+impl Default for MlM1Params {
     fn default() -> Self {
         Self {
             osc: [

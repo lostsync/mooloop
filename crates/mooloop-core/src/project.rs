@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::{
     default_buses, BusSetup, Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter,
-    AutomationLane, ModRack, MonoSynthParams, Ml1Params, NoteEvent, NoteId, PatternPlacement,
+    AutomationLane, ModRack, MonoSynthParams, MlM1Params, NoteEvent, NoteId, PatternPlacement,
     PlaybackMode, PolySynthParams,
     SamplerParams, SnareCharacter, DEFAULT_STEPS,
 };
@@ -46,8 +46,8 @@ pub struct MonoSynthState {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Ml1State {
-    pub params: Ml1Params,
+pub struct MlM1State {
+    pub params: MlM1Params,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -63,7 +63,12 @@ pub enum ChannelSource {
     DrumSynth(DrumSynthState),
     MonoSynth(MonoSynthState),
     PolySynth(PolySynthState),
-    Ml1(Ml1State),
+    /// Tagged `ml1` on disk, not the `rename_all` default `ml_m1`. This is the
+    /// `type` field every saved song and channel preset carries for an ML-M1
+    /// channel, written before the device's name was corrected. See
+    /// [`crate::DeviceKind::MlM1`], which is frozen for the same reason.
+    #[serde(rename = "ml1")]
+    MlM1(MlM1State),
 }
 
 impl Default for ChannelSource {
@@ -79,7 +84,7 @@ impl ChannelSource {
             Self::DrumSynth(_) => DeviceKind::DrumSynth,
             Self::MonoSynth(_) => DeviceKind::MonoSynth,
             Self::PolySynth(_) => DeviceKind::PolySynth,
-            Self::Ml1(_) => DeviceKind::Ml1,
+            Self::MlM1(_) => DeviceKind::MlM1,
         }
     }
 
@@ -125,16 +130,16 @@ impl ChannelSource {
         }
     }
 
-    pub fn ml1_state(&self) -> Option<&Ml1State> {
+    pub fn mlm1_state(&self) -> Option<&MlM1State> {
         match self {
-            Self::Ml1(state) => Some(state),
+            Self::MlM1(state) => Some(state),
             _ => None,
         }
     }
 
-    pub fn ml1_state_mut(&mut self) -> Option<&mut Ml1State> {
+    pub fn mlm1_state_mut(&mut self) -> Option<&mut MlM1State> {
         match self {
-            Self::Ml1(state) => Some(state),
+            Self::MlM1(state) => Some(state),
             _ => None,
         }
     }
@@ -205,14 +210,14 @@ impl ChannelSetup {
         }
     }
 
-    pub fn ml1(name: impl Into<String>) -> Self {
-        Self::ml1_with_params(name, Ml1Params::default())
+    pub fn mlm1(name: impl Into<String>) -> Self {
+        Self::mlm1_with_params(name, MlM1Params::default())
     }
 
-    pub fn ml1_with_params(name: impl Into<String>, params: Ml1Params) -> Self {
+    pub fn mlm1_with_params(name: impl Into<String>, params: MlM1Params) -> Self {
         Self {
-            channel: Channel::new(name, DeviceKind::Ml1),
-            source: ChannelSource::Ml1(Ml1State { params }),
+            channel: Channel::new(name, DeviceKind::MlM1),
+            source: ChannelSource::MlM1(MlM1State { params }),
             effects: Vec::new(),
             modulation: ModRack::default(),
         }
@@ -259,12 +264,12 @@ impl ChannelSetup {
         self.source.mono_synth_state_mut()
     }
 
-    pub fn ml1_state(&self) -> Option<&Ml1State> {
-        self.source.ml1_state()
+    pub fn mlm1_state(&self) -> Option<&MlM1State> {
+        self.source.mlm1_state()
     }
 
-    pub fn ml1_state_mut(&mut self) -> Option<&mut Ml1State> {
-        self.source.ml1_state_mut()
+    pub fn mlm1_state_mut(&mut self) -> Option<&mut MlM1State> {
+        self.source.mlm1_state_mut()
     }
 
     pub fn poly_synth_state(&self) -> Option<&PolySynthState> {
@@ -338,17 +343,17 @@ impl ProjectChannel {
         }
     }
 
-    pub fn ml1(index: usize, pattern_count: usize) -> Self {
-        Self::ml1_with_params(index, pattern_count, Ml1Params::default())
+    pub fn mlm1(index: usize, pattern_count: usize) -> Self {
+        Self::mlm1_with_params(index, pattern_count, MlM1Params::default())
     }
 
-    pub fn ml1_with_params(
+    pub fn mlm1_with_params(
         index: usize,
         pattern_count: usize,
-        params: Ml1Params,
+        params: MlM1Params,
     ) -> Self {
         Self {
-            setup: ChannelSetup::ml1_with_params(format!("ML-1 {}", index + 1), params),
+            setup: ChannelSetup::mlm1_with_params(format!("ML-M1 {}", index + 1), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
