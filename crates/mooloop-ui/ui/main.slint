@@ -51,7 +51,7 @@ export { DeviceRackConcepts } from "device-concepts.slint";
 // drag regression tests can drive them directly with real pointer events
 // instead of invoking their callbacks, which would pass even if event
 // routing to the handle were broken.
-export { EqDeviceDragHarness, FilterDeviceDragHarness } from "device-drag-harness.slint";
+export { CompressorDeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness } from "device-drag-harness.slint";
 export { MixerStripRow }
 export { OutputTargetRow }
 export { ShortcutRow }
@@ -2812,6 +2812,8 @@ export component MainWindow inherits Window {
                                                         hold: slot.p2;
                                                         release: slot.p3;
                                                         range: slot.p4;
+                                                        input-left-db: slot.input-left-db;
+                                                        input-right-db: slot.input-right-db;
                                                         threshold-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                         attack-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         hold-changed(v) => { root.effect-param-changed(index, 2, v); }
@@ -2841,6 +2843,8 @@ export component MainWindow inherits Window {
                                                         release: slot.p3;
                                                         knee: slot.p4;
                                                         makeup: slot.p5;
+                                                        input-left-db: slot.input-left-db;
+                                                        input-right-db: slot.input-right-db;
                                                         threshold-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                         ratio-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         attack-changed(v) => { root.effect-param-changed(index, 2, v); }
@@ -2869,6 +2873,8 @@ export component MainWindow inherits Window {
                                                         ceiling: slot.p0;
                                                         release: slot.p1;
                                                         gain: slot.p2;
+                                                        input-left-db: slot.input-left-db;
+                                                        input-right-db: slot.input-right-db;
                                                         ceiling-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                         release-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         gain-changed(v) => { root.effect-param-changed(index, 2, v); }

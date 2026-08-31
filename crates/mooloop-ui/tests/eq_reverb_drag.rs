@@ -17,7 +17,7 @@
 //! self-positioning control, only shared `ParameterKnob`s, so that case is
 //! gone rather than untested.
 
-use mooloop_ui::{EqDeviceDragHarness, FilterDeviceDragHarness};
+use mooloop_ui::{CompressorDeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -25,6 +25,7 @@ use std::rc::Rc;
 
 /// The EQ fits two rack units.
 const EQ_FACE_WIDTH: f32 = 220.0 * 2.0 + 4.0;
+const DYNAMICS_FACE_WIDTH: f32 = EQ_FACE_WIDTH;
 const FACE_HEIGHT: f32 = 268.0;
 const HEADER_HEIGHT: f32 = 28.0;
 
@@ -181,7 +182,8 @@ fn coincident_eq_points_are_separately_selectable() {
     // distinct centres at ±9px rather than sharing a z-ordered area.
     for x_offset in [-9.0, 9.0] {
         let at = LogicalPosition::new(center.0 + x_offset, center.1);
-        ui.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+        ui.window()
+            .dispatch_event(WindowEvent::PointerMoved { position: at });
         ui.window().dispatch_event(WindowEvent::PointerPressed {
             position: at,
             button: PointerEventButton::Left,
@@ -254,7 +256,8 @@ fn filter_point_drag_and_wheel_update_only_the_bound_parameters() {
         10.0 + cutoff * 208.0,
         HEADER_HEIGHT + 40.0 + (0.25 + 0.7 * (1.0 - magnitude)) * 96.0,
     );
-    ui.window().dispatch_event(WindowEvent::PointerMoved { position: hover });
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: hover });
     ui.window().dispatch_event(WindowEvent::PointerScrolled {
         position: hover,
         delta_x: 0.0,
@@ -280,5 +283,56 @@ fn filter_point_drag_and_wheel_update_only_the_bound_parameters() {
         before.as_bytes(),
         after.as_bytes(),
         "the filter point and curve should move together after a drag"
+    );
+}
+
+#[test]
+fn compressor_threshold_drag_updates_the_parameter_and_curve() {
+    init_software_backend();
+    let ui = CompressorDeviceDragHarness::new().unwrap();
+    ui.window()
+        .set_size(LogicalSize::new(DYNAMICS_FACE_WIDTH, FACE_HEIGHT));
+    ui.set_threshold(0.55);
+    ui.set_ratio(0.6);
+    ui.set_attack(0.6388);
+    ui.set_release(0.5304);
+    ui.set_knee(0.5);
+    ui.set_makeup(0.25);
+    ui.set_input_left_db(-12.0);
+    ui.set_input_right_db(-16.0);
+
+    let before = ui.window().take_snapshot().unwrap();
+    write_snapshot(&before, "MOOLOOP_DYNAMICS_BEFORE_DRAG_SNAPSHOT");
+
+    let thresholds = Rc::new(RefCell::new(Vec::new()));
+    ui.on_threshold_changed({
+        let thresholds = thresholds.clone();
+        move |v| thresholds.borrow_mut().push(v)
+    });
+
+    // The graph is inset 10px from the face's left and 38px from its top,
+    // and is 424x96px. At threshold 0.55 (-27 dB) with 6 dB makeup, the
+    // handle lies at input -27 dB / output -21 dB on the rendered curve.
+    let start = (10.0 + 33.0 / 60.0 * 424.0, 38.0 + 21.0 / 60.0 * 96.0);
+    let end = (start.0, start.1 - 24.0);
+    drag(ui.window(), start, end, 12);
+
+    assert_monotonic(&thresholds.borrow(), true, "compressor threshold");
+    let threshold = *thresholds.borrow().last().unwrap();
+    assert!(
+        (threshold - 0.8).abs() < 0.02,
+        "24px upward should raise threshold by 15 dB: got {threshold}"
+    );
+    assert!(
+        (ui.get_threshold() - threshold).abs() < 1e-4,
+        "the face property must track the callback sent to the DSP binding"
+    );
+
+    let after = ui.window().take_snapshot().unwrap();
+    write_snapshot(&after, "MOOLOOP_DYNAMICS_AFTER_DRAG_SNAPSHOT");
+    assert_ne!(
+        before.as_bytes(),
+        after.as_bytes(),
+        "the threshold handle and transfer curve should redraw after a drag"
     );
 }

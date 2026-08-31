@@ -1,5 +1,6 @@
 import { EqDeviceFace } from "eq-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
+import { CompressorDeviceFace } from "compressor-device.slint";
 
 // Slint only generates Rust bindings for exported components that inherit
 // Window - EqDeviceFace inherits EffectDeviceShell (a
@@ -69,5 +70,33 @@ export component FilterDeviceDragHarness inherits Window {
         cutoff-changed(v) => { root.cutoff-changed(v); }
         resonance-changed(v) => { root.resonance-changed(v); }
         mode-changed(v) => { root.mode-changed(v); }
+    }
+}
+
+export component CompressorDeviceDragHarness inherits Window {
+    in-out property <float> threshold;
+    in-out property <float> ratio;
+    in-out property <float> attack;
+    in-out property <float> release;
+    in-out property <float> knee;
+    in-out property <float> makeup;
+    in property <float> input-left-db: -60;
+    in property <float> input-right-db: -60;
+    callback threshold-changed(float);
+
+    preferred-width: 444px;
+    preferred-height: 268px;
+    CompressorDeviceFace {
+        width: 100%;
+        height: 100%;
+        threshold <=> root.threshold;
+        ratio <=> root.ratio;
+        attack <=> root.attack;
+        release <=> root.release;
+        knee <=> root.knee;
+        makeup <=> root.makeup;
+        input-left-db: root.input-left-db;
+        input-right-db: root.input-right-db;
+        threshold-changed(v) => { root.threshold-changed(v); }
     }
 }

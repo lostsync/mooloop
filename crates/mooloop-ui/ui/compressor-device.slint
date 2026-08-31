@@ -15,6 +15,8 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
     in-out property <float> release;   // normalized 0..1 (5..2000 ms)
     in-out property <float> knee;      // normalized 0..1 (0..24 dB)
     in-out property <float> makeup;    // normalized 0..1 (0..24 dB)
+    in property <float> input-left-db: -60;
+    in property <float> input-right-db: -60;
     in-out property <string> hover-hint;
     callback threshold-changed(float);
     callback ratio-changed(float);
@@ -49,6 +51,12 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 ratio: root.ratio-value;
                 knee-db: root.knee-db;
                 extra-db: root.makeup-db;
+                input-left-db: root.input-left-db;
+                input-right-db: root.input-right-db;
+                threshold-dragged(db) => {
+                    root.threshold = clamp((db + 60) / 60, 0, 1);
+                    root.threshold-changed(root.threshold);
+                }
             }
         }
         HorizontalLayout {

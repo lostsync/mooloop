@@ -383,20 +383,27 @@ export component DelayEchoDisplay inherits Rectangle {
     }
 }
 
-// Static transfer curve shared by the gate, compressor, and limiter: input
-// level on x, output level on y, both -60..0 dB, with the unity diagonal for
-// reference. The gain computers are the same ones in mooloop_dsp::dynamics,
-// so the plotted corner is the corner the audio actually has.
+// Transfer curve shared by the gate, compressor, and limiter: input level on
+// x, output level on y, both -60..0 dB, with the unity diagonal for reference.
+// The gain computers are the same ones in mooloop_dsp::dynamics, so the
+// plotted corner and both parameter-derived points stay on the audible curve.
 export component DynamicsCurveDisplay inherits Rectangle {
     in property <int> mode;            // 0 = gate, 1 = compressor, 2 = limiter
     // Gate and compressor: the threshold. Limiter: the ceiling.
     in property <float> threshold-db;
+    in property <float> threshold-min-db: -60;
     in property <float> ratio;
     in property <float> knee-db;
     // Gate: range. Compressor: makeup. Limiter: input gain.
     in property <float> extra-db;
+    // The engine's held peak at this effect's input. Dynamics link the stereo
+    // detector, so the louder channel is the useful position on this curve.
+    in property <float> input-left-db: root.floor-db;
+    in property <float> input-right-db: root.floor-db;
+    callback threshold-dragged(float);
     private property <int> sample-count: 140;
     private property <float> floor-db: -60;
+    private property <float> input-db: clamp(max(root.input-left-db, root.input-right-db), root.floor-db, 0);
 
     pure function comp-gain(input-db: float) -> float {
         let slope = 1 - 1 / max(1, root.ratio);
@@ -420,6 +427,14 @@ export component DynamicsCurveDisplay inherits Rectangle {
         let input-db = root.floor-db + (0 - root.floor-db) * index / (root.sample-count - 1);
         let out = clamp(root.output-db(input-db), root.floor-db, 0);
         return -out / -root.floor-db;
+    }
+
+    pure function db-x(db: float) -> float {
+        return (clamp(db, root.floor-db, 0) - root.floor-db) / -root.floor-db;
+    }
+
+    pure function db-y(db: float) -> float {
+        return -clamp(root.output-db(clamp(db, root.floor-db, 0)), root.floor-db, 0) / -root.floor-db;
     }
 
     for line in 5 : Rectangle {
@@ -458,6 +473,50 @@ export component DynamicsCurveDisplay inherits Rectangle {
             stroke: Theme.warning;
             stroke-width: 1.4px;
             fill: transparent;
+        }
+    }
+
+    // Live linked input. Accent separates signal telemetry from the yellow
+    // transfer curve and the outlined threshold handle.
+    Rectangle {
+        x: root.db-x(root.input-db) * parent.width - 4px;
+        y: root.db-y(root.input-db) * parent.height - 4px;
+        z: 2;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: Theme.accent;
+        border-width: 1px;
+        border-color: Theme.panel;
+    }
+
+    DraggablePoint {
+        x: root.db-x(root.threshold-db) * parent.width - 7px;
+        y: root.db-y(root.threshold-db) * parent.height - 7px;
+        z: 3;
+        width: 14px;
+        height: 14px;
+        dragged(dx, dy) => {
+            root.threshold-dragged(clamp(
+                root.threshold-db - dy * (0 - root.threshold-min-db) / (parent.height / 1px),
+                root.threshold-min-db,
+                0));
+        }
+        Rectangle {
+            width: 14px;
+            height: 14px;
+            border-radius: 7px;
+            background: Theme.panel;
+            border-width: 2px;
+            border-color: Theme.warning;
+        }
+        Rectangle {
+            x: 5px;
+            y: 5px;
+            width: 4px;
+            height: 4px;
+            border-radius: 2px;
+            background: Theme.text;
         }
     }
 }

@@ -14,6 +14,8 @@ export component GateDeviceFace inherits EffectDeviceShell {
     in-out property <float> hold;       // normalized 0..1 (0..500 ms)
     in-out property <float> release;    // normalized 0..1 (1..2000 ms)
     in-out property <float> range;      // normalized 0..1 (-80..0 dB)
+    in property <float> input-left-db: -60;
+    in property <float> input-right-db: -60;
     callback threshold-changed(float);
     callback attack-changed(float);
     callback hold-changed(float);
@@ -42,9 +44,16 @@ export component GateDeviceFace inherits EffectDeviceShell {
                 height: parent.height - 8px;
                 mode: 0;
                 threshold-db: root.threshold-db;
+                threshold-min-db: -80;
                 ratio: 1;
                 knee-db: 0;
                 extra-db: root.range-db;
+                input-left-db: root.input-left-db;
+                input-right-db: root.input-right-db;
+                threshold-dragged(db) => {
+                    root.threshold = clamp((db + 80) / 80, 0, 1);
+                    root.threshold-changed(root.threshold);
+                }
             }
         }
         HorizontalLayout {
