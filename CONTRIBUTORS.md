@@ -218,7 +218,16 @@ work session you can recall being part of, and don't stress over precision.
   frame to that, because scaling the live notes compounds its own rounding
   and a slow drag walks the selection away from where the pointer says it is.
   Left one standard gesture out on purpose and said so in `ENHANCEMENTS.md`:
-  axis-constrained drag has no conventional binding that is not Alt.
+  axis-constrained drag has no conventional binding that is not Alt. Adam
+  then found the real faults in it: a plain press collapsed the selection
+  before the drag it was starting, so a group could be neither dragged nor
+  resized; Shift both added to the selection and defeated snap, so a
+  Shift-drag deselected the note it was moving and looked like an accidental
+  clone; and the note rectangle floored its drawn width at one snap step, so
+  changing the grid appeared to rewrite every note's length. Dropped the
+  selection frame for plain tinting, moved stretch onto Alt+edge-drag with a
+  grab cursor, gave notes keyboard delete/nudge/copy/paste, and replaced the
+  PPQ-tick length field with musical divisions.
   Then fixed the dynamics display's jumpy signal dot, which turned out not to
   be a smoothing problem: the dot was being fed the surrounding peak meters,
   through a twelve-segment change filter that quantized its travel into five

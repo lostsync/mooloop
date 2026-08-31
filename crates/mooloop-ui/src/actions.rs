@@ -116,6 +116,10 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         "Edit",
         "delete"
     ),
+    action!("notes.nudge-earlier", "Nudge Notes Earlier", "Notes", "left"),
+    action!("notes.nudge-later", "Nudge Notes Later", "Notes", "right"),
+    action!("notes.nudge-up", "Transpose Notes Up", "Notes", "up"),
+    action!("notes.nudge-down", "Transpose Notes Down", "Notes", "down"),
     action!("notes.tool-select", "Select Tool", "Notes", "1"),
     action!("notes.tool-draw", "Draw Tool", "Notes", "2"),
     action!("notes.tool-paint", "Paint Tool", "Notes", "3"),

@@ -210,7 +210,12 @@ The device-chain row directly below it owns source type and generator presets:
 
 The roll's header reads left to right as mode, grid, then selection:
 
-`[SEL DRAW PAINT SLICE ERASE] [SNAP] [interval] | [tick/note/vel/len] | [VEL AUTO]`
+`[SEL DRAW PAINT SLICE ERASE] [SNAP] [interval] | [tick/note/vel] [length] | [VEL AUTO]`
+
+Length is a musical division, not a tick count, and setting it applies to the
+whole selection. Beside the picker is a readout of the exact value, because an
+unsnapped drag can land on a length no division names and the picker alone
+would hide it.
 
 The tool leads because it changes what every other gesture means. The row
 clips rather than widening the window; keys 1-6 reach the tools and the snap
@@ -220,7 +225,7 @@ toggle when it is narrow.
 | --- | --- |
 | Drag a note's body | Moves the whole selection by that delta |
 | Drag either note edge | Changes every selected note's length by that delta |
-| Drag a frame handle | Scales the selection in time about the opposite edge |
+| Alt + drag a note edge | Stretches the selection in time about its other edge |
 | Drag empty grid (Select) | Marquee, catching what it overlaps |
 | Double-click empty grid | Creates a note and drags its length |
 | Right-drag | Erases what it crosses, in any tool |
@@ -231,7 +236,14 @@ Modifier roles are remappable in Preferences > Shortcuts rather than fixed in
 the grid, because a window manager can claim a chord and leave the gesture
 dead with no visible cause. The roles compose — holding copy and snap
 override together does both — and where two overlap by design, the more
-specific one wins. Alt appears in the picker but is never a default.
+specific one wins.
+
+Pressing a note that is already selected does not collapse the selection --
+that press is nearly always the start of dragging the group. The collapse is
+deferred to release and only happens if nothing moved. Selection is shown by
+tinting the notes themselves, with no frame drawn around them: a frame has to
+be drawn somewhere, and where it was drawn was on top of the notes at the
+selection's edges.
 
 ### Channel modulation shelf
 

@@ -7,11 +7,10 @@
 //! and the resolved table is published to `.slint` rather than the modifiers
 //! being hardcoded in the grid's pointer handler.
 //!
-//! Defaults deliberately avoid Alt. Several window managers claim Alt+drag
-//! for moving windows and swallow it before the application sees the press,
-//! so an Alt default would be dead on those desktops with no visible cause.
-//! Alt is still offered in the picker for people whose desktop leaves it
-//! alone.
+//! Alt is a legal default here. It was avoided at first because several
+//! window managers claim Alt+drag for moving windows, but stretch has no
+//! other conventional binding, and a desktop that eats it can remap the role
+//! rather than everyone else losing the convention.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -149,7 +148,7 @@ pub(crate) static GESTURES: &[GestureSpec] = &[
         id: "gesture.add-to-selection",
         label: "Add to selection",
         description: "Marquee or click adds instead of replacing",
-        default: GestureMod::SHIFT,
+        default: GestureMod::CTRL,
     },
     GestureSpec {
         id: "gesture.subtract-from-selection",
@@ -162,6 +161,12 @@ pub(crate) static GESTURES: &[GestureSpec] = &[
         label: "Copy on drag",
         description: "Drags a duplicate away, leaving the original",
         default: GestureMod::CTRL,
+    },
+    GestureSpec {
+        id: "gesture.stretch-drag",
+        label: "Stretch selection",
+        description: "Drag a note edge to scale the whole selection in time",
+        default: GestureMod::ALT,
     },
 ];
 
@@ -197,16 +202,13 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn every_default_is_offered_by_the_picker_and_avoids_alt() {
+    fn every_default_is_offered_by_the_picker_and_is_bound() {
         for spec in GESTURES {
             assert!(
                 CHOICES.contains(&spec.default),
                 "{} defaults to something the picker cannot show",
                 spec.id
             );
-            // A default the window manager may eat is a dead feature with no
-            // visible cause; Alt stays opt-in.
-            assert!(!spec.default.alt, "{} defaults to Alt", spec.id);
             // "Not set" turns a role off entirely; nothing should ship that
             // way, or the feature is dark with no visible cause.
             assert_ne!(

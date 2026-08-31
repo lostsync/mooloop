@@ -45,16 +45,23 @@ blunt about gaps so roadmap decisions are based on the system that exists.
     sweeps across. **Slice** cuts a note at the pointer, and with Shift held
     joins the selection instead, per pitch row. **Erase** deletes what it
     crosses; a right-drag does the same in any tool.
-  - A selection behaves as one object. Dragging moves it by a common delta,
-    dragging either note edge changes every selected note's length by the
-    same amount, and both clamp as a group so a chord keeps its shape.
-    Notes have a left edge as well as a right: it moves the start and holds
-    the end.
-  - A multi-note selection draws a frame with a grab handle at each time
-    edge. Dragging a handle scales the selection in time about the opposite
-    edge, lengths and gaps together, so doubling its span turns an eighth
-    into a quarter.
+  - A selection behaves as one object. Pressing a note that is already
+    selected keeps the selection, so the press can drag the group; the
+    collapse to that one note still happens if the press turns out to be a
+    plain click. Dragging moves the selection by a common delta, dragging
+    either note edge changes every selected note's length by the same
+    amount, and both clamp as a group so a chord keeps its shape. Notes have
+    a left edge as well as a right: it moves the start and holds the end.
+  - Alt and a note-edge drag stretches the whole selection in time about its
+    opposite edge, lengths and gaps together, so doubling its span turns an
+    eighth into a quarter. The pointer becomes an open hand over an edge
+    that will stretch.
   - Copy-drag duplicates the selection in place and continues on the copy.
+  - Selected notes are addressable from the keyboard: Delete removes them,
+    the arrow keys nudge by the snap interval and transpose by a semitone,
+    and cut/copy/paste act on notes rather than the channel whenever the
+    roll has a selection. A paste lands the phrase after the selection,
+    keeping its internal timing, and selects what it pasted.
   - The whole of a drag is one undo step, not one per pointer frame.
   - Both axes use the zoom scrollbar — drag the thumb to pan, drag an end
     grip to zoom around the fixed end — in place of zoom-in/zoom-out buttons.
@@ -63,11 +70,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
     musical snap values from one bar through 1/64 with the playlist.
 - Which modifier each roll gesture answers to is remappable in
   Preferences > Shortcuts: snap override, add to selection, remove from
-  selection, and copy on drag. Defaults are Shift, Shift, Ctrl+Shift, and
-  Ctrl. The snap override inverts the toggle rather than only defeating it,
-  so it frees a drag when snap is on and quantises one when it is off. Alt
-  is offered but is never a default, because several window managers claim
-  Alt+drag before the application sees it.
+  selection, copy on drag, and stretch. Defaults are Shift, Ctrl, Ctrl+Shift,
+  Ctrl, and Alt. Shift is snap override alone -- it used to add to the
+  selection too, which meant a Shift-drag deselected the note it was about to
+  move and carried it off on its own. The snap override inverts the toggle
+  rather than only defeating it, so it frees a drag when snap is on and
+  quantises one when it is off.
 - Two lanes sit under the roll and toggle independently: a velocity lane
   drawn as stems with drag heads, and one variable automation lane. The
   automation lane's picker lists every parameter of every effect on the

@@ -417,7 +417,8 @@ export component MainWindow inherits Window {
     callback step-sliced(int, int, int);     // channel, step, divisions
     callback step-length-dragged(int, int, int); // channel, step, length in steps
     property <int> playlist-snap-ticks: root.snap-ticks(root.playlist-snap-index);
-    property <int> piano-snap-ticks: root.snap-ticks(root.piano-snap-index);
+    // `out` so the shortcut dispatcher can size an arrow-key nudge.
+    out property <int> piano-snap-ticks: root.snap-ticks(root.piano-snap-index);
     // Whether the roll quantises at all. The snap-override gesture inverts
     // this for a single drag, in either direction.
     in-out property <bool> piano-snap-enabled: true;
@@ -670,7 +671,6 @@ export component MainWindow inherits Window {
     in-out property <int> selected-note-step;
     in-out property <int> selected-note;
     in-out property <int> selected-velocity;
-    in-out property <int> selected-duration-ticks: 24;
     in-out property <bool> has-selected-note;
     in-out property <bool> has-note-selection;
     // The piano roll is a MIDI editor, rather than a C2–C6 drum-only view.
@@ -706,6 +706,12 @@ export component MainWindow inherits Window {
     // previous frame's rounding.
     callback piano-scale-begin(bool);   // true when dragging the left handle
     callback piano-selection-scaled(float);
+    // Clicking the grid takes keyboard focus back from whatever control had
+    // it, so Delete and the arrow keys reach the selection.
+    callback piano-focus-requested();
+    callback piano-notes-nudged(int, int); // tick delta, semitone delta
+    callback piano-notes-copied(bool);     // true to cut
+    callback piano-notes-pasted();
     callback piano-gesture-begin();
     callback piano-gesture-end();
     callback piano-note-created(int, int, int) -> int;  // start tick, MIDI note, duration ticks -> stable note ID
@@ -764,7 +770,12 @@ export component MainWindow inherits Window {
 
     callback selected-note-changed(int);
     callback selected-velocity-changed(int);
-    callback selected-duration-changed(int);
+    // Length as a musical division. `selected-duration-index` is -1 when the
+    // selection's length matches no listed division, or when the selection
+    // is not all one length; the text beside it always shows the truth.
+    in property <int> selected-duration-index: -1;
+    in property <string> selected-duration-text;
+    callback selected-duration-picked(int);
 
     // ---- sampler params of the selected channel ----
     in-out property <float> attack;
@@ -1072,10 +1083,15 @@ export component MainWindow inherits Window {
                 // The Shortcuts prefpane owns key capture for (re)binding
                 // while it's open; no global action should fire underneath it.
                 reject
-            } else if (event.text == Key.UpArrow && !event.modifiers.control) {
+            // Up/Down pick a channel, unless the piano roll has a selection
+            // to transpose -- an editor with something selected is where the
+            // arrow keys are expected to act.
+            } else if (event.text == Key.UpArrow && !event.modifiers.control
+                    && !(root.editor-page == 1 && root.has-note-selection)) {
                 root.channel-selected(max(0, root.selected-channel - 1));
                 accept
-            } else if (event.text == Key.DownArrow && !event.modifiers.control) {
+            } else if (event.text == Key.DownArrow && !event.modifiers.control
+                    && !(root.editor-page == 1 && root.has-note-selection)) {
                 root.channel-selected(min(root.channels.length - 1, root.selected-channel + 1));
                 accept
             } else if (event.text == " ") {
@@ -3289,16 +3305,31 @@ export component MainWindow inherits Window {
                                             font-size: 9px;
                                             vertical-alignment: center;
                                         }
-                                        SpinBox {
-                                            enabled: root.has-selected-note;
-                                            value <=> root.selected-duration-ticks;
-                                            minimum: 1;
-                                            maximum: max(1, root.pattern-length * 24);
-                                            step-size: root.piano-snap-ticks;
-                                            width: 78px;
+                                        // Musical divisions rather than raw
+                                        // ticks: a length is a note value,
+                                        // and PPQ ticks made every ordinary
+                                        // edit an arithmetic problem. Applies
+                                        // to the whole selection.
+                                        ComboBox {
+                                            enabled: root.has-note-selection;
+                                            model: root.musical-snap-options;
+                                            current-index: root.selected-duration-index;
+                                            width: 84px;
                                             height: 24px;
-                                            edited(value) => { root.selected-duration-changed(value); }
-                                            Tooltip { text: @markdown("Selected note length in PPQ ticks. **6** ticks = 1/64 note."); }
+                                            selected(value) => {
+                                                root.selected-duration-picked(self.current-index);
+                                            }
+                                        }
+                                        // The exact value, for lengths that
+                                        // are not a listed division -- an
+                                        // unsnapped drag can land anywhere,
+                                        // and the picker alone would hide it.
+                                        Text {
+                                            text: root.selected-duration-text;
+                                            color: Theme.text-muted;
+                                            font-size: 9px;
+                                            width: 56px;
+                                            vertical-alignment: center;
                                         }
                                         Rectangle { width: 8px; }
                                         ToggleButton {
@@ -3435,6 +3466,7 @@ export component MainWindow inherits Window {
                                                 visible-h: piano-scroll.visible-height;
                                                 hover-hint <=> root.hover-hint;
                                                 note-hit-test(tick, note) => { return root.piano-note-hit-test(tick, note); }
+                                                focus-requested => { keys.focus(); }
                                                 gesture-begin() => { root.piano-gesture-begin(); }
                                                 gesture-end() => { root.piano-gesture-end(); }
                                                 note-created(start, note, duration) => {

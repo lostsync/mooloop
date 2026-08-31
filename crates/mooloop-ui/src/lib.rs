@@ -347,6 +347,7 @@ fn resolve_gestures(table: &gestures::GestureTable) -> PianoGestures {
         add_to_selection: resolve("gesture.add-to-selection"),
         subtract_from_selection: resolve("gesture.subtract-from-selection"),
         copy_drag: resolve("gesture.copy-drag"),
+        stretch_drag: resolve("gesture.stretch-drag"),
     }
 }
 
@@ -587,6 +588,9 @@ struct CommandState {
     history: History<ProjectSnapshot>,
     project_edit_pending: bool,
     pane: Pane,
+    /// Notes cut or copied from the roll, kept relative to the earliest one
+    /// so a paste lands as a phrase rather than at absolute ticks.
+    note_clipboard: Vec<NoteEvent>,
     /// Token identifying the pointer gesture currently in flight, if one is.
     /// A drag reports an edit on every move frame; stamping them all with the
     /// same token is what collapses them into one undo step.
@@ -935,6 +939,70 @@ struct ScaleBase {
     anchor: u32,
     /// Each selected note's id with its pre-drag start and duration.
     notes: Vec<(NoteId, u32, u32)>,
+}
+
+/// Whether a keyboard edit should act on the piano roll's note selection
+/// rather than on the channel.
+///
+/// Both conditions matter: the roll has to be the visible editor, and it has
+/// to have something selected. Without the second, Ctrl+C on the Notes page
+/// would silently stop copying the channel.
+/// The musical snap/length divisions, in the order `musical-snap-options`
+/// lists them. Mirrors `snap-ticks()` in `main.slint`; the two are asserted
+/// equal in the tests below.
+const MUSICAL_DIVISIONS: [(u32, &str); 11] = [
+    (384, "1 Bar"),
+    (192, "1/2"),
+    (96, "1/4"),
+    (64, "1/4T"),
+    (48, "1/8"),
+    (32, "1/8T"),
+    (24, "1/16"),
+    (16, "1/16T"),
+    (12, "1/32"),
+    (8, "1/32T"),
+    (6, "1/64"),
+];
+
+/// The index in `MUSICAL_DIVISIONS` a length lands on exactly, if any.
+fn division_index(ticks: u32) -> i32 {
+    MUSICAL_DIVISIONS
+        .iter()
+        .position(|(division, _)| *division == ticks)
+        .map_or(-1, |index| index as i32)
+}
+
+/// A note length written the way a musician would say it.
+///
+/// Exact divisions and their dotted forms get their own name. Anything else
+/// -- which is what an unsnapped drag produces -- reads as the largest
+/// division that fits plus the remainder in ticks, so the value is never
+/// rounded away behind a tidy label.
+fn length_text(ticks: u32) -> String {
+    if ticks == 0 {
+        return String::new();
+    }
+    for (division, label) in MUSICAL_DIVISIONS {
+        if ticks == division {
+            return label.to_string();
+        }
+        // Dotted forms are common enough to deserve a name rather than a
+        // remainder; triplet divisions have no dotted convention.
+        if !label.ends_with('T') && ticks == division + division / 2 {
+            return format!("{label}.");
+        }
+    }
+    match MUSICAL_DIVISIONS
+        .iter()
+        .find(|(division, _)| *division <= ticks)
+    {
+        Some((division, label)) => format!("{label} +{}", ticks - division),
+        None => format!("{ticks}t"),
+    }
+}
+
+fn notes_have_focus(window: &MainWindow) -> bool {
+    window.get_editor_page() == 1 && window.get_has_note_selection()
 }
 
 fn selection_including(
@@ -1737,6 +1805,7 @@ pub fn note_hit_test(notes: &[NoteCell], tick: i32, midi_note: i32) -> NoteHit {
             id: cell.id,
             start_tick: cell.start_tick,
             duration_ticks: cell.duration_ticks,
+            selected: cell.selected,
         })
         .unwrap_or_default()
 }
@@ -2674,7 +2743,23 @@ impl UiState {
         }
         window.set_selection_count(count);
         if count == 0 {
+            window.set_selected_duration_index(-1);
+            window.set_selected_duration_text("".into());
             return;
+        }
+        // One length across the whole selection reads as that length; a
+        // mixed selection says so rather than picking a winner.
+        let mut lengths = channel.notes[self.current_pattern]
+            .iter()
+            .filter(|note| self.selected_note_ids.contains(&note.id))
+            .map(|note| note.duration_ticks);
+        let first = lengths.next().unwrap_or(0);
+        if lengths.all(|length| length == first) {
+            window.set_selected_duration_index(division_index(first));
+            window.set_selected_duration_text(length_text(first).into());
+        } else {
+            window.set_selected_duration_index(-1);
+            window.set_selected_duration_text("mixed".into());
         }
         window.set_selection_start_tick(start as i32);
         window.set_selection_end_tick(end as i32);
@@ -2705,7 +2790,6 @@ impl UiState {
         window.set_selected_note_step(note.start_tick as i32);
         window.set_selected_note(note.note as i32);
         window.set_selected_velocity(note.velocity as i32);
-        window.set_selected_duration_ticks(note.duration_ticks as i32);
     }
 
     /// Replaces the whole note selection with exactly one note (or clears it
@@ -4599,9 +4683,53 @@ impl AppUi {
                     "file.quit" => window.invoke_quit_requested(),
                     "edit.undo" => window.invoke_edit_command_requested(0, channel),
                     "edit.redo" => window.invoke_edit_command_requested(1, channel),
-                    "edit.cut-channel" => window.invoke_edit_command_requested(2, channel),
-                    "edit.copy-channel" => window.invoke_edit_command_requested(3, channel),
-                    "edit.paste-channel" => window.invoke_edit_command_requested(4, channel),
+                    // On the roll, with notes selected, the clipboard verbs
+                    // mean the notes. Anywhere else they still mean the
+                    // channel, which is what they have always meant.
+                    "edit.cut-channel" => {
+                        if notes_have_focus(&window) {
+                            window.invoke_piano_notes_copied(true);
+                        } else {
+                            window.invoke_edit_command_requested(2, channel);
+                        }
+                    }
+                    "edit.copy-channel" => {
+                        if notes_have_focus(&window) {
+                            window.invoke_piano_notes_copied(false);
+                        } else {
+                            window.invoke_edit_command_requested(3, channel);
+                        }
+                    }
+                    "edit.paste-channel" => {
+                        // Paste does not need a selection -- it needs
+                        // something on the note clipboard.
+                        if window.get_editor_page() == 1
+                            && !commands.borrow().note_clipboard.is_empty()
+                        {
+                            window.invoke_piano_notes_pasted();
+                        } else {
+                            window.invoke_edit_command_requested(4, channel);
+                        }
+                    }
+                    "notes.nudge-earlier" | "notes.nudge-later" => {
+                        if !notes_have_focus(&window) {
+                            return false;
+                        }
+                        let step = if window.get_piano_snap_enabled() {
+                            window.get_piano_snap_ticks().max(1)
+                        } else {
+                            1
+                        };
+                        let sign = if action_id == "notes.nudge-earlier" { -1 } else { 1 };
+                        window.invoke_piano_notes_nudged(sign * step, 0);
+                    }
+                    "notes.nudge-up" | "notes.nudge-down" => {
+                        if !notes_have_focus(&window) {
+                            return false;
+                        }
+                        let sign = if action_id == "notes.nudge-up" { 1 } else { -1 };
+                        window.invoke_piano_notes_nudged(0, sign);
+                    }
                     "channel.clone" => window.invoke_edit_command_requested(5, channel),
                     "channel.remove" => window.invoke_edit_command_requested(6, channel),
                     "channel.add" => window.invoke_add_channel_clicked(0),
@@ -5652,6 +5780,236 @@ impl AppUi {
         }
 
         // Tick-addressed piano-roll editing.
+        {
+            // Setting a length from the picker applies it to the whole
+            // selection, which is the only reading that makes sense when
+            // more than one note is selected.
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_selected_duration_picked(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let Some((ticks, _)) = MUSICAL_DIVISIONS.get(index.max(0) as usize).copied() else {
+                    return;
+                };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let selected = st.selected_note_ids.clone();
+                let mut edited = Vec::new();
+                for note in st.channels[channel].notes[pattern]
+                    .iter_mut()
+                    .filter(|note| selected.contains(&note.id))
+                {
+                    note.duration_ticks =
+                        ticks.min(length_ticks.saturating_sub(note.start_tick).max(1));
+                    edited.push(*note);
+                }
+                if edited.is_empty() {
+                    return;
+                }
+                for note in &edited {
+                    st.refresh_rack_cell(channel, (note.start_tick / TICKS_PER_STEP) as usize);
+                }
+                st.refresh_note_editor(&window);
+                for note in edited {
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                }
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Note length");
+            });
+        }
+        {
+            // Arrow-key editing. The same group clamp the pointer drag uses:
+            // a selection that hits the edge stops as one rather than
+            // flattening onto it note by note.
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_piano_notes_nudged(move |tick_delta, note_delta| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let moving: HashSet<NoteId> = st.selected_note_ids.clone();
+                let (mut min_tick, mut max_tick) = (i64::MAX, i64::MIN);
+                let (mut min_note, mut max_note) = (i32::MAX, i32::MIN);
+                for note in st.channels[channel].notes[pattern]
+                    .iter()
+                    .filter(|note| moving.contains(&note.id))
+                {
+                    min_tick = min_tick.min(note.start_tick as i64);
+                    max_tick = max_tick.max(note.start_tick as i64);
+                    min_note = min_note.min(note.note as i32);
+                    max_note = max_note.max(note.note as i32);
+                }
+                if min_tick == i64::MAX {
+                    return;
+                }
+                let last_start = length_ticks.saturating_sub(1) as i64;
+                let tick_delta =
+                    (tick_delta as i64).clamp(-min_tick, (last_start - max_tick).max(-min_tick));
+                let note_delta = note_delta.clamp(-min_note, (127 - max_note).max(-min_note));
+                if tick_delta == 0 && note_delta == 0 {
+                    return;
+                }
+
+                let mut edited = Vec::new();
+                let mut touched_steps = Vec::new();
+                for note in st.channels[channel].notes[pattern]
+                    .iter_mut()
+                    .filter(|note| moving.contains(&note.id))
+                {
+                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
+                    note.start_tick = (note.start_tick as i64 + tick_delta).max(0) as u32;
+                    note.note = (note.note as i32 + note_delta).clamp(0, 127) as u8;
+                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
+                    edited.push(*note);
+                }
+                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                for step in touched_steps {
+                    st.refresh_rack_cell(channel, step as usize);
+                }
+                st.refresh_note_editor(&window);
+                for note in edited {
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note,
+                    });
+                }
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Notes nudged");
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_piano_notes_copied(move |cut| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let mut copied: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                    .iter()
+                    .copied()
+                    .filter(|note| st.selected_note_ids.contains(&note.id))
+                    .collect();
+                if copied.is_empty() {
+                    return;
+                }
+                // Stored relative to the earliest note, so a paste is a
+                // phrase that can land anywhere rather than a set of
+                // absolute positions that only fit where they came from.
+                let origin = copied.iter().map(|note| note.start_tick).min().unwrap_or(0);
+                for note in &mut copied {
+                    note.start_tick -= origin;
+                }
+                copied.sort_by_key(|note| (note.start_tick, note.note));
+                commands.borrow_mut().note_clipboard = copied.clone();
+                if !cut {
+                    window.set_status_message(
+                        format!("Copied {} note(s)", copied.len()).into(),
+                    );
+                    return;
+                }
+                let ids: Vec<NoteId> = st.selected_note_ids.iter().copied().collect();
+                st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                st.prune_note_selection(&ids);
+                st.refresh_rack_row(channel);
+                st.refresh_note_editor(&window);
+                for id in &ids {
+                    let _ = tx.send(EngineCommand::RemoveNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        id: *id,
+                    });
+                }
+                window.set_status_message(format!("Cut {} note(s)", ids.len()).into());
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Notes cut");
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_piano_notes_pasted(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let clipboard = commands.borrow().note_clipboard.clone();
+                if clipboard.is_empty() {
+                    return;
+                }
+                let before = project_snapshot(&st.borrow(), &window);
+                let mut st = st.borrow_mut();
+                let pattern = st.current_pattern;
+                let channel = st.selected;
+                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                // Land the phrase after whatever is selected, or at the top
+                // of the pattern when nothing is -- pasting on top of the
+                // originals looks like nothing happened.
+                let origin = st.channels[channel].notes[pattern]
+                    .iter()
+                    .filter(|note| st.selected_note_ids.contains(&note.id))
+                    .map(|note| note.end_tick())
+                    .max()
+                    .unwrap_or(0);
+                let mut pasted = Vec::with_capacity(clipboard.len());
+                for note in clipboard {
+                    let start = origin.saturating_add(note.start_tick);
+                    if start >= length_ticks {
+                        continue;
+                    }
+                    let id = st.channels[channel].next_note_id;
+                    st.channels[channel].next_note_id = id.wrapping_add(1).max(1);
+                    let mut copy = NoteEvent { id, ..note };
+                    copy.start_tick = start;
+                    copy.duration_ticks = copy
+                        .duration_ticks
+                        .min(length_ticks.saturating_sub(start).max(1));
+                    st.channels[channel].notes[pattern].push(copy);
+                    pasted.push(copy);
+                }
+                if pasted.is_empty() {
+                    window.set_status_message("Nothing fits at the paste position".into());
+                    return;
+                }
+                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                // Select what was pasted, so it can be moved straight away.
+                st.selected_note_ids = pasted.iter().map(|note| note.id).collect();
+                st.selected_note_id = (pasted.len() == 1).then(|| pasted[0].id);
+                st.refresh_rack_row(channel);
+                st.refresh_note_editor(&window);
+                for note in &pasted {
+                    let _ = tx.send(EngineCommand::UpsertNote {
+                        pattern: pattern as u8,
+                        channel: channel as u8,
+                        note: *note,
+                    });
+                }
+                window.set_status_message(format!("Pasted {} note(s)", pasted.len()).into());
+                drop(st);
+                record_project_history(&commands, before, &history_state, &window, "Notes pasted");
+            });
+        }
         {
             // A drag's move frames each record an edit. Bracketing them with
             // one token collapses them into a single undo step; see
@@ -6777,12 +7135,6 @@ impl AppUi {
             on_selected_velocity_changed,
             velocity,
             |value: i32, _, _| value.clamp(1, 127) as u8
-        );
-        wire_selected_note_edit!(
-            on_selected_duration_changed,
-            duration_ticks,
-            |value: i32, note: &mut NoteEvent, length_ticks: u32| (value.max(1) as u32)
-                .min(length_ticks.saturating_sub(note.start_tick).max(1))
         );
 
         // Ctrl+A: select every note in the current channel's current
@@ -11569,6 +11921,48 @@ fn inspect_sample(path: &Path) -> Result<SampleInspection, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn musical_divisions_match_the_snap_table_in_main_slint() {
+        // `snap-ticks()` in main.slint is the other half of this table, and
+        // the length picker indexes into `musical-snap-options` by the same
+        // position. A drift between them would set the wrong length silently.
+        assert_eq!(
+            super::MUSICAL_DIVISIONS.map(|(ticks, _)| ticks),
+            [384, 192, 96, 64, 48, 32, 24, 16, 12, 8, 6]
+        );
+    }
+
+    #[test]
+    fn note_lengths_read_as_note_values() {
+        assert_eq!(super::length_text(96), "1/4");
+        assert_eq!(super::length_text(24), "1/16");
+        assert_eq!(super::length_text(64), "1/4T");
+        // Dotted forms get a name rather than a remainder, being common.
+        assert_eq!(super::length_text(144), "1/4.");
+        assert_eq!(super::length_text(36), "1/16.");
+    }
+
+    #[test]
+    fn an_unsnapped_length_shows_its_remainder_rather_than_rounding() {
+        // What a free drag produces. The point of the readout is that the
+        // exact value is never hidden behind a tidy label.
+        assert_eq!(super::length_text(26), "1/16 +2");
+        assert_eq!(super::length_text(100), "1/4 +4");
+        // Shorter than the smallest division there is.
+        assert_eq!(super::length_text(3), "3t");
+        assert_eq!(super::length_text(0), "");
+    }
+
+    #[test]
+    fn only_an_exact_division_selects_a_picker_entry() {
+        assert_eq!(super::division_index(24), 6);
+        assert_eq!(super::division_index(384), 0);
+        // A dotted or free length has no entry, so the picker shows none and
+        // the readout carries the value instead.
+        assert_eq!(super::division_index(36), -1);
+        assert_eq!(super::division_index(26), -1);
+    }
 
     #[test]
     fn browser_load_delivery_carries_its_target() {

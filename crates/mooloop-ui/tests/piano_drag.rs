@@ -143,14 +143,14 @@ fn two_notes() -> Vec<NoteCell> {
     ]
 }
 
-/// Click at `at`, optionally holding Shift, the way a Shift-click to extend a
+/// Click at `at`, optionally holding Ctrl, the way a Ctrl-click to extend a
 /// selection would arrive from the OS: modifier key down, then press/release,
 /// then modifier key up.
-fn click(window: &slint::Window, at: (f32, f32), shift: bool) {
+fn click(window: &slint::Window, at: (f32, f32), ctrl: bool) {
     let pos = LogicalPosition::new(at.0, at.1);
-    if shift {
+    if ctrl {
         window.dispatch_event(WindowEvent::KeyPressed {
-            text: slint::platform::Key::Shift.into(),
+            text: slint::platform::Key::Control.into(),
         });
     }
     window.dispatch_event(WindowEvent::PointerMoved { position: pos });
@@ -162,9 +162,9 @@ fn click(window: &slint::Window, at: (f32, f32), shift: bool) {
         position: pos,
         button: PointerEventButton::Left,
     });
-    if shift {
+    if ctrl {
         window.dispatch_event(WindowEvent::KeyReleased {
-            text: slint::platform::Key::Shift.into(),
+            text: slint::platform::Key::Control.into(),
         });
     }
 }
@@ -349,7 +349,7 @@ fn double_clicking_empty_grid_creates_and_drags_note_length() {
 }
 
 #[test]
-fn plain_click_replaces_the_selection_but_shift_click_adds_to_it() {
+fn plain_click_replaces_the_selection_but_ctrl_click_adds_to_it() {
     let ui = harness(two_notes());
     let selections: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
     {
@@ -370,8 +370,9 @@ fn plain_click_replaces_the_selection_but_shift_click_adds_to_it() {
     assert_eq!(
         selections.as_slice(),
         &[(7, 0), (8, 1)],
-        "a plain click should ask to replace the selection (0); a Shift-click should ask \
-         to add to it (1), Shift being the default add-to-selection gesture"
+        "a plain click should ask to replace the selection (0); a Ctrl-click should ask \
+         to add to it (1). Shift is snap override alone now: a Shift-drag that also \
+         changed the selection was deselecting the note it was about to move"
     );
 }
 

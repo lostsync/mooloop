@@ -75,6 +75,27 @@ fn cell(id: i32, start_tick: i32, duration_ticks: i32, note: i32) -> NoteCell {
     }
 }
 
+/// Two selected notes spanning ticks 0..120, on different rows.
+fn two_selected_notes() -> Vec<NoteCell> {
+    let mut notes = vec![
+        cell(7, 0, SNAP_TICKS, 60),
+        cell(8, 4 * SNAP_TICKS, SNAP_TICKS, 62),
+    ];
+    for note in &mut notes {
+        note.selected = true;
+    }
+    notes
+}
+
+/// What `refresh_selection_bounds` would publish for `two_selected_notes`.
+fn set_selection_bounds(ui: &MainWindow) {
+    ui.set_selection_count(2);
+    ui.set_selection_start_tick(0);
+    ui.set_selection_end_tick(5 * SNAP_TICKS);
+    ui.set_selection_low_note(60);
+    ui.set_selection_high_note(62);
+}
+
 fn press(window: &slint::Window, at: (f32, f32), button: PointerEventButton) {
     let pos = LogicalPosition::new(at.0, at.1);
     window.dispatch_event(WindowEvent::PointerMoved { position: pos });
@@ -190,11 +211,11 @@ fn a_band_drawn_backwards_reports_the_same_rectangle() {
     );
 }
 
-/// Shift is the add-to-selection role, so a Shift-band has to announce mode 1
+/// Ctrl is the add-to-selection role, so a Ctrl-band has to announce mode 1
 /// before it starts reporting bounds -- Rust snapshots the base selection on
 /// that call.
 #[test]
-fn a_shift_band_asks_to_add_rather_than_replace() {
+fn a_ctrl_band_asks_to_add_rather_than_replace() {
     let ui = harness(TOOL_SELECT, vec![cell(7, 0, TICKS_PER_STEP, 60)]);
     let modes: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
     {
@@ -207,7 +228,7 @@ fn a_shift_band_asks_to_add_rather_than_replace() {
         (tick_x(2 * TICKS_PER_STEP), note_centre_y(66)),
         (tick_x(6 * TICKS_PER_STEP), note_centre_y(58)),
         PointerEventButton::Left,
-        Some(Key::Shift),
+        Some(Key::Control),
     );
 
     assert_eq!(*modes.borrow(), vec![1]);
@@ -453,11 +474,11 @@ fn slice_with_the_add_modifier_joins_instead() {
 
     let at = (tick_x(2 * TICKS_PER_STEP) + 1.0, note_centre_y(60));
     ui.window().dispatch_event(WindowEvent::KeyPressed {
-        text: Key::Shift.into(),
+        text: Key::Control.into(),
     });
     press(ui.window(), at, PointerEventButton::Left);
     ui.window().dispatch_event(WindowEvent::KeyReleased {
-        text: Key::Shift.into(),
+        text: Key::Control.into(),
     });
 
     assert_eq!(*joins.borrow(), 1);
@@ -601,18 +622,17 @@ fn the_left_edge_stops_before_it_reaches_the_end() {
 
 // ---- scale --------------------------------------------------------------
 
-/// A frame handle is only offered for a multi-selection: one note already has
-/// its own edge grabs, and a handle over them would take the press.
+/// Stretch needs a real selection and an edge to pull. On a single note the
+/// modifier does nothing and the edge keeps its ordinary resize, or there
+/// would be no way to lengthen one note.
 #[test]
-fn a_single_selection_gets_no_scale_handle() {
+fn a_single_selection_does_not_stretch() {
     let mut notes = vec![cell(7, 0, 4 * SNAP_TICKS, 60)];
     notes[0].selected = true;
     let ui = harness(TOOL_SELECT, notes);
     ui.set_selection_count(1);
     ui.set_selection_start_tick(0);
     ui.set_selection_end_tick(4 * SNAP_TICKS);
-    ui.set_selection_low_note(60);
-    ui.set_selection_high_note(60);
     let scales = Rc::new(RefCell::new(0usize));
     let lengths = Rc::new(RefCell::new(0usize));
     {
@@ -624,33 +644,54 @@ fn a_single_selection_gets_no_scale_handle() {
         ui.on_piano_note_resized(move |_, _| *lengths.borrow_mut() += 1);
     }
 
-    // Right where the frame's right handle would be if there were a frame.
     let edge = (tick_x(4 * SNAP_TICKS) - 2.0, note_centre_y(60));
-    drag(ui.window(), edge, (edge.0 + 2.0 * STEP_WIDTH, note_centre_y(60)));
+    drag_with(
+        ui.window(),
+        edge,
+        (edge.0 + 2.0 * STEP_WIDTH, note_centre_y(60)),
+        PointerEventButton::Left,
+        Some(Key::Alt),
+    );
 
-    assert_eq!(*scales.borrow(), 0, "no frame, so no scale");
+    assert_eq!(*scales.borrow(), 0, "one note is not a selection to stretch");
     assert!(
         *lengths.borrow() > 0,
-        "the note's own right edge should still resize it"
+        "the edge should still resize the note itself"
     );
 }
 
-/// Dragging the right handle out to twice the selection's span reports a
-/// factor of about two, which is what turns an eighth into a quarter.
+/// Without the modifier, an edge drag on a multi-selection resizes rather
+/// than stretching: stretch is the deliberate gesture, resize the ordinary
+/// one.
 #[test]
-fn dragging_the_right_handle_scales_by_the_span_it_travelled() {
-    let ui = harness(
-        TOOL_SELECT,
-        vec![
-            cell(7, 0, SNAP_TICKS, 60),
-            cell(8, 4 * SNAP_TICKS, SNAP_TICKS, 62),
-        ],
-    );
-    ui.set_selection_count(2);
-    ui.set_selection_start_tick(0);
-    ui.set_selection_end_tick(5 * SNAP_TICKS);
-    ui.set_selection_low_note(60);
-    ui.set_selection_high_note(62);
+fn an_unmodified_edge_drag_resizes_rather_than_stretching() {
+    let ui = harness(TOOL_SELECT, two_selected_notes());
+    set_selection_bounds(&ui);
+    let scales = Rc::new(RefCell::new(0usize));
+    let lengths = Rc::new(RefCell::new(0usize));
+    {
+        let scales = scales.clone();
+        ui.on_piano_scale_begin(move |_| *scales.borrow_mut() += 1);
+    }
+    {
+        let lengths = lengths.clone();
+        ui.on_piano_note_resized(move |_, _| *lengths.borrow_mut() += 1);
+    }
+
+    let edge = (tick_x(5 * SNAP_TICKS) - 2.0, note_centre_y(62));
+    drag(ui.window(), edge, (edge.0 + 2.0 * STEP_WIDTH, note_centre_y(62)));
+
+    assert_eq!(*scales.borrow(), 0);
+    assert!(*lengths.borrow() > 0);
+}
+
+/// Alt on the selection's trailing edge, dragged out to twice its span,
+/// reports a factor of about two -- which is what turns an eighth into a
+/// quarter.
+#[test]
+fn alt_dragging_the_trailing_edge_scales_by_the_span_it_travelled() {
+    let ui = harness(TOOL_SELECT, two_selected_notes());
+    set_selection_bounds(&ui);
     let from_left: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
     let factors: Rc<RefCell<Vec<f32>>> = Rc::new(RefCell::new(Vec::new()));
     {
@@ -662,92 +703,205 @@ fn dragging_the_right_handle_scales_by_the_span_it_travelled() {
         ui.on_piano_selection_scaled(move |factor| factors.borrow_mut().push(factor));
     }
 
-    // The frame spans ticks 0..120, which is five steps of grid.
-    let handle = (tick_x(5 * SNAP_TICKS), note_centre_y(61));
-    drag(ui.window(), handle, (handle.0 + 5.0 * STEP_WIDTH, note_centre_y(61)));
-
-    assert_eq!(*from_left.borrow(), vec![false], "the right handle scales from the left");
-    let factor = *factors.borrow().last().expect("a factor should have been reported");
-    assert!(
-        (factor - 2.0).abs() < 0.05,
-        "doubling the frame's width should report ~2.0, got {factor}"
-    );
-}
-
-/// The left handle scales about the selection's right edge instead.
-#[test]
-fn dragging_the_left_handle_scales_about_the_right_edge() {
-    let ui = harness(
-        TOOL_SELECT,
-        vec![
-            cell(7, 0, SNAP_TICKS, 60),
-            cell(8, 4 * SNAP_TICKS, SNAP_TICKS, 62),
-        ],
-    );
-    ui.set_selection_count(2);
-    ui.set_selection_start_tick(0);
-    ui.set_selection_end_tick(5 * SNAP_TICKS);
-    ui.set_selection_low_note(60);
-    ui.set_selection_high_note(62);
-    let from_left: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
-    let factors: Rc<RefCell<Vec<f32>>> = Rc::new(RefCell::new(Vec::new()));
-    {
-        let from_left = from_left.clone();
-        ui.on_piano_scale_begin(move |left| from_left.borrow_mut().push(left));
-    }
-    {
-        let factors = factors.clone();
-        ui.on_piano_selection_scaled(move |factor| factors.borrow_mut().push(factor));
-    }
-
-    // Pull the left handle inward by half the frame's width.
-    let handle = (tick_x(0), note_centre_y(61));
-    drag(
+    // The selection spans ticks 0..120; grab the trailing note's right edge.
+    let edge = (tick_x(5 * SNAP_TICKS) - 2.0, note_centre_y(62));
+    drag_with(
         ui.window(),
-        handle,
-        (handle.0 + 2.5 * STEP_WIDTH, note_centre_y(61)),
+        edge,
+        (edge.0 + 5.0 * STEP_WIDTH, note_centre_y(62)),
+        PointerEventButton::Left,
+        Some(Key::Alt),
+    );
+
+    assert_eq!(
+        *from_left.borrow(),
+        vec![false],
+        "a trailing-edge stretch scales about the leading edge"
+    );
+    let factor = *factors.borrow().last().expect("a factor should be reported");
+    assert!(
+        (factor - 2.0).abs() < 0.1,
+        "doubling the span should report ~2.0, got {factor}"
+    );
+}
+
+/// Alt on the leading edge scales about the trailing one instead.
+#[test]
+fn alt_dragging_the_leading_edge_scales_about_the_other_end() {
+    let ui = harness(TOOL_SELECT, two_selected_notes());
+    set_selection_bounds(&ui);
+    let from_left: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+    let factors: Rc<RefCell<Vec<f32>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let from_left = from_left.clone();
+        ui.on_piano_scale_begin(move |left| from_left.borrow_mut().push(left));
+    }
+    {
+        let factors = factors.clone();
+        ui.on_piano_selection_scaled(move |factor| factors.borrow_mut().push(factor));
+    }
+
+    // The leading note's left edge, pulled inward by half the span.
+    let edge = (tick_x(0) + 1.0, note_centre_y(60));
+    drag_with(
+        ui.window(),
+        edge,
+        (edge.0 + 2.5 * STEP_WIDTH, note_centre_y(60)),
+        PointerEventButton::Left,
+        Some(Key::Alt),
     );
 
     assert_eq!(*from_left.borrow(), vec![true]);
-    let factor = *factors.borrow().last().expect("a factor should have been reported");
+    let factor = *factors.borrow().last().expect("a factor should be reported");
     assert!(
-        (factor - 0.5).abs() < 0.05,
-        "halving the frame's width should report ~0.5, got {factor}"
+        (factor - 0.5).abs() < 0.1,
+        "halving the span should report ~0.5, got {factor}"
     );
 }
 
-/// The handle claims the press even where it sits on top of a note's own
-/// resize edge, or there would be no way to scale a selection whose last
-/// note ends at the frame's edge.
+// ---- selection-preserving press -----------------------------------------
+
+/// Adam's report: "clicking one to drag them deselects the others."
+///
+/// A plain press on an already-selected note must not collapse the selection,
+/// or the drag that press begins can only ever move one note. This is also
+/// what made group length adjust look missing -- the resize was group-aware,
+/// but the press had already thrown the group away.
 #[test]
-fn the_handle_wins_over_the_note_edge_underneath_it() {
-    let ui = harness(
-        TOOL_SELECT,
-        vec![
-            cell(7, 0, SNAP_TICKS, 60),
-            cell(8, 4 * SNAP_TICKS, SNAP_TICKS, 60),
-        ],
+fn pressing_a_selected_note_does_not_collapse_the_selection() {
+    let ui = harness(TOOL_SELECT, two_selected_notes());
+    set_selection_bounds(&ui);
+    let selections: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let moves: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let selections = selections.clone();
+        ui.on_piano_note_selected(move |id, mode| selections.borrow_mut().push((id, mode)));
+    }
+    {
+        let moves = moves.clone();
+        ui.on_piano_note_moved(move |id, tick, _| moves.borrow_mut().push((id, tick)));
+    }
+
+    let body = (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60));
+    drag(ui.window(), body, (body.0 + 2.0 * STEP_WIDTH, note_centre_y(60)));
+
+    assert!(
+        selections.borrow().is_empty(),
+        "a drag off an already-selected note should not touch the selection, got {:?}",
+        selections.borrow()
     );
-    ui.set_selection_count(2);
-    ui.set_selection_start_tick(0);
-    ui.set_selection_end_tick(5 * SNAP_TICKS);
-    ui.set_selection_low_note(60);
-    ui.set_selection_high_note(60);
-    let scales = Rc::new(RefCell::new(0usize));
-    let lengths = Rc::new(RefCell::new(0usize));
+    assert!(!moves.borrow().is_empty(), "and it should still move");
+}
+
+/// The collapse is deferred, not abandoned: a press that turns out to be a
+/// plain click still selects just that note, so clicking one note of a
+/// selection to isolate it keeps working.
+#[test]
+fn clicking_without_dragging_still_collapses_to_that_note() {
+    let ui = harness(TOOL_SELECT, two_selected_notes());
+    set_selection_bounds(&ui);
+    let selections: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
     {
-        let scales = scales.clone();
-        ui.on_piano_scale_begin(move |_| *scales.borrow_mut() += 1);
-    }
-    {
-        let lengths = lengths.clone();
-        ui.on_piano_note_resized(move |_, _| *lengths.borrow_mut() += 1);
+        let selections = selections.clone();
+        ui.on_piano_note_selected(move |id, mode| selections.borrow_mut().push((id, mode)));
     }
 
-    // The frame's right edge is also note 8's right edge.
-    let handle = (tick_x(5 * SNAP_TICKS), note_centre_y(60));
-    drag(ui.window(), handle, (handle.0 + 2.0 * STEP_WIDTH, note_centre_y(60)));
+    press(
+        ui.window(),
+        (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60)),
+        PointerEventButton::Left,
+    );
 
-    assert_eq!(*scales.borrow(), 1);
-    assert_eq!(*lengths.borrow(), 0, "the note's own resize must not also fire");
+    assert_eq!(*selections.borrow(), vec![(7, 0)]);
+}
+
+/// Pressing a note that is *not* selected still replaces the selection
+/// immediately -- deferring that would leave the wrong notes selected for
+/// the drag about to start.
+#[test]
+fn pressing_an_unselected_note_replaces_the_selection_at_once() {
+    let mut notes = two_selected_notes();
+    notes[1].selected = false;
+    let ui = harness(TOOL_SELECT, notes);
+    let selections: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let selections = selections.clone();
+        ui.on_piano_note_selected(move |id, mode| selections.borrow_mut().push((id, mode)));
+    }
+
+    let body = (tick_x(4 * SNAP_TICKS) + STEP_WIDTH / 2.0, note_centre_y(62));
+    drag(ui.window(), body, (body.0 + 2.0 * STEP_WIDTH, note_centre_y(62)));
+
+    assert_eq!(*selections.borrow(), vec![(8, 0)]);
+}
+
+/// Shift is snap override alone now. Holding it while dragging a selected
+/// note used to remove that note from the selection and carry it off on its
+/// own, which read as an accidental clone.
+#[test]
+fn shift_dragging_a_selected_note_does_not_change_the_selection() {
+    let ui = harness(TOOL_SELECT, two_selected_notes());
+    set_selection_bounds(&ui);
+    let selections: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let duplicated = Rc::new(RefCell::new(0usize));
+    {
+        let selections = selections.clone();
+        ui.on_piano_note_selected(move |id, mode| selections.borrow_mut().push((id, mode)));
+    }
+    {
+        let duplicated = duplicated.clone();
+        ui.on_piano_selection_duplicated(move |_| {
+            *duplicated.borrow_mut() += 1;
+            99
+        });
+    }
+
+    let body = (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60));
+    drag_with(
+        ui.window(),
+        body,
+        (body.0 + 2.0 * STEP_WIDTH, note_centre_y(60)),
+        PointerEventButton::Left,
+        Some(Key::Shift),
+    );
+
+    assert!(selections.borrow().is_empty(), "Shift is not a selection role");
+    assert_eq!(*duplicated.borrow(), 0, "and it is not a copy either");
+}
+
+// ---- note width ---------------------------------------------------------
+
+/// Adam's report: "changing snap/grid will change all of the notes in the
+/// clip's length to that snap size."
+///
+/// The drawn width used to be floored at one snap step, so every note shorter
+/// than the grid rendered as a full grid step and changing the interval
+/// looked like it had rewritten the clip. The floor also inflated the edge
+/// grab zones, which is what this can actually observe: on a note far shorter
+/// than the snap, the middle must still be a body grab rather than an edge.
+#[test]
+fn a_short_note_is_not_inflated_to_the_snap_interval() {
+    // 6 ticks (1/64) against a 24-tick (1/16) snap: an eighth of a step wide.
+    let ui = harness(TOOL_SELECT, vec![cell(7, 0, 6, 60)]);
+    let moves = Rc::new(RefCell::new(0usize));
+    let resizes = Rc::new(RefCell::new(0usize));
+    {
+        let moves = moves.clone();
+        ui.on_piano_note_moved(move |_, _, _| *moves.borrow_mut() += 1);
+    }
+    {
+        let resizes = resizes.clone();
+        ui.on_piano_note_resized(move |_, _| *resizes.borrow_mut() += 1);
+    }
+
+    // Two thirds of a step in: inside the note only if the note was inflated
+    // to a full snap step. It should be empty grid.
+    let beyond = (tick_x(0) + STEP_WIDTH * 2.0 / 3.0, note_centre_y(60));
+    drag(ui.window(), beyond, (beyond.0 + STEP_WIDTH, note_centre_y(60)));
+
+    assert_eq!(
+        (*moves.borrow(), *resizes.borrow()),
+        (0, 0),
+        "a 1/64 note must not answer to a press two thirds of a 1/16 step away"
+    );
 }
