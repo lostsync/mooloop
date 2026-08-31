@@ -905,3 +905,66 @@ fn a_short_note_is_not_inflated_to_the_snap_interval() {
         "a 1/64 note must not answer to a press two thirds of a 1/16 step away"
     );
 }
+
+/// Ctrl is both add-to-selection and copy-drag. A Ctrl-drag off an
+/// already-selected note must copy the whole selection, so the press cannot
+/// toggle that note out of the selection first -- doing so duplicated
+/// everything except the note under the pointer.
+#[test]
+fn ctrl_dragging_a_selected_note_copies_without_deselecting_it() {
+    let ui = harness(TOOL_SELECT, two_selected_notes());
+    set_selection_bounds(&ui);
+    let selections: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let anchors: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let selections = selections.clone();
+        ui.on_piano_note_selected(move |id, mode| selections.borrow_mut().push((id, mode)));
+    }
+    {
+        let anchors = anchors.clone();
+        ui.on_piano_selection_duplicated(move |anchor| {
+            anchors.borrow_mut().push(anchor);
+            99
+        });
+    }
+
+    let body = (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60));
+    drag_with(
+        ui.window(),
+        body,
+        (body.0 + 2.0 * STEP_WIDTH, note_centre_y(60)),
+        PointerEventButton::Left,
+        Some(Key::Control),
+    );
+
+    assert!(
+        selections.borrow().is_empty(),
+        "the grabbed note must still be selected when the copy is taken, got {:?}",
+        selections.borrow()
+    );
+    assert_eq!(*anchors.borrow(), vec![7], "and the copy names the grabbed note");
+}
+
+/// Ctrl-*click* on a selected note still removes it: the toggle is deferred,
+/// not abandoned.
+#[test]
+fn ctrl_clicking_a_selected_note_still_toggles_it() {
+    let ui = harness(TOOL_SELECT, two_selected_notes());
+    set_selection_bounds(&ui);
+    let selections: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let selections = selections.clone();
+        ui.on_piano_note_selected(move |id, mode| selections.borrow_mut().push((id, mode)));
+    }
+
+    let at = (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60));
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Control.into(),
+    });
+    press(ui.window(), at, PointerEventButton::Left);
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Control.into(),
+    });
+
+    assert_eq!(*selections.borrow(), vec![(7, 1)]);
+}

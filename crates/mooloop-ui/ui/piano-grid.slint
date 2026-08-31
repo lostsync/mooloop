@@ -333,6 +333,7 @@ export component PianoGrid inherits Rectangle {
         // A press on an already-selected note defers its "select just this
         // one" until release, and only if nothing moved in between.
         property <int> pending-select-id: -1;
+        property <int> pending-select-mode;
         property <bool> dragged;
         property <bool> create-click-armed;
         property <length> create-click-x;
@@ -481,16 +482,21 @@ export component PianoGrid inherits Rectangle {
                     let mode = root.selection-mode(
                         e.modifiers.control, e.modifiers.shift,
                         e.modifiers.alt, e.modifiers.meta);
-                    if (mode != 0 || !hit.selected) {
-                        root.note-selected(hit.id, mode);
-                    } else {
+                    if (hit.selected && mode < 2) {
                         // Pressing a note that is already selected must not
-                        // collapse the selection: that press is nearly always
-                        // the start of dragging the group, and collapsing it
-                        // made dragging or resizing a selection impossible.
-                        // The collapse still happens, on release, if the
+                        // change the selection yet: that press is nearly
+                        // always the start of dragging the group, and acting
+                        // on it made dragging or resizing a selection
+                        // impossible. Applies to the add role too, which is
+                        // also the copy role -- a Ctrl-drag that toggled the
+                        // grabbed note out of the selection first would
+                        // duplicate everything except the note under the
+                        // pointer. Deferred to release, and only if the
                         // press turned out to be a plain click.
                         self.pending-select-id = hit.id;
+                        self.pending-select-mode = mode;
+                    } else {
+                        root.note-selected(hit.id, mode);
                     }
                     self.dragged = false;
                     self.grabbed-id = hit.id;
@@ -646,7 +652,7 @@ export component PianoGrid inherits Rectangle {
                 }
             } else if (e.kind == PointerEventKind.up) {
                 if (self.pending-select-id >= 0 && !self.dragged) {
-                    root.note-selected(self.pending-select-id, 0);
+                    root.note-selected(self.pending-select-id, self.pending-select-mode);
                 }
                 self.pending-select-id = -1;
                 self.dragged = false;
