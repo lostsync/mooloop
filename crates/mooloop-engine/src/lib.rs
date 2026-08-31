@@ -215,7 +215,7 @@ impl Engine {
         let device_telemetry = DeviceTelemetry::new();
         let playhead_meters = PlayheadMeters::new();
         let modulator_meters = ModulatorMeters::new();
-        let preview_gain = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+        let preview_gain = Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits()));
         let buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>> =
             Arc::new(ArcSwapOption::empty());
         let mut render = RenderState::new(sample_rate, sample_slots.clone());

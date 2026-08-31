@@ -1473,6 +1473,16 @@ id = "default_kick"
         // default. Asserting it here is the point: a stored gain survives a
         // change to what a fresh channel starts at.
         expected.channels[0].setup.channel.volume = 0.8;
+        // The manifest also predates the sampler's output trim. That mix was
+        // balanced against a sampler at unity, so the missing field has to
+        // deserialize to unity -- not to the -12 dB a sampler created today
+        // starts at, which would quieten every old song by 12 dB.
+        expected.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .params
+            .output_gain = 1.0;
         assert_eq!(loaded, expected);
         assert_eq!(loaded.buses.len(), mooloop_core::MAX_BUSES);
         assert_eq!(

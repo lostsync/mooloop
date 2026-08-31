@@ -61,7 +61,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   mixed-format sibling navigation, trim, reverse, root note, coarse/fine tune,
   loop region and mode, ADSR, low-pass
   filter with envelope depth and resonance, drive, bit reduction, and rate
-  reduction. Voice controls cover one-shot/gated playback, 1-16 voices,
+  reduction. An Output trim in the page bar sets the patch's level ahead of
+  the channel's inserts; a sampler created today starts at -9 dB so a
+  normalized file peaks where the synths' default patches do, while projects
+  saved before the trim existed load at unity. Voice controls cover one-shot/gated playback, 1-16 voices,
   restart/layer retriggering, and 16 cross-channel choke groups.
 - A mixer sharing the work surface with the step grid, behind a Steps/Mixer
   toggle. It is a strip per bus - master first, then sixteen inserts - with a

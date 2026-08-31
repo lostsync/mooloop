@@ -1060,6 +1060,14 @@ pub(crate) struct RenderState {
     preview: Option<PreviewVoice>,
     preview_retired: Vec<Arc<SampleData>>,
     /// Linear preview gain, shared with the GUI so the knob is heard live.
+    /// It starts at the operating level rather than unity: an audition is
+    /// usually a full-scale commercial file, and the browser should not be
+    /// 12 dB louder than the project it plays over.
+    ///
+    /// `REFERENCE_PEAK_DBFS` here, not the generator output reference the
+    /// sampler's trim uses, because a preview goes straight to the master
+    /// with no channel strip -- so it never pays the pan law the sampler's
+    /// 3 dB of extra trim exists to cancel. Both land at -12 dBFS.
     preview_gain: Arc<AtomicU32>,
 }
 
@@ -1099,7 +1107,7 @@ impl RenderState {
             modulator_meters: ModulatorMeters::new(),
             preview: None,
             preview_retired: Vec::new(),
-            preview_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            preview_gain: Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits())),
         }
     }
 

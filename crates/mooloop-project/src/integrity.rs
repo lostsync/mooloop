@@ -1173,6 +1173,12 @@ fn check_sampler(doctor: &mut Doctor, who: &str, params: &mut SamplerParams) {
         ("the bit reduction", &mut params.bit_reduction, 0.0, 1.0),
         ("the rate reduction", &mut params.rate_reduction, 0.0, 1.0),
         (
+            "the output gain",
+            &mut params.output_gain,
+            0.0,
+            mooloop_core::MAX_LINEAR_GAIN,
+        ),
+        (
             "the tuning in semitones",
             &mut params.tune_semitones,
             -48.0,

@@ -3,6 +3,20 @@
 pub const MAX_SAMPLER_VOICES: u8 = 16;
 pub const MAX_CHOKE_GROUP: u8 = 16;
 
+/// A fresh sampler's output trim: the generator output reference, as gain.
+///
+/// Loading or replacing a sample never touches this. The other generators
+/// calibrate their own default patch to peak at
+/// `gain::GENERATOR_OUTPUT_REFERENCE_DBFS`; the sampler cannot, because the
+/// audio is whatever the user loaded. Spending that much headroom is the
+/// closest honest equivalent -- a normalized, full-scale file then peaks
+/// where a default DrumSynth hit peaks, at any pan position. It is
+/// predictable headroom, not normalization: nothing measures, matches, or
+/// rewrites the audio.
+pub fn default_output_gain() -> f32 {
+    crate::gain::reference_level_gain()
+}
+
 /// How the sampler treats the loop region once the play head reaches it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -150,6 +164,20 @@ pub struct SamplerParams {
     pub bit_reduction: f32,
     /// Sample-rate reduction amount in `[0, 1]`. `0` bypasses it.
     pub rate_reduction: f32,
+    /// Patch-level output gain, linear, in `[0, MAX_LINEAR_GAIN]` (+12 dB).
+    /// This is the sampler's own trim ahead of the channel's inserts, not the
+    /// channel fader: a fresh sampler starts at `default_output_gain()`, so a
+    /// full-scale commercial sample arrives level with the calibrated
+    /// generators instead of well above them.
+    #[serde(default = "legacy_output_gain")]
+    pub output_gain: f32,
+}
+
+/// The trim a project saved before the field existed plays at. Those mixes
+/// were balanced against a sampler running at unity, so they keep unity;
+/// only a newly created sampler gets `default_output_gain()`.
+fn legacy_output_gain() -> f32 {
+    1.0
 }
 
 impl Default for SamplerParams {
@@ -178,6 +206,7 @@ impl Default for SamplerParams {
             drive: 0.0,
             bit_reduction: 0.0,
             rate_reduction: 0.0,
+            output_gain: default_output_gain(),
         }
     }
 }

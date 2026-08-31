@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-31
-- Sessions: 22
+- Sessions: 25
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -153,6 +153,17 @@ work session you can recall being part of, and don't stress over precision.
   octave below the other two, and that correcting it breaks the filter's
   resonance taper outright -- so the miscalibration is load-bearing, and it is
   recorded rather than fixed.
+  Then gave the sampler its own output trim. Two things only the code could
+  settle: the builtin kick looked like it would be quietened by a trimmed
+  default until it turned out to be reachable only through the legacy
+  `Builtin` reference, and the trim had to be -9 dB rather than the -12 the
+  issue specified, because `REFERENCE_PEAK_DBFS` is measured after the
+  equal-power pan law and a generator's own output peaks 3 dB above it --
+  at -12 every loaded sample would have sat under every synth. One lagged
+  gain serves every voice: each copies the smoother and walks its own copy,
+  the original is caught up once per segment by a closed-form `advance_by`,
+  and installing a patch onto a silent device snaps rather than ramps, since
+  the ramp was otherwise paid for by the first note's attack.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

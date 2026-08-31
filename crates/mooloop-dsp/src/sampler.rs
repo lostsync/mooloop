@@ -20,14 +20,31 @@ use crate::event::{Event, EventList};
 use crate::filter::apply_drive;
 use crate::node::{AudioNode, ProcessContext};
 use crate::scale::hz_from_normalized;
+use crate::smooth::Smoothed;
 use mooloop_core::{
-    clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES,
+    clamp01, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP, MAX_LINEAR_GAIN,
+    MAX_SAMPLER_VOICES,
 };
 
 use arc_swap::ArcSwapOption;
 
 /// Minimum envelope stage time, to avoid divide-by-zero and infinite rates.
 const MIN_STAGE_S: f32 = 1.0e-4;
+
+/// Time constant for the output trim's lag. Short enough that a knob feels
+/// attached to the sound, long enough that a jump across the whole range --
+/// by hand, by automation, or by modulation -- ramps instead of clicking.
+const OUTPUT_GAIN_SMOOTHING_S: f32 = 0.01;
+
+/// Keep the trim inside the shared +12 dB ceiling, and treat a non-finite
+/// value as silence rather than letting it reach the bus.
+fn clamp_output_gain(gain: f32) -> f32 {
+    if gain.is_finite() {
+        gain.clamp(0.0, MAX_LINEAR_GAIN)
+    } else {
+        0.0
+    }
+}
 
 /// Decoded sample data: stereo frames of f32 in `[-1, 1]`, plus the source
 /// sample rate and a root MIDI note (default middle-C).
@@ -256,6 +273,14 @@ pub struct Sampler {
     sample_rate: u32,
     voices: [Voice; MAX_SAMPLER_VOICES as usize],
     next_age: u64,
+    /// The device's patch-level output trim, lagged so it cannot click.
+    ///
+    /// One gain for the whole sampler, not one per voice: every voice copies
+    /// this smoother at the start of a segment and walks its own copy, and
+    /// `render_range` catches the original up once for the segment. Copies
+    /// are cheap, share a start value, and step identically, so the voices
+    /// stay in agreement without the frame loop having to own them all.
+    output_gain: Smoothed,
 }
 
 impl Sampler {
@@ -278,6 +303,11 @@ impl Sampler {
             sample_rate,
             voices,
             next_age: 1,
+            output_gain: Smoothed::new(
+                clamp_output_gain(params.output_gain),
+                OUTPUT_GAIN_SMOOTHING_S,
+                sample_rate,
+            ),
         }
     }
 
@@ -286,6 +316,17 @@ impl Sampler {
         params.polyphony = params.polyphony.clamp(1, MAX_SAMPLER_VOICES);
         params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
         self.params = params;
+        let trim = clamp_output_gain(params.output_gain);
+        if self.voices.iter().any(|voice| voice.active) {
+            self.output_gain.set_target(trim);
+        } else {
+            // Nothing is sounding, so there is nothing for a ramp to protect
+            // -- and a ramp here would be paid for by the *next* note's
+            // attack. That is precisely the project-load path: install the
+            // patch onto a silent device, then play it. Lagging into the
+            // first hit swallowed 5 dB of a kick's transient.
+            self.output_gain.reset_to(trim);
+        }
         for (index, voice) in self.voices.iter_mut().enumerate() {
             voice.env.configure(params);
             if index >= params.polyphony as usize {
@@ -342,6 +383,11 @@ impl Sampler {
             voice.reset(self.params, self.sample_rate);
         }
         self.next_age = 1;
+        // Every voice is silent now, so there is nothing for the trim to
+        // click against: start the next patch at its own level rather than
+        // ramping there from the last one's.
+        self.output_gain
+            .reset_to(clamp_output_gain(self.params.output_gain));
     }
 
     fn voice_limit(&self) -> usize {
@@ -541,6 +587,7 @@ impl Sampler {
         params: SamplerParams,
         sample_rate: u32,
         voice: &mut Voice,
+        output_gain: &mut Smoothed,
         bus: &mut StereoBus,
         start: usize,
         end: usize,
@@ -565,7 +612,10 @@ impl Sampler {
                 voice.active = false;
                 return;
             }
-            let amp = voice.env.level * voice.velocity_amp;
+            // The trim is the last stage before the bus, after the shaping
+            // in `shape_frame`: it is the patch's output level, not another
+            // colour control.
+            let amp = voice.env.level * voice.velocity_amp * output_gain.advance();
 
             // Fetch interpolated frame.
             let pos = voice.play_pos;
@@ -640,9 +690,17 @@ impl Sampler {
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let params = self.params;
         let sample_rate = self.sample_rate;
+        self.output_gain
+            .set_target(clamp_output_gain(params.output_gain));
+        let entry = self.output_gain;
         for voice in &mut self.voices[..params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize] {
-            Self::render_voice_range(params, sample_rate, voice, bus, start, end);
+            let mut gain = entry;
+            Self::render_voice_range(params, sample_rate, voice, &mut gain, bus, start, end);
         }
+        // A voice that ends mid-segment stops walking its copy, and a silent
+        // sampler renders no voices at all, so the trim advances here rather
+        // than inheriting whichever voice happened to run last.
+        self.output_gain.advance_by(end.saturating_sub(start));
     }
 
     #[cfg(test)]
@@ -1149,6 +1207,198 @@ mod tests {
         assert!(driven[0] < 0.26);
         assert!(driven[1] < -0.2);
         assert!(driven[1] > -0.26);
+    }
+
+    /// A held note, rendered with only the trim different. The trim is a
+    /// plain gain on the finished voice, so the two renders differ by exactly
+    /// its ratio once the lag has settled.
+    #[test]
+    fn the_output_trim_scales_the_finished_voice() {
+        let sr = 48_000;
+        let frames = 2048;
+        let render_at = |gain: f32| {
+            let params = SamplerParams {
+                loop_mode: LoopMode::Forward,
+                output_gain: gain,
+                ..SamplerParams::default()
+            };
+            let mut sampler = sampler_with_frames(sr, 512, params);
+            let mut bus = StereoBus::with_capacity(frames);
+            let mut events = EventList::empty();
+            events.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id: 1,
+                    note: 60,
+                    velocity: 127,
+                },
+            });
+            sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+            bus.l[frames / 2..frames]
+                .iter()
+                .fold(0.0f32, |peak, sample| peak.max(sample.abs()))
+        };
+
+        let unity = render_at(1.0);
+        let trimmed = render_at(mooloop_core::sampler::default_output_gain());
+        assert!(unity > 0.1, "the unity render should be audible: {unity}");
+        let ratio = trimmed / unity;
+        assert!(
+            (ratio - mooloop_core::sampler::default_output_gain()).abs() < 0.01,
+            "a -12 dB trim scaled the voice by {ratio}"
+        );
+    }
+
+    /// Loading a patch onto a silent sampler must not cost the first note its
+    /// attack. The regression this pins measured 5 dB off a kick's transient,
+    /// because the trim was still lagging up from the previous patch's value
+    /// when the note arrived.
+    #[test]
+    fn a_patch_installed_while_silent_is_at_level_by_the_first_note() {
+        let sr = 48_000;
+        let frames = 256;
+        let mut sampler = sampler_with_frames(
+            sr,
+            512,
+            SamplerParams {
+                output_gain: 0.05,
+                ..SamplerParams::default()
+            },
+        );
+        // The engine's load path: reset the device, then install the patch.
+        sampler.reset();
+        sampler.set_params(SamplerParams {
+            output_gain: 1.0,
+            ..SamplerParams::default()
+        });
+
+        // A sampler that was at unity all along. Comparing against it keeps
+        // the assertion about the trim rather than about the envelope's
+        // millisecond attack, which shapes the same early frames.
+        let mut settled = sampler_with_frames(
+            sr,
+            512,
+            SamplerParams {
+                output_gain: 1.0,
+                ..SamplerParams::default()
+            },
+        );
+
+        let mut note = EventList::empty();
+        note.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        let mut installed_bus = StereoBus::with_capacity(frames);
+        let mut settled_bus = StereoBus::with_capacity(frames);
+        sampler.process(&ctx(frames, sr), &mut installed_bus, &note, None);
+        settled.process(&ctx(frames, sr), &mut settled_bus, &note, None);
+
+        for frame in 0..frames {
+            assert!(
+                (installed_bus.l[frame] - settled_bus.l[frame]).abs() < 1.0e-6,
+                "frame {frame}: installed {} vs settled {} -- the trim was \
+                 still ramping when the note arrived",
+                installed_bus.l[frame],
+                settled_bus.l[frame]
+            );
+        }
+    }
+
+    /// Automation and modulation reach the trim through `ParamValue`, which
+    /// can jump the whole range between one sample and the next. The lag is
+    /// what stands between that and a click, so assert on the step size in
+    /// the output rather than on the parameter.
+    #[test]
+    fn jumping_the_output_trim_ramps_instead_of_clicking() {
+        let sr = 48_000;
+        let frames = 1024;
+        let params = SamplerParams {
+            loop_mode: LoopMode::Forward,
+            output_gain: 0.0,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(sr, 512, params);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        events.push(TimedEvent {
+            offset: (frames / 2) as u32,
+            event: Event::ParamValue {
+                id: mooloop_core::generator::SAMPLER_PARAM_OUTPUT_GAIN,
+                value: MAX_LINEAR_GAIN,
+            },
+        });
+        sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+
+        // The sample under the voice is a rising ramp, so consecutive frames
+        // differ a little on their own; a stepped gain would differ by the
+        // whole jump at once.
+        let largest_step = bus.l[..frames]
+            .windows(2)
+            .fold(0.0f32, |worst, pair| worst.max((pair[1] - pair[0]).abs()));
+        assert!(
+            largest_step < 0.05,
+            "the trim stepped by {largest_step} in one sample"
+        );
+        assert!(
+            bus.l[frames - 1].abs() > bus.l[frames / 2].abs(),
+            "the trim never arrived"
+        );
+    }
+
+    /// Every voice shares one trim. The smoother is copied per voice, so this
+    /// is the assertion that the copies stay in step with each other and with
+    /// the original.
+    #[test]
+    fn a_chord_hears_one_trim_rather_than_one_per_voice() {
+        let sr = 48_000;
+        let frames = 1024;
+        let render_notes = |notes: &[u8], gain: f32| {
+            let params = SamplerParams {
+                polyphony: 4,
+                retrigger_mode: RetriggerMode::Layer,
+                loop_mode: LoopMode::Forward,
+                output_gain: gain,
+                ..SamplerParams::default()
+            };
+            let mut sampler = sampler_with_frames(sr, 512, params);
+            let mut bus = StereoBus::with_capacity(frames);
+            let mut events = EventList::empty();
+            for (index, note) in notes.iter().enumerate() {
+                events.push(TimedEvent {
+                    offset: 0,
+                    event: Event::NoteOn {
+                        id: index as u64 + 1,
+                        note: *note,
+                        velocity: 127,
+                    },
+                });
+            }
+            sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+            bus.l[frames - 1]
+        };
+
+        let notes = [60u8, 64, 67];
+        let unity = render_notes(&notes, 1.0);
+        let halved = render_notes(&notes, 0.5);
+        assert!(unity.abs() > 0.1, "the chord should be audible: {unity}");
+        assert!(
+            (halved - unity * 0.5).abs() < 1.0e-4,
+            "three voices at half trim summed to {halved}, want {}",
+            unity * 0.5
+        );
     }
 
     #[test]

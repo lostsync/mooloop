@@ -15,7 +15,7 @@
 use crate::{
     DeviceKind, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode, MonoSynthParams, MlM1Params,
     NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PolySynthParams, RetriggerMode,
-    SamplerParams, VoiceMode, MAX_POLY_VOICES, MAX_SAMPLER_VOICES,
+    SamplerParams, VoiceMode, MAX_LINEAR_GAIN, MAX_POLY_VOICES, MAX_SAMPLER_VOICES,
 };
 
 // --- Sampler ---------------------------------------------------------------
@@ -42,6 +42,7 @@ pub const SAMPLER_PARAM_VOICE_MODE: u32 = 18;
 pub const SAMPLER_PARAM_POLYPHONY: u32 = 19;
 pub const SAMPLER_PARAM_RETRIGGER_MODE: u32 = 20;
 pub const SAMPLER_PARAM_ROOT_NOTE: u32 = 21;
+pub const SAMPLER_PARAM_OUTPUT_GAIN: u32 = 22;
 
 /// Envelope stages share this range across every generator. Exponential, so
 /// the fast end where percussion lives gets most of the travel.
@@ -84,7 +85,7 @@ const fn stepped(id: u32, name: &'static str, steps: u8, default: f32) -> ParamD
     }
 }
 
-static SAMPLER_DESCRIPTORS: [ParamDescriptor; 22] = [
+static SAMPLER_DESCRIPTORS: [ParamDescriptor; 23] = [
     unit(SAMPLER_PARAM_START, "Start", 0.0),
     unit(SAMPLER_PARAM_END, "End", 1.0),
     stepped(SAMPLER_PARAM_REVERSE, "Reverse", 2, 0.0),
@@ -146,6 +147,22 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 22] = [
         max: 127.0,
         curve: ParamCurve::Stepped(128),
         default: 60.0,
+    },
+    ParamDescriptor {
+        id: SAMPLER_PARAM_OUTPUT_GAIN,
+        name: "Output",
+        // Linear rather than the knob's dB scale, for the reason
+        // `STRIP_PARAM_VOLUME` gives: modulation depth is a fraction of the
+        // normalized range, and the dB taper belongs to the control surface
+        // rather than to the destination's numeric truth. The default is the
+        // literal gain a fresh sampler starts at, so a lane written against
+        // the descriptor and a knob left alone agree; the test below pins it
+        // to `GENERATOR_OUTPUT_REFERENCE_DBFS`.
+        unit: "x",
+        min: 0.0,
+        max: MAX_LINEAR_GAIN,
+        curve: ParamCurve::Linear,
+        default: 0.355_234_4,
     },
 ];
 
@@ -575,6 +592,7 @@ impl GeneratorParams {
                 SAMPLER_PARAM_POLYPHONY => f32::from(p.polyphony),
                 SAMPLER_PARAM_RETRIGGER_MODE => p.retrigger_mode.to_index() as f32,
                 SAMPLER_PARAM_ROOT_NOTE => f32::from(p.root_note),
+                SAMPLER_PARAM_OUTPUT_GAIN => p.output_gain,
                 _ => return None,
             }),
             Self::MonoSynth(p) => {
@@ -683,6 +701,7 @@ impl GeneratorParams {
                     p.retrigger_mode = RetriggerMode::from_index(value.round() as i32)
                 }
                 SAMPLER_PARAM_ROOT_NOTE => p.root_note = value.round() as u8,
+                SAMPLER_PARAM_OUTPUT_GAIN => p.output_gain = value,
                 _ => return None,
             },
             Self::MonoSynth(p) => {
@@ -850,6 +869,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The descriptor's default is a literal, because `ParamDescriptor` is a
+    /// const struct and `db_to_linear` is not a const fn. Pin it to the
+    /// parameter default and to the generator output reference so the two
+    /// cannot drift: an automation lane written against the descriptor and an
+    /// untouched knob have to mean the same gain.
+    #[test]
+    fn the_sampler_output_descriptor_defaults_to_the_operating_level() {
+        let params = GeneratorParams::Sampler(SamplerParams::default());
+        let descriptor = DeviceKind::Sampler
+            .descriptors()
+            .iter()
+            .find(|descriptor| descriptor.id == SAMPLER_PARAM_OUTPUT_GAIN)
+            .expect("the sampler describes its output gain");
+        let actual = params.get(SAMPLER_PARAM_OUTPUT_GAIN).unwrap();
+        assert!((actual - descriptor.default).abs() <= 1.0e-6, "{actual}");
+        assert!(
+            (crate::gain::linear_to_db(actual) - crate::gain::GENERATOR_OUTPUT_REFERENCE_DBFS).abs()
+                <= 0.01,
+            "a fresh sampler trims to {} dB, want the generator output reference",
+            crate::gain::linear_to_db(actual)
+        );
     }
 
     #[test]

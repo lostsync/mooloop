@@ -541,9 +541,11 @@ export component MainWindow inherits Window {
     callback browser-sample-loaded(string);
     callback browser-sample-loaded-new-channel(string);
     // Preview voice controls: the toggle arms click-to-play, the knob is
-    // the preview's own gain in dB (the callback carries linear gain).
+    // the preview's own gain in dB (the callback carries linear gain). It
+    // starts at the operating level, matching the engine's preview cell:
+    // auditioning a full-scale file should not be louder than the project.
     in-out property <bool> browser-autoplay: true;
-    in-out property <float> browser-preview-gain-db;
+    in-out property <float> browser-preview-gain-db: GainMath.reference-peak-dbfs;
     callback browser-preview-gain-changed(float);
     // Info pane for the last-clicked sample. Empty waveform = nothing
     // inspected yet.
@@ -761,6 +763,8 @@ export component MainWindow inherits Window {
     in-out property <float> sampler-drive;
     in-out property <float> bit-reduction;
     in-out property <float> rate-reduction;
+    // Linear, as the engine stores it; the sampler face's knob does the dB.
+    in-out property <float> sampler-output-gain: 1.0;
     in-out property <int>   loop-mode;     // 0=Off 1=Fwd 2=Pong
     in-out property <int> voice-mode;       // 0=One Shot 1=Gate
     in-out property <int> sampler-polyphony: 1;
@@ -805,6 +809,7 @@ export component MainWindow inherits Window {
     callback sampler-drive-changed(float);
     callback bit-reduction-changed(float);
     callback rate-reduction-changed(float);
+    callback sampler-output-gain-changed(float);
     callback load-sample-clicked();
     callback previous-sample-clicked();
     callback next-sample-clicked();
@@ -2443,6 +2448,7 @@ export component MainWindow inherits Window {
                                                     modulation-route-counts: root.source-modulation-route-counts;
                                                     bit-reduction <=> root.bit-reduction;
                                                     rate-reduction <=> root.rate-reduction;
+                                                    output-gain <=> root.sampler-output-gain;
                                                     loop-mode <=> root.loop-mode;
                                                     voice-mode <=> root.voice-mode;
                                                     polyphony <=> root.sampler-polyphony;
@@ -2486,6 +2492,7 @@ export component MainWindow inherits Window {
                                                     drive-changed(v) => { root.sampler-drive-changed(v); }
                                                     bit-reduction-changed(v) => { root.bit-reduction-changed(v); }
                                                     rate-reduction-changed(v) => { root.rate-reduction-changed(v); }
+                                                    output-gain-changed(v) => { root.sampler-output-gain-changed(v); }
                                                     load-sample-clicked => { root.load-sample-clicked(); }
                                                     previous-sample-clicked => { root.previous-sample-clicked(); }
                                                     next-sample-clicked => { root.next-sample-clicked(); }

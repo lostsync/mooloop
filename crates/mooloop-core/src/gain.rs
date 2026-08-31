@@ -32,6 +32,28 @@ pub const MAX_LINEAR_GAIN: f32 = 4.0;
 /// pins the measurements.
 pub const REFERENCE_PEAK_DBFS: f32 = -12.0;
 
+/// A centred channel's per-side gain, `pan_gains(0.0)`: the equal-power pan
+/// law spends 3.01 dB on both sides at centre. Every channel pays it, which
+/// is why `REFERENCE_PEAK_DBFS` -- measured at the master -- sits that far
+/// below where a generator's own output actually peaks.
+pub const CENTRE_PAN_DB: f32 = -3.0103;
+
+/// Where a calibrated generator's *device output* peaks, as opposed to
+/// `REFERENCE_PEAK_DBFS`, which is the same patch measured at the master
+/// after the pan law. This is the level a source has to hit to sit level
+/// with the others in the rack, at any pan position, since pan attenuates
+/// every channel identically.
+pub const GENERATOR_OUTPUT_REFERENCE_DBFS: f32 = REFERENCE_PEAK_DBFS - CENTRE_PAN_DB;
+
+/// The generator output reference as a linear gain. A stage that has to put
+/// an uncalibrated full-scale source level with the calibrated generators
+/// spends exactly this much: the sampler's default output trim and the
+/// browser's audition monitor both start here, which is what makes them
+/// agree with each other and with the rest of the rack.
+pub fn reference_level_gain() -> f32 {
+    db_to_linear(GENERATOR_OUTPUT_REFERENCE_DBFS)
+}
+
 /// At or below `MIN_DB` is silence (0.0), not residual gain.
 pub fn linear_to_db(linear: f32) -> f32 {
     if !linear.is_finite() || linear <= 0.0 {

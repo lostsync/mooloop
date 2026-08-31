@@ -92,11 +92,12 @@ fn trim_knob_reads_through_the_shared_formatter() {
 
 #[test]
 fn slint_meter_thresholds_match_the_rust_constants() {
-    use mooloop_core::gain::{METER_HOT_DB, METER_WARNING_DB};
+    use mooloop_core::gain::{METER_HOT_DB, METER_WARNING_DB, REFERENCE_PEAK_DBFS};
 
     for (name, expected) in [
         ("meter-warning-db", METER_WARNING_DB),
         ("meter-hot-db", METER_HOT_DB),
+        ("reference-peak-dbfs", REFERENCE_PEAK_DBFS),
     ] {
         let marker = format!("{name}: ");
         let line = GAIN_SLINT

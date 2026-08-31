@@ -64,6 +64,29 @@ impl Smoothed {
         self.current
     }
 
+    /// Advance `frames` samples in one step, landing where that many calls to
+    /// `advance` would have left it (within `SNAP_EPSILON`).
+    ///
+    /// This exists for a device that fans one smoothed value out over several
+    /// voices: each voice walks its own copy sample by sample, so the shared
+    /// original has to be caught up once for the whole block rather than once
+    /// per voice.
+    pub fn advance_by(&mut self, frames: usize) -> f32 {
+        let delta = self.target - self.current;
+        if frames == 0 {
+            return self.current;
+        }
+        // `(1 - coeff)^frames` is the closed form of the per-sample recurrence
+        // `current += (target - current) * coeff`.
+        let remaining = delta * (1.0 - self.coeff).powi(frames.min(i32::MAX as usize) as i32);
+        if remaining.abs() < SNAP_EPSILON {
+            self.current = self.target;
+        } else {
+            self.current = self.target - remaining;
+        }
+        self.current
+    }
+
     pub fn value(&self) -> f32 {
         self.current
     }
@@ -84,6 +107,38 @@ mod tests {
             smoothed.advance();
         }
         assert!((smoothed.value() - 1.0).abs() < 1.0e-3);
+    }
+
+    /// The whole point of `advance_by`: a caller that walks copies per voice
+    /// and catches the original up in one step must not drift away from a
+    /// caller that walked it sample by sample. The tolerance is loose enough
+    /// for the `f32` rounding the per-sample walk accumulates over thousands
+    /// of steps and the closed form does not -- where they differ, the
+    /// closed form is the more accurate of the two.
+    #[test]
+    fn advancing_a_block_matches_walking_it_sample_by_sample() {
+        for frames in [1usize, 7, 64, 512, 4096] {
+            let mut walked = Smoothed::new(0.25, 0.005, 48_000);
+            walked.set_target(1.0);
+            let mut stepped = walked;
+            for _ in 0..frames {
+                walked.advance();
+            }
+            stepped.advance_by(frames);
+            assert!(
+                (walked.value() - stepped.value()).abs() <= 3.0e-5,
+                "{frames} frames: walked to {}, stepped to {}",
+                walked.value(),
+                stepped.value()
+            );
+        }
+    }
+
+    #[test]
+    fn advancing_no_frames_holds_still() {
+        let mut smoothed = Smoothed::new(0.25, 0.005, 48_000);
+        smoothed.set_target(1.0);
+        assert_eq!(smoothed.advance_by(0), 0.25);
     }
 
     #[test]

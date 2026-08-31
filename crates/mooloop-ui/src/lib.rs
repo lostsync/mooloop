@@ -3660,6 +3660,7 @@ impl UiState {
         window.set_sampler_drive(p.drive);
         window.set_bit_reduction(p.bit_reduction);
         window.set_rate_reduction(p.rate_reduction);
+        window.set_sampler_output_gain(p.output_gain);
         self.refresh_note_editor(window);
     }
 }
@@ -8098,6 +8099,9 @@ impl AppUi {
         wire_unit_param!(on_sampler_drive_changed, drive);
         wire_unit_param!(on_bit_reduction_changed, bit_reduction);
         wire_unit_param!(on_rate_reduction_changed, rate_reduction);
+        // The face converts dB to linear before this runs, so the trim is an
+        // ordinary linear parameter by the time it reaches the engine.
+        wire_unit_param!(on_sampler_output_gain_changed, output_gain);
 
         {
             // Pure view state: re-bin the waveform for whatever range is

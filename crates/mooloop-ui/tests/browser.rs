@@ -36,7 +36,11 @@ fn browser_rows_render_in_an_open_sidebar() {
     assert!(!ui.get_sidebar_visible(), "the sidebar starts hidden");
     assert_eq!(ui.get_browser_rows().row_count(), 0, "no locations yet");
     assert!(ui.get_browser_autoplay(), "autoplay arms by default");
-    assert_eq!(ui.get_browser_preview_gain_db(), 0.0, "preview at unity");
+    assert_eq!(
+        ui.get_browser_preview_gain_db(),
+        mooloop_core::gain::REFERENCE_PEAK_DBFS,
+        "the preview monitor starts at the operating level, not unity"
+    );
 
     ui.set_sidebar_visible(true);
     let empty = snapshot(&ui);

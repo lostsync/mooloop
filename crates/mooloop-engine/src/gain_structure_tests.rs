@@ -14,12 +14,32 @@ use mooloop_core::{
     NoteEvent, OscParams, PlateParams, PolySynthParams, Project, ProjectChannel, ReverbParams,
     SampleReference, MAX_LINEAR_GAIN,
 };
+use mooloop_dsp::sampler::SampleData;
+use std::sync::Arc;
 
 const SAMPLE_RATE: u32 = 48_000;
 
 /// Render the project offline and return the master peak in dBFS.
 fn peak_dbfs(project: &Project, seconds: f32) -> f32 {
     let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
+    render.play();
+    let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
+    let mut peak = 0.0f32;
+    while remaining > 0 {
+        let frames = remaining.min(1024);
+        render.process_once_block(frames);
+        let master = render.master();
+        peak = peak.max(master.l[..frames].iter().fold(0.0f32, |p, s| p.max(s.abs())));
+        peak = peak.max(master.r[..frames].iter().fold(0.0f32, |p, s| p.max(s.abs())));
+        remaining -= frames;
+    }
+    20.0 * peak.max(1e-6).log10()
+}
+
+/// `peak_dbfs` with a decoded sample published into channel 0's slot, for the
+/// cases where the builtin kick is not the asset under test.
+fn peak_dbfs_with_sample(project: &Project, sample: Arc<SampleData>, seconds: f32) -> f32 {
+    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[Some(sample)]);
     render.play();
     let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
     let mut peak = 0.0f32;
@@ -67,10 +87,36 @@ fn one_note_channel(kind: DeviceKind) -> ProjectChannel {
         state.sample = SampleReference::Builtin {
             id: "default_kick".into(),
         };
+        // The builtin kick only reaches a channel through the legacy
+        // reference above -- a sampler created today starts empty -- so this
+        // channel is an old project, and old projects keep the unity trim
+        // they were balanced at. The kick is generated to peak at the
+        // reference level on its own; attenuating it as well would move a
+        // calibration this file exists to hold still.
+        state.params.output_gain = 1.0;
     }
     channel.setup.channel.volume = 1.0;
     channel.notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
     channel
+}
+
+/// A normalized asset: a full-scale sine at the sampler's root note, standing
+/// in for the commercial one-shot a user actually drags in. Nothing in
+/// mooloop measures or rewrites such a file, so its peak is the input the
+/// output trim has to work against.
+fn full_scale_fixture() -> Arc<SampleData> {
+    let frames = (SAMPLE_RATE / 2) as usize;
+    let step = std::f32::consts::TAU * 220.0 / SAMPLE_RATE as f32;
+    Arc::new(SampleData {
+        frames: (0..frames)
+            .map(|index| {
+                let value = (index as f32 * step).sin();
+                [value, value]
+            })
+            .collect(),
+        sample_rate: SAMPLE_RATE,
+        root_note: 60,
+    })
 }
 
 fn single_channel_project(channel: ProjectChannel) -> Project {
@@ -109,6 +155,49 @@ fn source_peak_at_unity_hits_the_reference_level() {
             "{kind:?} default patch peaked at {peak:.1} dBFS, want ~-12"
         );
     }
+}
+
+/// The sampler's half of the reference level, for the material it actually
+/// gets. A full-scale file in a fresh sampler lands where every default patch
+/// lands -- the same -12 dBFS the loop above asserts for the synths -- because
+/// the trim spends exactly the headroom that puts an uncalibrated source at
+/// the generator output reference. Nothing normalized the audio to get there.
+#[test]
+fn a_full_scale_sample_in_a_fresh_sampler_lands_at_the_reference_level() {
+    let mut channel = ProjectChannel::sampler(0, 1);
+    channel.setup.channel.volume = 1.0;
+    channel.notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
+    let peak = peak_dbfs_with_sample(&single_channel_project(channel), full_scale_fixture(), 1.0);
+    println!("full-scale sample, fresh sampler: {peak:.1} dBFS");
+    assert!(
+        (-13.0..=-11.0).contains(&peak),
+        "a normalized sample peaked at {peak:.1} dBFS, want ~-12"
+    );
+}
+
+/// The other side of the same contract: loading a sample does not touch the
+/// trim, so a project that stored unity still plays a full-scale file at full
+/// scale. Old mixes keep their level; the new default only reaches samplers
+/// created after it existed.
+#[test]
+fn a_stored_unity_trim_still_plays_a_full_scale_sample_at_full_scale() {
+    let mut channel = ProjectChannel::sampler(0, 1);
+    channel.setup.channel.volume = 1.0;
+    channel
+        .setup
+        .sampler_state_mut()
+        .unwrap()
+        .params
+        .output_gain = 1.0;
+    channel.notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
+    let peak = peak_dbfs_with_sample(&single_channel_project(channel), full_scale_fixture(), 1.0);
+    println!("full-scale sample, unity trim: {peak:.1} dBFS");
+    // -3, not 0: a centred channel spends 3.01 dB on the equal-power pan law
+    // (`pan_gains(0.0)` is 0.707 a side), which every generator pays equally.
+    assert!(
+        (-3.6..=-2.5).contains(&peak),
+        "a unity sampler peaked at {peak:.1} dBFS, want ~-3"
+    );
 }
 
 #[test]

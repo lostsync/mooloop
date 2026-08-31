@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
-import { MiniKnob, NoteFormat, ParameterKnob, SelectorBank, ToggleButton, ToolButton, ValueScale, ZoomScrollBar } from "controls.slint";
+import { MiniKnob, NoteFormat, ParameterKnob, SelectorBank, ToggleButton, ToolButton, TrimKnob, ValueScale, ZoomScrollBar } from "controls.slint";
+import { GainMath } from "gain.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
@@ -142,6 +143,10 @@ export component SamplerDeviceFace inherits Rectangle {
     in-out property <float> drive;
     in-out property <float> bit-reduction;
     in-out property <float> rate-reduction;
+    // The patch's output trim, stored linear like the engine keeps it. The
+    // knob works in dB; the conversion happens at the control, as it does on
+    // the oscillator strip's Level.
+    in-out property <float> output-gain;
     in-out property <int> loop-mode;
     in-out property <int> voice-mode;
     in-out property <int> polyphony: 1;
@@ -188,6 +193,7 @@ export component SamplerDeviceFace inherits Rectangle {
     callback drive-changed(float);
     callback bit-reduction-changed(float);
     callback rate-reduction-changed(float);
+    callback output-gain-changed(float);
     callback load-sample-clicked();
     callback previous-sample-clicked();
     callback next-sample-clicked();
@@ -211,6 +217,35 @@ export component SamplerDeviceFace inherits Rectangle {
             DevicePageButton { text: "VOICE"; active: root.page == 1; clicked => { root.page = 1; } }
             DevicePageButton { text: "TONE"; active: root.page == 2; clicked => { root.page = 2; } }
             Rectangle { horizontal-stretch: 1; }
+            // The trim belongs to the patch, not to a page, so it sits in the
+            // page bar and stays reachable from all three. One control: the
+            // channel fader in the rack rail is still the mix level.
+            Text {
+                text: "OUTPUT";
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+            }
+            TrimKnob {
+                diameter: 22px;
+                label: "Output";
+                value: GainMath.linear-to-db(root.output-gain);
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[22];
+                modulation-depth: root.modulation-depths[22];
+                modulation-offset: root.modulation-offsets[22];
+                modulation-route-count: root.modulation-route-counts[22];
+                changed(v) => {
+                    // Restate the linear value locally so the knob tracks the
+                    // drag instead of waiting for the engine's params to come
+                    // back around.
+                    root.output-gain = GainMath.db-to-linear(v);
+                    root.output-gain-changed(root.output-gain);
+                }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(22, v); }
+                modulation-edit-started => { root.modulation-edit-started(22); }
+                modulation-edit-finished => { root.modulation-edit-finished(22); }
+            }
         }
         Rectangle { height: 1px; background: Theme.border; }
 
