@@ -9,6 +9,11 @@
 # binaries were still 450 MB. Three is the first setting that has held with
 # roughly 10 GB still available throughout, so it is the default; drop to
 # `-j 2` explicitly for a full `--workspace` run.
+#
+# This cap only helps commands that link. `cargo check` never links, and its
+# cost is one rustc process on Slint's generated module -- 3.4 GB after an
+# edit, 5.2 GB cold -- which no job count subdivides. Run Cargo through
+# `scripts/cargo-capped` to bound that; see docs/AGENT_OPERATIONS.md.
 jobs = 3
 # Keep build output portable across usernames and workstations. Cargo's TOML
 # configuration does not expand shell variables such as ${USER}; its default

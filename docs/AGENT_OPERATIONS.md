@@ -6,18 +6,42 @@ application. The root agent contract has the workflow and verification rules.
 ## Cargo limits
 
 Never run Cargo build, test, or Clippy commands concurrently on this machine.
-Memory, especially during linking, is the constraint; `nice` does not solve
-that. Keep the workspace development profile's capped debug information intact.
+Memory is the constraint; `nice` does not solve that. Keep the workspace
+development profile's capped debug information intact.
 
-For `mooloop-ui`, cap jobs and prefer one relevant test target:
+Run Cargo through `scripts/cargo-capped`, which puts the run in a
+memory-bounded cgroup:
 
 ```sh
-cargo test -p mooloop-ui -j 2
+scripts/cargo-capped check -p mooloop-ui
+scripts/cargo-capped clippy -p mooloop-ui --all-targets
+scripts/cargo-capped test -p mooloop-ui -j 2
 ```
+
+It costs nothing in speed -- a measured `mooloop-ui` check runs 41s either way
+-- and it is the only thing that keeps a heavy run from freezing the desktop
+instead of just failing. Prefix `MOOLOOP_CAP_STATS=1` to print peak memory.
+
+Two distinct memory problems live here, and the fix for one does not help the
+other:
+
+- **Linking**, which is what makes `cargo test` expensive: seven `mooloop-ui`
+  test binaries link at once. That is what `.cargo/config.toml`'s job cap,
+  `mold`, and the dev debug-info cap address. Cap jobs and prefer one relevant
+  test target, as above.
+- **Checking**, which never links, so none of the above applies to it. A
+  `mooloop-ui` check peaks at 3.4 GB after an edit and 5.2 GB cold, in a
+  *single* rustc process handling the one huge module `build.rs` generates
+  from `ui/main.slint`. Job count cannot subdivide one process, so lowering
+  `jobs` does not help; only the cgroup bound does.
 
 `.cargo/config.toml` limits default Cargo jobs to three. Do not raise the
 limit. When several worktrees need a shared cache, use the machine-local
 `CARGO_TARGET_DIR` described in the README.
+
+Do not set `CARGO_INCREMENTAL=0` to save memory. It is the obvious guess and
+it is measurably wrong here: on the same `.slint` edit it cost 4.58 GB and
+2m01s, against 3.42 GB and 41s with incremental left on.
 
 ## Remote builds and tests
 

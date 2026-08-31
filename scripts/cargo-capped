@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Run a Cargo command inside a memory-bounded cgroup so it cannot take the
+# desktop down with it.
+#
+#   scripts/cargo-capped check -p mooloop-ui
+#   scripts/cargo-capped clippy -p mooloop-ui --all-targets
+#   scripts/cargo-capped test -p mooloop-ui -j 2
+#   MOOLOOP_CAP_STATS=1 scripts/cargo-capped check -p mooloop-ui   # print peak RSS
+#
+# Why this exists, given `.cargo/config.toml` already caps jobs:
+#
+# That cap, `mold`, and the dev debug-info cap all target *linking*, which is
+# what makes `cargo test` expensive. `cargo check` never links, so none of them
+# apply to it -- and checking `mooloop-ui` still exhausted this 16 GB laptop.
+# Measured on a warm target directory:
+#
+#   cold check, all deps           5.24 GB peak   2m13s   100% CPU
+#   after a .slint edit            3.42 GB peak      41s    96% CPU
+#   after a .rs edit               3.24 GB peak      26s    94% CPU
+#
+# The CPU percentages are the point: the expensive part is ONE rustc process
+# on the single enormous module `build.rs` generates from `ui/main.slint`. A
+# job count cannot subdivide one process, which is why lowering `jobs` never
+# stopped `check` from OOMing. The peak is what it is.
+#
+# So this bounds the damage instead of the peak. The run gets its own scope
+# with `MemoryHigh` (throttled reclaim, not a kill), a `MemoryMax` backstop,
+# and -- the part that actually prevents the lockups -- a `MemorySwapMax`.
+# Unbounded swapping was the real killer here: this machine's first swap
+# device is an 8 GB zram partition at priority 100, and zram stores swapped
+# pages compressed *in RAM*, so a run that swaps under memory pressure eats
+# the very RAM it is short of and thrashes the whole machine. Bounding the
+# scope's swap keeps that spiral inside the scope.
+#
+# Incremental compilation is deliberately left ON. Disabling it is the obvious
+# guess for cutting rustc memory, and it is wrong here -- measured on the same
+# .slint edit, `CARGO_INCREMENTAL=0` cost 4.58 GB and 2m01s versus 3.42 GB and
+# 41s with it on. It loses on both axes; do not "optimize" it back off.
+set -euo pipefail
+
+# Sized against the measurements above: steady-state checks (~3.4 GB) stay
+# clear of MemoryHigh and never throttle, the cold ~5.2 GB path reclaims
+# gently instead of freezing the desktop, and MemoryMax is a backstop that
+# should only ever fire on a genuine runaway.
+HIGH="${MOOLOOP_CAP_HIGH:-5G}"
+MAX="${MOOLOOP_CAP_MAX:-7G}"
+SWAP="${MOOLOOP_CAP_SWAP:-4G}"
+
+if [ "$#" -eq 0 ]; then
+  awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
+  exit 2
+fi
+
+CMD=(cargo "$@")
+if [ "${MOOLOOP_CAP_STATS:-0}" = "1" ]; then
+  CMD=(/usr/bin/time -f $'\ncargo-capped: peak %M KB, wall %es, %F major faults' "${CMD[@]}")
+fi
+
+# Fall back to an unbounded run rather than refusing to work on a machine
+# without a systemd user session or a delegated memory controller.
+if ! command -v systemd-run >/dev/null 2>&1 ||
+   ! grep -qw memory "/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers" 2>/dev/null; then
+  echo "cargo-capped: no delegated memory cgroup; running uncapped" >&2
+  exec "${CMD[@]}"
+fi
+
+exec systemd-run --user --scope --quiet --collect \
+  --unit="mooloop-cargo-$$" \
+  --description="Memory-bounded Cargo run for mooloop" \
+  -p MemoryAccounting=yes \
+  -p MemoryHigh="$HIGH" \
+  -p MemoryMax="$MAX" \
+  -p MemorySwapMax="$SWAP" \
+  -p CPUWeight=50 \
+  -p IOWeight=50 \
+  -- "${CMD[@]}"
