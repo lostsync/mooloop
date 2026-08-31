@@ -1945,11 +1945,12 @@ impl RenderState {
         // unmuting does not restart its phase.
         let active_channels = self.sequencer.active_channels();
         let mut modulator_ticks = [0usize; MAX_CHANNELS];
-        // Not an iterator loop: the body takes `&mut self`, which cannot
-        // coexist with a mutable borrow of the array being filled.
-        #[allow(clippy::needless_range_loop)]
         let mut gate_ticks =
             [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
+        // Not an iterator loop: `gate_ticks` is indexed by control tick first
+        // and by channel second, so the loop variable is not this array's
+        // outer index and enumerating it would walk the wrong axis.
+        #[allow(clippy::needless_range_loop)]
         for source_channel in 0..active_channels {
             for event in self.events[source_channel].iter() {
                 let tick = (event.offset as usize / CONTROL_RATE_FRAMES)
@@ -1963,8 +1964,8 @@ impl RenderState {
                 }
             }
         }
-        for index in 0..active_channels {
-            modulator_ticks[index] = self.tick_channel_modulators(index, frames, &gate_ticks);
+        for (index, ticks) in modulator_ticks.iter_mut().enumerate().take(active_channels) {
+            *ticks = self.tick_channel_modulators(index, frames, &gate_ticks);
         }
         // Lanes resolve whether or not the transport is running: stopped, the
         // playhead simply holds still and the destination sits at the value

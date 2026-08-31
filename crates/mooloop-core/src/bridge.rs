@@ -16,6 +16,17 @@ use crate::{
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
+// `SetChannelModulation` carries a whole `ModRack` (four modulator slots and
+// sixteen matrix rows), which makes this enum a few hundred bytes wide. That
+// is deliberate. The command ring is preallocated at startup and every entry
+// is already sized for the widest variant, so a wide variant costs fixed
+// setup memory, never a per-command allocation. Boxing the rack to even the
+// variants out would allocate on the GUI thread and, worse, drop that box on
+// the realtime callback -- a deallocation the executor contract forbids
+// (`docs/AUDIO_ARCHITECTURE.md`). It would also cost the `Copy` derive this
+// type is used through. A bounded stack copy through a fixed-capacity ring is
+// the cheaper half of that trade.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EngineCommand {
     /// Begin or resume playback from the current position.

@@ -10676,8 +10676,10 @@ mod tests {
 
     #[test]
     fn project_pattern_banks_are_normalized_for_stale_clipboard_channels() {
-        let mut project = Project::default();
-        project.pattern_lengths = vec![16, 32, 8];
+        let mut project = Project {
+            pattern_lengths: vec![16, 32, 8],
+            ..Default::default()
+        };
         project.channels[0].notes = vec![vec![NoteEvent::new(1, 0, 6, 60, 100)]];
         project.channels[0].automation = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()];
 

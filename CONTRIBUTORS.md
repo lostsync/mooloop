@@ -121,7 +121,10 @@ work session you can recall being part of, and don't stress over precision.
   snapping for sample and loop markers, where preference is a tier order
   (rising crossings, then same-direction ones, then quiet points) rather than
   a weight vector, and a channel that is still stepping disqualifies the
-  other channel's crossing.
+  other channel's crossing. Measured `EngineCommand` before believing
+  `large_enum_variant` about it: the width is the rack the preallocated ring
+  is sized for, so the variant kept its size and gained the reasoning in a
+  comment.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
