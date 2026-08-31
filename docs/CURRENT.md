@@ -377,6 +377,18 @@ boundary.
   change at all without an off-thread IR rebuild. Device faces are
   width-quantized in rack units; gate and compressor take 2U, while delay,
   EQ, reverb, and Mod take 3U.
+- Gate, compressor, and limiter share one transfer-curve display with a
+  draggable threshold handle. Its live dot is fed by the device's own gain
+  computer rather than by the surrounding peak meters: the audio thread
+  reports the level its sidechain detector reached and the gain reduction it
+  applied, held per block the way the peak meters are, and the display plots
+  the dot at that detector level against the level actually leaving the
+  device. So the dot moves with the attack and release the device is running,
+  and rides above the static curve for as long as a slow release is still
+  holding the gain down. Gain reduction is also read out three ways: a number,
+  a rail down the right edge, and a warm glow over the whole plot whose
+  strength tracks it. All three rest when nothing is coming in, so a gate shut
+  on a silent channel does not sit lit up.
 - The dynamics effects detect on the louder of the two channels and apply one
   gain to both, so compression cannot walk the stereo image around. The
   limiter has no lookahead on purpose: the engine has no plugin-delay

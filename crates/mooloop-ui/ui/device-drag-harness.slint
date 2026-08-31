@@ -80,8 +80,8 @@ export component CompressorDeviceDragHarness inherits Window {
     in-out property <float> release;
     in-out property <float> knee;
     in-out property <float> makeup;
-    in property <float> input-left-db: -60;
-    in property <float> input-right-db: -60;
+    in property <float> detector-db: -60;
+    in property <float> gain-reduction-db: 0;
     callback threshold-changed(float);
 
     preferred-width: 444px;
@@ -95,8 +95,8 @@ export component CompressorDeviceDragHarness inherits Window {
         release <=> root.release;
         knee <=> root.knee;
         makeup <=> root.makeup;
-        input-left-db: root.input-left-db;
-        input-right-db: root.input-right-db;
+        detector-db: root.detector-db;
+        gain-reduction-db: root.gain-reduction-db;
         threshold-changed(v) => { root.threshold-changed(v); }
     }
 }

@@ -161,6 +161,8 @@ fn render_mixer_pane_with_a_bus_chain() {
             input_right_db: -11.0,
             output_left_db: -12.0,
             output_right_db: -14.0,
+            detector_db: -60.0,
+            gain_reduction_db: 0.0,
         },
         EffectSlotRow {
             kind: 6,
@@ -189,6 +191,8 @@ fn render_mixer_pane_with_a_bus_chain() {
             input_right_db: -14.0,
             output_left_db: -10.0,
             output_right_db: -10.5,
+            detector_db: -12.0,
+            gain_reduction_db: -6.0,
         },
     ]))));
 

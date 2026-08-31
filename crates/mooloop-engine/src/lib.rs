@@ -469,6 +469,14 @@ impl EngineHandle {
         self.device_meters.take(target, stage)
     }
 
+    /// Read and clear a dynamics device's held display state: the loudest
+    /// level its detector reached and the deepest gain reduction it applied
+    /// over the blocks since the last read, as `(detector level, dB)`.
+    /// Stages that do not reduce gain read `(0.0, 0.0)`.
+    pub fn take_device_dynamics(&self, target: usize, stage: usize) -> (f32, f32) {
+        self.device_meters.take_dynamics(target, stage)
+    }
+
     /// Subscribe an effect stage's input to compact spectrum telemetry. This
     /// is observation-only: it never participates in audio or modulation
     /// signal flow, and disabled stages do not run spectral analysis.

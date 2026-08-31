@@ -12,8 +12,8 @@ export component LimiterDeviceFace inherits EffectDeviceShell {
     in-out property <float> ceiling;  // normalized 0..1 (-24..0 dB)
     in-out property <float> release;  // normalized 0..1 (1..500 ms)
     in-out property <float> gain;     // normalized 0..1 (0..24 dB)
-    in property <float> input-left-db: -60;
-    in property <float> input-right-db: -60;
+    in property <float> detector-db: -60;
+    in property <float> gain-reduction-db: 0;
     callback ceiling-changed(float);
     callback release-changed(float);
     callback gain-changed(float);
@@ -42,8 +42,8 @@ export component LimiterDeviceFace inherits EffectDeviceShell {
                 ratio: 1;
                 knee-db: 0;
                 extra-db: root.gain-db;
-                input-left-db: root.input-left-db;
-                input-right-db: root.input-right-db;
+                detector-db: root.detector-db;
+                gain-reduction-db: root.gain-reduction-db;
                 threshold-dragged(db) => {
                     root.ceiling = clamp((db + 24) / 24, 0, 1);
                     root.ceiling-changed(root.ceiling);

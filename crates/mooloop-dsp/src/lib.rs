@@ -64,6 +64,6 @@ pub use event::{Event, EventList, TimedEvent};
 pub use mlm1::MlM1;
 pub use monosynth::MonoSynth;
 pub use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
-pub use node::{AudioNode, ProcessContext};
+pub use node::{AudioNode, DynamicsFrame, ProcessContext};
 pub use polysynth::PolySynth;
 pub use sampler::{SampleData, Sampler};

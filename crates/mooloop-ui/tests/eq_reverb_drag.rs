@@ -298,8 +298,8 @@ fn compressor_threshold_drag_updates_the_parameter_and_curve() {
     ui.set_release(0.5304);
     ui.set_knee(0.5);
     ui.set_makeup(0.25);
-    ui.set_input_left_db(-12.0);
-    ui.set_input_right_db(-16.0);
+    ui.set_detector_db(-12.0);
+    ui.set_gain_reduction_db(-12.5);
 
     let before = ui.window().take_snapshot().unwrap();
     write_snapshot(&before, "MOOLOOP_DYNAMICS_BEFORE_DRAG_SNAPSHOT");

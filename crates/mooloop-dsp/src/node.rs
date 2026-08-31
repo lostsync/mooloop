@@ -55,6 +55,32 @@ pub struct ProcessContext {
     pub position_frames: u64,
 }
 
+/// What a gain-reducing device did over one block, for its display.
+///
+/// Both values are referred to the node's *input*, so a display can plot
+/// them straight onto the same input-level axis as its transfer curve, and
+/// both are block extremes rather than end-of-block samples: an attack
+/// faster than the GUI's frame interval is the one thing a dynamics display
+/// most needs to show.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DynamicsFrame {
+    /// The loudest level the sidechain detector reached, in dB. This is the
+    /// post-ballistics envelope, not a raw sample peak: it is the signal the
+    /// gain computer actually saw, so a dot drawn at it moves with the
+    /// device's attack and release rather than with the block boundaries.
+    pub detector_db: f32,
+    /// The deepest gain reduction applied, in dB. Always <= 0.
+    pub reduction_db: f32,
+}
+
+impl DynamicsFrame {
+    /// A block in which nothing was heard and nothing was reduced.
+    pub const SILENT: Self = Self {
+        detector_db: f32::NEG_INFINITY,
+        reduction_db: 0.0,
+    };
+}
+
 /// A realtime audio node (instrument or effect).
 pub trait AudioNode {
     /// Processing latency of the active path in base-rate frames. The value is
@@ -80,6 +106,15 @@ pub trait AudioNode {
     /// returns are observable without logging from the audio thread.
     fn buffer_collisions(&self) -> u64 {
         0
+    }
+
+    /// What this node's gain computer did over the block just processed, if
+    /// it has one. Only the dynamics devices report a value; the host
+    /// publishes it as display telemetry, the same way `buffer_collisions`
+    /// is published, so a transfer-curve display can show the detector and
+    /// the gain reduction without the audio thread knowing about the GUI.
+    fn dynamics_frame(&self) -> Option<DynamicsFrame> {
+        None
     }
 
     /// Process one block in place on `bus`. `events_in` is sorted by sample

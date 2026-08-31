@@ -176,6 +176,12 @@ struct EffectSlotRow {
     output-right-db: float,
     // Buffer-only: forced returns to live counted by the inserted device.
     buffer-collisions: int,
+    // Dynamics-only: the level this device's sidechain detector reached and
+    // the gain reduction it applied. Both are the device's own state, not a
+    // difference of the meters above -- the meters are block peaks, these
+    // carry the attack and release the device is actually running.
+    detector-db: float,
+    gain-reduction-db: float,
 }
 
 // One selectable destination inside the automation lane picker.
@@ -2875,8 +2881,8 @@ export component MainWindow inherits Window {
                                                         hold: slot.p2;
                                                         release: slot.p3;
                                                         range: slot.p4;
-                                                        input-left-db: slot.input-left-db;
-                                                        input-right-db: slot.input-right-db;
+                                                        detector-db: slot.detector-db;
+                                                        gain-reduction-db: slot.gain-reduction-db;
                                                         threshold-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                         attack-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         hold-changed(v) => { root.effect-param-changed(index, 2, v); }
@@ -2906,8 +2912,8 @@ export component MainWindow inherits Window {
                                                         release: slot.p3;
                                                         knee: slot.p4;
                                                         makeup: slot.p5;
-                                                        input-left-db: slot.input-left-db;
-                                                        input-right-db: slot.input-right-db;
+                                                        detector-db: slot.detector-db;
+                                                        gain-reduction-db: slot.gain-reduction-db;
                                                         threshold-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                         ratio-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         attack-changed(v) => { root.effect-param-changed(index, 2, v); }
@@ -2936,8 +2942,8 @@ export component MainWindow inherits Window {
                                                         ceiling: slot.p0;
                                                         release: slot.p1;
                                                         gain: slot.p2;
-                                                        input-left-db: slot.input-left-db;
-                                                        input-right-db: slot.input-right-db;
+                                                        detector-db: slot.detector-db;
+                                                        gain-reduction-db: slot.gain-reduction-db;
                                                         ceiling-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                         release-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         gain-changed(v) => { root.effect-param-changed(index, 2, v); }

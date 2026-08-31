@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-31
-- Sessions: 26
+- Sessions: 27
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -219,6 +219,20 @@ work session you can recall being part of, and don't stress over precision.
   and a slow drag walks the selection away from where the pointer says it is.
   Left one standard gesture out on purpose and said so in `ENHANCEMENTS.md`:
   axis-constrained drag has no conventional binding that is not Alt.
+  Then fixed the dynamics display's jumpy signal dot, which turned out not to
+  be a smoothing problem: the dot was being fed the surrounding peak meters,
+  through a twelve-segment change filter that quantized its travel into five
+  decibel steps. Gate, compressor, and limiter now report their own gain
+  computer's state -- the level their sidechain detector reached and the
+  reduction they applied, as block extremes on the `AudioNode` trait beside
+  `buffer_collisions` -- so the dot rides the attack and release the device is
+  actually running, and sits at the level really leaving the device rather
+  than on the static curve, which makes a slow release visible as the dot
+  floating above the curve. Added the gain-reduction readout that was missing
+  entirely: a number, a rail, and a glow whose strength tracks it. The glow
+  needed one rule the audio does not imply -- it rests when nothing is coming
+  in, because a gate shut on a silent channel is truthfully holding 80 dB down
+  and would otherwise sit at full brightness for as long as nobody played.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

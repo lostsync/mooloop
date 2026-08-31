@@ -19,14 +19,16 @@ use mooloop_core::MAX_BUSES;
 use mooloop_core::{
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_MODULATORS_PER_CHANNEL, MAX_SAMPLER_VOICES,
 };
-use mooloop_dsp::SPECTRUM_BINS;
+use mooloop_dsp::dynamics::db_to_lin;
+use mooloop_dsp::{DynamicsFrame, SPECTRUM_BINS};
 
 /// Peak-hold cells for every bus, left and right interleaved.
 pub struct BusMeters {
     cells: Vec<AtomicU32>,
 }
 
-/// Held input/output peaks for every visible device. Stage zero is a
+/// Held input/output peaks for every visible device, plus the held detector
+/// level and gain reduction of the ones that reduce gain. Stage zero is a
 /// source (its input is deliberately never published); later stages are the
 /// effect slots. This gives a device face a truthful pair of meters instead
 /// of borrowing the master meter for every rectangle in the rack.
@@ -159,7 +161,11 @@ impl DeviceTelemetry {
 impl DeviceMeters {
     const TARGETS: usize = MAX_CHANNELS + MAX_BUSES;
     const STAGES: usize = MAX_EFFECTS_PER_CHANNEL + 1;
-    const VALUES_PER_STAGE: usize = 4; // input L/R, output L/R
+    // Input L/R, output L/R, detector level, gain-reduction depth.
+    const VALUES_PER_STAGE: usize = 6;
+    /// Cell offset of the dynamics pair within a stage.
+    const DETECTOR: usize = 4;
+    const REDUCTION: usize = 5;
 
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -186,6 +192,45 @@ impl DeviceMeters {
             self.cells[base + 2].fetch_max(left.max(0.0).to_bits(), Ordering::Relaxed);
             self.cells[base + 3].fetch_max(right.max(0.0).to_bits(), Ordering::Relaxed);
         }
+    }
+
+    /// Raise a gain-reducing device's held display state.
+    ///
+    /// Both values are stored as non-negative magnitudes so the same
+    /// `fetch_max` hold as the peak meters is correct for them: the detector
+    /// keeps its linear level, and the reduction keeps its *depth* in dB
+    /// (the negation of the frame's reduction). That also makes the
+    /// swap-to-zero on read mean exactly "silent, and reducing nothing",
+    /// which is the right thing for a stage the GUI has stopped watching.
+    pub fn publish_dynamics(&self, target: usize, stage: usize, frame: DynamicsFrame) {
+        let Some(base) = Self::base(target, stage) else {
+            return;
+        };
+        // A silent block reports `-inf` dB, which converts to the zero the
+        // held cell already rests at; anything else is an ordinary level.
+        let detector = if frame.detector_db.is_finite() {
+            db_to_lin(frame.detector_db).max(0.0)
+        } else {
+            0.0
+        };
+        let depth_db = (-frame.reduction_db).max(0.0);
+        self.cells[base + Self::DETECTOR].fetch_max(detector.to_bits(), Ordering::Relaxed);
+        self.cells[base + Self::REDUCTION].fetch_max(depth_db.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Read and clear a device's held dynamics state, as `(detector level,
+    /// gain reduction dB)` with the reduction back in its natural sign.
+    pub fn take_dynamics(&self, target: usize, stage: usize) -> (f32, f32) {
+        Self::base(target, stage)
+            .map(|base| {
+                let read =
+                    |index: usize| f32::from_bits(self.cells[index].swap(0, Ordering::Relaxed));
+                (
+                    read(base + Self::DETECTOR),
+                    -read(base + Self::REDUCTION),
+                )
+            })
+            .unwrap_or((0.0, 0.0))
     }
 
     pub fn take(&self, target: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
@@ -343,6 +388,7 @@ impl ModulatorMeters {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mooloop_dsp::dynamics::lin_to_db;
 
     #[test]
     fn a_peak_is_held_until_it_is_read() {
@@ -381,6 +427,65 @@ mod tests {
         telemetry.set_spectrum_enabled(2, 1, false);
         assert!(!telemetry.spectrum_enabled(2, 1));
         assert_eq!(telemetry.read_spectrum(2, 1), [0.0; SPECTRUM_BINS]);
+    }
+
+    #[test]
+    fn dynamics_telemetry_holds_the_deepest_reduction_until_it_is_read() {
+        let meters = DeviceMeters::new();
+        meters.publish_dynamics(
+            0,
+            1,
+            DynamicsFrame {
+                detector_db: -20.0,
+                reduction_db: -9.0,
+            },
+        );
+        // A calmer block must not erase the squeeze the GUI has not seen.
+        meters.publish_dynamics(
+            0,
+            1,
+            DynamicsFrame {
+                detector_db: -40.0,
+                reduction_db: -1.0,
+            },
+        );
+        let (detector, reduction_db) = meters.take_dynamics(0, 1);
+        assert!(
+            (lin_to_db(detector) + 20.0).abs() < 0.01,
+            "held detector read {} dB",
+            lin_to_db(detector)
+        );
+        assert!(
+            (reduction_db + 9.0).abs() < 0.01,
+            "held reduction read {reduction_db} dB"
+        );
+        // Reading clears, so a stage nobody is driving reads as at rest.
+        assert_eq!(meters.take_dynamics(0, 1), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_silent_dynamics_frame_rests_at_zero_rather_than_a_residual_level() {
+        let meters = DeviceMeters::new();
+        meters.publish_dynamics(0, 1, DynamicsFrame::SILENT);
+        assert_eq!(meters.take_dynamics(0, 1), (0.0, 0.0));
+    }
+
+    #[test]
+    fn dynamics_telemetry_does_not_disturb_the_peak_meters() {
+        let meters = DeviceMeters::new();
+        meters.publish_input(2, 3, 0.5, 0.25);
+        meters.publish_output(2, 3, 0.4, 0.2);
+        meters.publish_dynamics(
+            2,
+            3,
+            DynamicsFrame {
+                detector_db: -6.0,
+                reduction_db: -3.0,
+            },
+        );
+        assert_eq!(meters.take(2, 3), ((0.5, 0.25), (0.4, 0.2)));
+        // ...and the peaks' own read did not clear the dynamics pair.
+        assert!(meters.take_dynamics(2, 3).1 < 0.0);
     }
 
     #[test]

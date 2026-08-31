@@ -912,6 +912,17 @@ fn meter_display_changed(previous: f32, next: f32, segments: u32) -> bool {
     meter_segments(previous, segments) != meter_segments(next, segments)
 }
 
+/// A dynamics display is a continuous readout, not a segmented meter: its dot
+/// slides along a transfer curve and its gain reduction fades a glow, so the
+/// twelve-segment test the meter bars use would quantize both into visible
+/// five-decibel jumps. Half a decibel is finer than either can resolve and
+/// still keeps the model row from being rewritten on every idle frame.
+const DYNAMICS_DISPLAY_STEP_DB: f32 = 0.5;
+
+fn dynamics_display_changed(previous: f32, next: f32) -> bool {
+    (previous - next).abs() >= DYNAMICS_DISPLAY_STEP_DB
+}
+
 /// The selected notes a group gesture should act on, always including the
 /// note that was actually grabbed.
 ///
@@ -1368,6 +1379,8 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
         output_left_db: METER_FLOOR_DB,
         output_right_db: METER_FLOOR_DB,
         buffer_collisions: 0,
+        detector_db: METER_FLOOR_DB,
+        gain_reduction_db: 0.0,
     }
 }
 
@@ -10406,6 +10419,18 @@ impl AppUi {
                                     || meter_display_changed(row.input_right_db, input_right_db, 12)
                                     || meter_display_changed(row.output_left_db, output_left_db, 12)
                                     || meter_display_changed(row.output_right_db, output_right_db, 12);
+                                // Non-dynamics stages never publish here, so
+                                // they read the resting pair and need no
+                                // check for what kind of device they hold.
+                                let (detector, reduction_db) =
+                                    handle.take_device_dynamics(device_target, slot + 1);
+                                let detector_db = linear_to_db(detector);
+                                let dynamics_changed =
+                                    dynamics_display_changed(row.detector_db, detector_db)
+                                        || dynamics_display_changed(
+                                            row.gain_reduction_db,
+                                            reduction_db,
+                                        );
                                 if row.eq_analyzer_enabled {
                                     let spectrum = handle.effect_spectrum(state.effect_target, slot as u8);
                                     row.eq_spectrum_data = spectrum.as_slice().into();
@@ -10420,12 +10445,18 @@ impl AppUi {
                                     row.buffer_collisions
                                 };
                                 let collisions_changed = collisions != row.buffer_collisions;
-                                if meter_changed || collisions_changed || row.eq_analyzer_enabled {
+                                if meter_changed
+                                    || dynamics_changed
+                                    || collisions_changed
+                                    || row.eq_analyzer_enabled
+                                {
                                     row.input_left_db = input_left_db;
                                     row.input_right_db = input_right_db;
                                     row.output_left_db = output_left_db;
                                     row.output_right_db = output_right_db;
                                     row.buffer_collisions = collisions;
+                                    row.detector_db = detector_db;
+                                    row.gain_reduction_db = reduction_db;
                                     state.effect_slot_model.set_row_data(slot, row);
                                 }
                             }

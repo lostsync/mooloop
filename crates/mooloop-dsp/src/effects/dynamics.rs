@@ -24,7 +24,7 @@ use crate::dynamics::{
     EnvelopeFollower,
 };
 use crate::event::{Event, EventList};
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{AudioNode, DynamicsFrame, ProcessContext};
 use crate::smooth::Smoothed;
 
 /// Peak detection for the limiter is effectively instantaneous: its whole job
@@ -42,6 +42,46 @@ fn linked_peak(l: f32, r: f32) -> f32 {
     l.abs().max(r.abs())
 }
 
+/// The running block extremes each dynamics effect reports for its display.
+///
+/// Extremes rather than the last sample of the block: attack times here go
+/// down to 0.05 ms, so a device can open, clamp a transient, and be halfway
+/// released again inside one buffer. A display fed end-of-block samples
+/// would simply never see the moments that matter.
+#[derive(Debug, Clone, Copy)]
+struct DynamicsBlock {
+    /// Loudest detector level of the block, linear, referred to node input.
+    detector: f32,
+    /// Deepest reduction of the block in dB, always <= 0.
+    reduction_db: f32,
+}
+
+impl DynamicsBlock {
+    fn new() -> Self {
+        Self {
+            detector: 0.0,
+            reduction_db: 0.0,
+        }
+    }
+
+    fn begin(&mut self) {
+        self.detector = 0.0;
+        self.reduction_db = 0.0;
+    }
+
+    fn observe(&mut self, detector: f32, reduction_db: f32) {
+        self.detector = self.detector.max(detector);
+        self.reduction_db = self.reduction_db.min(reduction_db);
+    }
+
+    fn frame(&self) -> DynamicsFrame {
+        DynamicsFrame {
+            detector_db: lin_to_db(self.detector),
+            reduction_db: self.reduction_db,
+        }
+    }
+}
+
 // --- Gate ------------------------------------------------------------------
 
 pub struct GateEffect {
@@ -51,6 +91,7 @@ pub struct GateEffect {
     gain_db: f32,
     /// Samples of hold remaining since the level last cleared the threshold.
     hold_remaining: u32,
+    block: DynamicsBlock,
 }
 
 impl GateEffect {
@@ -61,6 +102,7 @@ impl GateEffect {
             // Start shut, so a gate on a silent channel does not pass a burst
             // before its first ramp.
             gain_db: params.range_db,
+            block: DynamicsBlock::new(),
             hold_remaining: 0,
         }
     }
@@ -119,6 +161,9 @@ impl GateEffect {
                 shut_coeff
             };
             self.gain_db = target_db + coeff * (self.gain_db - target_db);
+            // The gate detects on the bare level, so that level *is* its
+            // detector; report it rather than an envelope it does not have.
+            self.block.observe(db_to_lin(level_db), self.gain_db);
 
             let gain = db_to_lin(self.gain_db);
             bus.l[i] *= gain;
@@ -128,6 +173,10 @@ impl GateEffect {
 }
 
 impl AudioNode for GateEffect {
+    fn dynamics_frame(&self) -> Option<DynamicsFrame> {
+        Some(self.block.frame())
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,
@@ -135,6 +184,7 @@ impl AudioNode for GateEffect {
         events_in: &EventList,
         _events_out: Option<&mut EventList>,
     ) {
+        self.block.begin();
         self.sample_rate = ctx.sample_rate;
         let frames = ctx.frames.min(bus.capacity());
         let mut pos = 0usize;
@@ -159,6 +209,7 @@ pub struct CompressorEffect {
     threshold_db: Smoothed,
     ratio: Smoothed,
     makeup_db: Smoothed,
+    block: DynamicsBlock,
 }
 
 impl CompressorEffect {
@@ -173,6 +224,7 @@ impl CompressorEffect {
             threshold_db: smoothed(params.threshold_db.clamp(-60.0, 0.0)),
             ratio: smoothed(params.ratio.clamp(1.0, 20.0)),
             makeup_db: smoothed(params.makeup_db.clamp(0.0, 24.0)),
+            block: DynamicsBlock::new(),
         }
     }
 
@@ -224,6 +276,7 @@ impl CompressorEffect {
             let envelope = self.detector.process(linked_peak(bus.l[i], bus.r[i]));
             let reduction_db =
                 compressor_gain_db(lin_to_db(envelope), threshold_db, ratio, knee_db);
+            self.block.observe(envelope, reduction_db);
             let gain = db_to_lin(reduction_db) * makeup;
             bus.l[i] *= gain;
             bus.r[i] *= gain;
@@ -232,6 +285,10 @@ impl CompressorEffect {
 }
 
 impl AudioNode for CompressorEffect {
+    fn dynamics_frame(&self) -> Option<DynamicsFrame> {
+        Some(self.block.frame())
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,
@@ -239,6 +296,7 @@ impl AudioNode for CompressorEffect {
         events_in: &EventList,
         _events_out: Option<&mut EventList>,
     ) {
+        self.block.begin();
         if ctx.sample_rate != self.sample_rate {
             self.sample_rate = ctx.sample_rate;
             self.detector.set_times(
@@ -279,6 +337,7 @@ pub struct LimiterEffect {
     detector: EnvelopeFollower,
     ceiling_db: Smoothed,
     gain_db: Smoothed,
+    block: DynamicsBlock,
 }
 
 impl LimiterEffect {
@@ -292,6 +351,7 @@ impl LimiterEffect {
             detector,
             ceiling_db: smoothed(params.ceiling_db.clamp(-24.0, 0.0)),
             gain_db: smoothed(params.gain_db.clamp(0.0, 24.0)),
+            block: DynamicsBlock::new(),
         }
     }
 
@@ -336,7 +396,11 @@ impl LimiterEffect {
             let r = bus.r[i] * drive;
 
             let envelope = self.detector.process(linked_peak(l, r));
-            let reduction = db_to_lin(limiter_gain_db(lin_to_db(envelope), ceiling_db));
+            let reduction_db = limiter_gain_db(lin_to_db(envelope), ceiling_db);
+            let reduction = db_to_lin(reduction_db);
+            // The detector sits after the input gain, but the display's axis
+            // is this node's input, so refer the level back across the drive.
+            self.block.observe(envelope / drive.max(f32::MIN_POSITIVE), reduction_db);
 
             // The detector's release leaves the gain high for a moment after a
             // peak passes, so clamp as a backstop. Without it the released
@@ -348,6 +412,10 @@ impl LimiterEffect {
 }
 
 impl AudioNode for LimiterEffect {
+    fn dynamics_frame(&self) -> Option<DynamicsFrame> {
+        Some(self.block.frame())
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,
@@ -355,6 +423,7 @@ impl AudioNode for LimiterEffect {
         events_in: &EventList,
         _events_out: Option<&mut EventList>,
     ) {
+        self.block.begin();
         if ctx.sample_rate != self.sample_rate {
             self.sample_rate = ctx.sample_rate;
             self.detector
@@ -725,6 +794,136 @@ mod tests {
             max_step < 0.1,
             "gain change left a discontinuity of {max_step}"
         );
+    }
+
+    #[test]
+    fn the_compressors_reported_frame_matches_the_gain_it_applied() {
+        let frames = 48_000;
+        let amplitude = 0.5; // about -6 dB, 12 dB over the threshold
+        let mut bus = tone_bus(frames, amplitude);
+        let mut effect = CompressorEffect::new(
+            CompressorParams {
+                threshold_db: -18.0,
+                ratio: 4.0,
+                attack_ms: 1.0,
+                release_ms: 50.0,
+                knee_db: 0.0,
+                makeup_db: 0.0,
+            },
+            SR,
+        );
+        effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+        let frame = effect.dynamics_frame().expect("a compressor reduces gain");
+
+        // The detector settles at the tone's own level, so the display's dot
+        // lands where the signal really is on the input axis.
+        assert!(
+            (frame.detector_db - lin_to_db(amplitude)).abs() < 1.0,
+            "detector read {} for a {} dB tone",
+            frame.detector_db,
+            lin_to_db(amplitude)
+        );
+        // 12 dB over at 4:1 is 9 dB of reduction, which is also what the
+        // audio lost -- the reported number is the applied one, not a
+        // separate estimate that could drift from it.
+        assert!(
+            (frame.reduction_db + 9.0).abs() < 1.5,
+            "reported {} dB of reduction",
+            frame.reduction_db
+        );
+        let measured_db = lin_to_db(peak(&bus.l[frames / 2..])) - lin_to_db(amplitude);
+        assert!(
+            (frame.reduction_db - measured_db).abs() < 1.0,
+            "reported {} dB but the audio lost {measured_db} dB",
+            frame.reduction_db
+        );
+    }
+
+    #[test]
+    fn a_reported_frame_covers_the_whole_block_not_just_its_last_sample() {
+        // One loud burst at the top of the block, silence for the rest. With
+        // a 500 ms release the device is still well into its recovery at the
+        // end, but a display fed the final sample would understate what it
+        // did; the frame must carry the extreme.
+        let frames = 4_096;
+        let mut bus = StereoBus::with_capacity(frames);
+        for i in 0..64 {
+            bus.l[i] = 0.9;
+            bus.r[i] = 0.9;
+        }
+        let mut effect = LimiterEffect::new(
+            LimiterParams {
+                ceiling_db: -12.0,
+                release_ms: 500.0,
+                gain_db: 0.0,
+            },
+            SR,
+        );
+        effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+        let frame = effect.dynamics_frame().expect("a limiter reduces gain");
+        assert!(
+            frame.reduction_db < -6.0,
+            "a burst 11 dB over the ceiling reported only {} dB",
+            frame.reduction_db
+        );
+        assert!(
+            frame.detector_db > -3.0,
+            "detector missed the burst, reading {}",
+            frame.detector_db
+        );
+    }
+
+    #[test]
+    fn a_limiters_reported_level_is_referred_to_its_input() {
+        // The detector sits after the input gain, but the display plots
+        // against this node's input, so 12 dB of drive must not move the dot.
+        let frames = 8_192;
+        let run = |gain_db: f32| {
+            let mut bus = tone_bus(frames, 0.1);
+            let mut effect = LimiterEffect::new(
+                LimiterParams {
+                    ceiling_db: -1.0,
+                    release_ms: 50.0,
+                    gain_db,
+                },
+                SR,
+            );
+            effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+            effect.dynamics_frame().expect("a limiter reduces gain").detector_db
+        };
+        let plain = run(0.0);
+        let driven = run(12.0);
+        assert!(
+            (plain - driven).abs() < 0.5,
+            "input gain moved the reported level from {plain} to {driven}"
+        );
+    }
+
+    #[test]
+    fn every_dynamics_effect_reports_a_resting_frame_for_silence() {
+        let frames = 4_096;
+        let mut nodes: Vec<Box<dyn AudioNode>> = vec![
+            Box::new(GateEffect::new(GateParams::default(), SR)),
+            Box::new(CompressorEffect::new(CompressorParams::default(), SR)),
+            Box::new(LimiterEffect::new(LimiterParams::default(), SR)),
+        ];
+        for node in nodes.iter_mut() {
+            let mut bus = StereoBus::with_capacity(frames);
+            node.process(&context(frames), &mut bus, &EventList::empty(), None);
+            let frame = node.dynamics_frame().expect("all three reduce gain");
+            assert!(
+                frame.detector_db <= -100.0,
+                "silence detected at {}",
+                frame.detector_db
+            );
+            // A gate's whole job is to shut on silence, so it alone is
+            // expected to be reducing here; none of them may report a lift.
+            assert!(
+                frame.reduction_db <= 0.0,
+                "reported a gain increase: {}",
+                frame.reduction_db
+            );
+        }
     }
 
     #[test]

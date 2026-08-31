@@ -447,6 +447,8 @@ fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
         input_right_db: -60.0,
         output_left_db: -60.0,
         output_right_db: -60.0,
+        detector_db: -60.0,
+        gain_reduction_db: 0.0,
     }
 }
 

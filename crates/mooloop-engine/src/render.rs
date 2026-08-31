@@ -642,6 +642,11 @@ impl EffectChain {
                     // counter. Publishing it here keeps the audio thread free
                     // of logging.
                     telemetry.publish_buffer_collisions(target, slot + 1, node.buffer_collisions());
+                    // Only the dynamics devices answer this; for everything
+                    // else it is one `None` and the cells stay at rest.
+                    if let Some(frame) = node.dynamics_frame() {
+                        meters.publish_dynamics(target, slot + 1, frame);
+                    }
                 }
             }
             self.events[slot].clear();

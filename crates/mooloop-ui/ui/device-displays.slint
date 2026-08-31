@@ -396,14 +396,39 @@ export component DynamicsCurveDisplay inherits Rectangle {
     in property <float> knee-db;
     // Gate: range. Compressor: makeup. Limiter: input gain.
     in property <float> extra-db;
-    // The engine's held peak at this effect's input. Dynamics link the stereo
-    // detector, so the louder channel is the useful position on this curve.
-    in property <float> input-left-db: root.floor-db;
-    in property <float> input-right-db: root.floor-db;
+    // What the device's own sidechain detector reached, referred to this
+    // node's input. Deliberately not the input meter: that is a per-block
+    // peak, which lands somewhere different every frame and makes the dot
+    // stutter, while this has already been through the attack and release
+    // the device is running, so it moves the way the device sounds.
+    in property <float> detector-db: root.floor-db;
+    // Gain reduction the device is actually applying, in dB and <= 0. It
+    // lags the static curve during release, which is exactly the part of a
+    // compressor's behaviour a transfer plot alone cannot show.
+    in property <float> gain-reduction-db: 0;
     callback threshold-dragged(float);
     private property <int> sample-count: 140;
     private property <float> floor-db: -60;
-    private property <float> input-db: clamp(max(root.input-left-db, root.input-right-db), root.floor-db, 0);
+    private property <float> input-db: clamp(root.detector-db, root.floor-db, 0);
+    // A device with nothing coming into it is not doing anything worth
+    // lighting up, whatever its gain computer says. This matters for the
+    // gate above all: a shut gate on a silent channel is holding 80 dB down
+    // and would otherwise sit at full glow for as long as nobody plays.
+    private property <bool> has-signal: root.detector-db > root.floor-db;
+    private property <float> reduction-db:
+        root.has-signal ? clamp(-root.gain-reduction-db, 0, 24) : 0;
+    // Reduction as 0..1 for the glow. Squashed rather than linear: the first
+    // few decibels are the ones worth seeing arrive, and past about twelve
+    // the display should already be as lit as it gets.
+    private property <float> reduction-amount: clamp(pow(root.reduction-db / 12, 0.65), 0, 1);
+    // Where the signal actually leaves the device: the detector's level plus
+    // the gain being applied to it right now. On a steady tone this sits on
+    // the curve; through a transient it rides above it, by the amount the
+    // ballistics are still holding back. With nothing playing it parks on
+    // the floor rather than being lifted off it by the makeup gain.
+    private property <float> live-output-db: root.has-signal
+        ? clamp(root.input-db + root.gain-reduction-db + root.extra-db, root.floor-db, 0)
+        : root.floor-db;
 
     pure function comp-gain(input-db: float) -> float {
         let slope = 1 - 1 / max(1, root.ratio);
@@ -433,10 +458,28 @@ export component DynamicsCurveDisplay inherits Rectangle {
         return (clamp(db, root.floor-db, 0) - root.floor-db) / -root.floor-db;
     }
 
-    pure function db-y(db: float) -> float {
-        return -clamp(root.output-db(clamp(db, root.floor-db, 0)), root.floor-db, 0) / -root.floor-db;
+    // Plot height for a level, shared by the curve, the handle, and the live
+    // dot so all three agree on where a given decibel sits.
+    pure function level-y(db: float) -> float {
+        return -clamp(db, root.floor-db, 0) / -root.floor-db;
     }
 
+    pure function db-y(db: float) -> float {
+        return root.level-y(root.output-db(clamp(db, root.floor-db, 0)));
+    }
+
+    // The scope warms as the device leans on the signal. This is the same
+    // number as the rail on the right, said in a way that is legible from
+    // across the rack without being read: gain reduction is the one thing
+    // about a compressor you want to notice without looking at it.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.warning.with-alpha(root.reduction-amount * 0.07);
+        border-width: 1px;
+        border-color: Theme.warning.with-alpha(root.reduction-amount * 0.22);
+        border-radius: Theme.radius-xs;
+    }
     for line in 5 : Rectangle {
         y: line * parent.height / 4;
         width: 100%; height: 1px;
@@ -476,18 +519,62 @@ export component DynamicsCurveDisplay inherits Rectangle {
         }
     }
 
-    // Live linked input. Accent separates signal telemetry from the yellow
-    // transfer curve and the outlined threshold handle.
+    // Gain-reduction rail: the plain reading of the same number the glow
+    // gives approximately. Drawn downward from the top, like every hardware
+    // GR meter.
+    Rectangle {
+        x: parent.width - 4px;
+        width: 2px;
+        height: 100%;
+        z: 2;
+        background: Theme.border.with-alpha(0.3);
+        // Full scale at 18 dB rather than the 24 the devices can reach: the
+        // rail is there to show the first few decibels arriving, and a scale
+        // set by the extreme leaves ordinary gain reduction barely moving.
+        Rectangle {
+            y: 0;
+            width: 100%;
+            height: parent.height * clamp(root.reduction-db / 18, 0, 1);
+            background: Theme.warning.with-alpha(0.8);
+        }
+    }
+    if root.reduction-db > 0.05 : Text {
+        x: 4px;
+        y: 2px;
+        z: 2;
+        text: "GR -" + round(root.reduction-db * 10) / 10 + " dB";
+        font-size: 9px;
+        color: Theme.warning.with-alpha(0.85);
+    }
+
+    // Where the signal is, and where the device is putting it. The dot sits
+    // at the detector's level on x and at the level actually leaving the
+    // device on y, so under a slow release it floats above the static curve
+    // for as long as the device is still holding the gain down.
     Rectangle {
         x: root.db-x(root.input-db) * parent.width - 4px;
-        y: root.db-y(root.input-db) * parent.height - 4px;
-        z: 2;
+        y: root.level-y(root.live-output-db) * parent.height - 4px;
+        z: 3;
         width: 8px;
         height: 8px;
-        border-radius: 4px;
-        background: Theme.accent;
-        border-width: 1px;
-        border-color: Theme.panel;
+        // A halo in the reduction colour, sized by how hard the device is
+        // working. At rest it is not drawn at all.
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 8px + 13px * root.reduction-amount;
+            height: self.width;
+            border-radius: self.width / 2;
+            background: Theme.warning.with-alpha(root.reduction-amount * 0.22);
+        }
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            border-radius: 4px;
+            background: Theme.accent;
+            border-width: 1px;
+            border-color: Theme.panel;
+        }
     }
 
     DraggablePoint {
