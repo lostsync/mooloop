@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-30
-- Sessions: 18
+- Sessions: 19
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -115,7 +115,13 @@ work session you can recall being part of, and don't stress over precision.
   destination channel absolutely, so any channel preset with a rack modulated
   whatever channel it was saved from; the bank could not ship without
   rescoping on load. The listening pass the step exists for is still open,
-  since voicing by ear is not something I can do.
+  since voicing by ear is not something I can do. Opened the sampler v2 push
+  on GitHub issues instead of `docs/plans/`, filing the loop-focused gaps the
+  existing set missed, and started its first slice: control-side zero-crossing
+  snapping for sample and loop markers, where preference is a tier order
+  (rising crossings, then same-direction ones, then quiet points) rather than
+  a weight vector, and a channel that is still stepping disqualifies the
+  other channel's crossing.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

@@ -41,6 +41,7 @@ pub mod monosynth;
 pub mod node;
 pub mod osc;
 pub mod polysynth;
+pub mod sample_analysis;
 pub mod sampler;
 pub mod scale;
 pub mod shaper;
