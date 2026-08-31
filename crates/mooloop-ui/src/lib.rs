@@ -49,7 +49,8 @@ use mooloop_engine::{
     RenderScope, StructuralCommand, WavEncoding,
 };
 use mooloop_project::{
-    AssetMode, AssetWarning, LoadReport, LoadedDocument, PresetInfo, PresetSummary, SaveReport,
+    AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetSummary,
+    SaveReport,
 };
 use settings::{AppearanceSettings, ThemePalette, ThemeScheme, UiSettings};
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
@@ -601,6 +602,33 @@ struct ProjectEdit {
     history: Option<(HistoryMove, HistoryEntry<ProjectSnapshot>)>,
 }
 
+/// A failure the user has to be told about in full. `message` is the plain
+/// language they act on; `report` is the codes and counts they copy into a bug
+/// report, empty when the error has nothing more to say than `message` does.
+/// Kept together so no failure path can show one and drop the other.
+struct DocumentProblem {
+    message: String,
+    report: String,
+}
+
+impl From<mooloop_project::Error> for DocumentProblem {
+    fn from(error: mooloop_project::Error) -> Self {
+        Self {
+            report: error.report().unwrap_or_default(),
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<String> for DocumentProblem {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            report: String::new(),
+        }
+    }
+}
+
 enum DocumentResult {
     Cancelled,
     NewSong(Project),
@@ -619,9 +647,10 @@ enum DocumentResult {
         label: &'static str,
         report: SaveReport,
     },
-    SaveFailed {
+    /// `action` completes "Could not ...", e.g. `save this song`.
+    Failed {
         action: &'static str,
-        error: String,
+        problem: DocumentProblem,
     },
     Loaded {
         path: PathBuf,
@@ -631,7 +660,6 @@ enum DocumentResult {
     Exported {
         path: PathBuf,
     },
-    Failed(String),
 }
 
 fn fresh_starter_seed() -> u64 {
@@ -3747,7 +3775,10 @@ impl AppUi {
                             target: LoadTarget::Song,
                             document,
                         })
-                        .unwrap_or_else(DocumentResult::Failed);
+                        .unwrap_or_else(|problem| DocumentResult::Failed {
+                            action: "open this song",
+                            problem,
+                        });
                     let _ = tx.send(result);
                 });
             });
@@ -3760,9 +3791,12 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
-                let project = st
-                    .borrow()
-                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
+                // The free function, not `UiState::project_snapshot`: it is
+                // the one that squares every channel's pattern-indexed banks
+                // with the pattern list, and a save that skipped that step was
+                // one of the ways a song reached disk in a shape it could not
+                // be read back from.
+                let project = project_snapshot(&st.borrow(), &window).project;
                 let revision = st.borrow().revision;
                 let mode = if window.get_embed_assets() {
                     AssetMode::Embedded
@@ -3808,9 +3842,9 @@ impl AppUi {
                                     .collect(),
                             })
                         })
-                        .unwrap_or_else(|error| DocumentResult::SaveFailed {
-                            action: "song",
-                            error: error.to_string(),
+                        .unwrap_or_else(|error| DocumentResult::Failed {
+                            action: "save this song",
+                            problem: error.into(),
                         });
                     let _ = tx.send(result);
                 });
@@ -3855,9 +3889,9 @@ impl AppUi {
                             label: "Kit saved",
                             report,
                         })
-                        .unwrap_or_else(|error| DocumentResult::SaveFailed {
-                            action: "kit",
-                            error: error.to_string(),
+                        .unwrap_or_else(|error| DocumentResult::Failed {
+                            action: "save this kit",
+                            problem: error.into(),
                         });
                     let _ = tx.send(result);
                 });
@@ -3893,9 +3927,9 @@ impl AppUi {
                             label: "Channel saved",
                             report,
                         })
-                        .unwrap_or_else(|error| DocumentResult::SaveFailed {
-                            action: "channel",
-                            error: error.to_string(),
+                        .unwrap_or_else(|error| DocumentResult::Failed {
+                            action: "save this channel",
+                            problem: error.into(),
                         });
                     let _ = tx.send(result);
                 });
@@ -3930,7 +3964,10 @@ impl AppUi {
                             target,
                             document,
                         })
-                        .unwrap_or_else(DocumentResult::Failed);
+                        .unwrap_or_else(|problem| DocumentResult::Failed {
+                            action: "open this file",
+                            problem,
+                        });
                     let _ = tx.send(result);
                 });
             };
@@ -3977,7 +4014,10 @@ impl AppUi {
                             target,
                             document,
                         })
-                        .unwrap_or_else(DocumentResult::Failed);
+                        .unwrap_or_else(|problem| DocumentResult::Failed {
+                            action: "open this preset",
+                            problem,
+                        });
                     let _ = tx.send(result);
                 });
             };
@@ -4080,9 +4120,9 @@ impl AppUi {
                     };
                     let result = result
                         .map(|report| DocumentResult::SavedPreset { label, report })
-                        .unwrap_or_else(|error| DocumentResult::SaveFailed {
-                            action: "preset",
-                            error: error.to_string(),
+                        .unwrap_or_else(|error| DocumentResult::Failed {
+                            action: "save this preset",
+                            problem: error.into(),
                         });
                     let _ = tx.send(result);
                 });
@@ -4148,7 +4188,10 @@ impl AppUi {
                     let result =
                         OfflineRenderer::render(&project, &samples, export_sample_rate, &spec)
                             .map(|_| DocumentResult::Exported { path })
-                            .unwrap_or_else(|error| DocumentResult::Failed(error.to_string()));
+                            .unwrap_or_else(|error| DocumentResult::Failed {
+                                action: "export this song",
+                                problem: error.to_string().into(),
+                            });
                     let _ = tx.send(result);
                 });
             });
@@ -8855,17 +8898,33 @@ impl AppUi {
                             state.update_document_title(&window);
                             window.set_embed_assets(mode == AssetMode::Embedded);
                             window.set_status_message(
-                                operation_status("Song saved", &path, &report.warnings).into(),
+                                operation_status(
+                                    "Song saved",
+                                    &path,
+                                    &report.warnings,
+                                    &report.repairs,
+                                )
+                                .into(),
                             );
                         }
                         DocumentResult::SavedOther { label, report } => {
                             window.set_status_message(
-                                format!("{label}{}", warning_suffix(report.warnings.len())).into(),
+                                format!(
+                                    "{label}{}{}",
+                                    warning_suffix(report.warnings.len()),
+                                    repair_suffix(report.repairs.len())
+                                )
+                                .into(),
                             );
                         }
                         DocumentResult::SavedPreset { label, report } => {
                             window.set_status_message(
-                                format!("{label}{}", warning_suffix(report.warnings.len())).into(),
+                                format!(
+                                    "{label}{}{}",
+                                    warning_suffix(report.warnings.len()),
+                                    repair_suffix(report.repairs.len())
+                                )
+                                .into(),
                             );
                             window.set_save_preset_open(false);
                             refresh_preset_menus(&st, &window);
@@ -8874,14 +8933,16 @@ impl AppUi {
                             window
                                 .set_status_message(format!("Exported {}", path.display()).into());
                         }
-                        DocumentResult::SaveFailed { action, error } => {
-                            window.set_save_error_title(format!("Could not save {action}").into());
-                            window.set_save_error_detail(error.clone().into());
+                        // Every failure gets the dialog, not just saves: a
+                        // song that will not open leaves the user with as
+                        // little to go on as one that will not save, and the
+                        // status bar cannot hold a located, copyable answer.
+                        DocumentResult::Failed { action, problem } => {
+                            window.set_save_error_title(format!("Could not {action}").into());
+                            window.set_save_error_detail(problem.message.into());
+                            window.set_save_error_report(problem.report.into());
                             window.set_save_error_open(true);
-                            window.set_status_message(format!("Save {action} failed").into());
-                        }
-                        DocumentResult::Failed(error) => {
-                            window.set_status_message(format!("Error: {error}").into());
+                            window.set_status_message(format!("Could not {action}").into());
                         }
                         DocumentResult::Loaded {
                             path,
@@ -8896,6 +8957,7 @@ impl AppUi {
                                 document,
                                 asset_mode,
                                 warnings,
+                                repairs,
                             } = report;
                             let current = st
                                 .borrow()
@@ -9030,9 +9092,10 @@ impl AppUi {
                                 state.update_document_title(&window);
                                 window.set_status_message(
                                     format!(
-                                        "Loaded {}{}",
+                                        "Loaded {}{}{}",
                                         path.display(),
-                                        warning_suffix(warnings.len())
+                                        warning_suffix(warnings.len()),
+                                        repair_suffix(repairs.len())
                                     )
                                     .into(),
                                 );
@@ -9847,11 +9910,30 @@ fn warning_suffix(count: usize) -> String {
     }
 }
 
-fn operation_status(label: &str, path: &Path, warnings: &[AssetWarning]) -> String {
+/// Saving and loading repair what they can rather than refusing, so a clean
+/// run still has something to say when it corrected anything on the way.
+fn repair_suffix(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!(
+            " ({count} problem{} corrected)",
+            if count == 1 { "" } else { "s" }
+        )
+    }
+}
+
+fn operation_status(
+    label: &str,
+    path: &Path,
+    warnings: &[AssetWarning],
+    repairs: &[Issue],
+) -> String {
     format!(
-        "{label}: {}{}",
+        "{label}: {}{}{}",
         path.display(),
-        warning_suffix(warnings.len())
+        warning_suffix(warnings.len()),
+        repair_suffix(repairs.len())
     )
 }
 
@@ -9959,8 +10041,8 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
     st.sync_channel_preset_menu(window);
 }
 
-fn resolve_document(path: &Path) -> Result<ResolvedDocument, String> {
-    let mut report = mooloop_project::load_bundle(path).map_err(|error| error.to_string())?;
+fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem> {
+    let mut report = mooloop_project::load_bundle(path)?;
     let sample_references = match &report.document {
         LoadedDocument::Song(project) => project
             .channels

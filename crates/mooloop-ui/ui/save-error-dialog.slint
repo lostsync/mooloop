@@ -1,44 +1,105 @@
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { ToolButton } from "controls.slint";
 
-// Persistence failures are rare, but a one-line status bar can elide the
-// location and range the user needs to repair a hand-edited document.
+// Persistence failures are rare, and by the time one reaches here the save
+// path has already corrected everything it could without discarding work --
+// so what is left is genuinely unfixable from inside mooloop, and the user's
+// only route forward is to act on it or report it. That is why the whole
+// diagnosis is here rather than a one-line status: `summary` says what is
+// wrong in plain language, `report` carries the machine-readable form, and
+// both sit in a selectable, copyable text box so nothing has to be
+// transcribed from a screenshot.
 export component SaveErrorDialog inherits Rectangle {
     in-out property <bool> open;
     in property <string> title: "Could not save";
+    // Plain language, one bullet per problem, with locations the user can
+    // find on screen.
     in property <string> detail;
+    // The same thing with codes, counts, and versions. Empty for errors that
+    // have nothing more to say than `detail` already does.
+    in property <string> report;
     callback dismissed;
+
+    // Everything the copy button puts on the clipboard, which is everything
+    // shown: no separate hidden copy to fall out of step with the visible one.
+    property <string> full-text: root.report == ""
+        ? root.detail
+        : root.detail + "\n\n" + root.report;
 
     visible: root.open;
     background: #00000099;
     z: 200;
 
+    // Swallows clicks on the scrim so the window behind stays untouched while
+    // the dialog is up.
     TouchArea { }
 
     Rectangle {
-        width: min(parent.width - 32px, 520px);
-        height: 230px;
+        width: min(parent.width - 32px, 620px);
+        height: min(parent.height - 32px, 420px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
         border-width: 1px;
         border-color: Theme.warning;
-        border-radius: 6px;
+        border-radius: Theme.radius-lg;
 
         VerticalLayout {
             padding: 18px;
             spacing: 10px;
 
-            Text { text: root.title; color: Theme.text; font-size: 16px; }
             Text {
-                text: root.detail;
-                color: Theme.text-muted;
-                font-size: 11px;
-                wrap: word-wrap;
-                vertical-stretch: 1;
+                text: root.title;
+                color: Theme.text;
+                font-size: 16px;
+                height: 22px;
             }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.panel;
+                border-radius: Theme.radius-lg;
+                border-width: 1px;
+                border-color: Theme.border;
+
+                ScrollView {
+                    x: 10px;
+                    y: 8px;
+                    width: parent.width - 20px;
+                    height: parent.height - 16px;
+                    viewport-width: self.width;
+
+                    detail-text := TextInput {
+                        width: parent.width;
+                        text: root.full-text;
+                        // Selectable so a fragment can be lifted out by hand,
+                        // but never editable: the text is a record of what
+                        // happened, not a field.
+                        read-only: true;
+                        single-line: false;
+                        wrap: word-wrap;
+                        color: Theme.text-muted;
+                        font-size: 11px;
+                        font-family: "monospace";
+                    }
+                }
+            }
+
             HorizontalLayout {
                 alignment: end;
+                spacing: 6px;
+                ToolButton {
+                    text: copied-for.running ? "Copied" : "Copy details";
+                    width: 110px;
+                    height: 30px;
+                    clicked => {
+                        detail-text.select-all();
+                        detail-text.copy();
+                        detail-text.clear-selection();
+                        copied-for.running = true;
+                    }
+                }
                 ToolButton {
                     text: "Dismiss";
                     active: true;
@@ -48,5 +109,13 @@ export component SaveErrorDialog inherits Rectangle {
                 }
             }
         }
+    }
+
+    // Confirms the copy landed. Nothing else in the dialog moves, so without
+    // this the button gives no sign it did anything.
+    copied-for := Timer {
+        interval: 1600ms;
+        running: false;
+        triggered => { self.running = false; }
     }
 }

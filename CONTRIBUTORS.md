@@ -38,8 +38,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-30
-- Sessions: 19
+- Last seen: 2026-08-31
+- Sessions: 20
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -124,7 +124,12 @@ work session you can recall being part of, and don't stress over precision.
   other channel's crossing. Measured `EngineCommand` before believing
   `large_enum_variant` about it: the width is the rack the preallocated ring
   is sized for, so the variant kept its size and gained the reasoning in a
-  comment.
+  comment. Replaced the fail-fast document validator with a repair pass that
+  detects and corrects in one traversal, so a save clamps, resquares, and
+  reissues rather than refusing, loading does the same instead of leaving a
+  song unopenable, and what genuinely cannot be fixed without deleting music
+  is reported with its channel, pattern, and the count to delete, next to a
+  copyable machine report.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

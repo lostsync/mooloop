@@ -111,6 +111,26 @@ impl AutomationLane {
         true
     }
 
+    /// Rebuild the lane from `points`, restoring tick order and moving the id
+    /// allocator past everything kept. For repair passes, which have to edit
+    /// ticks and ids together and so cannot go through `upsert` one point at a
+    /// time; ordinary edits still should. Anything past the preallocated
+    /// capacity is dropped, because the realtime side cannot address it.
+    pub fn reset_points(&mut self, points: impl IntoIterator<Item = AutomationPoint>) {
+        let capacity = self.points.capacity();
+        self.points.clear();
+        self.points.extend(points.into_iter().take(capacity));
+        self.points.sort_by_key(|point| (point.tick, point.id));
+        self.next_point_id = self
+            .points
+            .iter()
+            .map(|point| point.id)
+            .max()
+            .unwrap_or(0)
+            .wrapping_add(1)
+            .max(1);
+    }
+
     pub fn remove(&mut self, id: PointId) -> Option<AutomationPoint> {
         let index = self.points.iter().position(|point| point.id == id)?;
         Some(self.points.remove(index))

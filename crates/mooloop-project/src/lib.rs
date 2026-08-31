@@ -1,23 +1,19 @@
 //! Versioned mooloop documents and sample-asset handling.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use mooloop_core::{
-    ChannelSetup, ChannelSource, DeviceKind, DrumSynthParams, Kit, MonoSynthParams, Ml1Params,
-    PolySynthParams, Project, SampleReference, SamplerParams, MAX_AUTOMATION_LANES_PER_CHANNEL,
-    MAX_AUTOMATION_POINTS_PER_LANE, MAX_CHANNELS, MAX_CHOKE_GROUP,
-    MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS,
-    MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SAMPLER_VOICES, TICKS_PER_STEP,
-};
+use mooloop_core::{ChannelSetup, ChannelSource, DeviceKind, Kit, Project, SampleReference};
 use serde::{Deserialize, Serialize};
 
 pub mod factory;
+pub mod integrity;
 
 pub use factory::{rescope_modulation, seed_ml1_bank};
+pub use integrity::{Diagnosis, Issue, Remedy};
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const MANIFEST_FILE: &str = "manifest.toml";
@@ -39,7 +35,7 @@ pub enum DocumentKind {
 }
 
 impl DocumentKind {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Song => "song",
             Self::Kit => "kit",
@@ -82,6 +78,10 @@ pub struct AssetWarning {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SaveReport {
     pub warnings: Vec<AssetWarning>,
+    /// Problems found on the way out and corrected before writing. The
+    /// document on disk reflects these; the one in memory does not until the
+    /// caller applies the same repair.
+    pub repairs: Vec<Issue>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,6 +97,9 @@ pub struct LoadReport {
     pub document: LoadedDocument,
     pub asset_mode: AssetMode,
     pub warnings: Vec<AssetWarning>,
+    /// Problems found on the way in and corrected before handing the document
+    /// over. A file that needed these opens; one that needed more does not.
+    pub repairs: Vec<Issue>,
 }
 
 #[derive(Debug)]
@@ -104,9 +107,26 @@ pub enum Error {
     Io(std::io::Error),
     Parse(toml::de::Error),
     Encode(toml::ser::Error),
+    /// Something wrong with the *request* rather than the document: a path
+    /// with no parent directory, a bundle target that is a plain file.
     Invalid(String),
+    /// Something wrong with the document that a repair pass could not put
+    /// right. Carries every problem found, where it is, and what correcting
+    /// it would have cost -- see [`Diagnosis::report`] for the copyable form.
+    InvalidDocument(Box<Diagnosis>),
     UnsupportedVersion(u32),
     UnsupportedDocument(String),
+}
+
+impl Error {
+    /// The full diagnostic text when there is one, for a bug report or a
+    /// clipboard button. `None` for errors that are already one line.
+    pub fn report(&self) -> Option<String> {
+        match self {
+            Self::InvalidDocument(diagnosis) => Some(diagnosis.report()),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Error {
@@ -116,6 +136,7 @@ impl fmt::Display for Error {
             Self::Parse(error) => write!(f, "invalid manifest: {error}"),
             Self::Encode(error) => write!(f, "could not encode manifest: {error}"),
             Self::Invalid(message) => write!(f, "invalid document: {message}"),
+            Self::InvalidDocument(diagnosis) => write!(f, "{diagnosis}"),
             Self::UnsupportedVersion(version) => {
                 write!(f, "unsupported format version {version}")
             }
@@ -125,6 +146,12 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<Diagnosis> for Error {
+    fn from(value: Diagnosis) -> Self {
+        Self::InvalidDocument(Box::new(value))
+    }
+}
 
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
@@ -162,19 +189,36 @@ struct Header {
     preset: Option<PresetInfo>,
 }
 
+/// Writes `project` to `path`, correcting on the way out anything that can be
+/// corrected without discarding work. The saved file is therefore the repaired
+/// document, and [`SaveReport::repairs`] says what changed; only a problem
+/// whose fix would delete notes or clips stops the write, and that comes back
+/// as [`Error::InvalidDocument`] naming exactly where it is.
 pub fn save_song(path: &Path, project: &Project, mode: AssetMode) -> Result<SaveReport, Error> {
-    validate_project(project)?;
-    save_song_file(path, project, mode)
+    let mut document = project.clone();
+    let diagnosis = integrity::repair_project(&mut document);
+    if !diagnosis.is_usable() {
+        return Err(diagnosis.into());
+    }
+    let mut report = save_song_file(path, &document, mode)?;
+    report.repairs = diagnosis.issues;
+    Ok(report)
 }
 
 pub fn save_kit(path: &Path, kit: &Kit, mode: AssetMode) -> Result<SaveReport, Error> {
-    validate_setups(&kit.channels)?;
-    save_with_assets(path, DocumentKind::Kit, kit.clone(), mode, None, |kit| {
+    let mut kit = kit.clone();
+    let diagnosis = integrity::repair_setups(DocumentKind::Kit, &mut kit.channels);
+    if !diagnosis.is_usable() {
+        return Err(diagnosis.into());
+    }
+    let mut report = save_with_assets(path, DocumentKind::Kit, kit, mode, None, |kit| {
         kit.channels
             .iter_mut()
             .map(|setup| &mut setup.source)
             .collect()
-    })
+    })?;
+    report.repairs = diagnosis.issues;
+    Ok(report)
 }
 
 pub fn save_channel(
@@ -202,15 +246,22 @@ fn save_channel_with_preset(
     mode: AssetMode,
     preset: Option<PresetInfo>,
 ) -> Result<SaveReport, Error> {
-    validate_setups(std::slice::from_ref(channel))?;
-    save_with_assets(
+    let mut channel = channel.clone();
+    let diagnosis =
+        integrity::repair_setups(DocumentKind::Channel, std::slice::from_mut(&mut channel));
+    if !diagnosis.is_usable() {
+        return Err(diagnosis.into());
+    }
+    let mut report = save_with_assets(
         path,
         DocumentKind::Channel,
-        channel.clone(),
+        channel,
         mode,
         preset,
         |channel| vec![&mut channel.source],
-    )
+    )?;
+    report.repairs = diagnosis.issues;
+    Ok(report)
 }
 
 /// Saves a generator-only preset: just the [`ChannelSource`] (params +
@@ -221,15 +272,21 @@ pub fn save_generator_preset(
     info: PresetInfo,
     mode: AssetMode,
 ) -> Result<SaveReport, Error> {
-    validate_source(0, source)?;
-    save_with_assets(
+    let mut source = source.clone();
+    let diagnosis = integrity::repair_source(DocumentKind::Generator, &mut source);
+    if !diagnosis.is_usable() {
+        return Err(diagnosis.into());
+    }
+    let mut report = save_with_assets(
         path,
         DocumentKind::Generator,
-        source.clone(),
+        source,
         mode,
         Some(info),
         |source| vec![source],
-    )
+    )?;
+    report.repairs = diagnosis.issues;
+    Ok(report)
 }
 
 fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<SaveReport, Error> {
@@ -633,19 +690,16 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         "song" => {
             let envelope: Envelope<Project> = toml::from_str(&manifest)?;
             validate_envelope(&envelope, "song")?;
-            validate_project(&envelope.document)?;
             (LoadedDocument::Song(envelope.document), envelope.asset_mode)
         }
         "kit" => {
             let envelope: Envelope<Kit> = toml::from_str(&manifest)?;
             validate_envelope(&envelope, "kit")?;
-            validate_setups(&envelope.document.channels)?;
             (LoadedDocument::Kit(envelope.document), envelope.asset_mode)
         }
         "channel" => {
             let envelope: Envelope<ChannelSetup> = toml::from_str(&manifest)?;
             validate_envelope(&envelope, "channel")?;
-            validate_setups(std::slice::from_ref(&envelope.document))?;
             (
                 LoadedDocument::Channel(Box::new(envelope.document)),
                 envelope.asset_mode,
@@ -654,7 +708,6 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         "generator" => {
             let envelope: Envelope<ChannelSource> = toml::from_str(&manifest)?;
             validate_envelope(&envelope, "generator")?;
-            validate_source(0, &envelope.document)?;
             (
                 LoadedDocument::Generator(envelope.document),
                 envelope.asset_mode,
@@ -663,29 +716,44 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         other => return Err(Error::UnsupportedDocument(other.into())),
     };
 
+    // Repair runs after the padding steps below rather than before them,
+    // because a bank that is merely short is the legitimate on-disk shape of
+    // an older song rather than damage, and padding it first keeps the two
+    // from being confused. A file that needs more than repair can offer does
+    // not open -- but that is now the only case that does not.
     let mut warnings = Vec::new();
-    match &mut document {
+    let diagnosis = match &mut document {
         LoadedDocument::Song(project) => {
             for (index, channel) in project.channels.iter_mut().enumerate() {
                 resolve_setup_asset(path, index, &mut channel.setup.source, &mut warnings)?;
                 channel.normalize_automation();
                 channel.recompute_next_note_id();
             }
+            integrity::repair_project(project)
         }
         LoadedDocument::Kit(kit) => {
             for (index, setup) in kit.channels.iter_mut().enumerate() {
                 resolve_setup_asset(path, index, &mut setup.source, &mut warnings)?;
             }
+            integrity::repair_setups(DocumentKind::Kit, &mut kit.channels)
         }
         LoadedDocument::Channel(setup) => {
-            resolve_setup_asset(path, 0, &mut setup.source, &mut warnings)?
+            resolve_setup_asset(path, 0, &mut setup.source, &mut warnings)?;
+            integrity::repair_setups(DocumentKind::Channel, std::slice::from_mut(setup.as_mut()))
         }
-        LoadedDocument::Generator(source) => resolve_setup_asset(path, 0, source, &mut warnings)?,
+        LoadedDocument::Generator(source) => {
+            resolve_setup_asset(path, 0, source, &mut warnings)?;
+            integrity::repair_source(DocumentKind::Generator, source)
+        }
+    };
+    if !diagnosis.is_usable() {
+        return Err(diagnosis.into());
     }
     Ok(LoadReport {
         document,
         asset_mode,
         warnings,
+        repairs: diagnosis.issues,
     })
 }
 
@@ -803,449 +871,36 @@ fn safe_embedded_path(bundle: &Path, path: &Path) -> bool {
         .is_some_and(|assets| path.starts_with(assets.join("samples")))
 }
 
+/// Whether `project` is already exactly what the format stores, with no
+/// correction needed. Saving does not require this -- it repairs first -- so
+/// this is for callers that want to know the document is pristine.
 pub fn validate_project(project: &Project) -> Result<(), Error> {
-    if project.ppq != 96 || project.beats_per_bar != 4 {
-        return Err(Error::Invalid("v1 requires PPQ 96 and 4/4 meter".into()));
-    }
-    if !(1..=999).contains(&project.bpm) {
-        return Err(Error::Invalid("tempo must be in 1..=999 BPM".into()));
-    }
-    if !(mooloop_core::MIN_SWING_PERCENT..=mooloop_core::MAX_SWING_PERCENT)
-        .contains(&project.swing_percent)
-    {
-        return Err(Error::Invalid(format!(
-            "swing must be in {}..={} percent",
-            mooloop_core::MIN_SWING_PERCENT,
-            mooloop_core::MAX_SWING_PERCENT
-        )));
-    }
-    if project.channels.is_empty() || project.channels.len() > MAX_CHANNELS {
-        return Err(Error::Invalid(format!(
-            "channel count must be in 1..={MAX_CHANNELS}"
-        )));
-    }
-    if project.pattern_lengths.is_empty() || project.pattern_lengths.len() > MAX_PATTERNS {
-        return Err(Error::Invalid(format!(
-            "pattern count must be in 1..={MAX_PATTERNS}"
-        )));
-    }
-    if project.current_pattern as usize >= project.pattern_lengths.len() {
-        return Err(Error::Invalid("current pattern is out of range".into()));
-    }
-    if project.selected_channel as usize >= project.channels.len() {
-        return Err(Error::Invalid("selected channel is out of range".into()));
-    }
-    if project.playlist.len() > MAX_PLAYLIST_PLACEMENTS {
-        return Err(Error::Invalid("playlist has too many placements".into()));
-    }
-    for (index, length) in project.pattern_lengths.iter().enumerate() {
-        if !(1..=MAX_PATTERN_STEPS).contains(length) {
-            return Err(Error::Invalid(format!(
-                "pattern {index} length must be in 1..={MAX_PATTERN_STEPS}"
-            )));
-        }
-    }
-    for placement in &project.playlist {
-        if placement.pattern as usize >= project.pattern_lengths.len()
-            || placement.start_tick >= MAX_PLAYLIST_TICKS
-        {
-            return Err(Error::Invalid("playlist placement is out of range".into()));
-        }
-    }
-    for (index, bus) in project.buses.iter().enumerate() {
-        if bus.effects.len() > mooloop_core::MAX_EFFECTS_PER_CHANNEL {
-            return Err(Error::Invalid(format!(
-                "bus {index} has more effects than the realtime address space supports"
-            )));
-        }
-    }
-    validate_setups(
-        &project
-            .channels
-            .iter()
-            .map(|channel| channel.setup.clone())
-            .collect::<Vec<_>>(),
-    )?;
-    let capacity_ticks = u32::from(MAX_PATTERN_STEPS) * TICKS_PER_STEP;
-    for (channel_index, channel) in project.channels.iter().enumerate() {
-        if channel.notes.len() != project.pattern_lengths.len() {
-            return Err(Error::Invalid(format!(
-                "channel {channel_index} note bank does not match pattern count"
-            )));
-        }
-        for (pattern_index, notes) in channel.notes.iter().enumerate() {
-            if notes.len() > MAX_NOTES_PER_CHANNEL_PATTERN {
-                return Err(Error::Invalid(format!(
-                    "channel {channel_index} pattern {pattern_index} has too many notes"
-                )));
-            }
-            let mut ids = HashSet::with_capacity(notes.len());
-            for note in notes {
-                if note.id == 0
-                    || !ids.insert(note.id)
-                    || note.start_tick >= capacity_ticks
-                    || note.duration_ticks == 0
-                    || note.note > 127
-                    || !(1..=127).contains(&note.velocity)
-                {
-                    return Err(Error::Invalid(format!(
-                        "channel {channel_index} pattern {pattern_index} has an invalid note"
-                    )));
-                }
-            }
-        }
-        // A song written before clip automation carries none, and one written
-        // before a pattern was added carries fewer banks than it has patterns.
-        // Both are normalized on load, so only a surplus is a real error.
-        if channel.automation.len() > channel.notes.len() {
-            return Err(Error::Invalid(format!(
-                "channel {channel_index} automation bank does not match pattern count"
-            )));
-        }
-        for (pattern_index, lanes) in channel.automation.iter().enumerate() {
-            if lanes.len() > MAX_AUTOMATION_LANES_PER_CHANNEL {
-                return Err(Error::Invalid(format!(
-                    "channel {channel_index} pattern {pattern_index} has too many automation lanes"
-                )));
-            }
-            let mut targets = HashSet::with_capacity(lanes.len());
-            for lane in lanes {
-                if !targets.insert(lane.target) {
-                    return Err(Error::Invalid(format!(
-                        "channel {channel_index} pattern {pattern_index} \
-                         has two automation lanes on one destination"
-                    )));
-                }
-                if lane.points().len() > MAX_AUTOMATION_POINTS_PER_LANE {
-                    return Err(Error::Invalid(format!(
-                        "channel {channel_index} pattern {pattern_index} \
-                         automation lane has too many points"
-                    )));
-                }
-                let mut point_ids = HashSet::with_capacity(lane.points().len());
-                for point in lane.points() {
-                    if point.id == 0
-                        || !point_ids.insert(point.id)
-                        || point.tick >= capacity_ticks
-                        || !(0.0..=1.0).contains(&point.value)
-                    {
-                        return Err(Error::Invalid(format!(
-                            "channel {channel_index} pattern {pattern_index} \
-                             has an invalid automation point"
-                        )));
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_setups(setups: &[ChannelSetup]) -> Result<(), Error> {
-    if setups.is_empty() || setups.len() > MAX_CHANNELS {
-        return Err(Error::Invalid(format!(
-            "channel count must be in 1..={MAX_CHANNELS}"
-        )));
-    }
-    for (index, setup) in setups.iter().enumerate() {
-        let channel = &setup.channel;
-        if channel.name.trim().is_empty() || channel.name.len() > 128 {
-            return Err(Error::Invalid(format!(
-                "channel {index} has an invalid name"
-            )));
-        }
-        if !channel.volume.is_finite()
-            || !(0.0..=mooloop_core::MAX_LINEAR_GAIN).contains(&channel.volume)
-            || !channel.pan.is_finite()
-            || !(-1.0..=1.0).contains(&channel.pan)
-        {
-            return Err(Error::Invalid(format!(
-                "channel {index} mixer output or pan is outside its allowed range"
-            )));
-        }
-        if channel.kind != setup.source.kind() {
-            return Err(Error::Invalid(format!(
-                "channel {index} kind does not match its source"
-            )));
-        }
-        if setup.effects.len() > mooloop_core::MAX_EFFECTS_PER_CHANNEL {
-            return Err(Error::Invalid(format!(
-                "channel {index} has more effects than the realtime address space supports"
-            )));
-        }
-        validate_source(index, &setup.source)?;
-    }
-    Ok(())
-}
-
-fn validate_source(index: usize, source: &ChannelSource) -> Result<(), Error> {
-    match source {
-        ChannelSource::Sampler(sampler) => validate_sampler(index, sampler.params),
-        ChannelSource::DrumSynth(synth) => validate_drum_synth(index, synth.params),
-        ChannelSource::MonoSynth(synth) => validate_mono_synth(index, synth.params),
-        ChannelSource::PolySynth(synth) => validate_poly_synth(index, synth.params),
-        ChannelSource::Ml1(synth) => validate_ml1(index, synth.params),
+    let diagnosis = integrity::inspect_project(project);
+    if diagnosis.is_clean() {
+        Ok(())
+    } else {
+        Err(diagnosis.into())
     }
 }
 
-fn validate_drum_synth(channel: usize, params: DrumSynthParams) -> Result<(), Error> {
-    if params.choke_group > MAX_CHOKE_GROUP {
-        return Err(invalid_integer(
-            channel,
-            "drum synth choke group",
-            params.choke_group,
-            0,
-            MAX_CHOKE_GROUP,
-        ));
+/// The channel-bank counterpart of [`validate_project`].
+pub fn validate_setups(setups: &[ChannelSetup]) -> Result<(), Error> {
+    let diagnosis = integrity::inspect_setups(DocumentKind::Kit, setups);
+    if diagnosis.is_clean() {
+        Ok(())
+    } else {
+        Err(diagnosis.into())
     }
-    for (field, value, min, max) in [
-        ("drum decay", params.decay, 0.0, 10.0),
-        ("drum tune", params.tune_semitones, -48.0, 48.0),
-        ("drum drive", params.drive, 0.0, 1.0),
-        ("drum punch", params.punch, 0.0, 1.0),
-        ("kick start frequency", params.kick_start_hz, 20.0, 20_000.0),
-        ("kick end frequency", params.kick_end_hz, 20.0, 20_000.0),
-        ("kick sweep", params.kick_sweep, 0.0, 10.0),
-        ("kick click", params.kick_click, 0.0, 1.0),
-        ("snare tone frequency", params.snare_tone_hz, 20.0, 20_000.0),
-        (
-            "snare second tone frequency",
-            params.snare_tone2_hz,
-            20.0,
-            20_000.0,
-        ),
-        ("snare second tone mix", params.snare_tone2_mix, 0.0, 1.0),
-        ("snare noise mix", params.snare_noise_mix, 0.0, 1.0),
-        ("snare noise decay", params.snare_noise_decay, 0.0, 10.0),
-        ("snare noise color", params.snare_noise_color, 0.0, 1.0),
-        ("hat high-pass frequency", params.hat_hp_hz, 20.0, 20_000.0),
-        ("hat metallic", params.hat_metallic, 0.0, 1.0),
-    ] {
-        validate_range(channel, field, value, min, max)?;
-    }
-    Ok(())
 }
 
-fn validate_mono_synth(channel: usize, params: MonoSynthParams) -> Result<(), Error> {
-    validate_synth_params(
-        channel,
-        "mono synth",
-        &params.osc,
-        params.glide,
-        params.attack,
-        params.decay,
-        params.sustain,
-        params.release,
-        params.filter_cutoff,
-        params.filter_resonance,
-        params.filter_env_amount,
-        params.drive,
-        params.lfo.rate_hz,
-        params.lfo.to_pitch,
-        params.lfo.to_filter,
-        params.lfo.to_pulse_width,
-        params.lfo.to_amp,
-    )?;
-    Ok(())
-}
-
-/// The three-oscillator front end every synth in the project shares.
-fn validate_oscillators(
-    channel: usize,
-    kind: &str,
-    oscillators: &[mooloop_core::OscParams],
-) -> Result<(), Error> {
-    for (index, osc) in oscillators.iter().enumerate() {
-        for (field, value, min, max) in [
-            ("semitones", osc.semitones, -48.0, 48.0),
-            ("cents", osc.cents, -100.0, 100.0),
-            ("level", osc.level, 0.0, 1.0),
-            ("pulse width", osc.pulse_width, 0.05, 0.95),
-        ] {
-            validate_range(
-                channel,
-                &format!("{kind} oscillator {} {field}", index + 1),
-                value,
-                min,
-                max,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-/// The ML-1 has no device-local LFO and two envelopes, so it gets its
-/// own field list rather than being squeezed through the v1 signature.
-fn validate_ml1(channel: usize, params: Ml1Params) -> Result<(), Error> {
-    const KIND: &str = "ML-1";
-    validate_oscillators(channel, KIND, &params.osc)?;
-    for (field, value, min, max) in [
-        ("glide", params.glide, 0.0, 10.0),
-        ("attack", params.attack, 0.0, 10.0),
-        ("decay", params.decay, 0.0, 10.0),
-        ("sustain", params.sustain, 0.0, 1.0),
-        ("release", params.release, 0.0, 10.0),
-        ("filter cutoff", params.filter_cutoff, 0.0, 1.0),
-        ("filter resonance", params.filter_resonance, 0.0, 1.0),
-        ("filter envelope", params.filter_env_amount, -1.0, 1.0),
-        ("drive", params.drive, 0.0, 1.0),
-        ("filter attack", params.filter_attack, 0.0, 10.0),
-        ("filter decay", params.filter_decay, 0.0, 10.0),
-        ("filter sustain", params.filter_sustain, 0.0, 1.0),
-        ("filter release", params.filter_release, 0.0, 10.0),
-        ("filter keytrack", params.filter_keytrack, 0.0, 1.0),
-        ("accent", params.accent, 0.0, 1.0),
-    ] {
-        validate_range(channel, &format!("{KIND} {field}"), value, min, max)?;
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_synth_params(
-    channel: usize,
-    kind: &str,
-    oscillators: &[mooloop_core::OscParams],
-    glide: f32,
-    attack: f32,
-    decay: f32,
-    sustain: f32,
-    release: f32,
-    cutoff: f32,
-    resonance: f32,
-    env: f32,
-    drive: f32,
-    rate: f32,
-    pitch: f32,
-    filter: f32,
-    pulse: f32,
-    amp: f32,
-) -> Result<(), Error> {
-    validate_oscillators(channel, kind, oscillators)?;
-    for (field, value, min, max) in [
-        ("glide", glide, 0.0, 10.0),
-        ("attack", attack, 0.0, 10.0),
-        ("decay", decay, 0.0, 10.0),
-        ("sustain", sustain, 0.0, 1.0),
-        ("release", release, 0.0, 10.0),
-        ("filter cutoff", cutoff, 0.0, 1.0),
-        ("filter resonance", resonance, 0.0, 1.0),
-        ("filter envelope", env, -1.0, 1.0),
-        ("drive", drive, 0.0, 1.0),
-        ("LFO rate", rate, 0.0, 20.0),
-        ("LFO pitch", pitch, -24.0, 24.0),
-        ("LFO filter", filter, -4.0, 4.0),
-        ("LFO pulse width", pulse, -0.45, 0.45),
-        ("LFO amplitude", amp, 0.0, 1.0),
-    ] {
-        validate_range(channel, &format!("{kind} {field}"), value, min, max)?;
-    }
-    Ok(())
-}
-
-fn validate_poly_synth(channel: usize, params: PolySynthParams) -> Result<(), Error> {
-    validate_synth_params(
-        channel,
-        "poly synth",
-        &params.osc,
-        params.glide,
-        params.attack,
-        params.decay,
-        params.sustain,
-        params.release,
-        params.filter_cutoff,
-        params.filter_resonance,
-        params.filter_env_amount,
-        params.drive,
-        params.lfo.rate_hz,
-        params.lfo.to_pitch,
-        params.lfo.to_filter,
-        params.lfo.to_pulse_width,
-        params.lfo.to_amp,
-    )?;
-    if !(1..=MAX_POLY_VOICES).contains(&params.polyphony) {
-        return Err(invalid_integer(
-            channel,
-            "poly synth voice count",
-            params.polyphony,
-            1,
-            MAX_POLY_VOICES,
-        ));
-    }
-    validate_range(channel, "poly synth stereo spread", params.spread, 0.0, 1.0)?;
-    Ok(())
-}
-
-fn validate_range(
-    channel: usize,
-    field: &str,
-    value: f32,
-    min: f32,
-    max: f32,
-) -> Result<(), Error> {
-    if value.is_finite() && (min..=max).contains(&value) {
-        return Ok(());
-    }
-    Err(Error::Invalid(format!(
-        "channel {channel} {field} is {value:?}; expected {min}..={max}"
-    )))
-}
-
-fn invalid_integer(channel: usize, field: &str, value: u8, min: u8, max: u8) -> Error {
-    Error::Invalid(format!(
-        "channel {channel} {field} is {value}; expected {min}..={max}"
-    ))
-}
-
-fn validate_sampler(channel: usize, params: SamplerParams) -> Result<(), Error> {
-    let normalized = [
-        params.start,
-        params.end,
-        params.loop_start,
-        params.loop_end,
-        params.sustain,
-        params.filter_cutoff,
-        params.filter_resonance,
-        params.drive,
-        params.bit_reduction,
-        params.rate_reduction,
-    ];
-    let finite = normalized.iter().all(|value| value.is_finite())
-        && [
-            params.tune_semitones,
-            params.tune_cents,
-            params.attack,
-            params.decay,
-            params.release,
-            params.filter_env_amount,
-        ]
-        .iter()
-        .all(|value| value.is_finite());
-    let valid = finite
-        && normalized.iter().all(|value| (0.0..=1.0).contains(value))
-        && params.start < params.end
-        && params.loop_start <= params.loop_end
-        && params.root_note <= 127
-        && (1..=MAX_SAMPLER_VOICES).contains(&params.polyphony)
-        && params.choke_group <= MAX_CHOKE_GROUP
-        && (-48.0..=48.0).contains(&params.tune_semitones)
-        && (-100.0..=100.0).contains(&params.tune_cents)
-        && params.attack >= 0.0
-        && params.decay >= 0.0
-        && params.release >= 0.0
-        && (-1.0..=1.0).contains(&params.filter_env_amount);
-    if !valid {
-        return Err(Error::Invalid(format!(
-            "channel {channel} has invalid sampler parameters"
-        )));
-    }
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{AutomationLane, AutomationPoint, NoteEvent, ParamAddr, PatternPlacement};
+    use mooloop_core::{
+        AutomationLane, AutomationPoint, DrumSynthParams, Ml1Params, MonoSynthParams, NoteEvent,
+        ParamAddr, PatternPlacement, MAX_CHOKE_GROUP,
+    };
     use tempfile::tempdir;
 
     #[test]
@@ -1308,7 +963,7 @@ mod tests {
         let target = ParamAddr::effect(mooloop_core::EffectTarget::Channel(0), 0, 1);
         project.channels[0].automation[0].push(AutomationLane::new(target));
         project.channels[0].automation[0].push(AutomationLane::new(target));
-        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
     }
 
     #[test]
@@ -1439,6 +1094,95 @@ mod tests {
         assert_eq!(loaded_channel.document, LoadedDocument::Channel(Box::new(setup)));
     }
 
+    /// The whole point of the repair pass, checked end to end: a song that
+    /// used to be refused now reaches disk, and what comes back is the
+    /// corrected version rather than the broken one.
+    #[test]
+    fn a_song_with_an_out_of_range_setting_saves_and_reloads_corrected() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1);
+        project.channels[0]
+            .setup
+            .mono_synth_state_mut()
+            .unwrap()
+            .params
+            .lfo
+            .rate_hz = 400.0;
+
+        let saved = save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        assert_eq!(saved.repairs.len(), 1);
+        assert_eq!(saved.repairs[0].code, "channel.synth.lfo");
+
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.repairs.is_empty(), "the file on disk is already fixed");
+        let LoadedDocument::Song(reloaded) = loaded.document else {
+            panic!("expected a song");
+        };
+        assert_eq!(
+            reloaded.channels[0]
+                .setup
+                .mono_synth_state()
+                .unwrap()
+                .params
+                .lfo
+                .rate_hz,
+            20.0
+        );
+    }
+
+    /// A song already on disk in a shape the old validator refused was
+    /// unopenable, which is worse than unsaveable. It must open.
+    #[test]
+    fn a_song_written_with_a_bad_value_still_opens() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.channel.pan = 9.0;
+        // Straight past `save_song`, so the manifest keeps the bad value the
+        // way a hand edit or an older build would have left it.
+        let envelope = Envelope {
+            format_version: FORMAT_VERSION,
+            document_type: "song".into(),
+            asset_mode: AssetMode::Embedded,
+            preset: None,
+            document: project,
+        };
+        fs::write(&bundle, toml::to_string_pretty(&envelope).unwrap()).unwrap();
+
+        let loaded = load_bundle(&bundle).unwrap();
+        assert_eq!(loaded.repairs.len(), 1);
+        let LoadedDocument::Song(project) = loaded.document else {
+            panic!("expected a song");
+        };
+        assert_eq!(project.channels[0].setup.channel.pan, 1.0);
+    }
+
+    /// What is left when repair cannot help has to say where it is and what it
+    /// would cost, in both the sentence and the copyable report.
+    #[test]
+    fn an_unrepairable_song_reports_the_place_and_the_price() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.channel.name = "Lead".into();
+        project.channels[0].notes[0] = (0..mooloop_core::MAX_NOTES_PER_CHANNEL_PATTERN + 2)
+            .map(|index| NoteEvent::new(index as u32 + 1, 0, 24, 60, 100))
+            .collect();
+
+        let error = save_song(&bundle, &project, AssetMode::Embedded).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Channel 1 \"Lead\""), "{message}");
+        assert!(message.contains("pattern 1"), "{message}");
+        assert!(message.contains("delete 2 notes"), "{message}");
+
+        let report = error.report().expect("a document error carries a report");
+        assert!(report.contains("channel.notes.count"), "{report}");
+        assert!(report.contains("format version"), "{report}");
+        assert!(!bundle.exists(), "a refused save leaves no partial file");
+    }
+
     #[test]
     fn missing_reference_loads_with_warning() {
         let temp = tempdir().unwrap();
@@ -1484,6 +1228,9 @@ mod tests {
             toml::to_string_pretty(&envelope).unwrap(),
         )
         .unwrap();
+        // A path escaping the bundle is a problem with the request, not with
+        // the document's own contents, so it stays an `Invalid` rather than
+        // going through the repair pass.
         assert!(matches!(load_bundle(&bundle), Err(Error::Invalid(_))));
     }
 
@@ -1740,13 +1487,13 @@ id = "default_kick"
             swing_percent: 49,
             ..Project::default()
         };
-        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
         project.swing_percent = 76;
-        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
 
         let mut project = Project::starter_kit(1);
         project.channels[0].setup.channel.kind = mooloop_core::DeviceKind::Sampler;
-        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
 
         let mut project = Project::starter_kit(1);
         project.channels[0]
@@ -1755,7 +1502,7 @@ id = "default_kick"
             .unwrap()
             .params
             .choke_group = MAX_CHOKE_GROUP + 1;
-        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
 
         let mut project = Project::default();
         project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1);
@@ -1765,7 +1512,7 @@ id = "default_kick"
             .unwrap()
             .params
             .filter_cutoff = f32::NAN;
-        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
 
         let mut project = Project::default();
         project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1);
@@ -1778,7 +1525,8 @@ id = "default_kick"
             .rate_hz = 400.0;
         let error = validate_project(&project).unwrap_err().to_string();
         assert!(error.contains("LFO rate"), "{error}");
-        assert!(error.contains("expected 0..=20"), "{error}");
+        assert!(error.contains("range 0 to 20"), "{error}");
+        assert!(error.contains("Mono Synth 1"), "{error}");
 
         let mut project = Project::default();
         project.channels[0] = mooloop_core::ProjectChannel::poly_synth(0, 1);
@@ -1788,7 +1536,7 @@ id = "default_kick"
             .unwrap()
             .params
             .polyphony = 0;
-        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
     }
 
     #[test]
@@ -1846,7 +1594,7 @@ id = "default_kick"
             .unwrap()
             .params
             .filter_keytrack = 4.0;
-        assert!(matches!(validate_project(&project), Err(Error::Invalid(_))));
+        assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
     }
 
     #[test]
