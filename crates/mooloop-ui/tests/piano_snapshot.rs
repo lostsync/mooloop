@@ -57,6 +57,9 @@ fn render_piano_snapshot() {
 /// worth pinning is the fully expanded one: velocity stems and an automation
 /// curve stacked under the grid, with the keyboard column's labels still
 /// aligned to them.
+///
+/// It carries a multi-note selection too, so the selection frame and its
+/// scale handles are in the one rendering that shows the whole editor.
 #[test]
 fn render_piano_lanes_snapshot() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
@@ -100,9 +103,15 @@ fn render_piano_lanes_snapshot() {
             duration_ticks: 48,
             note: 67,
             velocity: 127,
-            selected: false,
+            selected: true,
         },
     ]));
+    // What `refresh_selection_bounds` would publish for notes 1 and 3.
+    ui.set_selection_count(2);
+    ui.set_selection_start_tick(0);
+    ui.set_selection_end_tick(144);
+    ui.set_selection_low_note(60);
+    ui.set_selection_high_note(67);
     ui.set_notes(ModelRc::from(notes.clone()));
     ui.on_piano_note_hit_test(move |tick, midi_note| {
         let notes: Vec<NoteCell> = notes.iter().collect();
