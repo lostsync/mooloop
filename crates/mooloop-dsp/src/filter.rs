@@ -339,6 +339,18 @@ impl Ladder {
         self.feedback = 0.0;
     }
 
+    /// The resonance feedback gain this filter would use at these settings.
+    ///
+    /// Published because how much level resonance costs is a function of it,
+    /// and a host that wants to compensate should read the number rather than
+    /// re-derive it from [`LADDER_MAX_FEEDBACK`] and get it wrong later.
+    pub fn feedback_at(cutoff_hz: f32, resonance: f32, sample_rate: u32) -> f32 {
+        let sr = sample_rate as f32;
+        let cutoff = (cutoff_hz * LADDER_POLE_COMPENSATION).clamp(20.0, sr * 0.45);
+        let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
+        resonance.clamp(0.0, 1.0) * LADDER_MAX_FEEDBACK * (1.0 + LADDER_FEEDBACK_TRACKING * g)
+    }
+
     /// Process one sample. Safe to call with `cutoff_hz` moving every sample,
     /// which is what an envelope-swept filter does.
     pub fn next_sample(
@@ -392,9 +404,11 @@ impl Default for Ladder {
 /// - **The saturation is asymmetric** ([`DriveCurve::Tape`]), so it generates
 ///   even harmonics as well as odd. That is most of why it sounds brighter at
 ///   the same settings rather than merely thinner.
-/// - **No bass compensation.** The ladder deliberately feeds part of the input
-///   past the feedback subtraction to keep its low end; this one does not,
-///   which is what makes resonance squeeze the body out of a note and squelch.
+/// - **Half the ladder's bass compensation.** The ladder feeds a generous part
+///   of the input past the feedback subtraction to keep its low end; this one
+///   feeds half as much ([`ACID_BASS_COMPENSATION`]), which is what lets
+///   resonance squeeze the body out of a note and squelch without the
+///   Resonance knob spending its first half as a volume control.
 ///
 /// Bounded for the same structural reason as the ladder: the stages only ever
 /// integrate a shaper output, and every shaper in `shaper::shape` is bounded.
@@ -407,6 +421,17 @@ pub struct Acid {
 /// Three cascaded one-poles reach -3 dB at `1 / sqrt(2^(1/3) - 1)` below a
 /// single pole's corner. Same job as [`LADDER_POLE_COMPENSATION`]: make the
 /// Cutoff knob mean one frequency across every model.
+///
+/// It does not currently achieve that, and the gap is deliberate for now.
+/// Measured, this puts Acid's corner at 0.41x the knob's value while [`Ladder`]
+/// sits at 0.68x and [`Svf`] at 0.65x -- about three quarters of an octave
+/// darker at the same setting. Correcting it to 1.307 lines all three up, but
+/// Acid's feedback, bass compensation and Tape shaper are all voiced against
+/// this low corner: with the corner moved, the resonance taper goes
+/// non-monotonic and its range collapses from 12 dB to under 3, and no value
+/// of [`ACID_MAX_FEEDBACK`] recovers it. Lining the corners up means
+/// re-deriving the filter, not retuning a constant. Recorded in
+/// `docs/plans/mono-synth-v2/00-status.md`.
 const ACID_POLE_COMPENSATION: f32 = 0.8;
 
 /// Half the ladder's, so the low end still thins as resonance rises -- that is
@@ -433,6 +458,15 @@ impl Acid {
     pub fn reset(&mut self) {
         self.stage = [0.0; 3];
         self.feedback = 0.0;
+    }
+
+    /// The resonance feedback gain this filter would use at these settings.
+    /// See [`Ladder::feedback_at`].
+    pub fn feedback_at(cutoff_hz: f32, resonance: f32, sample_rate: u32) -> f32 {
+        let sr = sample_rate as f32;
+        let cutoff = (cutoff_hz * ACID_POLE_COMPENSATION).clamp(20.0, sr * 0.45);
+        let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
+        resonance.clamp(0.0, 1.0) * ACID_MAX_FEEDBACK * (1.0 + ACID_FEEDBACK_TRACKING * g)
     }
 
     pub fn next_sample(

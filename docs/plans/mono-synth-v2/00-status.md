@@ -2,10 +2,8 @@
 
 In progress. 02-07 are in, restructured. 08's bank and its automated checks
 are in. **Adam played the bank on 2026-08-31**, so 08's listening pass has
-happened; his verdict was that the synth sounds very good. The findings it
-produced are being worked on their own branches and are not yet folded back
-into 04, 05 and 06 — the first is that the three filter models differ in
-apparent loudness. "What is not" is still accurate until that lands.
+happened; his verdict was that the synth sounds very good. See "Findings from
+the listening pass" for what it turned up and what is still open.
 
 ## The name, corrected 2026-08-31
 
@@ -113,11 +111,14 @@ Consequences for the steps below:
 
 ## What is not
 
-**08's listening pass.** The step's own framing is that the Ladder's bass
-compensation, the Acid filter's resonance path, the Accent depth constants and
-the pre-drive makeup gain are "tune by ear", and that tuning them against six
-concrete patches is what turns them from plausible to right. That has not
-happened, and no constant in 04, 05 or 06 was changed during this pass.
+**Voicing the remaining constants by ear.** The listening pass has now happened
+and produced one concrete DSP fix (see below), but the step's framing was that
+the Ladder's bass compensation, the Acid filter's resonance path, the Accent
+depth constants and the pre-drive makeup gain are all "tune by ear". Only the
+filter level matching has been touched. `ACCENT_ENV_SCALE`,
+`ACCENT_DRIVE_PUSH`, `PRE_DRIVE_GAIN_RANGE` and the Ladder/Acid compensation
+values still stand where measurement left them, as do the new makeup
+constants.
 
 This is a limitation of who did the work, not an oversight. The bank was
 voiced against measurements — the same brightness and peak proxies the earlier
@@ -132,6 +133,80 @@ that exercise the constants in combination, so that when Adam does play them,
 what needs moving should be obvious and the file to move it in is small.
 Anything changed then still needs writing back into 04, 05 or 06 with the
 reason, per the step.
+
+## Findings from the listening pass, 2026-08-31
+
+Adam played the bank and reported that the synth sounds very good, with one
+DSP note: the filter models had "pretty different apparent loudness between
+types". Measured across a cutoff/resonance grid with a 110 Hz saw at the
+operating level, that was **10.8 dB at worst** (5 kHz, resonance 0.9), and it
+turned out to be two separate defects.
+
+### Fixed: resonance was moving level, in opposite directions per model
+
+The two nonlinear models *lose* level as resonance rises, because their stages
+only ever integrate a bounded shaper output and so compress as the feedback
+path drives them harder. The linear `Svf` *gains* level from its resonant peak.
+So the three diverge as the Resonance knob comes up, rather than merely sitting
+at different offsets.
+
+Neither existing guard could see it. `resonant_filter_and_drive_stay_bounded`
+asserts only a peak ceiling, and the model-switch test measures the step at the
+instant of switching, not the level either side of it — a steady 10 dB offset
+passes both.
+
+`VoiceFilter` now applies a resonance makeup shaped on each model's feedback
+gain `k`, which already folds in cutoff tracking, so one term covers both axes.
+Worst-case spread falls to **2.4 dB**, most of which is the honest slope
+difference between a three-pole and a four-pole filter.
+
+The compensation lives in the ML-M1 rather than in the filters, deliberately: a
+`Ladder` used elsewhere should not arrive pre-trimmed to match two filters it
+has never heard of, and `Svf` is shared with the v1 synths and the filter
+effect, where changing its level would be a regression. `Ladder` and `Acid` now
+publish `feedback_at()` so the host can read `k` instead of re-deriving it.
+
+**The constants are a measured first pass and want an ear.** They are
+`LADDER_MAKEUP_DB`/`KNEE`, `ACID_MAKEUP_DB`/`KNEE`/`STATIC_DB`, and
+`CLEAN_MAKEUP_DB`/`KNEE` in `crates/mooloop-dsp/src/mlm1.rs`. Depth scales the
+whole correction; knee sets how quickly it arrives as resonance opens.
+
+### Not fixed: Acid's Cutoff knob means a different frequency
+
+`ACID_POLE_COMPENSATION` is documented as making "the Cutoff knob mean one
+frequency across every model", and it does not. Measured -3 dB corners, as a
+fraction of the knob's nominal value:
+
+| Model | Corner |
+| --- | --- |
+| Ladder | 0.68x |
+| Clean (`Svf`) | 0.65x |
+| Acid | **0.41x** |
+
+Acid is about three quarters of an octave darker at the same setting, and the
+constant's own formula, `1 / sqrt(2^(1/3) - 1)`, evaluates to 1.96 rather than
+the 0.8 in the file.
+
+Correcting it to 1.307 does line all three up, and it removes most of Acid's
+standing level offset. **It also breaks the filter.** Acid's feedback, bass
+compensation and Tape shaper are all voiced against the low corner: with the
+corner moved, the resonance taper goes non-monotonic at 100 Hz and its range
+collapses from about 12 dB to under 3, failing
+`acid_resonance_climbs_smoothly_across_the_cutoff_range` and
+`the_acid_sweeps_harder_than_the_ladder_at_the_same_settings`. A sweep of
+`ACID_MAX_FEEDBACK` from 12.0 down to 4.5 recovers neither.
+
+So 0.8 is not a typo — it is load-bearing, and lining the corners up means
+re-deriving the filter rather than retuning a constant. Left alone, with the
+standing offset absorbed by `ACID_MAKEUP_STATIC_DB` instead. Whether Acid
+*should* track the others is also a taste question Adam has not been asked: a
+darker, lower corner is part of what the model is for.
+
+### Also corrected
+
+`Acid`'s doc comment claimed "**No bass compensation**" while
+`ACID_BASS_COMPENSATION = 0.25` was applied a few lines below. The constant was
+added later and only its own comment was updated.
 
 ## 07 audit result
 

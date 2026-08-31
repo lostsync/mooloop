@@ -144,7 +144,15 @@ work session you can recall being part of, and don't stress over precision.
   deliberately frozen at the old spelling, since a serialized name is an
   on-disk identifier and Adam already had songs and a seeded bank written
   under it. Added the backward-compatibility test the existing round-trip
-  could not provide, because renaming both ends at once still passes it.
+  could not provide, because renaming both ends at once still passes it. Then
+  chased Adam's listening-pass note that the filter models differed in apparent
+  loudness: measured 10.8 dB between them, traced it to the two nonlinear
+  models compressing as resonance drives them while the linear one gains from
+  its peak, and matched them to 2.4 dB with a makeup shaped on each model's own
+  feedback gain. Found on the way that Acid's corner sits three quarters of an
+  octave below the other two, and that correcting it breaks the filter's
+  resonance taper outright -- so the miscalibration is load-bearing, and it is
+  recorded rather than fixed.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

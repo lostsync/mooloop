@@ -98,12 +98,79 @@ impl VoiceFilter {
         sample_rate: u32,
     ) -> f32 {
         match model {
-            FilterModel::Ladder => self.ladder.next_sample(input, cutoff_hz, resonance, sample_rate),
-            FilterModel::Acid => self.acid.next_sample(input, cutoff_hz, resonance, sample_rate),
-            FilterModel::Clean => self.clean.next_sample(input, cutoff_hz, resonance, sample_rate),
+            FilterModel::Ladder => {
+                let k = Ladder::feedback_at(cutoff_hz, resonance, sample_rate);
+                self.ladder.next_sample(input, cutoff_hz, resonance, sample_rate)
+                    * makeup(LADDER_MAKEUP_DB, LADDER_MAKEUP_KNEE, 0.0, k)
+            }
+            FilterModel::Acid => {
+                let k = Acid::feedback_at(cutoff_hz, resonance, sample_rate);
+                self.acid.next_sample(input, cutoff_hz, resonance, sample_rate)
+                    * makeup(ACID_MAKEUP_DB, ACID_MAKEUP_KNEE, ACID_MAKEUP_STATIC_DB, k)
+            }
+            FilterModel::Clean => {
+                let k = clean_feedback_at(cutoff_hz, resonance, sample_rate);
+                self.clean.next_sample(input, cutoff_hz, resonance, sample_rate)
+                    * makeup(CLEAN_MAKEUP_DB, CLEAN_MAKEUP_KNEE, 0.0, k)
+            }
         }
     }
 }
+
+/// Resonance makeup gain, as a linear multiplier.
+///
+/// Resonance changes a filter's output level, and by different amounts in
+/// different directions per model: the two nonlinear models lose level, because
+/// their stages only ever integrate a bounded shaper output and so compress as
+/// the feedback path drives them harder, while the linear [`Svf`] *gains* level
+/// from its resonant peak. Measured across a cutoff/resonance grid, that put
+/// the three models up to 10.4 dB apart at identical settings, which is what
+/// the Model switch sounded like before this existed.
+///
+/// The loss is close to logarithmic in the feedback gain `k`, which is why the
+/// curve is shaped on `k` rather than on the Resonance knob: `k` already folds
+/// in the cutoff tracking, so one term covers both axes.
+///
+/// This lives here rather than inside the filters because "the three models
+/// should be equally loud" is the ML-M1's policy, not a property of a ladder.
+/// A [`Ladder`] used somewhere else should not arrive pre-trimmed to match two
+/// filters it has never heard of, and [`Svf`] is shared with the v1 synths and
+/// the filter effect, where changing its level would be a regression.
+fn makeup(depth_db: f32, knee: f32, static_db: f32, k: f32) -> f32 {
+    let db = depth_db * (1.0 + knee * k).ln() + static_db;
+    10.0_f32.powf(db / 20.0)
+}
+
+/// [`Svf`] is linear and has no feedback gain to publish, so the Clean model
+/// gets the same shape driven by an equivalent term. The `1.5` matches the
+/// tracking both nonlinear models use.
+fn clean_feedback_at(cutoff_hz: f32, resonance: f32, sample_rate: u32) -> f32 {
+    let sr = sample_rate as f32;
+    let cutoff = cutoff_hz.clamp(20.0, sr * 0.45);
+    let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
+    resonance.clamp(0.0, 1.0) * (1.0 + 1.5 * g)
+}
+
+// Fitted by least squares against the measured grid, per model, so that each
+// model holds its own zero-resonance level as resonance rises. Worst-case
+// spread between the three models falls from 10.8 dB to 2.4 dB; the remainder
+// is mostly the honest slope difference between a three-pole and a four-pole
+// filter, which is character rather than error.
+//
+// These are a measured first pass and are meant to be tuned by ear.
+const LADDER_MAKEUP_DB: f32 = 14.30;
+const LADDER_MAKEUP_KNEE: f32 = 0.04;
+const ACID_MAKEUP_DB: f32 = 1.80;
+const ACID_MAKEUP_KNEE: f32 = 1.24;
+/// Acid is the one model that also sits low at *zero* resonance, because its
+/// corner is calibrated well below the other two -- see
+/// [`crate::filter`]'s `ACID_POLE_COMPENSATION`. Until that is re-derived,
+/// this closes the standing offset without touching its voice. The fit wanted
+/// no static term at all for the other two.
+const ACID_MAKEUP_STATIC_DB: f32 = 2.10;
+/// Negative: the linear filter is the one that gets *louder* with resonance.
+const CLEAN_MAKEUP_DB: f32 = -0.90;
+const CLEAN_MAKEUP_KNEE: f32 = 7.88;
 
 struct MlM1Voice {
     active: bool,
@@ -1596,6 +1663,68 @@ mod tests {
             acid_brightness > round_brightness * 1.5,
             "the two bass patches are too alike: round {round_brightness:.4}, \
              acid {acid_brightness:.4}"
+        );
+    }
+
+    /// Switching the Model switch must not act as a volume control.
+    ///
+    /// Adam's finding from the 08 listening pass: the three models had
+    /// "pretty different apparent loudness between types". Measured, they sat
+    /// up to 10.4 dB apart at identical cutoff and resonance -- the two
+    /// nonlinear models lose level to compression as the feedback path drives
+    /// them, while the linear one gains it from its resonant peak, so they
+    /// diverge in *opposite* directions as Resonance comes up.
+    ///
+    /// The two existing guards could not see this. `resonant_filter_and_drive_stay_bounded`
+    /// only asserts a peak ceiling, and the model-switch test measures the
+    /// step at the moment of switching, not the level either side of it -- a
+    /// steady 10 dB offset passes both.
+    #[test]
+    fn the_three_filter_models_are_matched_in_level() {
+        const SR: u32 = 48_000;
+        let mut phase = 0.0f32;
+        let input: Vec<f32> = (0..SR as usize / 2)
+            .map(|_| {
+                let v = (phase * 2.0 - 1.0) * 0.251;
+                phase = (phase + 110.0 / SR as f32).fract();
+                v
+            })
+            .collect();
+        let settle = input.len() / 4;
+
+        let mut worst: (f32, f32, f32) = (0.0, 0.0, 0.0);
+        for &cutoff in &[200.0f32, 500.0, 1000.0, 2000.0, 5000.0] {
+            for &res in &[0.0f32, 0.3, 0.6, 0.9] {
+                let levels: Vec<f32> = [FilterModel::Ladder, FilterModel::Acid, FilterModel::Clean]
+                    .iter()
+                    .map(|&model| {
+                        let mut f = VoiceFilter::new();
+                        let out: Vec<f32> = input
+                            .iter()
+                            .map(|&x| f.next_sample(model, x, cutoff, res, SR))
+                            .collect();
+                        let mean_sq = out[settle..].iter().map(|s| s * s).sum::<f32>()
+                            / out[settle..].len() as f32;
+                        20.0 * mean_sq.sqrt().max(1e-9).log10()
+                    })
+                    .collect();
+                let spread = levels.iter().fold(f32::MIN, |a, &b| a.max(b))
+                    - levels.iter().fold(f32::MAX, |a, &b| a.min(b));
+                if spread > worst.0 {
+                    worst = (spread, cutoff, res);
+                }
+            }
+        }
+
+        // Measured worst case is 2.4 dB, most of it the honest difference
+        // between a three-pole and a four-pole slope. 3.5 dB leaves room to
+        // voice the makeup constants by ear without the test becoming a
+        // tripwire, while still catching the 10 dB regression it exists for.
+        assert!(
+            worst.0 < 3.5,
+            "filter models are {:.2} dB apart at cutoff {} Hz, resonance {} -- \
+             the Model switch is acting as a volume control",
+            worst.0, worst.1, worst.2
         );
     }
 }
