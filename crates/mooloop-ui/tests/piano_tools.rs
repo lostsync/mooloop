@@ -542,3 +542,209 @@ fn snapping_on_keeps_the_drag_on_the_grid() {
         "every landing should be on a 1/16 boundary, got {moves:?}"
     );
 }
+
+// ---- resize -------------------------------------------------------------
+
+/// The left edge moves the start and holds the end, which is the whole point
+/// of having it: the right edge already covers "make this longer at the end".
+#[test]
+fn dragging_the_left_edge_moves_the_start() {
+    let ui = harness(TOOL_SELECT, vec![cell(7, 4 * SNAP_TICKS, 4 * SNAP_TICKS, 60)]);
+    let starts: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let lengths = Rc::new(RefCell::new(0usize));
+    {
+        let starts = starts.clone();
+        ui.on_piano_note_start_resized(move |id, start| starts.borrow_mut().push((id, start)));
+    }
+    {
+        let lengths = lengths.clone();
+        ui.on_piano_note_resized(move |_, _| *lengths.borrow_mut() += 1);
+    }
+
+    // Grab the note's left edge and pull it two steps earlier.
+    let left = (tick_x(4 * SNAP_TICKS) + 1.0, note_centre_y(60));
+    drag(ui.window(), left, (left.0 - 2.0 * STEP_WIDTH, note_centre_y(60)));
+
+    assert_eq!(
+        *lengths.borrow(),
+        0,
+        "the left edge must not report a right-edge resize"
+    );
+    let (id, start) = *starts.borrow().last().expect("the start should have moved");
+    assert_eq!(id, 7);
+    assert_eq!(start, 2 * SNAP_TICKS);
+}
+
+/// The start can travel until it would reach the note's own end; past that
+/// there would be no note left.
+#[test]
+fn the_left_edge_stops_before_it_reaches_the_end() {
+    let ui = harness(TOOL_SELECT, vec![cell(7, 0, 2 * SNAP_TICKS, 60)]);
+    let starts: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let starts = starts.clone();
+        ui.on_piano_note_start_resized(move |_, start| starts.borrow_mut().push(start));
+    }
+
+    let left = (tick_x(0) + 1.0, note_centre_y(60));
+    drag(ui.window(), left, (left.0 + 6.0 * STEP_WIDTH, note_centre_y(60)));
+
+    let starts = starts.borrow();
+    assert!(
+        starts.iter().all(|start| *start <= SNAP_TICKS),
+        "the start should stop one snap step short of the end at 48, got {starts:?}"
+    );
+}
+
+// ---- scale --------------------------------------------------------------
+
+/// A frame handle is only offered for a multi-selection: one note already has
+/// its own edge grabs, and a handle over them would take the press.
+#[test]
+fn a_single_selection_gets_no_scale_handle() {
+    let mut notes = vec![cell(7, 0, 4 * SNAP_TICKS, 60)];
+    notes[0].selected = true;
+    let ui = harness(TOOL_SELECT, notes);
+    ui.set_selection_count(1);
+    ui.set_selection_start_tick(0);
+    ui.set_selection_end_tick(4 * SNAP_TICKS);
+    ui.set_selection_low_note(60);
+    ui.set_selection_high_note(60);
+    let scales = Rc::new(RefCell::new(0usize));
+    let lengths = Rc::new(RefCell::new(0usize));
+    {
+        let scales = scales.clone();
+        ui.on_piano_scale_begin(move |_| *scales.borrow_mut() += 1);
+    }
+    {
+        let lengths = lengths.clone();
+        ui.on_piano_note_resized(move |_, _| *lengths.borrow_mut() += 1);
+    }
+
+    // Right where the frame's right handle would be if there were a frame.
+    let edge = (tick_x(4 * SNAP_TICKS) - 2.0, note_centre_y(60));
+    drag(ui.window(), edge, (edge.0 + 2.0 * STEP_WIDTH, note_centre_y(60)));
+
+    assert_eq!(*scales.borrow(), 0, "no frame, so no scale");
+    assert!(
+        *lengths.borrow() > 0,
+        "the note's own right edge should still resize it"
+    );
+}
+
+/// Dragging the right handle out to twice the selection's span reports a
+/// factor of about two, which is what turns an eighth into a quarter.
+#[test]
+fn dragging_the_right_handle_scales_by_the_span_it_travelled() {
+    let ui = harness(
+        TOOL_SELECT,
+        vec![
+            cell(7, 0, SNAP_TICKS, 60),
+            cell(8, 4 * SNAP_TICKS, SNAP_TICKS, 62),
+        ],
+    );
+    ui.set_selection_count(2);
+    ui.set_selection_start_tick(0);
+    ui.set_selection_end_tick(5 * SNAP_TICKS);
+    ui.set_selection_low_note(60);
+    ui.set_selection_high_note(62);
+    let from_left: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+    let factors: Rc<RefCell<Vec<f32>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let from_left = from_left.clone();
+        ui.on_piano_scale_begin(move |left| from_left.borrow_mut().push(left));
+    }
+    {
+        let factors = factors.clone();
+        ui.on_piano_selection_scaled(move |factor| factors.borrow_mut().push(factor));
+    }
+
+    // The frame spans ticks 0..120, which is five steps of grid.
+    let handle = (tick_x(5 * SNAP_TICKS), note_centre_y(61));
+    drag(ui.window(), handle, (handle.0 + 5.0 * STEP_WIDTH, note_centre_y(61)));
+
+    assert_eq!(*from_left.borrow(), vec![false], "the right handle scales from the left");
+    let factor = *factors.borrow().last().expect("a factor should have been reported");
+    assert!(
+        (factor - 2.0).abs() < 0.05,
+        "doubling the frame's width should report ~2.0, got {factor}"
+    );
+}
+
+/// The left handle scales about the selection's right edge instead.
+#[test]
+fn dragging_the_left_handle_scales_about_the_right_edge() {
+    let ui = harness(
+        TOOL_SELECT,
+        vec![
+            cell(7, 0, SNAP_TICKS, 60),
+            cell(8, 4 * SNAP_TICKS, SNAP_TICKS, 62),
+        ],
+    );
+    ui.set_selection_count(2);
+    ui.set_selection_start_tick(0);
+    ui.set_selection_end_tick(5 * SNAP_TICKS);
+    ui.set_selection_low_note(60);
+    ui.set_selection_high_note(62);
+    let from_left: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+    let factors: Rc<RefCell<Vec<f32>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let from_left = from_left.clone();
+        ui.on_piano_scale_begin(move |left| from_left.borrow_mut().push(left));
+    }
+    {
+        let factors = factors.clone();
+        ui.on_piano_selection_scaled(move |factor| factors.borrow_mut().push(factor));
+    }
+
+    // Pull the left handle inward by half the frame's width.
+    let handle = (tick_x(0), note_centre_y(61));
+    drag(
+        ui.window(),
+        handle,
+        (handle.0 + 2.5 * STEP_WIDTH, note_centre_y(61)),
+    );
+
+    assert_eq!(*from_left.borrow(), vec![true]);
+    let factor = *factors.borrow().last().expect("a factor should have been reported");
+    assert!(
+        (factor - 0.5).abs() < 0.05,
+        "halving the frame's width should report ~0.5, got {factor}"
+    );
+}
+
+/// The handle claims the press even where it sits on top of a note's own
+/// resize edge, or there would be no way to scale a selection whose last
+/// note ends at the frame's edge.
+#[test]
+fn the_handle_wins_over_the_note_edge_underneath_it() {
+    let ui = harness(
+        TOOL_SELECT,
+        vec![
+            cell(7, 0, SNAP_TICKS, 60),
+            cell(8, 4 * SNAP_TICKS, SNAP_TICKS, 60),
+        ],
+    );
+    ui.set_selection_count(2);
+    ui.set_selection_start_tick(0);
+    ui.set_selection_end_tick(5 * SNAP_TICKS);
+    ui.set_selection_low_note(60);
+    ui.set_selection_high_note(60);
+    let scales = Rc::new(RefCell::new(0usize));
+    let lengths = Rc::new(RefCell::new(0usize));
+    {
+        let scales = scales.clone();
+        ui.on_piano_scale_begin(move |_| *scales.borrow_mut() += 1);
+    }
+    {
+        let lengths = lengths.clone();
+        ui.on_piano_note_resized(move |_, _| *lengths.borrow_mut() += 1);
+    }
+
+    // The frame's right edge is also note 8's right edge.
+    let handle = (tick_x(5 * SNAP_TICKS), note_centre_y(60));
+    drag(ui.window(), handle, (handle.0 + 2.0 * STEP_WIDTH, note_centre_y(60)));
+
+    assert_eq!(*scales.borrow(), 1);
+    assert_eq!(*lengths.borrow(), 0, "the note's own resize must not also fire");
+}

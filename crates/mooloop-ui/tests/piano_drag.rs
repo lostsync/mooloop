@@ -392,8 +392,8 @@ fn dragging_one_note_of_a_selection_reports_its_own_landing_position() {
 
     drag(
         ui.window(),
-        (tick_x(0) + 6.0, note_centre_y(60)),
-        (tick_x(4 * TICKS_PER_STEP) + 6.0, note_centre_y(60)),
+        (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60)),
+        (tick_x(4 * TICKS_PER_STEP) + STEP_WIDTH / 2.0, note_centre_y(60)),
     );
 
     let moves = moves.borrow();
@@ -425,8 +425,8 @@ fn ctrl_drag_duplicates_once_and_continues_on_the_copy() {
 
     drag_with(
         ui.window(),
-        (tick_x(0) + 6.0, note_centre_y(60)),
-        (tick_x(4 * TICKS_PER_STEP) + 6.0, note_centre_y(60)),
+        (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60)),
+        (tick_x(4 * TICKS_PER_STEP) + STEP_WIDTH / 2.0, note_centre_y(60)),
         Some(slint::platform::Key::Control),
     );
 
@@ -454,8 +454,8 @@ fn shift_drag_leaves_the_grid() {
     let half_step = tick_x(TICKS_PER_STEP / 2) - tick_x(0);
     drag_with(
         ui.window(),
-        (tick_x(0) + 6.0, note_centre_y(60)),
-        (tick_x(0) + 6.0 + half_step, note_centre_y(60)),
+        (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60)),
+        (tick_x(0) + STEP_WIDTH / 2.0 + half_step, note_centre_y(60)),
         Some(slint::platform::Key::Shift),
     );
 

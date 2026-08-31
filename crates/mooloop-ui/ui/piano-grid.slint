@@ -75,6 +75,11 @@ export component PianoGrid inherits Rectangle {
     in property <length> visible-w;
     in property <length> visible-h;
     in property <PianoGestures> gestures;
+    in property <int> selection-count;
+    in property <int> selection-start-tick;
+    in property <int> selection-end-tick;
+    in property <int> selection-low-note;
+    in property <int> selection-high-note;
     in-out property <string> hover-hint;
 
     pure callback note-hit-test(int, int) -> NoteHit; // tick, MIDI note
@@ -85,12 +90,15 @@ export component PianoGrid inherits Rectangle {
     callback note-moved(int, int, int);               // id, start tick, note
     callback selection-duplicated(int) -> int;        // anchor id -> copy of anchor
     callback note-resized(int, int);                  // id, duration ticks
+    callback note-start-resized(int, int);            // id, start tick (end held)
     callback note-removed(int);                       // id
     callback pan(length, length);                     // requested scroll-x, scroll-y
     callback marquee-begin(int);                      // 0 replace / 1 add / 2 remove
     callback marquee-updated(int, int, int, int);     // start tick, end tick, low note, high note
     callback note-sliced(int, int);                   // id, tick to cut at
     callback selection-joined();
+    callback scale-begin(bool);                       // true for the left handle
+    callback selection-scaled(float);
     callback cell-painted(int, int, int);             // start tick, note, duration
 
     x: 0px;
@@ -124,6 +132,43 @@ export component PianoGrid inherits Rectangle {
         return (!want.ctrl || ctrl) && (!want.shift || shift)
             && (!want.alt || alt) && (!want.meta || meta);
     }
+    // The selection frame's extent, in canvas pixels. Only meaningful when
+    // more than one note is selected -- a single note already has its own
+    // edge grabs, and a frame around it would just cover them.
+    pure function frame-shown() -> bool {
+        return root.selection-count > 1;
+    }
+    pure function frame-left() -> length {
+        return root.note-x(root.selection-start-tick);
+    }
+    pure function frame-right() -> length {
+        return root.note-x(root.selection-end-tick);
+    }
+    pure function frame-top() -> length {
+        return (root.high-note - root.selection-high-note) * root.row-height;
+    }
+    pure function frame-bottom() -> length {
+        return (root.high-note - root.selection-low-note + 1) * root.row-height;
+    }
+    // 0 none, 1 left handle, 2 right handle. Tested before the note grabs,
+    // so a handle sitting over a note's edge still scales rather than
+    // resizing that one note.
+    pure function scale-handle-at(x: length, y: length) -> int {
+        if (!root.frame-shown()) {
+            return 0;
+        }
+        if (y < root.frame-top() || y > root.frame-bottom()) {
+            return 0;
+        }
+        if (abs(x - root.frame-left()) <= 4px) {
+            return 1;
+        }
+        if (abs(x - root.frame-right()) <= 4px) {
+            return 2;
+        }
+        return 0;
+    }
+
     // Lays one note at the pointer's cell, unless that cell is the one the
     // stroke last painted or already holds a note. Called from the press and
     // from every move frame; the dedupe is what makes a slow sweep across
@@ -191,19 +236,31 @@ export component PianoGrid inherits Rectangle {
         return clamp(root.high-note - floor(y / root.row-height),
             root.low-note, root.high-note);
     }
-    // 0 = empty grid, 1 = note body (move), 2 = right edge (resize).
-    // The edge zone scales with the note so it stays
+    // 0 = empty grid, 1 = note body (move), 2 = right edge (lengthen),
+    // 3 = left edge (move the start, hold the end).
+    // The edge zones scale with the note so they stay
     // grabbable on a minimum-width note instead of the
-    // fixed 5px that used to eat the whole note.
+    // fixed 5px that used to eat the whole note. Right wins
+    // where the two would overlap on a very short note, since
+    // lengthening is much the more common of the pair.
     pure function grab-mode-at(x: length, y: length) -> int {
         let hit = root.note-hit-test(self.tick-at(x), self.note-at(y));
         if (!hit.found) {
             return 0;
         }
-        let edge = clamp(self.note-width(hit.duration-ticks) / 4, 3px, 8px);
-        return x >= self.note-x(hit.start-tick)
-                + self.note-width(hit.duration-ticks) - edge
-            ? 2 : 1;
+        let width = self.note-width(hit.duration-ticks);
+        // A fifth rather than a quarter, now that both ends are taken: at a
+        // quarter each the body was only half the note, and the body is the
+        // part you reach for most.
+        let edge = clamp(width / 5, 3px, 7px);
+        let left = self.note-x(hit.start-tick);
+        if (x >= left + width - edge) {
+            return 2;
+        }
+        if (x <= left + edge) {
+            return 3;
+        }
+        return 1;
     }
 
     for key in root.note-count : Rectangle {
@@ -240,6 +297,29 @@ export component PianoGrid inherits Rectangle {
         opacity: 0.55 + 0.45 * cell.velocity / 127;
         border-width: cell.selected ? 1px : 0px;
         border-color: Theme.text;
+    }
+
+    // The selection frame. A multi-selection is one object for the purposes
+    // of moving and scaling, so it gets one outline and a grab handle at
+    // each time edge rather than the user having to infer its extent from
+    // which notes happen to be tinted.
+    if root.frame-shown() : Rectangle {
+        x: root.frame-left();
+        y: root.frame-top();
+        width: max(1px, root.frame-right() - root.frame-left());
+        height: root.frame-bottom() - root.frame-top();
+        background: transparent;
+        border-width: 1px;
+        border-color: Theme.focus.transparentize(0.4);
+
+        for side in 2 : Rectangle {
+            x: side == 0 ? -3px : parent.width - 3px;
+            width: 6px;
+            height: parent.height;
+            background: Theme.focus.transparentize(
+                piano-touch.scaling != 0
+                    && piano-touch.scaling == (side == 0 ? 1 : 2) ? 0.2 : 0.55);
+        }
     }
 
     // The rubber band. Drawn above the notes and in the same canvas
@@ -298,6 +378,15 @@ export component PianoGrid inherits Rectangle {
         property <int> painted-note: -1;
         // Rubber-band selection, in canvas coordinates so the band does not
         // move under the pointer while the model changes beneath it.
+        // 0 none, 1 dragging the left handle, 2 the right one. The anchor
+        // is the opposite edge, held still.
+        property <int> scaling;
+        property <length> scale-anchor-x;
+        // Where the grabbed edge started. Cached, because the frame follows
+        // the model and reading it live would divide by a span the previous
+        // frame already scaled -- the factor would compound instead of
+        // measuring against the original.
+        property <length> scale-origin-x;
         property <bool> marqueeing;
         property <length> marquee-anchor-x;
         property <length> marquee-anchor-y;
@@ -315,8 +404,9 @@ export component PianoGrid inherits Rectangle {
         // Rust, and the cursor used to pay for that twice on every pointer
         // move. A binding re-evaluates once when `mouse-x`/`mouse-y` change
         // and caches until they do.
-        property <int> hover-mode: root.grab-mode-at(self.mouse-x, self.mouse-y);
-        mouse-cursor: self.hover-mode == 2 ? ew-resize
+        property <int> hover-mode: root.scale-handle-at(self.mouse-x, self.mouse-y) != 0
+            ? 2 : root.grab-mode-at(self.mouse-x, self.mouse-y);
+        mouse-cursor: self.hover-mode == 2 || self.hover-mode == 3 ? ew-resize
             : self.hover-mode == 1 ? move
             : crosshair;
 
@@ -334,12 +424,28 @@ export component PianoGrid inherits Rectangle {
                 self.erasing = false;
                 self.painting = false;
                 self.marqueeing = false;
+                self.scaling = 0;
                 let tick = root.tick-at(self.mouse-x);
                 let note = root.note-at(self.mouse-y);
                 let hit = root.note-hit-test(tick, note);
                 let quantise = root.snapping(e.modifiers.control,
                     e.modifiers.shift, e.modifiers.alt, e.modifiers.meta);
-                if (e.button == PointerEventButton.right || root.tool == 4) {
+                let handle = e.button == PointerEventButton.left
+                    ? root.scale-handle-at(self.mouse-x, self.mouse-y) : 0;
+                if (handle != 0) {
+                    // Claimed before the tools and before the note grabs: a
+                    // handle sits on top of whatever note is at the
+                    // selection's edge, and that note's own resize would
+                    // otherwise win and there would be no way to scale.
+                    self.create-click-armed = false;
+                    create-click-timeout.running = false;
+                    self.scaling = handle;
+                    self.scale-anchor-x = handle == 1
+                        ? root.frame-right() : root.frame-left();
+                    self.scale-origin-x = handle == 1
+                        ? root.frame-left() : root.frame-right();
+                    root.scale-begin(handle == 1);
+                } else if (e.button == PointerEventButton.right || root.tool == 4) {
                     // A right-drag erases whatever it crosses, in every
                     // tool. Sweeping is the only reason erase needs a mode
                     // of its own; a single delete never did.
@@ -444,6 +550,15 @@ export component PianoGrid inherits Rectangle {
                         self.marquee-y = self.mouse-y;
                     }
                 }
+            } else if (e.kind == PointerEventKind.move && self.scaling != 0) {
+                let span = self.mouse-x - self.scale-anchor-x;
+                let original = self.scale-origin-x - self.scale-anchor-x;
+                // A zero-width original has no factor to speak of, and a
+                // handle dragged through its anchor would flip the selection
+                // inside out rather than scaling it.
+                if (abs(original) > 0.5px && span / original > 0.02) {
+                    root.selection-scaled(span / original);
+                }
             } else if (e.kind == PointerEventKind.move && self.erasing) {
                 let hit = root.note-hit-test(root.tick-at(self.mouse-x),
                     root.note-at(self.mouse-y));
@@ -501,6 +616,14 @@ export component PianoGrid inherits Rectangle {
                             : min(root.snap-ticks, max-duration),
                         max-duration);
                     root.note-resized(self.grabbed-id, duration);
+                } else if (self.grab-mode == 3) {
+                    // The end tick is what stays put, so the start can only
+                    // travel as far as leaving a note behind.
+                    let floor-length = free ? 1 : min(root.snap-ticks,
+                        self.original-duration);
+                    let start = clamp(self.original-start + delta-ticks,
+                        0, self.original-start + self.original-duration - floor-length);
+                    root.note-start-resized(self.grabbed-id, start);
                 } else {
                     if (root.has-gesture(root.gestures.copy-drag,
                             e.modifiers.control, e.modifiers.shift,
@@ -528,6 +651,7 @@ export component PianoGrid inherits Rectangle {
                 self.erasing = false;
                 self.painting = false;
                 self.marqueeing = false;
+                self.scaling = 0;
                 root.gesture-end();
             }
         }

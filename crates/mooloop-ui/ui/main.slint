@@ -688,6 +688,18 @@ export component MainWindow inherits Window {
     // twenty undos.
     // Resolved from `gestures.rs` plus the user's Preferences overrides.
     in property <PianoGestures> piano-gestures;
+    // The selection's bounding box, for the grid's selection frame and its
+    // scale handles. Zero count means no frame.
+    in property <int> selection-count;
+    in property <int> selection-start-tick;
+    in property <int> selection-end-tick;
+    in property <int> selection-low-note;
+    in property <int> selection-high-note;
+    // Time-scaling the selection. Begin caches the pre-drag geometry in Rust
+    // so every frame scales the original rather than compounding on the
+    // previous frame's rounding.
+    callback piano-scale-begin(bool);   // true when dragging the left handle
+    callback piano-selection-scaled(float);
     callback piano-gesture-begin();
     callback piano-gesture-end();
     callback piano-note-created(int, int, int) -> int;  // start tick, MIDI note, duration ticks -> stable note ID
@@ -700,6 +712,8 @@ export component MainWindow inherits Window {
     // nothing was duplicated.
     callback piano-selection-duplicated(int) -> int;
     callback piano-note-resized(int, int);  // ID, duration ticks
+    // Left-edge resize: the end tick stays put and the start moves.
+    callback piano-note-start-resized(int, int); // ID, start tick
     callback piano-note-removed(int);       // stable note ID
     // Marquee selection. Begin snapshots the base selection in Rust, because
     // the band updates live and would otherwise clobber its own base every
@@ -3394,6 +3408,11 @@ export component MainWindow inherits Window {
                                                 pattern-length: root.pattern-length;
                                                 notes: root.notes;
                                                 gestures: root.piano-gestures;
+                                                selection-count: root.selection-count;
+                                                selection-start-tick: root.selection-start-tick;
+                                                selection-end-tick: root.selection-end-tick;
+                                                selection-low-note: root.selection-low-note;
+                                                selection-high-note: root.selection-high-note;
                                                 low-note: root.piano-low-note;
                                                 high-note: root.piano-high-note;
                                                 note-count: root.piano-note-count;
@@ -3419,7 +3438,12 @@ export component MainWindow inherits Window {
                                                 note-moved(id, start, note) => { root.piano-note-moved(id, start, note); }
                                                 selection-duplicated(id) => { return root.piano-selection-duplicated(id); }
                                                 note-resized(id, duration) => { root.piano-note-resized(id, duration); }
+                                                note-start-resized(id, start) => {
+                                                    root.piano-note-start-resized(id, start);
+                                                }
                                                 note-removed(id) => { root.piano-note-removed(id); }
+                                                scale-begin(from-left) => { root.piano-scale-begin(from-left); }
+                                                selection-scaled(factor) => { root.piano-selection-scaled(factor); }
                                                 marquee-begin(mode) => { root.piano-marquee-begin(mode); }
                                                 marquee-updated(a, b, lo, hi) => {
                                                     root.piano-marquee-updated(a, b, lo, hi);

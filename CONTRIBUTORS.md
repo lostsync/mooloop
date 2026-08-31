@@ -210,7 +210,13 @@ work session you can recall being part of, and don't stress over precision.
   a right-drag erase sweep stalled after one frame until the gesture flags
   became the only record of a drag in flight; and the new header controls
   propagated a window minimum width that cost the sidebar most of its resize
-  range, so the row clips and leads with the tool selector instead.
+  range, so the row clips and leads with the tool selector instead. Finished
+  the selection as an editable object: left-edge resize, length adjust across
+  the whole selection, and a frame with a grab handle at each time edge that
+  scales the selection in time -- double its span and an eighth becomes a
+  quarter. The scale caches its pre-drag geometry in Rust and applies each
+  frame to that, because scaling the live notes compounds its own rounding
+  and a slow drag walks the selection away from where the pointer says it is.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
