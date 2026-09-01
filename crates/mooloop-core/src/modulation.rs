@@ -1198,9 +1198,15 @@ pub struct ModRoute {
     pub polarity: ModPolarity,
 }
 
-/// Fixed rack size. Four slots per channel, matching the rack UI and keeping
-/// a channel a self-contained instrument (`MODULATION_PLAN.md`).
-pub const MAX_MODULATORS_PER_CHANNEL: usize = 4;
+/// Fixed rack size. Eight slots per channel: four stopped being enough the
+/// moment modules became cheap to add, and the grid is laid out to hold this
+/// many (`docs/plans/modulator-modules/03-the-grid.md`).
+///
+/// This is a protocol number, not a UI one. The whole rack rides the command
+/// ring by value, so growing it grows every preallocated ring entry — which
+/// is why `the_rack_is_what_a_command_ring_entry_costs` measures the price
+/// rather than leaving the next change to assume it.
+pub const MAX_MODULATORS_PER_CHANNEL: usize = 8;
 /// Ceiling on matrix rows per channel. Bounded so evaluation is a fixed cost
 /// and the whole rack stays `Copy`.
 pub const MAX_MOD_ROUTES_PER_CHANNEL: usize = 16;
@@ -1684,6 +1690,37 @@ retrigger = true
     /// The sixteen step values are one contiguous id block and nothing
     /// outside it, so the editor can walk the bank by offset and a stale
     /// automation id past the end is ignored rather than aliasing step 1.
+    /// Rack capacity is bought with preallocated ring memory, so the price
+    /// is pinned here rather than rediscovered. `SetChannelModulation` ships
+    /// a whole `ModRack` by value and is the widest `EngineCommand` variant,
+    /// so this number times the engine's queue capacity is what the command
+    /// ring costs at startup.
+    ///
+    /// If this test fails, something changed the width of a command. That is
+    /// allowed — but confirm the new ring size is one you meant to pay for
+    /// before updating the number.
+    #[test]
+    fn the_rack_is_what_a_command_ring_entry_costs() {
+        use core::mem::size_of;
+
+        // One slot is one `Option<ModulatorParams>`, and the widest kind is
+        // the step pattern's sixteen values.
+        let slot = size_of::<Option<ModulatorParams>>();
+        assert_eq!(slot, 72);
+        assert_eq!(
+            size_of::<ModRack>(),
+            MAX_MODULATORS_PER_CHANNEL * slot
+                + MAX_MOD_ROUTES_PER_CHANNEL * size_of::<ModRoute>()
+        );
+
+        // Eight slots: 832 bytes of rack, 840 bytes an entry. At the
+        // engine's 1024-entry queue that is 840 KiB preallocated, up from
+        // 552 KiB at four slots — a fixed setup cost, never a per-command
+        // allocation, which is the trade `bridge.rs` documents.
+        assert_eq!(size_of::<ModRack>(), 832);
+        assert_eq!(size_of::<crate::EngineCommand>(), 840);
+    }
+
     #[test]
     fn the_step_value_block_is_contiguous_and_bounded() {
         assert_eq!(step_value_index(STEP_PARAM_VALUE_BASE), Some(0));
