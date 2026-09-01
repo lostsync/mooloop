@@ -10465,6 +10465,21 @@ impl AppUi {
                         }
                     }
                 }
+                // Resets are applied before loads, never after: a reset
+                // carries only "put this channel back to the default sample",
+                // while a load carries a sample the user actually asked for.
+                // Drained the other way round, a reset queued in the same
+                // window -- by adding a channel, or by switching a channel's
+                // source to the sampler -- silently overwrites the load and
+                // leaves the slot holding the default while the waveform,
+                // name, and duration on screen all describe the new file.
+                while let Ok(channel) = sample_reset_rx.try_recv() {
+                    if let Some(sample) = default_sample_for_pump.as_ref() {
+                        handle.load_sample(channel, sample.clone());
+                    } else {
+                        handle.clear_sample(channel);
+                    }
+                }
                 let mut deferred_new_channel_load = None;
                 while let Ok(load) = load_rx.try_recv() {
                     let still_current = {
@@ -10491,33 +10506,31 @@ impl AppUi {
                         continue;
                     };
                     if load.new_channel {
-                        // The channel is created below, after the reset loop,
-                        // so its default-sample reset lands first and this
-                        // load overwrites it rather than the reverse.
+                        // The channel does not exist yet. Creating it is
+                        // deferred to below, where its default-sample reset
+                        // can be spent before this load lands rather than
+                        // after.
                         deferred_new_channel_load = Some(loaded);
                         continue;
                     }
                     apply_loaded_sample(&handle, &st, &weak, load.channel, loaded);
                 }
-                while let Ok(channel) = sample_reset_rx.try_recv() {
-                    if let Some(sample) = default_sample_for_pump.as_ref() {
-                        handle.load_sample(channel, sample.clone());
-                    } else {
-                        handle.clear_sample(channel);
-                    }
-                }
                 if let Some(loaded) = deferred_new_channel_load {
                     if let Some(window) = weak.upgrade() {
                         window.invoke_add_channel_clicked(0);
+                        // Creating the channel queues its own default-sample
+                        // reset. Spend it here, so the sample this whole
+                        // branch exists to deliver is the last write to the
+                        // slot rather than the first.
+                        while let Ok(channel) = sample_reset_rx.try_recv() {
+                            if let Some(sample) = default_sample_for_pump.as_ref() {
+                                handle.load_sample(channel, sample.clone());
+                            } else {
+                                handle.clear_sample(channel);
+                            }
+                        }
                         let channel = st.borrow().channels.len().saturating_sub(1);
                         apply_loaded_sample(&handle, &st, &weak, channel, loaded);
-                    }
-                }
-                while let Ok(channel) = sample_reset_rx.try_recv() {
-                    if let Some(sample) = default_sample_for_pump.as_ref() {
-                        handle.load_sample(channel, sample.clone());
-                    } else {
-                        handle.clear_sample(channel);
                     }
                 }
                 let mut forwarded = 0usize;
