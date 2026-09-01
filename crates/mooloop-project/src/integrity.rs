@@ -1194,6 +1194,12 @@ fn check_sampler(doctor: &mut Doctor, who: &str, params: &mut SamplerParams) {
             -1.0,
             1.0,
         ),
+        (
+            "the stretch ratio",
+            &mut params.stretch_ratio,
+            mooloop_core::MIN_STRETCH_RATIO,
+            mooloop_core::MAX_STRETCH_RATIO,
+        ),
     ] {
         doctor.fit("channel.sampler.range", who, field, value, min, max);
     }
@@ -1233,6 +1239,18 @@ fn check_sampler(doctor: &mut Doctor, who: &str, params: &mut SamplerParams) {
         &mut params.choke_group,
         0,
         MAX_CHOKE_GROUP,
+    );
+    // Out of range here means a hand-edited or corrupted document: the
+    // descriptor clamps it, and the DSP clamps it again. Repairing it anyway
+    // keeps the saved value honest rather than leaving something on disk that
+    // reads back differently from what plays.
+    doctor.fit_int(
+        "channel.sampler.stretch",
+        who,
+        "the stretch grain window",
+        &mut params.stretch_grain,
+        mooloop_core::MIN_STRETCH_GRAIN,
+        mooloop_core::MAX_STRETCH_GRAIN,
     );
 
     // Checked after the two are individually in range, so this only fires on
