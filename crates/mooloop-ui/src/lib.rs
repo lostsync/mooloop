@@ -50,7 +50,8 @@ use mooloop_dsp::{
     DrumSynth, DryAlign, SampleData, SpectrumAnalyzer,
 };
 use mooloop_engine::{
-    EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, PreviewCommand,
+    EffectSlot, EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer,
+    PreviewCommand,
     RenderScope, StructuralCommand, WavEncoding,
 };
 use mooloop_project::{
@@ -8260,6 +8261,9 @@ impl AppUi {
                     node,
                     align,
                     analyzer: Box::new(SpectrumAnalyzer::new()),
+                    // Allocated here with the node: an empty addressable slot
+                    // costs a pointer rather than its full host state.
+                    state: Box::new(EffectSlot::new()),
                 });
                 for position in (slot + 1..=tail_slot).rev() {
                     let _ = tx.send(EngineCommand::SwapEffectSlots {

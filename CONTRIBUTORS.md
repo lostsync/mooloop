@@ -295,6 +295,15 @@ work session you can recall being part of, and don't stress over precision.
   when they are multiplied, which is why it went unnoticed and why the fix
   is a pinned test rather than a paragraph. Stopped short of the refactor
   and rewrote the plan against the real numbers instead.
+  Then took the first half of the fix Adam asked for -- allocate none of them
+  at launch, allow more up to a high limit -- on the effect chain, where the
+  weight was. An effect slot's host and control state became one boxed
+  struct, so an addressable-but-empty slot costs a pointer rather than the
+  496 bytes it used to reserve. The chain fell from 141 KiB to 20 KiB and the
+  graph from 42.8 MiB to 11.6 MiB, with both ceilings untouched. The subtlety
+  worth recording is that host controls belong to the slot and not to the
+  device in it, so `install` carries wet/dry and the trims across a
+  replacement rather than letting a fresh box reset what the user dialled.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

@@ -39,6 +39,7 @@ mod gain_structure_tests;
 
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
+pub use render::EffectSlot;
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
 pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
@@ -67,6 +68,11 @@ pub enum StructuralCommand {
         node: Box<dyn AudioNode + Send>,
         align: Option<Box<DryAlign>>,
         analyzer: Box<SpectrumAnalyzer>,
+        /// The slot's host and control state. Allocated here with the node
+        /// rather than reserved for all 256 addressable slots up front, which
+        /// is what an empty slot used to cost
+        /// (`docs/plans/modulator-capacity/`).
+        state: Box<EffectSlot>,
     },
     /// Replace an installed node only when the destination still contains the
     /// requested kind. Resource-backed devices use this after preparing new

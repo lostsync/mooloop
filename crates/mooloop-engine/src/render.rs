@@ -34,11 +34,17 @@ pub(crate) struct ReclaimedEffect {
     pub node: Option<Box<dyn AudioNode + Send>>,
     pub align: Option<Box<DryAlign>>,
     pub analyzer: Option<Box<SpectrumAnalyzer>>,
+    /// The slot's own state, which is a box like the rest and so must leave
+    /// the realtime thread the same way rather than being dropped on it.
+    pub state: Option<Box<EffectSlot>>,
 }
 
 impl ReclaimedEffect {
     fn is_empty(&self) -> bool {
-        self.node.is_none() && self.align.is_none() && self.analyzer.is_none()
+        self.node.is_none()
+            && self.align.is_none()
+            && self.analyzer.is_none()
+            && self.state.is_none()
     }
 }
 
@@ -182,6 +188,60 @@ impl PendingEffectParams {
 /// A fixed-size chain of optional effect nodes plus the per-slot machinery
 /// that feeds them. Channels and mixer buses both own one, which is the whole
 /// reason effect commands address an `EffectTarget` rather than a channel.
+/// Everything a populated effect slot carries besides its node, its dry-path
+/// aligner, and its analyzer — all of which are already boxed.
+///
+/// Grouped and boxed so an addressable-but-empty slot costs a pointer rather
+/// than its full state. A chain addresses `MAX_EFFECTS_PER_CHANNEL` slots
+/// because that is the width of the index, and a project populates a handful;
+/// holding a 320-byte event queue and a 140-byte parameter set for each of
+/// the 256 was 140 KiB per chain, and a chain lives on every one of 256
+/// channels (`docs/plans/modulator-capacity/`).
+///
+/// Allocated on the control thread and installed, like the node beside it.
+pub struct EffectSlot {
+    /// The slot's persisted device identity, tracked independently of the
+    /// trait object so prepared resource replacements can refuse stale work.
+    kind: Option<mooloop_core::EffectKind>,
+    /// The authoritative knob value. Nodes retain only the resolved value they
+    /// were last sent; keeping the base here is what lets a knob move
+    /// underneath an active modulator without fighting it.
+    base_params: Option<mooloop_core::EffectParams>,
+    /// Control-side identity of an asynchronously prepared device resource.
+    resource_key: Option<u64>,
+    /// Parameter events queued between blocks by `EngineCommand::SetEffectParam`
+    /// and consumed by the next block.
+    events: PendingEffectParams,
+    /// Host controls. These belong to the slot rather than to the device in
+    /// it, so replacing an effect keeps the wet/dry and trims dialled there.
+    bypassed: bool,
+    wet_dry: f32,
+    input_trim: f32,
+    output_trim: f32,
+}
+
+impl EffectSlot {
+    /// A fresh slot, allocated on the control thread to be installed.
+    pub fn new() -> Self {
+        Self {
+            kind: None,
+            base_params: None,
+            resource_key: None,
+            events: PendingEffectParams::empty(),
+            bypassed: false,
+            wet_dry: 1.0,
+            input_trim: 1.0,
+            output_trim: 1.0,
+        }
+    }
+}
+
+impl Default for EffectSlot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct EffectChain {
     /// Processed in order after whatever produced the audio. Slots are `None`
     /// until a node is installed structurally.
@@ -189,30 +249,13 @@ struct EffectChain {
     /// One past the highest occupied node slot. Keeps the realtime pass
     /// proportional to the populated chain instead of its addressable size.
     bound: usize,
-    /// Tracks a slot's persisted device identity independently of the trait
-    /// object. Prepared resource replacements use this to refuse stale work.
-    kinds: [Option<mooloop_core::EffectKind>; MAX_EFFECTS_PER_CHANNEL],
-    /// The authoritative knob value for each installed effect. Nodes retain
-    /// only the resolved value they were last sent; keeping the base here is
-    /// what lets a knob move underneath an active modulator without fighting
-    /// it.
-    base_params: [Option<mooloop_core::EffectParams>; MAX_EFFECTS_PER_CHANNEL],
-    /// Control-side identity of an asynchronously prepared device resource.
-    /// Ordinary effects leave this empty; resource-backed replacements must
-    /// match it before they are allowed to take a slot.
-    resource_keys: [Option<u64>; MAX_EFFECTS_PER_CHANNEL],
-    /// Per-slot parameter events, queued between blocks by
-    /// `EngineCommand::SetEffectParam` and consumed by the next block. Kept
-    /// separate from the note-event lists so slot addressing is trivial and
-    /// generators never see effect events.
-    events: [PendingEffectParams; MAX_EFFECTS_PER_CHANNEL],
+    /// Per-slot host and control state, present only where a slot is (or was)
+    /// populated. See [`EffectSlot`] for why this is one boxed struct rather
+    /// than a parallel array per field.
+    slots: [Option<Box<EffectSlot>>; MAX_EFFECTS_PER_CHANNEL],
     /// Reused while each sequential slot processes. See
     /// `PendingEffectParams` for why this is not stored per slot.
     event_scratch: EventList,
-    bypassed: [bool; MAX_EFFECTS_PER_CHANNEL],
-    wet_dry: [f32; MAX_EFFECTS_PER_CHANNEL],
-    input_trim: [f32; MAX_EFFECTS_PER_CHANNEL],
-    output_trim: [f32; MAX_EFFECTS_PER_CHANNEL],
     /// Per-slot dry-path delay matching the installed node's reported
     /// latency, so the wet/dry blend never mixes time-misaligned signals.
     /// Allocated off the realtime thread, next to the node it belongs to.
@@ -233,19 +276,39 @@ impl EffectChain {
         Self {
             nodes: std::array::from_fn(|_| None),
             bound: 0,
-            kinds: [None; MAX_EFFECTS_PER_CHANNEL],
-            base_params: [None; MAX_EFFECTS_PER_CHANNEL],
-            resource_keys: [None; MAX_EFFECTS_PER_CHANNEL],
-            events: [PendingEffectParams::empty(); MAX_EFFECTS_PER_CHANNEL],
+            slots: std::array::from_fn(|_| None),
             event_scratch: EventList::empty(),
-            bypassed: [false; MAX_EFFECTS_PER_CHANNEL],
-            wet_dry: [1.0; MAX_EFFECTS_PER_CHANNEL],
-            input_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
-            output_trim: [1.0; MAX_EFFECTS_PER_CHANNEL],
             dry_align: std::array::from_fn(|_| None),
             analyzers: std::array::from_fn(|_| None),
             dry: StereoBus::with_capacity(MAX_BLOCK_SIZE),
         }
+    }
+
+    /// One slot's host and control state, if it has any.
+    fn slot(&self, slot: usize) -> Option<&EffectSlot> {
+        self.slots.get(slot)?.as_deref()
+    }
+
+    fn slot_mut(&mut self, slot: usize) -> Option<&mut EffectSlot> {
+        self.slots.get_mut(slot)?.as_deref_mut()
+    }
+
+    /// Host controls read on the realtime path, where an empty slot must
+    /// answer with its resting value rather than be absent.
+    fn bypassed(&self, slot: usize) -> bool {
+        self.slot(slot).is_some_and(|slot| slot.bypassed)
+    }
+
+    fn wet_dry(&self, slot: usize) -> f32 {
+        self.slot(slot).map_or(1.0, |slot| slot.wet_dry)
+    }
+
+    fn input_trim(&self, slot: usize) -> f32 {
+        self.slot(slot).map_or(1.0, |slot| slot.input_trim)
+    }
+
+    fn output_trim(&self, slot: usize) -> f32 {
+        self.slot(slot).map_or(1.0, |slot| slot.output_trim)
     }
 
     /// Remove every node, queuing the boxes for off-thread disposal.
@@ -255,21 +318,12 @@ impl EffectChain {
                 node: self.nodes[slot].take(),
                 align: self.dry_align[slot].take(),
                 analyzer: self.analyzers[slot].take(),
+                state: self.slots[slot].take(),
             };
             if !displaced.is_empty() {
                 reclaim.push(displaced);
             }
         }
-        for events in &mut self.events {
-            events.clear();
-        }
-        self.bypassed = [false; MAX_EFFECTS_PER_CHANNEL];
-        self.kinds = [None; MAX_EFFECTS_PER_CHANNEL];
-        self.base_params = [None; MAX_EFFECTS_PER_CHANNEL];
-        self.resource_keys = [None; MAX_EFFECTS_PER_CHANNEL];
-        self.wet_dry = [1.0; MAX_EFFECTS_PER_CHANNEL];
-        self.input_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
-        self.output_trim = [1.0; MAX_EFFECTS_PER_CHANNEL];
         self.bound = 0;
     }
 
@@ -284,6 +338,7 @@ impl EffectChain {
     /// Install a node together with its dry-path delay, returning whichever
     /// occupants must be reclaimed. An invalid slot returns the incoming
     /// pieces so they are never dropped by the realtime caller.
+    #[allow(clippy::too_many_arguments)]
     fn install(
         &mut self,
         slot: usize,
@@ -292,22 +347,34 @@ impl EffectChain {
         node: Box<dyn AudioNode + Send>,
         align: Option<Box<DryAlign>>,
         analyzer: Box<SpectrumAnalyzer>,
+        mut state: Box<EffectSlot>,
     ) -> ReclaimedEffect {
         if slot < MAX_EFFECTS_PER_CHANNEL {
-            self.kinds[slot] = Some(kind);
-            self.base_params[slot] = Some(kind.default_params());
-            self.resource_keys[slot] = resource_key;
+            // Host controls belong to the slot, not to the device in it, so
+            // an effect swapped into an occupied slot keeps the wet/dry and
+            // trims already dialled there.
+            if let Some(previous) = self.slot(slot) {
+                state.bypassed = previous.bypassed;
+                state.wet_dry = previous.wet_dry;
+                state.input_trim = previous.input_trim;
+                state.output_trim = previous.output_trim;
+            }
+            state.kind = Some(kind);
+            state.base_params = Some(kind.default_params());
+            state.resource_key = resource_key;
             self.bound = self.bound.max(slot + 1);
             ReclaimedEffect {
                 node: self.nodes[slot].replace(node),
                 align: std::mem::replace(&mut self.dry_align[slot], align),
                 analyzer: self.analyzers[slot].replace(analyzer),
+                state: self.slots[slot].replace(state),
             }
         } else {
             ReclaimedEffect {
                 node: Some(node),
                 align,
                 analyzer: Some(analyzer),
+                state: Some(state),
             }
         }
     }
@@ -323,21 +390,25 @@ impl EffectChain {
         node: Box<dyn AudioNode + Send>,
         align: Option<Box<DryAlign>>,
     ) -> ReclaimedEffect {
-        if slot < MAX_EFFECTS_PER_CHANNEL
-            && self.kinds[slot] == Some(expected_kind)
-            && self.resource_keys[slot] == Some(expected_resource_key)
-        {
-            self.resource_keys[slot] = Some(resource_key);
+        let matches = self.slot(slot).is_some_and(|state| {
+            state.kind == Some(expected_kind) && state.resource_key == Some(expected_resource_key)
+        });
+        if matches {
+            if let Some(state) = self.slot_mut(slot) {
+                state.resource_key = Some(resource_key);
+            }
             ReclaimedEffect {
                 node: self.nodes[slot].replace(node),
                 align: std::mem::replace(&mut self.dry_align[slot], align),
                 analyzer: None,
+                state: None,
             }
         } else {
             ReclaimedEffect {
                 node: Some(node),
                 align,
                 analyzer: None,
+                state: None,
             }
         }
     }
@@ -348,29 +419,16 @@ impl EffectChain {
                 node: self.nodes[slot].take(),
                 align: self.dry_align[slot].take(),
                 analyzer: self.analyzers[slot].take(),
+                state: self.slots[slot].take(),
             }
         } else {
             ReclaimedEffect {
                 node: None,
                 align: None,
                 analyzer: None,
+                state: None,
             }
         };
-        if let Some(events) = self.events.get_mut(slot) {
-            events.clear();
-        }
-        if let Some(kind) = self.kinds.get_mut(slot) {
-            *kind = None;
-        }
-        if let Some(params) = self.base_params.get_mut(slot) {
-            *params = None;
-        }
-        if let Some(resource_key) = self.resource_keys.get_mut(slot) {
-            *resource_key = None;
-        }
-        if let Some(bypassed) = self.bypassed.get_mut(slot) {
-            *bypassed = false;
-        }
         self.refresh_bound();
         removed
     }
@@ -378,14 +436,7 @@ impl EffectChain {
     fn swap(&mut self, slot_a: usize, slot_b: usize) {
         if slot_a < MAX_EFFECTS_PER_CHANNEL && slot_b < MAX_EFFECTS_PER_CHANNEL {
             self.nodes.swap(slot_a, slot_b);
-            self.kinds.swap(slot_a, slot_b);
-            self.base_params.swap(slot_a, slot_b);
-            self.resource_keys.swap(slot_a, slot_b);
-            self.events.swap(slot_a, slot_b);
-            self.bypassed.swap(slot_a, slot_b);
-            self.wet_dry.swap(slot_a, slot_b);
-            self.input_trim.swap(slot_a, slot_b);
-            self.output_trim.swap(slot_a, slot_b);
+            self.slots.swap(slot_a, slot_b);
             self.dry_align.swap(slot_a, slot_b);
             self.analyzers.swap(slot_a, slot_b);
             self.refresh_bound();
@@ -393,17 +444,17 @@ impl EffectChain {
     }
 
     fn set_bypassed(&mut self, slot: usize, bypassed: bool) {
-        if let Some(flag) = self.bypassed.get_mut(slot) {
-            *flag = bypassed;
+        if let Some(state) = self.slot_mut(slot) {
+            state.bypassed = bypassed;
         }
     }
 
     fn queue_param(&mut self, slot: usize, id: u32, value: f32) {
-        if let Some(events) = self.events.get_mut(slot) {
+        if let Some(state) = self.slot_mut(slot) {
             // Queued between blocks, so it lands at the next block's first
             // frame. Repeated writes to a parameter coalesce to its newest
             // value, matching the command ring's latest-state semantics.
-            events.queue(TimedEvent {
+            state.events.queue(TimedEvent {
                 offset: 0,
                 event: Event::ParamValue { id, value },
             });
@@ -413,11 +464,11 @@ impl EffectChain {
     /// Update a knob's base value through the descriptor table. This is the
     /// only path that writes base effect state after installation.
     fn set_base_param(&mut self, slot: usize, id: u32, value: f32) -> Option<f32> {
-        self.base_params.get_mut(slot)?.as_mut()?.set(id, value)
+        self.slot_mut(slot)?.base_params.as_mut()?.set(id, value)
     }
 
     fn base_param(&self, slot: usize, id: u32) -> Option<f32> {
-        self.base_params.get(slot)?.as_ref()?.get(id)
+        self.slot(slot)?.base_params.as_ref()?.get(id)
     }
 
     /// Resolve every control signal aimed at this slot into `ParamValue`
@@ -434,10 +485,10 @@ impl EffectChain {
         modulation: Option<&ModulationBlock<'_>>,
         automation: Option<&AutomationBlock<'_>>,
     ) {
-        let Some(kind) = self.kinds.get(slot).copied().flatten() else {
+        let Some(state) = self.slot(slot) else {
             return;
         };
-        let Some(params) = self.base_params.get(slot).copied().flatten() else {
+        let (Some(kind), Some(params)) = (state.kind, state.base_params) else {
             return;
         };
         let ticks = modulation
@@ -493,8 +544,8 @@ impl EffectChain {
     }
 
     fn queue_buffer(&mut self, slot: usize, event: mooloop_core::BufferEvent) {
-        if let Some(events) = self.events.get_mut(slot) {
-            events.queue(TimedEvent {
+        if let Some(state) = self.slot_mut(slot) {
+            state.events.queue(TimedEvent {
                 offset: 0,
                 event: Event::Buffer(event),
             });
@@ -502,8 +553,8 @@ impl EffectChain {
     }
 
     fn queue_buffer_scrub(&mut self, slot: usize, delta_frames: f32) {
-        if let Some(events) = self.events.get_mut(slot) {
-            events.queue(TimedEvent {
+        if let Some(state) = self.slot_mut(slot) {
+            state.events.queue(TimedEvent {
                 offset: 0,
                 event: Event::BufferScrub { delta_frames },
             });
@@ -511,8 +562,8 @@ impl EffectChain {
     }
 
     fn queue_buffer_release(&mut self, slot: usize) {
-        if let Some(events) = self.events.get_mut(slot) {
-            events.queue(TimedEvent {
+        if let Some(state) = self.slot_mut(slot) {
+            state.events.queue(TimedEvent {
                 offset: 0,
                 event: Event::BufferRelease,
             });
@@ -539,15 +590,20 @@ impl EffectChain {
                 node,
                 align,
                 Box::new(SpectrumAnalyzer::new()),
+                Box::new(EffectSlot::new()),
             );
             if !displaced.is_empty() {
                 reclaim.push(displaced);
             }
-            self.base_params[slot] = Some(effect.params);
-            self.bypassed[slot] = effect.bypassed;
-            self.wet_dry[slot] = effect.wet_dry.clamp(0.0, 1.0);
-            self.input_trim[slot] = effect.input_trim.clamp(0.0, MAX_LINEAR_GAIN);
-            self.output_trim[slot] = effect.output_trim.clamp(0.0, MAX_LINEAR_GAIN);
+            // `install` seeds the kind's defaults; a saved chain overrides
+            // them with what was persisted.
+            if let Some(state) = self.slot_mut(slot) {
+                state.base_params = Some(effect.params);
+                state.bypassed = effect.bypassed;
+                state.wet_dry = effect.wet_dry.clamp(0.0, 1.0);
+                state.input_trim = effect.input_trim.clamp(0.0, MAX_LINEAR_GAIN);
+                state.output_trim = effect.output_trim.clamp(0.0, MAX_LINEAR_GAIN);
+            }
         }
     }
 
@@ -573,7 +629,7 @@ impl EffectChain {
                     }
                 }
             }
-            if self.bypassed[slot] {
+            if self.bypassed(slot) {
                 // A bypassed slot keeps its queued events until re-enabled, so
                 // knob turns made while bypassed are not lost.
                 if let Some(align) = &mut self.dry_align[slot] {
@@ -595,7 +651,7 @@ impl EffectChain {
                 continue;
             }
             if self.nodes[slot].is_some() {
-                let input_trim = self.input_trim[slot];
+                let input_trim = self.input_trim(slot);
                 for frame in 0..context.frames {
                     bus.l[frame] *= input_trim;
                     bus.r[frame] *= input_trim;
@@ -613,13 +669,18 @@ impl EffectChain {
                     meters.publish_input(target, slot + 1, left, right);
                 }
                 self.event_scratch.clear();
-                self.events[slot].copy_to(&mut self.event_scratch);
+                if let Some(state) = self.slots[slot].as_mut() {
+                    state.events.copy_to(&mut self.event_scratch);
+                }
                 self.control_events_for_slot(slot, scope, modulation, automation);
+                // Read the slot's host controls before the node borrow: they
+                // now live behind the same `&self` the node is taken from.
+                let wet = self.wet_dry(slot);
+                let trim = self.output_trim(slot);
                 // `control_events_for_slot` mutates the shared scratch
                 // list, so take the node borrow only after that work.
                 let node = self.nodes[slot].as_mut().expect("checked above");
                 node.process(context, bus, &self.event_scratch, None);
-                let wet = self.wet_dry[slot];
                 // Equal-power crossfade. The wet paths people actually blend
                 // (reverb, chorus, delay) are decorrelated from dry, where a
                 // linear fade dips ~3 dB at the midpoint; correlated paths
@@ -627,7 +688,6 @@ impl EffectChain {
                 // in docs/GAIN_STRUCTURE.md.
                 let blend = wet * core::f32::consts::FRAC_PI_2;
                 let (dry_gain, wet_gain) = (blend.cos(), blend.sin());
-                let trim = self.output_trim[slot];
                 for frame in 0..context.frames {
                     bus.l[frame] =
                         (self.dry.l[frame] * dry_gain + bus.l[frame] * wet_gain) * trim;
@@ -649,7 +709,9 @@ impl EffectChain {
                     }
                 }
             }
-            self.events[slot].clear();
+            if let Some(state) = self.slots[slot].as_mut() {
+                state.events.clear();
+            }
         }
     }
 }
@@ -1403,7 +1465,7 @@ impl RenderState {
         };
         let Some(descriptor) = self
             .chain(target)
-            .and_then(|chain| chain.kinds.get(slot as usize).copied().flatten())
+            .and_then(|chain| chain.slot(slot as usize).and_then(|state| state.kind))
             .and_then(|kind| kind.descriptor(id))
         else {
             return false;
@@ -1471,16 +1533,26 @@ impl RenderState {
                 node,
                 align,
                 analyzer,
+                state,
             } => {
                 // `chain_for` borrows the two strip vectors rather than all of
                 // `self`, so `reclaim` stays independently borrowable here.
                 if let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target) {
-                    Some(chain.install(slot as usize, kind, resource_key, node, align, analyzer))
+                    Some(chain.install(
+                        slot as usize,
+                        kind,
+                        resource_key,
+                        node,
+                        align,
+                        analyzer,
+                        state,
+                    ))
                 } else {
                     Some(ReclaimedEffect {
                         node: Some(node),
                         align,
                         analyzer: Some(analyzer),
+                        state: Some(state),
                     })
                 }
             }
@@ -1507,6 +1579,7 @@ impl RenderState {
                         node: Some(node),
                         align,
                         analyzer: None,
+                        state: None,
                     })
                 }
             }
@@ -1748,7 +1821,7 @@ impl RenderState {
                 wet_dry,
             } => {
                 if let Some(chain) = self.chain_mut(target) {
-                    if let Some(value) = chain.wet_dry.get_mut(slot as usize) {
+                    if let Some(value) = chain.slot_mut(slot as usize).map(|state| &mut state.wet_dry) {
                         *value = wet_dry.clamp(0.0, 1.0);
                     }
                 }
@@ -1759,7 +1832,7 @@ impl RenderState {
                 input_trim,
             } => {
                 if let Some(chain) = self.chain_mut(target) {
-                    if let Some(value) = chain.input_trim.get_mut(slot as usize) {
+                    if let Some(value) = chain.slot_mut(slot as usize).map(|state| &mut state.input_trim) {
                         *value = input_trim.clamp(0.0, MAX_LINEAR_GAIN);
                     }
                 }
@@ -1770,7 +1843,7 @@ impl RenderState {
                 output_trim,
             } => {
                 if let Some(chain) = self.chain_mut(target) {
-                    if let Some(value) = chain.output_trim.get_mut(slot as usize) {
+                    if let Some(value) = chain.slot_mut(slot as usize).map(|state| &mut state.output_trim) {
                         *value = output_trim.clamp(0.0, MAX_LINEAR_GAIN);
                     }
                 }
@@ -2746,7 +2819,7 @@ mod tests {
             "LFO did not close cutoff: {values:?}"
         );
         assert_eq!(
-            render.strips[0].effects.base_params[0]
+            render.strips[0].effects.slot(0).and_then(|state| state.base_params)
                 .unwrap()
                 .get(mooloop_core::FILTER_PARAM_CUTOFF_HZ),
             Some(1_000.0),
@@ -2837,7 +2910,7 @@ mod tests {
         // The knob is untouched: a lane supplies the base, it does not
         // overwrite what the user set.
         assert_eq!(
-            render.strips[0].effects.base_params[0]
+            render.strips[0].effects.slot(0).and_then(|state| state.base_params)
                 .unwrap()
                 .get(mooloop_core::FILTER_PARAM_CUTOFF_HZ),
             Some(1_000.0),
@@ -3156,6 +3229,7 @@ mod tests {
             node,
             align,
             analyzer: Box::new(SpectrumAnalyzer::new()),
+            state: Box::new(EffectSlot::new()),
         }
     }
 
@@ -3584,6 +3658,7 @@ mod tests {
                 Box::new(LatentDelay::new(1)),
                 None,
                 Box::new(SpectrumAnalyzer::new()),
+                Box::new(EffectSlot::new()),
             );
             assert!(displaced.is_empty());
         }
@@ -3613,9 +3688,10 @@ mod tests {
             node,
             align,
             Box::new(SpectrumAnalyzer::new()),
+            Box::new(EffectSlot::new()),
         );
         assert!(displaced.is_empty());
-        chain.wet_dry[0] = 0.5;
+        chain.slot_mut(0).unwrap().wet_dry = 0.5;
 
         let context = ProcessContext {
             sample_rate: 48_000,
@@ -3662,6 +3738,7 @@ mod tests {
             initial,
             initial_align,
             Box::new(SpectrumAnalyzer::new()),
+            Box::new(EffectSlot::new()),
         );
         assert!(displaced.is_empty());
 
@@ -3676,7 +3753,7 @@ mod tests {
             stale_align,
         );
         assert!(rejected.node.is_some());
-        assert_eq!(chain.resource_keys[0], Some(10));
+        assert_eq!(chain.slot(0).unwrap().resource_key, Some(10));
 
         let current = Box::new(LatentDelay::new(2));
         let current_align = DryAlign::new(current.latency_frames()).map(Box::new);
@@ -3689,7 +3766,7 @@ mod tests {
             current_align,
         );
         assert!(replaced.node.is_some());
-        assert_eq!(chain.resource_keys[0], Some(11));
+        assert_eq!(chain.slot(0).unwrap().resource_key, Some(11));
     }
 
     #[test]
@@ -4160,10 +4237,16 @@ mod footprint {
     use super::*;
 
     /// What the render graph preallocates, and why. Every per-channel array
-    /// is sized at `MAX_CHANNELS`, and the effect chain inside each one is
-    /// sized at `MAX_EFFECTS_PER_CHANNEL`. Both ceilings are `u8::MAX + 1`,
-    /// so the graph reserves the *product* of two full index spaces: 65,536
-    /// effect slots that a project will never populate.
+    /// is sized at `MAX_CHANNELS`, and the effect chain inside each one
+    /// addresses `MAX_EFFECTS_PER_CHANNEL` slots. Both ceilings are
+    /// `u8::MAX + 1`, so the graph reserves the *product* of two full index
+    /// spaces: 65,536 effect slots that a project will never populate.
+    ///
+    /// Boxing each slot's state made an empty one cost a pointer instead of
+    /// its full 496 bytes, which took the graph from 42.8 MiB to 11.6 MiB.
+    /// What is left is dominated by the per-channel buffers rather than by
+    /// addressable-but-empty slots; the remaining step is to stop reserving
+    /// those for 256 channels a project does not have.
     ///
     /// This is pinned rather than described because it is invisible at every
     /// individual definition — no single array looks unreasonable, and the
@@ -4171,7 +4254,7 @@ mod footprint {
     /// something changed a ceiling or widened a per-slot struct; check the
     /// new total is one worth paying before updating it.
     ///
-    /// `docs/plans/modulator-capacity/02-size-by-what-exists.md`.
+    /// `docs/plans/modulator-capacity/`.
     #[test]
     fn the_render_graph_preallocates_a_measured_amount() {
         use core::mem::size_of;
@@ -4181,11 +4264,12 @@ mod footprint {
         assert_eq!(MAX_CHANNELS, 256);
         assert_eq!(MAX_EFFECTS_PER_CHANNEL, 256);
 
-        // The effect chain dominates a strip: its five generators together
-        // are under 7 KiB, and the chain is 140 KiB of per-slot arrays.
-        assert_eq!(size_of::<PendingEffectParams>(), 320);
-        assert_eq!(size_of::<EffectChain>(), 143_936);
-        assert_eq!(size_of::<ChannelStrip>(), 150_904);
+        // An occupied slot's state is half a kilobyte; an empty one is the
+        // pointer that would otherwise have reserved it.
+        assert_eq!(size_of::<EffectSlot>(), 496);
+        assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
+        assert_eq!(size_of::<EffectChain>(), 20_544);
+        assert_eq!(size_of::<ChannelStrip>(), 27_512);
 
         let per_channel = size_of::<ChannelStrip>()
             + size_of::<EventList>()
@@ -4194,9 +4278,8 @@ mod footprint {
             + size_of::<ControlOutputs>();
         let total = per_channel * MAX_CHANNELS;
 
-        // 42.8 MiB reserved at startup for a project that typically uses a
-        // few dozen channels and a few effects each.
-        assert_eq!(per_channel, 171_076);
-        assert_eq!(total / 1024, 42_769);
+        assert_eq!(per_channel, 47_684);
+        assert_eq!(total / 1024, 11_921);
     }
 }
+
