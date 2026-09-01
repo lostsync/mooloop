@@ -2665,8 +2665,10 @@ mod tests {
         let render = RenderState::from_project(48_000, &project, &[]);
         assert!(render.strips[0].sampler.has_stretch());
         assert!(render.strips[0].sampler.wants_stretch());
-        // Channels the project does not describe stay empty.
-        assert!(!render.strips[1].sampler.has_stretch());
+        // Channels the project does not describe are not provisioned because
+        // they are not built at all -- a stronger statement than "built and
+        // left empty", and the one the graph actually makes now.
+        assert_eq!(render.strips.len(), 1);
     }
 
     /// The inverse, which is the part that actually saves the memory: a
@@ -2722,20 +2724,24 @@ mod tests {
 
     /// `apply_structural` hands the pool back when the channel does not
     /// exist, because dropping it would free megabytes on the realtime
-    /// thread. Today that branch is unreachable: `MAX_CHANNELS` is 256 and
-    /// the command addresses channels with a `u8`, so the address space is
-    /// exactly covered.
+    /// thread.
     ///
-    /// This pins that coverage rather than the branch. If `MAX_CHANNELS` ever
-    /// shrinks, the guard stops being defensive and starts being load
-    /// bearing, and this is what says so.
+    /// That guard was written when it could not fire: `MAX_CHANNELS` is 256
+    /// and the command addresses channels with a `u8`, so every address was
+    /// backed by a strip that had been reserved up front. Reserving them
+    /// stopped (`docs/plans/modulator-capacity/`) -- the graph now builds
+    /// only the channels a project describes -- so an in-range `u8` can
+    /// address a strip that is simply not there, and the guard became load
+    /// bearing rather than defensive. This is the case that reaches it.
     #[test]
-    fn every_addressable_channel_exists_so_no_pool_is_ever_turned_away() {
-        assert_eq!(MAX_CHANNELS, usize::from(u8::MAX) + 1);
-
+    fn a_pool_aimed_at_a_channel_that_does_not_exist_comes_back() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        let installed = render.apply_structural(StructuralCommand::SetSamplerStretch {
+        // Addressable, and beyond what this project materialized.
+        assert!(usize::from(u8::MAX) < MAX_CHANNELS);
+        assert!(render.strips.len() <= usize::from(u8::MAX));
+
+        let turned_away = render.apply_structural(StructuralCommand::SetSamplerStretch {
             channel: u8::MAX,
             pool: Some(Box::new(StretchPool::new(
                 mooloop_core::StretchMode::Music,
@@ -2743,8 +2749,10 @@ mod tests {
                 1,
             ))),
         });
-        assert!(installed.is_none(), "the last channel should accept it");
-        assert!(render.strips[usize::from(u8::MAX)].sampler.has_stretch());
+        assert!(
+            matches!(turned_away, Some(StructuralReclaim::SamplerStretch(_))),
+            "a pool with nowhere to go must be handed back, not freed here"
+        );
     }
 
     fn synth_project(mut channel: ProjectChannel) -> Project {
@@ -4749,7 +4757,13 @@ mod footprint {
         assert_eq!(size_of::<EffectSlot>(), 496);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
         assert_eq!(size_of::<EffectChain>(), 20_544);
-        assert_eq!(size_of::<ChannelStrip>(), 27_512);
+        // 27,512 before the sampler learned to stretch. The extra 160 bytes
+        // are a pointer to the stretch pool (the ~1.6 MB pool itself is
+        // allocated only for a sampler that asks to stretch), the device's
+        // copy of the tempo that fit-to-tempo derives its ratio from, and one
+        // f64 per voice holding the pitch its note was struck at so a tune
+        // edit can be applied to an already-sounding voice.
+        assert_eq!(size_of::<ChannelStrip>(), 27_672);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -4760,11 +4774,13 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 45_952);
+        assert_eq!(per_live, 46_112);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
-        // project, with both ceilings untouched.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_157);
+        // project, with both ceilings untouched. Stretch added 2.5 KiB across
+        // those sixteen channels; the pools it can allocate are not counted
+        // here because a sampler only gets one by asking.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_159);
     }
 }
 
