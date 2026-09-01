@@ -37,6 +37,9 @@ pub(crate) struct ReclaimedEffect {
     /// The slot's own state, which is a box like the rest and so must leave
     /// the realtime thread the same way rather than being dropped on it.
     pub state: Option<Box<EffectSlot>>,
+    /// Channel storage the graph turned out not to need, handed back for the
+    /// same reason as the rest: the audio thread never drops a box.
+    pub channel: Option<Box<ChannelStorage>>,
 }
 
 impl ReclaimedEffect {
@@ -45,6 +48,7 @@ impl ReclaimedEffect {
             && self.align.is_none()
             && self.analyzer.is_none()
             && self.state.is_none()
+            && self.channel.is_none()
     }
 }
 
@@ -319,6 +323,7 @@ impl EffectChain {
                 align: self.dry_align[slot].take(),
                 analyzer: self.analyzers[slot].take(),
                 state: self.slots[slot].take(),
+                channel: None,
             };
             if !displaced.is_empty() {
                 reclaim.push(displaced);
@@ -368,6 +373,7 @@ impl EffectChain {
                 align: std::mem::replace(&mut self.dry_align[slot], align),
                 analyzer: self.analyzers[slot].replace(analyzer),
                 state: self.slots[slot].replace(state),
+                channel: None,
             }
         } else {
             ReclaimedEffect {
@@ -375,6 +381,7 @@ impl EffectChain {
                 align,
                 analyzer: Some(analyzer),
                 state: Some(state),
+                channel: None,
             }
         }
     }
@@ -402,6 +409,7 @@ impl EffectChain {
                 align: std::mem::replace(&mut self.dry_align[slot], align),
                 analyzer: None,
                 state: None,
+                channel: None,
             }
         } else {
             ReclaimedEffect {
@@ -409,6 +417,7 @@ impl EffectChain {
                 align,
                 analyzer: None,
                 state: None,
+                channel: None,
             }
         }
     }
@@ -420,6 +429,7 @@ impl EffectChain {
                 align: self.dry_align[slot].take(),
                 analyzer: self.analyzers[slot].take(),
                 state: self.slots[slot].take(),
+                channel: None,
             }
         } else {
             ReclaimedEffect {
@@ -427,6 +437,7 @@ impl EffectChain {
                 align: None,
                 analyzer: None,
                 state: None,
+                channel: None,
             }
         };
         self.refresh_bound();
@@ -884,7 +895,17 @@ impl BusStrip {
     }
 }
 
-struct ChannelStrip {
+/// One channel's storage, moved as a unit between the control thread and the
+/// graph. The graph unpacks it into its parallel vectors immediately: those
+/// stay separate because the block loop borrows them with different
+/// mutabilities at once, and bundling would make that a conflict.
+pub struct ChannelStorage {
+    strip: Box<ChannelStrip>,
+    events: Box<EventList>,
+    control_outputs: Box<ControlOutputs>,
+}
+
+pub struct ChannelStrip {
     sampler: Sampler,
     drum_synth: DrumSynth,
     mono_synth: MonoSynth,
@@ -1020,7 +1041,7 @@ fn clamp_bus(bus: u8) -> u8 {
     }
 }
 
-fn inject_choke_events(choke_groups: &[u8], events: &mut [EventList]) {
+fn inject_choke_events(choke_groups: &[u8], events: &mut [Box<EventList>]) {
     let active = choke_groups.len().min(events.len());
     for source in 0..active {
         let group = choke_groups[source];
@@ -1090,20 +1111,29 @@ pub(crate) struct RenderReport {
 pub(crate) struct RenderState {
     transport: Transport,
     sequencer: Sequencer,
-    strips: Vec<ChannelStrip>,
+    /// One entry per channel the project actually has, not per addressable
+    /// channel. Boxed so the vector reserves its full addressable length in
+    /// pointers and grows without ever reallocating on the audio thread.
+    strips: Vec<Box<ChannelStrip>>,
+    /// Kept so a channel can be materialized after construction: a strip
+    /// needs its channel's sample slot, and the control thread builds them.
+    sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
     /// The full bus bank, master first. Always `MAX_BUSES` long, so assigning
     /// a channel to any bus is a bounded mutation rather than an allocation.
     buses: Vec<BusStrip>,
     /// Destinations and their matching render order, compiled together off the
     /// audio thread. The executor only installs or walks this value.
     bus_graph: CompiledBusGraph,
-    events: Vec<EventList>,
+    events: Vec<Box<EventList>>,
     /// The saved matrix and the runnable sources are deliberately separate:
     /// the former is editable/persisted configuration; the latter contains
     /// LFO phase and other realtime-only state.
     modulation: Vec<ModRack>,
     modulators: Vec<ModulatorRack>,
-    control_outputs: Vec<ControlOutputs>,
+    /// A full block of resolved control signal is 8 KiB; reserving one for
+    /// every addressable channel cost 2 MiB before a project existed
+    /// (`docs/plans/modulator-capacity/`).
+    control_outputs: Vec<Box<ControlOutputs>>,
     sample_rate: u32,
     /// Nodes displaced from effect slots this block, awaiting handoff to the
     /// reclaim ring (realtime playback) or plain drop (offline render).
@@ -1147,22 +1177,24 @@ struct PreviewVoice {
 
 impl RenderState {
     pub fn new(sample_rate: u32, sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>) -> Self {
-        let strips = sample_slots
-            .iter()
-            .map(|slot| ChannelStrip::new(slot.clone(), sample_rate))
-            .collect();
-        Self {
+        #![allow(clippy::let_and_return)]
+        // Deliberately empty. Channels are materialized from a project on
+        // this thread, or pushed one at a time through the structural ring.
+        let strips = Vec::with_capacity(MAX_CHANNELS);
+        let slots_for_growth = sample_slots.clone();
+        let mut state = Self {
             transport: Transport::new(sample_rate),
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
+            sample_slots: slots_for_growth,
             buses: (0..MAX_BUSES).map(|_| BusStrip::new()).collect(),
             bus_graph: CompiledBusGraph::default(),
-            events: (0..MAX_CHANNELS).map(|_| EventList::empty()).collect(),
+            events: Vec::with_capacity(MAX_CHANNELS),
+            // Small enough that reserving the addressable length outright
+            // costs 433 KiB and saves boxing every control-path access.
             modulation: (0..MAX_CHANNELS).map(|_| ModRack::default()).collect(),
             modulators: (0..MAX_CHANNELS).map(|_| ModulatorRack::new()).collect(),
-            control_outputs: (0..MAX_CHANNELS)
-                .map(|_| [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK])
-                .collect(),
+            control_outputs: Vec::with_capacity(MAX_CHANNELS),
             sample_rate,
             reclaim: Vec::new(),
             meters: BusMeters::new(),
@@ -1175,7 +1207,13 @@ impl RenderState {
             preview: None,
             preview_retired: Vec::new(),
             preview_gain: Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits())),
-        }
+        };
+        // The sequencer starts with one channel, so the graph starts with
+        // storage for one. `live_channels` tolerates the two disagreeing, but
+        // they should not disagree at rest.
+        let initial = state.sequencer.active_channels();
+        state.grow_channels(initial);
+        state
     }
 
     /// Point bus metering at the array the GUI reads. Called once at startup,
@@ -1287,7 +1325,60 @@ impl RenderState {
         state
     }
 
+    /// Build one channel's storage. Allocates, so it belongs on the control
+    /// thread — either here during a project install, or in the `AddChannel`
+    /// structural command that carries the result across.
+    pub(crate) fn build_channel(
+        sample_slot: Arc<ArcSwapOption<SampleData>>,
+        sample_rate: u32,
+    ) -> Box<ChannelStorage> {
+        Box::new(ChannelStorage {
+            strip: Box::new(ChannelStrip::new(sample_slot, sample_rate)),
+            events: Box::new(EventList::empty()),
+            control_outputs: Box::new(
+                [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK],
+            ),
+        })
+    }
+
+    /// Take one channel's storage into the graph's parallel vectors. The box
+    /// is the transport, not an optimisation: it was allocated on the control
+    /// thread and the audio thread only ever moves what is inside it.
+    #[allow(clippy::boxed_local)]
+    fn push_channel(&mut self, storage: Box<ChannelStorage>) {
+        let ChannelStorage {
+            strip,
+            events,
+            control_outputs,
+        } = *storage;
+        self.strips.push(strip);
+        self.events.push(events);
+        self.control_outputs.push(control_outputs);
+    }
+
+    /// Channels that both exist to the sequencer and have storage behind
+    /// them. Those two can disagree for one block — a project can declare
+    /// more channels than the graph has been handed storage for — and a
+    /// per-channel pass must render the ones it has rather than panic on the
+    /// ones it does not.
+    fn live_channels(&self) -> usize {
+        self.sequencer.active_channels().min(self.strips.len())
+    }
+
+    /// Materialize channels up to `count`. Allocates; control thread only.
+    fn grow_channels(&mut self, count: usize) {
+        let sample_rate = self.sample_rate;
+        while self.strips.len() < count.min(MAX_CHANNELS) {
+            let slot = self.sample_slots[self.strips.len()].clone();
+            self.push_channel(Self::build_channel(slot, sample_rate));
+        }
+    }
+
     pub fn load_project(&mut self, project: &Project) {
+        // A loaded project decides how many channels exist. This runs on the
+        // control thread inside `install_project`, so allocating here is the
+        // point rather than a hazard.
+        self.grow_channels(project.channels.len());
         self.transport.stop();
         self.transport.set_tempo(project.bpm.into());
         self.sequencer.load_project(project);
@@ -1347,7 +1438,7 @@ impl RenderState {
     /// bounds-checked, so a stale index from the GUI is a no-op rather than a
     /// panic on the audio thread.
     fn chain_for<'a>(
-        strips: &'a mut [ChannelStrip],
+        strips: &'a mut [Box<ChannelStrip>],
         buses: &'a mut [BusStrip],
         target: EffectTarget,
     ) -> Option<&'a mut EffectChain> {
@@ -1553,6 +1644,7 @@ impl RenderState {
                         align,
                         analyzer: Some(analyzer),
                         state: Some(state),
+                        channel: None,
                     })
                 }
             }
@@ -1580,8 +1672,40 @@ impl RenderState {
                         align,
                         analyzer: None,
                         state: None,
+                        channel: None,
                     })
                 }
+            }
+            StructuralCommand::AddChannel { storage, source } => {
+                let channel = self.sequencer.active_channels();
+                if channel >= MAX_CHANNELS {
+                    return Some(ReclaimedEffect {
+                        node: None,
+                        align: None,
+                        analyzer: None,
+                        state: None,
+                        channel: Some(storage),
+                    });
+                }
+                // The graph only grows. A channel removed earlier left its
+                // storage behind, so this may already have somewhere to go —
+                // in which case the storage that arrived goes straight back
+                // rather than being dropped on this thread.
+                let spare = channel < self.strips.len();
+                let returned = if spare { Some(storage) } else { self.push_channel(storage); None };
+                if let Some(strip) = self.strips.get_mut(channel) {
+                    strip.reset_slot(source, &mut self.reclaim);
+                }
+                self.set_channel_modulation(channel, ModRack::default());
+                self.sequencer.clear_channel(channel);
+                self.sequencer.set_active_channels(channel + 1);
+                returned.map(|storage| ReclaimedEffect {
+                    node: None,
+                    align: None,
+                    analyzer: None,
+                    state: None,
+                    channel: Some(storage),
+                })
             }
             StructuralCommand::RemoveEffect { target, slot } => {
                 Self::chain_for(&mut self.strips, &mut self.buses, target)
@@ -1618,15 +1742,6 @@ impl RenderState {
             } => {
                 self.sequencer
                     .set_playlist_placement(pattern as usize, start_tick, on);
-            }
-            EngineCommand::AddChannel { source } => {
-                let channel = self.sequencer.active_channels();
-                if let Some(strip) = self.strips.get_mut(channel) {
-                    strip.reset_slot(source, &mut self.reclaim);
-                    self.set_channel_modulation(channel, ModRack::default());
-                    self.sequencer.clear_channel(channel);
-                    self.sequencer.set_active_channels(channel + 1);
-                }
             }
             EngineCommand::RemoveChannel => {
                 let active = self.sequencer.active_channels();
@@ -2009,14 +2124,14 @@ impl RenderState {
                 .strips
                 .iter()
                 .enumerate()
-                .take(self.sequencer.active_channels())
+                .take(self.live_channels())
             {
                 if !strip.output.muted {
                     choke_groups[index] = strip.choke_group();
                 }
             }
             inject_choke_events(
-                &choke_groups[..self.sequencer.active_channels()],
+                &choke_groups[..self.live_channels()],
                 &mut self.events,
             );
         }
@@ -2032,7 +2147,7 @@ impl RenderState {
         // Modulators must all advance before anything borrows the sequencer for
         // automation, and every channel's rack advances even while muted so
         // unmuting does not restart its phase.
-        let active_channels = self.sequencer.active_channels();
+        let active_channels = self.live_channels();
         let mut modulator_ticks = [0usize; MAX_CHANNELS];
         let mut gate_ticks =
             [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
@@ -2278,7 +2393,11 @@ mod tests {
 
     #[test]
     fn matching_choke_group_receives_sample_timed_choke() {
-        let mut events = [EventList::empty(), EventList::empty(), EventList::empty()];
+        let mut events = [
+            Box::new(EventList::empty()),
+            Box::new(EventList::empty()),
+            Box::new(EventList::empty()),
+        ];
         events[0].push(TimedEvent {
             offset: 37,
             event: Event::NoteOn {
@@ -2287,7 +2406,7 @@ mod tests {
                 velocity: 100,
             },
         });
-        inject_choke_events(&[2, 2, 3], &mut events);
+        inject_choke_events(&[2, 2, 3], &mut events[..]);
         assert_eq!(events[0].len(), 1);
         assert_eq!(events[1].iter().next().unwrap().event, Event::Choke);
         assert!(events[2].is_empty());
@@ -2295,7 +2414,7 @@ mod tests {
 
     #[test]
     fn choke_is_ordered_before_a_simultaneous_note_on() {
-        let mut events = [EventList::empty(), EventList::empty()];
+        let mut events = [Box::new(EventList::empty()), Box::new(EventList::empty())];
         for (channel, id) in events.iter_mut().zip([1, 2]) {
             channel.push(TimedEvent {
                 offset: 0,
@@ -2307,7 +2426,7 @@ mod tests {
             });
         }
 
-        inject_choke_events(&[1, 1], &mut events);
+        inject_choke_events(&[1, 1], &mut events[..]);
 
         for channel in &events {
             assert!(matches!(channel.iter().next().unwrap().event, Event::Choke));
@@ -2478,12 +2597,19 @@ mod tests {
         assert_eq!(render.process_block(256).peak_l, 0.0);
     }
 
+    /// Adding a channel allocates, so it goes through the structural ring
+    /// with storage built off-thread — the same route an effect node takes.
+    fn add_channel(render: &mut RenderState, source: DeviceKind) {
+        let storage = RenderState::build_channel(Arc::new(ArcSwapOption::from(None)), 48_000);
+        let returned = render.apply_structural(StructuralCommand::AddChannel { storage, source });
+        // Reused storage comes straight back rather than being dropped here.
+        drop(returned);
+    }
+
     #[test]
     fn readding_a_channel_resets_its_preallocated_slot() {
         let mut render = RenderState::from_project(48_000, &Project::default(), &[]);
-        render.apply_command(EngineCommand::AddChannel {
-            source: DeviceKind::DrumSynth,
-        });
+        add_channel(&mut render, DeviceKind::DrumSynth);
         render.apply_command(EngineCommand::SetStep {
             pattern: 0,
             channel: 1,
@@ -2496,9 +2622,7 @@ mod tests {
         assert!(render.process_block(256).peak_l > 0.001);
 
         render.apply_command(EngineCommand::RemoveChannel);
-        render.apply_command(EngineCommand::AddChannel {
-            source: DeviceKind::DrumSynth,
-        });
+        add_channel(&mut render, DeviceKind::DrumSynth);
         render.apply_command(EngineCommand::Stop);
         render.apply_command(EngineCommand::Play);
         assert_eq!(render.process_block(256).peak_l, 0.0);
@@ -4236,50 +4360,51 @@ mod tests {
 mod footprint {
     use super::*;
 
-    /// What the render graph preallocates, and why. Every per-channel array
-    /// is sized at `MAX_CHANNELS`, and the effect chain inside each one
-    /// addresses `MAX_EFFECTS_PER_CHANNEL` slots. Both ceilings are
-    /// `u8::MAX + 1`, so the graph reserves the *product* of two full index
-    /// spaces: 65,536 effect slots that a project will never populate.
+    /// What the render graph costs, and why. Both `MAX_CHANNELS` and
+    /// `MAX_EFFECTS_PER_CHANNEL` are `u8::MAX + 1`, so the graph *addresses*
+    /// the product of two full index spaces — 65,536 effect slots. It used to
+    /// reserve all of them: 42.8 MiB before a project existed.
     ///
-    /// Boxing each slot's state made an empty one cost a pointer instead of
-    /// its full 496 bytes, which took the graph from 42.8 MiB to 11.6 MiB.
-    /// What is left is dominated by the per-channel buffers rather than by
-    /// addressable-but-empty slots; the remaining step is to stop reserving
-    /// those for 256 channels a project does not have.
+    /// Now it allocates neither ceiling up front. An empty effect slot costs a
+    /// pointer, and a channel that does not exist costs nothing at all, so the
+    /// price tracks the project rather than the limits.
     ///
     /// This is pinned rather than described because it is invisible at every
     /// individual definition — no single array looks unreasonable, and the
-    /// number only appears when they are multiplied. If this test fails,
-    /// something changed a ceiling or widened a per-slot struct; check the
-    /// new total is one worth paying before updating it.
+    /// number only appeared when they were multiplied. If this test fails,
+    /// something changed a ceiling or widened a per-slot or per-channel
+    /// struct; check the new figure is one worth paying before updating it.
     ///
     /// `docs/plans/modulator-capacity/`.
     #[test]
-    fn the_render_graph_preallocates_a_measured_amount() {
+    fn the_render_graph_costs_what_the_project_uses() {
         use core::mem::size_of;
 
-        // Both ceilings are the u8 index space, which is what makes the
-        // product large rather than either one being unreasonable alone.
         assert_eq!(MAX_CHANNELS, 256);
         assert_eq!(MAX_EFFECTS_PER_CHANNEL, 256);
 
-        // An occupied slot's state is half a kilobyte; an empty one is the
-        // pointer that would otherwise have reserved it.
+        // An occupied effect slot's state is half a kilobyte; an empty one is
+        // the pointer that would otherwise have reserved it.
         assert_eq!(size_of::<EffectSlot>(), 496);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
         assert_eq!(size_of::<EffectChain>(), 20_544);
         assert_eq!(size_of::<ChannelStrip>(), 27_512);
 
-        let per_channel = size_of::<ChannelStrip>()
-            + size_of::<EventList>()
-            + size_of::<ModRack>()
-            + size_of::<ModulatorRack>()
-            + size_of::<ControlOutputs>();
-        let total = per_channel * MAX_CHANNELS;
+        // Reserved whatever the project holds: the two small modulation
+        // vectors, plus three vectors of pointers to per-channel storage.
+        let fixed = (size_of::<ModRack>() + size_of::<ModulatorRack>()) * MAX_CHANNELS
+            + MAX_CHANNELS * size_of::<usize>() * 3;
+        assert_eq!(fixed / 1024, 439);
 
-        assert_eq!(per_channel, 47_684);
-        assert_eq!(total / 1024, 11_921);
+        // Paid per channel the project actually has.
+        let per_live =
+            size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
+        assert_eq!(per_live, 45_952);
+
+        // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
+        // project, with both ceilings untouched.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_157);
     }
 }
+
 

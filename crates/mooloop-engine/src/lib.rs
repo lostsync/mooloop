@@ -19,6 +19,7 @@ use jack::{AudioOut, Client, ClientOptions, MidiIn};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
     MAX_MODULATORS_PER_CHANNEL,
+    DeviceKind,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, DryAlign, SampleData,
@@ -39,7 +40,7 @@ mod gain_structure_tests;
 
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
-pub use render::EffectSlot;
+pub use render::{ChannelStorage, EffectSlot};
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
 pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
@@ -89,6 +90,14 @@ pub enum StructuralCommand {
     },
     /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
     RemoveEffect { target: EffectTarget, slot: u8 },
+    /// Append one channel's storage, built on this thread. The graph only
+    /// grows: a removed channel's storage stays for the next one rather than
+    /// being freed on the audio thread, so this arrives with storage the
+    /// graph may already have and hands it straight back if so.
+    AddChannel {
+        storage: Box<ChannelStorage>,
+        source: DeviceKind,
+    },
 }
 
 /// GUI -> audio for the sample browser's audition voice. Owned here rather
@@ -415,6 +424,17 @@ impl EngineHandle {
 
     /// Sets the preview voice's linear output gain. Live: the voice reads
     /// the shared cell every block, so turning the knob is heard at once.
+    /// Add a channel. Its strip, event list and control-output buffer are
+    /// built here rather than reserved at startup, and travel to the graph
+    /// through the structural ring like any other allocation.
+    pub fn add_channel(&mut self, channel: usize, source: DeviceKind) {
+        let Some(slot) = self.sample_slots.get(channel).cloned() else {
+            return;
+        };
+        let storage = RenderState::build_channel(slot, self.sample_rate);
+        self.send_structural(StructuralCommand::AddChannel { storage, source });
+    }
+
     pub fn set_preview_gain(&self, gain: f32) {
         self.preview_gain.store(gain.to_bits(), Ordering::Relaxed);
     }

@@ -54,8 +54,6 @@ pub enum EngineCommand {
         start_tick: u32,
         on: bool,
     },
-    /// Grow the channel pool's active region by one (appends a channel).
-    AddChannel { source: DeviceKind },
     /// Shrink the channel pool's active region by one (removes the last
     /// channel). Kept last-index-only so existing indices stay valid.
     RemoveChannel,

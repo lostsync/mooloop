@@ -90,6 +90,13 @@ enum PendingEngineMessage {
         bpm: f64,
     },
     Structural(StructuralCommand),
+    /// Adding a channel allocates its strip, event list and control-output
+    /// buffer, so it is structural rather than POD. The pump expands it: the
+    /// engine handle owns the sample slot the new strip needs.
+    AddChannel {
+        channel: usize,
+        source: DeviceKind,
+    },
     ProjectEdit(ProjectEdit),
     Audio(AudioAction),
     Telemetry(TelemetryAction),
@@ -149,6 +156,12 @@ impl StructuralCommandSender {
     fn send(&self, command: StructuralCommand) -> bool {
         self.0
             .send(PendingEngineMessage::Structural(command))
+            .is_ok()
+    }
+
+    fn add_channel(&self, channel: usize, source: DeviceKind) -> bool {
+        self.0
+            .send(PendingEngineMessage::AddChannel { channel, source })
             .is_ok()
     }
 }
@@ -7230,7 +7243,7 @@ impl AppUi {
             });
         }
         {
-            let tx = cmd_tx.clone();
+            let add_channel_tx = structural_tx.clone();
             let reset_tx = sample_reset_tx.clone();
             let st = state.clone();
             let commands = command_state.clone();
@@ -7278,7 +7291,7 @@ impl AppUi {
                     st.refresh_editor(&window);
                 }
                 let _ = reset_tx.send(index);
-                let _ = tx.send(EngineCommand::AddChannel { source });
+                let _ = add_channel_tx.add_channel(index, source);
             });
         }
         {
@@ -10169,6 +10182,15 @@ impl AppUi {
                             for (target, slot, params) in buffers {
                                 let _ = handle.replace_buffer(target, slot, params, params, bpm);
                             }
+                        }
+                        PendingEngineMessage::AddChannel { channel, source } => {
+                            {
+                                let mut state = st.borrow_mut();
+                                document_title_needs_refresh |= !state.dirty;
+                                state.dirty = true;
+                                state.revision = state.revision.wrapping_add(1);
+                            }
+                            handle.add_channel(channel, source);
                         }
                         PendingEngineMessage::Structural(cmd) => {
                             // Any structural change is an unsaved edit.

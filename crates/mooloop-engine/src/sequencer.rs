@@ -385,7 +385,7 @@ impl Sequencer {
         end_tick: f64,
         frames: usize,
         ticks_per_sample: f64,
-        events: &mut [EventList],
+        events: &mut [Box<EventList>],
     ) {
         if frames == 0
             || !start_tick.is_finite()
@@ -413,7 +413,7 @@ impl Sequencer {
         end_tick: f64,
         frames: usize,
         ticks_per_sample: f64,
-        events: &mut [EventList],
+        events: &mut [Box<EventList>],
     ) {
         if frames == 0 || end_tick <= start_tick || ticks_per_sample <= 0.0 {
             return;
@@ -564,7 +564,7 @@ impl Sequencer {
         end_tick: f64,
         frames: usize,
         ticks_per_sample: f64,
-        events: &mut [EventList],
+        events: &mut [Box<EventList>],
     ) {
         let Some(pattern) = self.patterns.get(self.current) else {
             return;
@@ -620,7 +620,7 @@ impl Sequencer {
         end_tick: f64,
         frames: usize,
         ticks_per_sample: f64,
-        events: &mut [EventList],
+        events: &mut [Box<EventList>],
     ) {
         let song_ticks = self.song_length_ticks();
         let instance_stride = MAX_PLAYLIST_TICKS as u64 * self.patterns.len() as u64;
@@ -766,7 +766,7 @@ mod tests {
     fn schedule_range(sequencer: &Sequencer, start_tick: f64, end_tick: f64) -> Vec<TimedEvent> {
         let ticks_per_sample = ticks_per_sample(120.0, 48_000, Ppq::DEFAULT);
         let frames = ((end_tick - start_tick) / ticks_per_sample).ceil() as usize;
-        let mut events = [EventList::empty()];
+        let mut events = [Box::new(EventList::empty())];
         sequencer.schedule(start_tick, end_tick, frames, ticks_per_sample, &mut events);
         events[0].iter().copied().collect()
     }
@@ -778,7 +778,7 @@ mod tests {
     ) -> Vec<TimedEvent> {
         let ticks_per_sample = ticks_per_sample(120.0, 48_000, Ppq::DEFAULT);
         let frames = ((end_tick - start_tick) / ticks_per_sample).ceil() as usize;
-        let mut events = [EventList::empty()];
+        let mut events = [Box::new(EventList::empty())];
         sequencer.schedule_once(start_tick, end_tick, frames, ticks_per_sample, &mut events);
         events[0].iter().copied().collect()
     }

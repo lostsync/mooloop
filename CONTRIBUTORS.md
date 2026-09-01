@@ -304,6 +304,18 @@ work session you can recall being part of, and don't stress over precision.
   worth recording is that host controls belong to the slot and not to the
   device in it, so `install` carries wet/dry and the trims across a
   replacement rather than letting a fresh box reset what the user dialled.
+  Then the other half: channels are materialized from a project rather than
+  reserved 256-deep, which took a sixteen-channel project from 42.8 MiB of
+  startup reservation to 1.1 MiB. Two things only the doing settled. The
+  per-channel vectors had to stay separate rather than becoming one struct,
+  because the block loop borrows strips, events and control outputs with
+  different mutabilities at once and bundling them turns that into a borrow
+  conflict. And `AddChannel` stopped being a POD command: it allocates now,
+  so leaving it on the realtime ring would have made it silently do nothing
+  exactly when a channel needed creating. The bug that surfaced -- the
+  sequencer claiming a channel the graph had no storage for -- is why there
+  is a `live_channels` accessor rather than two counts that agree by
+  convention.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
