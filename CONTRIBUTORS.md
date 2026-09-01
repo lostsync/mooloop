@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-01
-- Sessions: 28
+- Sessions: 29
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -328,7 +328,18 @@ work session you can recall being part of, and don't stress over precision.
   -- and a dead wide variant would have held the ring at 936 bytes, which is
   the whole thing the step was for. And reordering the grid needed its own
   narrow verb, or it would have been the one gesture still sending
-  everything.
+  everything. Investigated the `spike/sampler-time-stretch` spike (#32),
+  found its "build vs. buy" conclusion under-argued, and merged it to `main`
+  once Adam decided to own the build regardless. Built the sampler's #13
+  time-stretch on top of it: a WSOLA unit with a grain mode that leaves the
+  similarity search off on purpose, because the phase-discontinuity rattle
+  it produces at extreme ratios is the target sound (NIN *Year Zero*
+  territory), not an artifact to suppress. Composed the stretcher with the
+  existing transposing reader so pitch and rate are independent controls,
+  moved its ~1.6 MB per-voice state to one device-level pool provisioned off
+  the realtime thread instead of paying it per voice, and added a
+  fit-to-tempo mode that derives the stretch ratio from bars/tempo/playback
+  rate so a sample's loop locks to the grid however it's transposed.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
