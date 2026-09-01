@@ -36,7 +36,11 @@ for two hundred and forty it does not have, at every capacity.
 
 1. `01-capacity-is-a-constant.md` — remove the layout and control
    assumptions that quietly cap the number, so raising it is one edit.
-   No memory change, no protocol change.
+   No memory change, no protocol change. **Landed 2026-09-01** on
+   `spike/mod-capacity`: grid rows follow capacity and scroll, the math
+   input jack became a name-carrying picker, and
+   `the_module_grid_scales_with_capacity_alone` renders the shelf at eight
+   and sixteen so a re-introduced literal fails a test.
 2. `02-size-by-what-exists.md` — dimension the per-channel engine arrays
    by the live channel count rather than by `MAX_CHANNELS`. This is where
    the memory actually is, and it pays off at every capacity.
