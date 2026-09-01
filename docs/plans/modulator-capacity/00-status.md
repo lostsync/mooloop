@@ -33,9 +33,11 @@ render graph, which step 02 now pins in a test, says otherwise:
 | `ModRack` + `ModulatorRack` 1,732 B | 433 KiB |
 | **171,076 B** | **42.8 MiB** |
 
-Boxing the effect slot state (step 04) has since taken `ChannelStrip` to
-27,512 B and the graph to **11.6 MiB**. The table above is what it was
-before, because that is the number the diagnosis below is about.
+That table is what it was before the fix. Boxing the effect slot state
+(step 04) took the graph to 11.6 MiB, and materializing channels from the
+project (step 02) took a sixteen-channel project to **1.1 MiB** — 439 KiB
+reserved plus 45 KiB a channel. Both ceilings are untouched; the graph
+simply stopped paying for them in advance.
 
 Modulation is one percent of it. The strip is 88%, and inside the strip
 the weight is `EffectChain` at 140 KiB — because `MAX_CHANNELS` and
@@ -62,12 +64,9 @@ a test behind rather than a paragraph.
 2. `04-lazy-effect-slots.md` — stop reserving every addressable effect
    slot's state up front. **Landed 2026-09-01**: 42.8 MiB → 11.6 MiB with
    both ceilings untouched.
-3. `02-size-by-what-exists.md` — materialize channels on demand instead
-   of reserving 256 of everything. This is where the memory actually is —
-   42.8 MiB, of which modulation is 433 KiB — and it pays off whether or
-   not the modulator count ever moves. **Not started**; the measurement
-   and the two candidate shapes are written up, and the footprint is
-   pinned by a test.
+3. `02-size-by-what-exists.md` — materialize channels from the project
+   instead of reserving 256 of everything. **Landed 2026-09-01**: shape A,
+   11.6 MiB → 1.1 MiB at sixteen channels.
 4. `03-per-slot-commands.md` — stop shipping the whole rack by value on
    every edit, so the ring stops growing with capacity at all.
 

@@ -1,5 +1,7 @@
 # 02 — Size by what exists
 
+**Landed 2026-09-01** on `perf/lazy-channels`, as shape A.
+
 **This step was rewritten on 2026-09-01 after measuring properly.** The
 first draft said the expensive per-channel arrays were the modulation ones
 and put the total at 3.1 MiB. Both were wrong, because the measurement
@@ -74,6 +76,26 @@ This is the realtime path, not a UI surface. The rules that must hold:
   than processes.
 - Offline render and realtime render stay identical, which the existing
   render tests already pin.
+
+## What it turned out to need
+
+Three things the write-up above did not anticipate:
+
+- **The per-channel vectors had to stay separate.** Bundling them into one
+  `ChannelSlot` per channel reads better, but the block loop borrows
+  strips, events and control outputs with different mutabilities at the
+  same time. As separate fields those are disjoint borrows; inside one
+  struct reached through `Vec<Box<..>>` they are a conflict. Storage moves
+  as a unit through `ChannelStorage` and is unpacked on arrival.
+- **`EngineCommand::AddChannel` had to go.** Adding a channel allocates
+  now, so a POD command on the realtime ring would have silently done
+  nothing in exactly the case it was needed — when no spare storage
+  existed. It is structural, like an effect node.
+- **Two channel counts can disagree.** A fresh `RenderState` claimed one
+  channel from its sequencer and had storage for none, which panicked the
+  block loop rather than rendering silence. `live_channels` is that
+  invariant stated once; every per-channel pass reads it instead of
+  `active_channels`.
 
 ## Done when
 
