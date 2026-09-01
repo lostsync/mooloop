@@ -29,6 +29,7 @@ use mooloop_core::{
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
     ModPolarity, ModRack, ModRandomTrigger, ModRoute, ModStepTrigger,
     ModulatorKind, ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State,
+    MlP8Params, MlP8State, SubOctave, SubSource, SubWave, SyncSource,
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
@@ -479,6 +480,7 @@ struct ChannelState {
     drum_params: DrumSynthParams,
     mono_params: MonoSynthParams,
     mlm1_params: MlM1Params,
+    mlp8_params: MlP8Params,
     poly_params: PolySynthParams,
     sample_name: String,
     sample_description: String,
@@ -511,6 +513,7 @@ impl ChannelState {
             DeviceKind::MonoSynth => GeneratorParams::MonoSynth(self.mono_params),
             DeviceKind::PolySynth => GeneratorParams::PolySynth(self.poly_params),
             DeviceKind::MlM1 => GeneratorParams::MlM1(self.mlm1_params),
+            DeviceKind::MlP8 => GeneratorParams::MlP8(self.mlp8_params),
             DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
         }
     }
@@ -528,6 +531,7 @@ impl ChannelState {
             drum_params: DrumSynthParams::default(),
             mono_params: MonoSynthParams::default(),
             mlm1_params: MlM1Params::default(),
+            mlp8_params: MlP8Params::default(),
             poly_params: PolySynthParams::default(),
             sample_name: String::new(),
             sample_description: String::new(),
@@ -1544,6 +1548,7 @@ fn device_kind_from_int(value: i32) -> DeviceKind {
         2 => DeviceKind::MonoSynth,
         3 => DeviceKind::PolySynth,
         4 => DeviceKind::MlM1,
+        5 => DeviceKind::MlP8,
         _ => DeviceKind::Sampler,
     }
 }
@@ -1555,6 +1560,7 @@ fn device_kind_to_int(kind: DeviceKind) -> i32 {
         DeviceKind::MonoSynth => 2,
         DeviceKind::PolySynth => 3,
         DeviceKind::MlM1 => 4,
+        DeviceKind::MlP8 => 5,
     }
 }
 
@@ -1993,6 +1999,7 @@ impl UiState {
             DeviceKind::MonoSynth => format!("Mono {}", index + 1),
             DeviceKind::PolySynth => format!("Poly {}", index + 1),
             DeviceKind::MlM1 => format!("ML-M1 {}", index + 1),
+            DeviceKind::MlP8 => format!("ML-P8 {}", index + 1),
         };
         match kind {
             DeviceKind::Sampler => {
@@ -2021,6 +2028,18 @@ impl UiState {
             }
             DeviceKind::MlM1 => {
                 channel.mlm1_params = MlM1Params::default();
+                channel.sample_name.clear();
+                channel.sample_description.clear();
+                channel.sample_duration = 0.0;
+                channel.sample_path = None;
+                channel.sample_embedded = false;
+                channel.sample_data = None;
+                channel.waveform.clear();
+                channel.can_previous_sample = false;
+                channel.can_next_sample = false;
+            }
+            DeviceKind::MlP8 => {
+                channel.mlp8_params = MlP8Params::default();
                 channel.sample_name.clear();
                 channel.sample_description.clear();
                 channel.sample_duration = 0.0;
@@ -2089,6 +2108,9 @@ impl UiState {
                     }),
                     DeviceKind::MlM1 => ChannelSource::MlM1(MlM1State {
                         params: channel.mlm1_params,
+                    }),
+                    DeviceKind::MlP8 => ChannelSource::MlP8(MlP8State {
+                        params: channel.mlp8_params,
                     }),
                 };
                 ProjectChannel {
@@ -2159,44 +2181,17 @@ impl UiState {
             .enumerate()
             .map(|(index, project_channel)| {
                 let setup = &project_channel.setup;
-                let (sampler, drum_params, mono_params, poly_params, mlm1_params) =
-                    match &setup.source {
-                        ChannelSource::Sampler(sampler) => (
-                            Some(sampler),
-                            DrumSynthParams::default(),
-                            MonoSynthParams::default(),
-                            PolySynthParams::default(),
-                            MlM1Params::default(),
-                        ),
-                        ChannelSource::DrumSynth(drum) => (
-                            None,
-                            drum.params,
-                            MonoSynthParams::default(),
-                            PolySynthParams::default(),
-                            MlM1Params::default(),
-                        ),
-                        ChannelSource::MonoSynth(mono) => (
-                            None,
-                            DrumSynthParams::default(),
-                            mono.params,
-                            PolySynthParams::default(),
-                            MlM1Params::default(),
-                        ),
-                        ChannelSource::PolySynth(poly) => (
-                            None,
-                            DrumSynthParams::default(),
-                            MonoSynthParams::default(),
-                            poly.params,
-                            MlM1Params::default(),
-                        ),
-                        ChannelSource::MlM1(mono) => (
-                            None,
-                            DrumSynthParams::default(),
-                            MonoSynthParams::default(),
-                            PolySynthParams::default(),
-                            mono.params,
-                        ),
-                    };
+                // One accessor a kind rather than one tuple arm a kind: the
+                // shape was a five-tuple whose every arm restated the four
+                // defaults it was not, which is a line of edit per synth per
+                // synth added.
+                let source = &setup.source;
+                let sampler = source.sampler_state();
+                let drum_params = source.drum_synth_state().map(|s| s.params).unwrap_or_default();
+                let mono_params = source.mono_synth_state().map(|s| s.params).unwrap_or_default();
+                let poly_params = source.poly_synth_state().map(|s| s.params).unwrap_or_default();
+                let mlm1_params = source.mlm1_state().map(|s| s.params).unwrap_or_default();
+                let mlp8_params = source.mlp8_state().map(|s| s.params).unwrap_or_default();
                 let sample = sampler
                     .is_some()
                     .then(|| samples.get(index).cloned().flatten())
@@ -2293,6 +2288,7 @@ impl UiState {
                     mono_params,
                     poly_params,
                     mlm1_params,
+                    mlp8_params,
                     sample_name,
                     sample_description: description,
                     sample_duration: duration,
@@ -3757,6 +3753,48 @@ impl UiState {
         window.set_mono_lfo_filter(mono.lfo.to_filter);
         window.set_mono_lfo_pulse_width(mono.lfo.to_pulse_width);
         window.set_mono_lfo_amp(mono.lfo.to_amp);
+        let mlp8 = ch.mlp8_params;
+        window.set_mlp8_osc1_wave(osc_wave_to_int(mlp8.osc[0].wave));
+        window.set_mlp8_osc1_semitones(mlp8.osc[0].semitones);
+        window.set_mlp8_osc1_cents(mlp8.osc[0].cents);
+        window.set_mlp8_osc1_level(mlp8.osc[0].level);
+        window.set_mlp8_osc1_pulse_width(mlp8.osc[0].pulse_width);
+        window.set_mlp8_osc2_wave(osc_wave_to_int(mlp8.osc[1].wave));
+        window.set_mlp8_osc2_semitones(mlp8.osc[1].semitones);
+        window.set_mlp8_osc2_cents(mlp8.osc[1].cents);
+        window.set_mlp8_osc2_level(mlp8.osc[1].level);
+        window.set_mlp8_osc2_pulse_width(mlp8.osc[1].pulse_width);
+        window.set_mlp8_osc3_wave(osc_wave_to_int(mlp8.osc[2].wave));
+        window.set_mlp8_osc3_semitones(mlp8.osc[2].semitones);
+        window.set_mlp8_osc3_cents(mlp8.osc[2].cents);
+        window.set_mlp8_osc3_level(mlp8.osc[2].level);
+        window.set_mlp8_osc3_pulse_width(mlp8.osc[2].pulse_width);
+        window.set_mlp8_attack(mlp8.attack);
+        window.set_mlp8_decay(mlp8.decay);
+        window.set_mlp8_sustain(mlp8.sustain);
+        window.set_mlp8_release(mlp8.release);
+        window.set_mlp8_glide(mlp8.glide);
+        window.set_mlp8_sub_level(mlp8.sub_level);
+        window.set_mlp8_noise_level(mlp8.noise_level);
+        window.set_mlp8_noise_color(mlp8.noise_color);
+        window.set_mlp8_sub_octave(mlp8.sub_octave.to_index());
+        window.set_mlp8_sub_wave(mlp8.sub_wave.to_index());
+        window.set_mlp8_sub_source(mlp8.sub_source.to_index());
+        window.set_mlp8_xmod12(mlp8.xmod[mooloop_core::mlp8::xmod_index(0, 1)]);
+        window.set_mlp8_xmod13(mlp8.xmod[mooloop_core::mlp8::xmod_index(0, 2)]);
+        window.set_mlp8_xmod21(mlp8.xmod[mooloop_core::mlp8::xmod_index(1, 0)]);
+        window.set_mlp8_xmod23(mlp8.xmod[mooloop_core::mlp8::xmod_index(1, 2)]);
+        window.set_mlp8_xmod31(mlp8.xmod[mooloop_core::mlp8::xmod_index(2, 0)]);
+        window.set_mlp8_xmod32(mlp8.xmod[mooloop_core::mlp8::xmod_index(2, 1)]);
+        window.set_mlp8_noise_osc1(mlp8.noise_to_osc[0]);
+        window.set_mlp8_noise_osc2(mlp8.noise_to_osc[1]);
+        window.set_mlp8_noise_osc3(mlp8.noise_to_osc[2]);
+        window.set_mlp8_feedback1(mlp8.osc_feedback[0]);
+        window.set_mlp8_feedback2(mlp8.osc_feedback[1]);
+        window.set_mlp8_feedback3(mlp8.osc_feedback[2]);
+        window.set_mlp8_sync1(mlp8.sync_source[0].to_index());
+        window.set_mlp8_sync2(mlp8.sync_source[1].to_index());
+        window.set_mlp8_sync3(mlp8.sync_source[2].to_index());
         let mlm1 = ch.mlm1_params;
         window.set_mlm1_osc1_wave(osc_wave_to_int(mlm1.osc[0].wave));
         window.set_mlm1_osc1_semitones(mlm1.osc[0].semitones);
@@ -4183,12 +4221,12 @@ impl AppUi {
                                 sample_references: saved
                                     .channels
                                     .into_iter()
-                                    .map(|channel| match channel.setup.source {
-                                        ChannelSource::Sampler(sampler) => Some(sampler.sample),
-                                        ChannelSource::DrumSynth(_)
-                                        | ChannelSource::MonoSynth(_)
-                                        | ChannelSource::PolySynth(_)
-                                        | ChannelSource::MlM1(_) => None,
+                                    .map(|channel| {
+                                        channel
+                                            .setup
+                                            .source
+                                            .sampler_state()
+                                            .map(|sampler| sampler.sample.clone())
                                     })
                                     .collect(),
                             })
@@ -9418,6 +9456,70 @@ impl AppUi {
         wire_mlm1_osc_float!(on_mlm1_osc3_level_changed, 2, level);
         wire_mlm1_osc_float!(on_mlm1_osc3_pulse_width_changed, 2, pulse_width);
 
+
+        // ML-P8. One macro a shape rather than one a control: the device has
+        // forty-one parameters and hand-writing a closure per knob is where a
+        // wrong field goes unnoticed.
+        macro_rules! wire_mlp8 {
+            ($callback:ident, |$params:ident, $value:ident: $ty:ty| $write:expr) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |$value: $ty| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    let $params = &mut channel.mlp8_params;
+                    $write;
+                    let _ = tx.send(EngineCommand::SetChannelMlP8Params {
+                        channel: channel_index as u8,
+                        params: channel.mlp8_params,
+                    });
+                });
+            }};
+        }
+
+        wire_mlp8!(on_mlp8_osc1_wave_changed, |p, v: i32| p.osc[0].wave = osc_wave_from_int(v));
+        wire_mlp8!(on_mlp8_osc1_semitones_changed, |p, v: f32| p.osc[0].semitones = v);
+        wire_mlp8!(on_mlp8_osc1_cents_changed, |p, v: f32| p.osc[0].cents = v);
+        wire_mlp8!(on_mlp8_osc1_level_changed, |p, v: f32| p.osc[0].level = v);
+        wire_mlp8!(on_mlp8_osc1_pulse_width_changed, |p, v: f32| p.osc[0].pulse_width = v);
+        wire_mlp8!(on_mlp8_osc2_wave_changed, |p, v: i32| p.osc[1].wave = osc_wave_from_int(v));
+        wire_mlp8!(on_mlp8_osc2_semitones_changed, |p, v: f32| p.osc[1].semitones = v);
+        wire_mlp8!(on_mlp8_osc2_cents_changed, |p, v: f32| p.osc[1].cents = v);
+        wire_mlp8!(on_mlp8_osc2_level_changed, |p, v: f32| p.osc[1].level = v);
+        wire_mlp8!(on_mlp8_osc2_pulse_width_changed, |p, v: f32| p.osc[1].pulse_width = v);
+        wire_mlp8!(on_mlp8_osc3_wave_changed, |p, v: i32| p.osc[2].wave = osc_wave_from_int(v));
+        wire_mlp8!(on_mlp8_osc3_semitones_changed, |p, v: f32| p.osc[2].semitones = v);
+        wire_mlp8!(on_mlp8_osc3_cents_changed, |p, v: f32| p.osc[2].cents = v);
+        wire_mlp8!(on_mlp8_osc3_level_changed, |p, v: f32| p.osc[2].level = v);
+        wire_mlp8!(on_mlp8_osc3_pulse_width_changed, |p, v: f32| p.osc[2].pulse_width = v);
+        wire_mlp8!(on_mlp8_attack_changed, |p, v: f32| p.attack = v);
+        wire_mlp8!(on_mlp8_decay_changed, |p, v: f32| p.decay = v);
+        wire_mlp8!(on_mlp8_sustain_changed, |p, v: f32| p.sustain = v);
+        wire_mlp8!(on_mlp8_release_changed, |p, v: f32| p.release = v);
+        wire_mlp8!(on_mlp8_glide_changed, |p, v: f32| p.glide = v);
+        wire_mlp8!(on_mlp8_sub_level_changed, |p, v: f32| p.sub_level = v);
+        wire_mlp8!(on_mlp8_noise_level_changed, |p, v: f32| p.noise_level = v);
+        wire_mlp8!(on_mlp8_noise_color_changed, |p, v: f32| p.noise_color = v);
+        wire_mlp8!(on_mlp8_sub_octave_changed, |p, v: i32| p.sub_octave = SubOctave::from_index(v));
+        wire_mlp8!(on_mlp8_sub_wave_changed, |p, v: i32| p.sub_wave = SubWave::from_index(v));
+        wire_mlp8!(on_mlp8_sub_source_changed, |p, v: i32| p.sub_source = SubSource::from_index(v));
+        wire_mlp8!(on_mlp8_xmod12_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(0, 1)] = v);
+        wire_mlp8!(on_mlp8_xmod13_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(0, 2)] = v);
+        wire_mlp8!(on_mlp8_xmod21_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(1, 0)] = v);
+        wire_mlp8!(on_mlp8_xmod23_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(1, 2)] = v);
+        wire_mlp8!(on_mlp8_xmod31_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(2, 0)] = v);
+        wire_mlp8!(on_mlp8_xmod32_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(2, 1)] = v);
+        wire_mlp8!(on_mlp8_noise_osc1_changed, |p, v: f32| p.noise_to_osc[0] = v);
+        wire_mlp8!(on_mlp8_noise_osc2_changed, |p, v: f32| p.noise_to_osc[1] = v);
+        wire_mlp8!(on_mlp8_noise_osc3_changed, |p, v: f32| p.noise_to_osc[2] = v);
+        wire_mlp8!(on_mlp8_feedback1_changed, |p, v: f32| p.osc_feedback[0] = v);
+        wire_mlp8!(on_mlp8_feedback2_changed, |p, v: f32| p.osc_feedback[1] = v);
+        wire_mlp8!(on_mlp8_feedback3_changed, |p, v: f32| p.osc_feedback[2] = v);
+        wire_mlp8!(on_mlp8_sync1_changed, |p, v: i32| p.sync_source[0] = SyncSource::from_index(v));
+        wire_mlp8!(on_mlp8_sync2_changed, |p, v: i32| p.sync_source[1] = SyncSource::from_index(v));
+        wire_mlp8!(on_mlp8_sync3_changed, |p, v: i32| p.sync_source[2] = SyncSource::from_index(v));
+
         macro_rules! wire_mono_osc_float {
             ($callback:ident, $index:expr, $field:ident) => {{
                 let tx = cmd_tx.clone();
@@ -11037,18 +11139,16 @@ fn install_project_in_ui(
         let sample = project
             .channels
             .get(index)
-            .and_then(|channel| match &channel.setup.source {
-                ChannelSource::Sampler(sampler) => {
-                    samples.get(index).cloned().flatten().or_else(|| {
-                        matches!(sampler.sample, SampleReference::Builtin { .. })
-                            .then(|| default_sample.cloned())
-                            .flatten()
-                    })
-                }
-                ChannelSource::DrumSynth(_)
-                | ChannelSource::MonoSynth(_)
-                | ChannelSource::PolySynth(_)
-                | ChannelSource::MlM1(_) => default_sample.cloned(),
+            // Asked through the accessor rather than by naming every
+            // generator: this is a question about samples, and the four
+            // synths were only listed here to say "not me".
+            .and_then(|channel| match channel.setup.source.sampler_state() {
+                Some(sampler) => samples.get(index).cloned().flatten().or_else(|| {
+                    matches!(sampler.sample, SampleReference::Builtin { .. })
+                        .then(|| default_sample.cloned())
+                        .flatten()
+                }),
+                None => default_sample.cloned(),
             });
         if let Some(sample) = sample {
             handle.load_sample(index, sample);
@@ -11128,39 +11228,31 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem> {
         LoadedDocument::Song(project) => project
             .channels
             .iter()
-            .map(|channel| match &channel.setup.source {
-                ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
-                ChannelSource::DrumSynth(_)
-                | ChannelSource::MonoSynth(_)
-                | ChannelSource::PolySynth(_)
-                | ChannelSource::MlM1(_) => None,
+            .map(|channel| {
+                channel
+                    .setup
+                    .source
+                    .sampler_state()
+                    .map(|sampler| sampler.sample.clone())
             })
             .collect::<Vec<_>>(),
         LoadedDocument::Kit(kit) => kit
             .channels
             .iter()
-            .map(|channel| match &channel.source {
-                ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
-                ChannelSource::DrumSynth(_)
-                | ChannelSource::MonoSynth(_)
-                | ChannelSource::PolySynth(_)
-                | ChannelSource::MlM1(_) => None,
+            .map(|channel| {
+                channel
+                    .source
+                    .sampler_state()
+                    .map(|sampler| sampler.sample.clone())
             })
             .collect(),
-        LoadedDocument::Channel(channel) => vec![match &channel.source {
-            ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
-            ChannelSource::DrumSynth(_)
-            | ChannelSource::MonoSynth(_)
-            | ChannelSource::PolySynth(_)
-            | ChannelSource::MlM1(_) => None,
-        }],
-        LoadedDocument::Generator(source) => vec![match source {
-            ChannelSource::Sampler(sampler) => Some(sampler.sample.clone()),
-            ChannelSource::DrumSynth(_)
-            | ChannelSource::MonoSynth(_)
-            | ChannelSource::PolySynth(_)
-            | ChannelSource::MlM1(_) => None,
-        }],
+        LoadedDocument::Channel(channel) => vec![channel
+            .source
+            .sampler_state()
+            .map(|sampler| sampler.sample.clone())],
+        LoadedDocument::Generator(source) => {
+            vec![source.sampler_state().map(|sampler| sampler.sample.clone())]
+        }
     };
     let mut samples = Vec::with_capacity(sample_references.len());
     for (channel, reference) in sample_references.into_iter().enumerate() {

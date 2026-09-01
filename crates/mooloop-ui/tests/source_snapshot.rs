@@ -826,3 +826,70 @@ fn the_module_grid_scales_with_capacity_alone() {
         );
     }
 }
+
+#[test]
+fn render_mlp8_source_editor() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .ok();
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_pattern_length(16);
+    ui.set_selected_channel_name(SharedString::from("ML-P8"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(5);
+
+    let osc = ui.window().take_snapshot().unwrap();
+    assert_eq!((osc.width(), osc.height()), (960, 760));
+    assert!(osc.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&osc, "MOOLOOP_MLP8_OSC_SOURCE_SNAPSHOT");
+
+    // The sources row is under the three oscillator strips, so it is the part
+    // most likely to be laid out off the bottom of the face.
+    ui.set_mlp8_sub_level(0.7);
+    ui.set_mlp8_noise_level(0.4);
+    ui.set_mlp8_noise_color(-70.0);
+    let sources = ui.window().take_snapshot().unwrap();
+    assert_ne!(osc.as_bytes(), sources.as_bytes());
+    write_snapshot(&sources, "MOOLOOP_MLP8_SOURCES_SNAPSHOT");
+
+    // ROUTE is the page the device exists for: twelve bipolar amounts, three
+    // sync selectors, and none of them drawn over each other.
+    ui.set_mlp8_device_page(1);
+    let route = ui.window().take_snapshot().unwrap();
+    assert_ne!(sources.as_bytes(), route.as_bytes());
+    write_snapshot(&route, "MOOLOOP_MLP8_ROUTE_SOURCE_SNAPSHOT");
+
+    ui.set_mlp8_xmod12(80.0);
+    ui.set_mlp8_xmod21(-45.0);
+    ui.set_mlp8_feedback1(60.0);
+    ui.set_mlp8_noise_osc3(-30.0);
+    let wired = ui.window().take_snapshot().unwrap();
+    assert_ne!(route.as_bytes(), wired.as_bytes());
+    write_snapshot(&wired, "MOOLOOP_MLP8_WIRED_SOURCE_SNAPSHOT");
+
+    // Oscillator 1's list is OFF/2/3, so index 2 is oscillator 3 -- the
+    // selector has to skip the oscillator it belongs to.
+    ui.set_mlp8_sync1(3);
+    let synced = ui.window().take_snapshot().unwrap();
+    assert_ne!(wired.as_bytes(), synced.as_bytes());
+    write_snapshot(&synced, "MOOLOOP_MLP8_SYNC_SOURCE_SNAPSHOT");
+
+    ui.set_mlp8_device_page(2);
+    let amp = ui.window().take_snapshot().unwrap();
+    assert_ne!(synced.as_bytes(), amp.as_bytes());
+    write_snapshot(&amp, "MOOLOOP_MLP8_AMP_SOURCE_SNAPSHOT");
+
+    ui.window().set_size(LogicalSize::new(720.0, 760.0));
+    let narrow = ui.window().take_snapshot().unwrap();
+    assert_eq!((narrow.width(), narrow.height()), (720, 760));
+    assert!(narrow.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&narrow, "MOOLOOP_MLP8_AMP_NARROW_SNAPSHOT");
+}

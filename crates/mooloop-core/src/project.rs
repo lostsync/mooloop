@@ -75,6 +75,11 @@ pub enum ChannelSource {
     /// [`crate::DeviceKind::MlM1`], which is frozen for the same reason.
     #[serde(rename = "ml1")]
     MlM1(MlM1State),
+    /// Tagged `mlp8`, matching [`crate::DeviceKind::MlP8`]. Named explicitly
+    /// rather than taking the `rename_all` default `ml_p8`, because a
+    /// serialized tag is an on-disk identifier and this device gets to choose
+    /// its own before any project carries it.
+    #[serde(rename = "mlp8")]
     MlP8(MlP8State),
 }
 

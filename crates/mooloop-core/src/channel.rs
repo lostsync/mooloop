@@ -45,6 +45,12 @@ pub enum DeviceKind {
     /// The ML-P8: eight voices around a three-oscillator network. A new kind
     /// rather than a reinterpretation of [`Self::PolySynth`], which stays as
     /// its own simpler device with its own saved projects.
+    ///
+    /// Serialized as `mlp8`, chosen rather than inherited: the `rename_all`
+    /// default would spell it `ml_p8`, and the ML-M1's history is the reason
+    /// to pick a serialized name on purpose the first time. It matches the
+    /// preset directory slug, and it is frozen from here.
+    #[serde(rename = "mlp8")]
     MlP8,
 }
 

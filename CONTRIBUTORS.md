@@ -334,7 +334,24 @@ work session you can recall being part of, and don't stress over precision.
   block is the widest a command carries now, so the modulation ring's cost
   test moved from 136 to 152 bytes an entry -- recorded rather than worked
   around, because twelve network amounts and three sync selectors are what
-  the instrument is.
+  the instrument is. Then built the network itself: six directed
+  cross-modulation routes all reading the previous sample, so the graph is
+  causal and order-independent; noise into every phase input whether or not it
+  is audible; a derived sub that follows its source's pitch and sync but not
+  its cross-modulation; and hard sync with a band-limited reset. The sync
+  correction made aliasing *worse* until two things were fixed -- the step
+  height has to be measured on the naive waveform rather than through the
+  PolyBLEP that has already corrected it once, and the oscillator's own
+  cycle-boundary residual has to stand down for the sample after a reset,
+  where it would otherwise correct a wrap that did not happen at a height that
+  is not the one it stepped by. Neither shows up in a test that hunts for a
+  high band, because a synced oscillator is exactly periodic at its master's
+  rate and every alias folds onto the master's own harmonic grid; the test
+  compares harmonic magnitudes against an eight-times-oversampled render
+  instead. The plan's "skip an oscillator nothing reads" rule also needed a
+  caveat it could not have known: the skip reads target levels and levels are
+  smoothed, so a knob reaching zero un-needs a source while its ramp is still
+  running, replacing the ramp with the step the smoother exists to prevent.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

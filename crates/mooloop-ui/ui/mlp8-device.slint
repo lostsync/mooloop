@@ -1,0 +1,480 @@
+import { Theme } from "theme.slint";
+import { ParameterKnob, SelectorBank, TrimKnob } from "controls.slint";
+import { DevicePageButton } from "device-rack.slint";
+import { EnvelopeEditor } from "envelope.slint";
+import { OscillatorDeviceStrip } from "device-oscillator.slint";
+import { GainMath } from "gain.slint";
+
+// One bipolar modulation amount, in signed percent.
+//
+// There are twelve of these on the ROUTE page and they differ only in label
+// and destination id, so the knob takes its id and indexes the modulation
+// arrays itself — the same trick `OscillatorDeviceStrip` plays with
+// `param-base`, and for the same reason: twelve hand-written copies are twelve
+// places for a destination id to be wrong.
+component RouteKnob inherits ParameterKnob {
+    in property <int> param-id;
+    in property <[float]> depths;
+    in property <[bool]> allowed;
+    in property <[float]> offsets;
+    in property <[int]> route-counts;
+    callback route-depth-changed(int, float);
+    callback route-edit-started(int);
+    callback route-edit-finished(int);
+
+    width: 52px;
+    diameter: 34px;
+    minimum: -100;
+    maximum: 100;
+    default-value: 0;
+    bipolar: true;
+    value-text: (root.value > 0 ? "+" : "") + round(root.value) + "%";
+    modulation-allowed: root.allowed[root.param-id];
+    modulation-depth: root.depths[root.param-id];
+    modulation-offset: root.offsets[root.param-id];
+    modulation-route-count: root.route-counts[root.param-id];
+    modulation-depth-changed(v) => { root.route-depth-changed(root.param-id, v); }
+    modulation-edit-started => { root.route-edit-started(root.param-id); }
+    modulation-edit-finished => { root.route-edit-finished(root.param-id); }
+}
+
+// The ML-P8's face.
+//
+// ROUTE is the page that makes this device what it is: the six directed
+// cross-modulation amounts, the sync matrix, and the feedback the oscillators
+// apply to themselves. It sits second, immediately after the oscillators it
+// wires together, rather than being filed under an "advanced" heading.
+//
+// The plan's five pages arrive with the steps that fill them: the filter and
+// its envelope are step 03, ML-P8's own LFO and internal routes are step 04,
+// and allocation and the finishers are step 05.
+export component MlP8DeviceFace inherits Rectangle {
+    in-out property <int> page;
+    in-out property <int> osc1-wave; in-out property <float> osc1-semitones; in-out property <float> osc1-cents; in-out property <float> osc1-level; in-out property <float> osc1-pulse-width;
+    in-out property <int> osc2-wave; in-out property <float> osc2-semitones; in-out property <float> osc2-cents; in-out property <float> osc2-level; in-out property <float> osc2-pulse-width;
+    in-out property <int> osc3-wave; in-out property <float> osc3-semitones; in-out property <float> osc3-cents; in-out property <float> osc3-level; in-out property <float> osc3-pulse-width;
+    in-out property <float> attack; in-out property <float> decay; in-out property <float> sustain; in-out property <float> release; in-out property <float> glide;
+    in-out property <float> sub-level; in-out property <int> sub-octave; in-out property <int> sub-wave; in-out property <int> sub-source;
+    in-out property <float> noise-level; in-out property <float> noise-color;
+    in-out property <float> xmod12; in-out property <float> xmod13; in-out property <float> xmod21; in-out property <float> xmod23; in-out property <float> xmod31; in-out property <float> xmod32;
+    in-out property <float> noise-osc1; in-out property <float> noise-osc2; in-out property <float> noise-osc3;
+    in-out property <float> feedback1; in-out property <float> feedback2; in-out property <float> feedback3;
+    in-out property <int> sync1; in-out property <int> sync2; in-out property <int> sync3;
+    in property <bool> modulation-armed;
+    // Indexed by descriptor id. ML-P8's ids are its own namespace starting at
+    // zero (`mlp8.rs` in mooloop-core), not the shared `SYNTH_PARAM_*` ones the
+    // other synth faces use.
+    in property <[float]> modulation-depths;
+    in property <[bool]> modulation-allowed;
+    in property <[float]> modulation-offsets;
+    in property <[int]> modulation-route-counts;
+    callback osc1-wave-changed(int); callback osc1-semitones-changed(float); callback osc1-cents-changed(float); callback osc1-level-changed(float); callback osc1-pulse-width-changed(float);
+    callback osc2-wave-changed(int); callback osc2-semitones-changed(float); callback osc2-cents-changed(float); callback osc2-level-changed(float); callback osc2-pulse-width-changed(float);
+    callback osc3-wave-changed(int); callback osc3-semitones-changed(float); callback osc3-cents-changed(float); callback osc3-level-changed(float); callback osc3-pulse-width-changed(float);
+    callback attack-changed(float); callback decay-changed(float); callback sustain-changed(float); callback release-changed(float); callback glide-changed(float);
+    callback sub-level-changed(float); callback sub-octave-changed(int); callback sub-wave-changed(int); callback sub-source-changed(int);
+    callback noise-level-changed(float); callback noise-color-changed(float);
+    callback xmod12-changed(float); callback xmod13-changed(float); callback xmod21-changed(float); callback xmod23-changed(float); callback xmod31-changed(float); callback xmod32-changed(float);
+    callback noise-osc1-changed(float); callback noise-osc2-changed(float); callback noise-osc3-changed(float);
+    callback feedback1-changed(float); callback feedback2-changed(float); callback feedback3-changed(float);
+    callback sync1-changed(int); callback sync2-changed(int); callback sync3-changed(int);
+    callback modulation-depth-changed(int, float);
+    callback modulation-edit-started(int);
+    callback modulation-edit-finished(int);
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 5px;
+        HorizontalLayout {
+            spacing: 3px;
+            DevicePageButton { text: "OSC"; active: root.page == 0; clicked => { root.page = 0; } }
+            DevicePageButton { text: "ROUTE"; active: root.page == 1; clicked => { root.page = 1; } }
+            DevicePageButton { text: "AMP"; active: root.page == 2; clicked => { root.page = 2; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+
+        if root.page == 0 : VerticalLayout {
+            vertical-stretch: 1;
+            spacing: 5px;
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 5px;
+            OscillatorDeviceStrip {
+                horizontal-stretch: 1; title: "OSC 1";
+                param-base: 0;
+                modulation-armed: root.modulation-armed;
+                modulation-depths: root.modulation-depths;
+                modulation-allowed: root.modulation-allowed;
+                modulation-offsets: root.modulation-offsets;
+                modulation-route-counts: root.modulation-route-counts;
+                modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                modulation-edit-started(p) => { root.modulation-edit-started(p); }
+                modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
+                wave <=> root.osc1-wave; semitones <=> root.osc1-semitones; cents <=> root.osc1-cents; level <=> root.osc1-level; pulse-width <=> root.osc1-pulse-width;
+                wave-changed(v) => { root.osc1-wave-changed(v); } semitones-changed(v) => { root.osc1-semitones-changed(v); } cents-changed(v) => { root.osc1-cents-changed(v); } level-changed(v) => { root.osc1-level-changed(v); } pulse-width-changed(v) => { root.osc1-pulse-width-changed(v); }
+            }
+            OscillatorDeviceStrip {
+                horizontal-stretch: 1; title: "OSC 2";
+                param-base: 5;
+                modulation-armed: root.modulation-armed;
+                modulation-depths: root.modulation-depths;
+                modulation-allowed: root.modulation-allowed;
+                modulation-offsets: root.modulation-offsets;
+                modulation-route-counts: root.modulation-route-counts;
+                modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                modulation-edit-started(p) => { root.modulation-edit-started(p); }
+                modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
+                wave <=> root.osc2-wave; semitones <=> root.osc2-semitones; cents <=> root.osc2-cents; level <=> root.osc2-level; pulse-width <=> root.osc2-pulse-width;
+                wave-changed(v) => { root.osc2-wave-changed(v); } semitones-changed(v) => { root.osc2-semitones-changed(v); } cents-changed(v) => { root.osc2-cents-changed(v); } level-changed(v) => { root.osc2-level-changed(v); } pulse-width-changed(v) => { root.osc2-pulse-width-changed(v); }
+            }
+            OscillatorDeviceStrip {
+                horizontal-stretch: 1; title: "OSC 3";
+                param-base: 10;
+                modulation-armed: root.modulation-armed;
+                modulation-depths: root.modulation-depths;
+                modulation-allowed: root.modulation-allowed;
+                modulation-offsets: root.modulation-offsets;
+                modulation-route-counts: root.modulation-route-counts;
+                modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                modulation-edit-started(p) => { root.modulation-edit-started(p); }
+                modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
+                wave <=> root.osc3-wave; semitones <=> root.osc3-semitones; cents <=> root.osc3-cents; level <=> root.osc3-level; pulse-width <=> root.osc3-pulse-width;
+                wave-changed(v) => { root.osc3-wave-changed(v); } semitones-changed(v) => { root.osc3-semitones-changed(v); } cents-changed(v) => { root.osc3-cents-changed(v); } level-changed(v) => { root.osc3-level-changed(v); } pulse-width-changed(v) => { root.osc3-pulse-width-changed(v); }
+            }
+            }
+            Rectangle {
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 5px; spacing: 4px;
+                    Text { text: "SOURCES"; color: Theme.text-faint; font-size: 8px; }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "SUB"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                        TrimKnob {
+                            width: 52px; diameter: 34px; label: "Level";
+                            value: GainMath.linear-to-db(root.sub-level);
+                            maximum: 0;
+                            default-value: -60;
+                            changed(v) => {
+                                root.sub-level = GainMath.db-to-linear(v);
+                                root.sub-level-changed(root.sub-level);
+                            }
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[20];
+                            modulation-depth: root.modulation-depths[20];
+                            modulation-offset: root.modulation-offsets[20];
+                            modulation-route-count: root.modulation-route-counts[20];
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(20, v); }
+                            modulation-edit-started => { root.modulation-edit-started(20); }
+                            modulation-edit-finished => { root.modulation-edit-finished(20); }
+                        }
+                        SelectorBank {
+                            options: ["-1", "-2"]; selected-index <=> root.sub-octave; segment-width: 30px;
+                            tooltip: "Sub octave"; selected(i) => { root.sub-octave-changed(i); }
+                        }
+                        SelectorBank {
+                            options: ["SINE", "SQR"]; selected-index <=> root.sub-wave; segment-width: 40px;
+                            tooltip: "Sub waveform"; selected(i) => { root.sub-wave-changed(i); }
+                        }
+                        SelectorBank {
+                            options: ["1", "2", "3"]; selected-index <=> root.sub-source; segment-width: 26px;
+                            tooltip: "Which oscillator the sub divides"; selected(i) => { root.sub-source-changed(i); }
+                        }
+                        Rectangle { width: 10px; }
+                        Text { text: "NOISE"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                        TrimKnob {
+                            width: 52px; diameter: 34px; label: "Level";
+                            value: GainMath.linear-to-db(root.noise-level);
+                            maximum: 0;
+                            default-value: -60;
+                            changed(v) => {
+                                root.noise-level = GainMath.db-to-linear(v);
+                                root.noise-level-changed(root.noise-level);
+                            }
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[25];
+                            modulation-depth: root.modulation-depths[25];
+                            modulation-offset: root.modulation-offsets[25];
+                            modulation-route-count: root.modulation-route-counts[25];
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(25, v); }
+                            modulation-edit-started => { root.modulation-edit-started(25); }
+                            modulation-edit-finished => { root.modulation-edit-finished(25); }
+                        }
+                        ParameterKnob {
+                            width: 52px; diameter: 34px; label: "Color"; tooltip: "Dark through white to bright";
+                            value <=> root.noise-color; minimum: -100; maximum: 100; default-value: 0; bipolar: true;
+                            value-text: (root.noise-color > 0 ? "+" : "") + round(root.noise-color) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[26];
+                            modulation-depth: root.modulation-depths[26];
+                            modulation-offset: root.modulation-offsets[26];
+                            modulation-route-count: root.modulation-route-counts[26];
+                            changed(v) => { root.noise-color-changed(v); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(26, v); }
+                            modulation-edit-started => { root.modulation-edit-started(26); }
+                            modulation-edit-finished => { root.modulation-edit-finished(26); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+        }
+
+        if root.page == 1 : HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 5px;
+            Rectangle {
+                horizontal-stretch: 6;
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 5px; spacing: 4px;
+                    Text { text: "XMOD"; color: Theme.text-faint; font-size: 8px; }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        RouteKnob {
+                            label: "1 > 2"; tooltip: "Phase modulation 1 > 2"; param-id: 27;
+                            value <=> root.xmod12;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.xmod12-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        RouteKnob {
+                            label: "1 > 3"; tooltip: "Phase modulation 1 > 3"; param-id: 28;
+                            value <=> root.xmod13;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.xmod13-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        RouteKnob {
+                            label: "2 > 1"; tooltip: "Phase modulation 2 > 1"; param-id: 29;
+                            value <=> root.xmod21;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.xmod21-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        RouteKnob {
+                            label: "2 > 3"; tooltip: "Phase modulation 2 > 3"; param-id: 30;
+                            value <=> root.xmod23;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.xmod23-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        RouteKnob {
+                            label: "3 > 1"; tooltip: "Phase modulation 3 > 1"; param-id: 31;
+                            value <=> root.xmod31;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.xmod31-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        RouteKnob {
+                            label: "3 > 2"; tooltip: "Phase modulation 3 > 2"; param-id: 32;
+                            value <=> root.xmod32;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.xmod32-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        RouteKnob {
+                            label: "N > 1"; tooltip: "Noise into oscillator 1"; param-id: 33;
+                            value <=> root.noise-osc1;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.noise-osc1-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        RouteKnob {
+                            label: "N > 2"; tooltip: "Noise into oscillator 2"; param-id: 34;
+                            value <=> root.noise-osc2;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.noise-osc2-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        RouteKnob {
+                            label: "N > 3"; tooltip: "Noise into oscillator 3"; param-id: 35;
+                            value <=> root.noise-osc3;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.noise-osc3-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 3;
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 5px; spacing: 4px;
+                    Text { text: "SYNC"; color: Theme.text-faint; font-size: 8px; }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "OSC 1"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        SelectorBank {
+                            // Self-sync is not a topology, it is a stuck
+                            // phase, so oscillator 1 is missing from its own
+                            // list rather than being present and inert.
+                            options: ["OFF", "2", "3"];
+                            selected-index: root.sync1 == 0 ? 0 : root.sync1 < 1 ? root.sync1 : root.sync1 - 1;
+                            segment-width: 34px;
+                            tooltip: "Hard sync source";
+                            selected(i) => { root.sync1-changed(i == 0 ? 0 : i < 1 ? i : i + 1); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "OSC 2"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        SelectorBank {
+                            // Self-sync is not a topology, it is a stuck
+                            // phase, so oscillator 2 is missing from its own
+                            // list rather than being present and inert.
+                            options: ["OFF", "1", "3"];
+                            selected-index: root.sync2 == 0 ? 0 : root.sync2 < 2 ? root.sync2 : root.sync2 - 1;
+                            segment-width: 34px;
+                            tooltip: "Hard sync source";
+                            selected(i) => { root.sync2-changed(i == 0 ? 0 : i < 2 ? i : i + 1); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "OSC 3"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        SelectorBank {
+                            // Self-sync is not a topology, it is a stuck
+                            // phase, so oscillator 3 is missing from its own
+                            // list rather than being present and inert.
+                            options: ["OFF", "1", "2"];
+                            selected-index: root.sync3 == 0 ? 0 : root.sync3 < 3 ? root.sync3 : root.sync3 - 1;
+                            segment-width: 34px;
+                            tooltip: "Hard sync source";
+                            selected(i) => { root.sync3-changed(i == 0 ? 0 : i < 3 ? i : i + 1); }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 3;
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 5px; spacing: 4px;
+                    Text { text: "FEEDBACK"; color: Theme.text-faint; font-size: 8px; }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        RouteKnob {
+                            label: "Osc 1"; tooltip: "Osc 1 self-feedback"; param-id: 36;
+                            value <=> root.feedback1;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.feedback1-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        RouteKnob {
+                            label: "Osc 2"; tooltip: "Osc 2 self-feedback"; param-id: 37;
+                            value <=> root.feedback2;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.feedback2-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        RouteKnob {
+                            label: "Osc 3"; tooltip: "Osc 3 self-feedback"; param-id: 38;
+                            value <=> root.feedback3;
+                            modulation-armed: root.modulation-armed;
+                            allowed: root.modulation-allowed; depths: root.modulation-depths;
+                            offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                            changed(v) => { root.feedback3-changed(v); }
+                            route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                            route-edit-started(p) => { root.modulation-edit-started(p); }
+                            route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+
+        if root.page == 2 : HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 5px;
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 5px; spacing: 4px;
+                    Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: 8px; }
+                    EnvelopeEditor {
+                        vertical-stretch: 1;
+                        min-height: 44px;
+                        attack: root.attack / 2; decay: root.decay / 2; sustain <=> root.sustain; release: root.release / 2;
+                        attack-text: round(root.attack * 1000) + " ms"; decay-text: round(root.decay * 1000) + " ms"; sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 1000) + " ms";
+                        attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
+                        decay-changed(v) => { root.decay = v * 2; root.decay-changed(root.decay); }
+                        sustain-changed(v) => { root.sustain-changed(v); }
+                        release-changed(v) => { root.release = v * 2; root.release-changed(root.release); }
+                    }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; minimum: 0; maximum: 2; default-value: 0.005; value-text: round(root.attack * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[15]; modulation-depth: root.modulation-depths[15]; modulation-offset: root.modulation-offsets[15]; modulation-route-count: root.modulation-route-counts[15]; changed(v) => { root.attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(15, v); } modulation-edit-started => { root.modulation-edit-started(15); } modulation-edit-finished => { root.modulation-edit-finished(15); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; minimum: 0; maximum: 2; default-value: 0.2; value-text: round(root.decay * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[16]; modulation-depth: root.modulation-depths[16]; modulation-offset: root.modulation-offsets[16]; modulation-route-count: root.modulation-route-counts[16]; changed(v) => { root.decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(16, v); } modulation-edit-started => { root.modulation-edit-started(16); } modulation-edit-finished => { root.modulation-edit-finished(16); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 0.7; value-text: round(root.sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[17]; modulation-depth: root.modulation-depths[17]; modulation-offset: root.modulation-offsets[17]; modulation-route-count: root.modulation-route-counts[17]; changed(v) => { root.sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(17, v); } modulation-edit-started => { root.modulation-edit-started(17); } modulation-edit-finished => { root.modulation-edit-finished(17); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; minimum: 0; maximum: 2; default-value: 0.15; value-text: round(root.release * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[18]; modulation-depth: root.modulation-depths[18]; modulation-offset: root.modulation-offsets[18]; modulation-route-count: root.modulation-route-counts[18]; changed(v) => { root.release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(18, v); } modulation-edit-started => { root.modulation-edit-started(18); } modulation-edit-finished => { root.modulation-edit-finished(18); } }
+                        ParameterKnob { width: 52px; diameter: 34px; label: "Glide"; tooltip: "Portamento between reused voices"; value <=> root.glide; minimum: 0; maximum: 2; default-value: 0; value-text: round(root.glide * 1000) + " ms"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[19]; modulation-depth: root.modulation-depths[19]; modulation-offset: root.modulation-offsets[19]; modulation-route-count: root.modulation-route-counts[19]; changed(v) => { root.glide-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(19, v); } modulation-edit-started => { root.modulation-edit-started(19); } modulation-edit-finished => { root.modulation-edit-finished(19); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+        }
+    }
+}

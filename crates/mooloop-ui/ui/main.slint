@@ -41,6 +41,7 @@ import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { MlM1DeviceFace } from "mlm1-device.slint";
+import { MlP8DeviceFace } from "mlp8-device.slint";
 import { PolyDeviceFace } from "poly-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 import { SampleTrace } from "device-displays.slint";
@@ -547,7 +548,7 @@ export component MainWindow inherits Window {
     in-out property <[float]> browser-info-waveform;
     in-out property <string> browser-info-name;
     in-out property <string> browser-info-stats;
-    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly, 4=ML-M1
+    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly, 4=ML-M1, 5=ML-P8
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
     in-out property <int> poly-device-page;
@@ -905,6 +906,52 @@ export component MainWindow inherits Window {
     callback mono-filter-cutoff-changed(float); callback mono-filter-resonance-changed(float); callback mono-filter-env-changed(float); callback mono-drive-changed(float);
     callback mono-lfo-wave-changed(int); callback mono-lfo-rate-changed(float); callback mono-lfo-retrigger-changed(bool);
     callback mono-lfo-pitch-changed(float); callback mono-lfo-filter-changed(float); callback mono-lfo-pulse-width-changed(float); callback mono-lfo-amp-changed(float);
+
+
+    // ---- ML-P8 params of the selected channel ----
+    in-out property <int> mlp8-device-page;
+    in-out property <int> mlp8-osc1-wave: 2;
+    in-out property <float> mlp8-osc1-semitones;
+    in-out property <float> mlp8-osc1-cents;
+    in-out property <float> mlp8-osc1-level: 1;
+    in-out property <float> mlp8-osc1-pulse-width: 0.5;
+    in-out property <int> mlp8-osc2-wave: 2;
+    in-out property <float> mlp8-osc2-semitones: 12;
+    in-out property <float> mlp8-osc2-cents: 4;
+    in-out property <float> mlp8-osc2-level;
+    in-out property <float> mlp8-osc2-pulse-width: 0.5;
+    in-out property <int> mlp8-osc3-wave: 2;
+    in-out property <float> mlp8-osc3-semitones: -12;
+    in-out property <float> mlp8-osc3-cents: -4;
+    in-out property <float> mlp8-osc3-level;
+    in-out property <float> mlp8-osc3-pulse-width: 0.5;
+    in-out property <float> mlp8-attack: 0.005;
+    in-out property <float> mlp8-decay: 0.2;
+    in-out property <float> mlp8-sustain: 0.7;
+    in-out property <float> mlp8-release: 0.15;
+    in-out property <float> mlp8-glide;
+    in-out property <float> mlp8-sub-level;
+    in-out property <int> mlp8-sub-octave;
+    in-out property <int> mlp8-sub-wave;
+    in-out property <int> mlp8-sub-source;
+    in-out property <float> mlp8-noise-level;
+    in-out property <float> mlp8-noise-color;
+    in-out property <float> mlp8-xmod12; in-out property <float> mlp8-xmod13; in-out property <float> mlp8-xmod21;
+    in-out property <float> mlp8-xmod23; in-out property <float> mlp8-xmod31; in-out property <float> mlp8-xmod32;
+    in-out property <float> mlp8-noise-osc1; in-out property <float> mlp8-noise-osc2; in-out property <float> mlp8-noise-osc3;
+    in-out property <float> mlp8-feedback1; in-out property <float> mlp8-feedback2; in-out property <float> mlp8-feedback3;
+    in-out property <int> mlp8-sync1; in-out property <int> mlp8-sync2; in-out property <int> mlp8-sync3;
+    callback mlp8-osc1-wave-changed(int); callback mlp8-osc1-semitones-changed(float); callback mlp8-osc1-cents-changed(float); callback mlp8-osc1-level-changed(float); callback mlp8-osc1-pulse-width-changed(float);
+    callback mlp8-osc2-wave-changed(int); callback mlp8-osc2-semitones-changed(float); callback mlp8-osc2-cents-changed(float); callback mlp8-osc2-level-changed(float); callback mlp8-osc2-pulse-width-changed(float);
+    callback mlp8-osc3-wave-changed(int); callback mlp8-osc3-semitones-changed(float); callback mlp8-osc3-cents-changed(float); callback mlp8-osc3-level-changed(float); callback mlp8-osc3-pulse-width-changed(float);
+    callback mlp8-attack-changed(float); callback mlp8-decay-changed(float); callback mlp8-sustain-changed(float); callback mlp8-release-changed(float); callback mlp8-glide-changed(float);
+    callback mlp8-sub-level-changed(float); callback mlp8-sub-octave-changed(int); callback mlp8-sub-wave-changed(int); callback mlp8-sub-source-changed(int);
+    callback mlp8-noise-level-changed(float); callback mlp8-noise-color-changed(float);
+    callback mlp8-xmod12-changed(float); callback mlp8-xmod13-changed(float); callback mlp8-xmod21-changed(float);
+    callback mlp8-xmod23-changed(float); callback mlp8-xmod31-changed(float); callback mlp8-xmod32-changed(float);
+    callback mlp8-noise-osc1-changed(float); callback mlp8-noise-osc2-changed(float); callback mlp8-noise-osc3-changed(float);
+    callback mlp8-feedback1-changed(float); callback mlp8-feedback2-changed(float); callback mlp8-feedback3-changed(float);
+    callback mlp8-sync1-changed(int); callback mlp8-sync2-changed(int); callback mlp8-sync3-changed(int);
 
     // ---- ML-M1 params of the selected channel ----
     in-out property <int> mlm1-osc1-wave: 2;
@@ -2320,7 +2367,7 @@ export component MainWindow inherits Window {
                                             vertical-alignment: center;
                                         }
                                         if !root.editing-bus : SelectorBank {
-                                            options: ["Sampler", "Drum", "Mono", "Poly", "ML-M1"];
+                                            options: ["Sampler", "Drum", "Mono", "Poly", "ML-M1", "ML-P8"];
                                             selected-index <=> root.source-kind;
                                             segment-width: 48px;
                                             tooltip: "Source device";
@@ -2673,12 +2720,49 @@ export component MainWindow inherits Window {
                                                     modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
                                                 }
 
+
+                                                if !root.editing-bus && root.source-kind == 5 : MlP8DeviceFace {
+                                                    x: DeviceRackMetrics.rail-width;
+                                                    y: DeviceRackMetrics.header-height;
+                                                    width: parent.content-width;
+                                                    height: parent.height - DeviceRackMetrics.header-height;
+                                                    page <=> root.mlp8-device-page;
+                                                    osc1-wave <=> root.mlp8-osc1-wave; osc1-semitones <=> root.mlp8-osc1-semitones; osc1-cents <=> root.mlp8-osc1-cents; osc1-level <=> root.mlp8-osc1-level; osc1-pulse-width <=> root.mlp8-osc1-pulse-width;
+                                                    osc2-wave <=> root.mlp8-osc2-wave; osc2-semitones <=> root.mlp8-osc2-semitones; osc2-cents <=> root.mlp8-osc2-cents; osc2-level <=> root.mlp8-osc2-level; osc2-pulse-width <=> root.mlp8-osc2-pulse-width;
+                                                    osc3-wave <=> root.mlp8-osc3-wave; osc3-semitones <=> root.mlp8-osc3-semitones; osc3-cents <=> root.mlp8-osc3-cents; osc3-level <=> root.mlp8-osc3-level; osc3-pulse-width <=> root.mlp8-osc3-pulse-width;
+                                                    attack <=> root.mlp8-attack; decay <=> root.mlp8-decay; sustain <=> root.mlp8-sustain; release <=> root.mlp8-release; glide <=> root.mlp8-glide;
+                                                    sub-level <=> root.mlp8-sub-level; noise-level <=> root.mlp8-noise-level; noise-color <=> root.mlp8-noise-color; xmod12 <=> root.mlp8-xmod12; xmod13 <=> root.mlp8-xmod13;
+                                                    xmod21 <=> root.mlp8-xmod21; xmod23 <=> root.mlp8-xmod23; xmod31 <=> root.mlp8-xmod31; xmod32 <=> root.mlp8-xmod32; noise-osc1 <=> root.mlp8-noise-osc1;
+                                                    noise-osc2 <=> root.mlp8-noise-osc2; noise-osc3 <=> root.mlp8-noise-osc3; feedback1 <=> root.mlp8-feedback1; feedback2 <=> root.mlp8-feedback2; feedback3 <=> root.mlp8-feedback3;
+                                                    sub-octave <=> root.mlp8-sub-octave; sub-wave <=> root.mlp8-sub-wave; sub-source <=> root.mlp8-sub-source; sync1 <=> root.mlp8-sync1; sync2 <=> root.mlp8-sync2;
+                                                    sync3 <=> root.mlp8-sync3;
+                                                    modulation-armed: root.modulation-armed-slot >= 0;
+                                                    modulation-depths: root.source-modulation-depths;
+                                                    modulation-allowed: root.source-modulation-allowed;
+                                                    modulation-offsets: root.source-modulation-offsets;
+                                                    modulation-route-counts: root.source-modulation-route-counts;
+                                                    osc1-wave-changed(v) => { root.mlp8-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.mlp8-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.mlp8-osc1-cents-changed(v); } osc1-level-changed(v) => { root.mlp8-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.mlp8-osc1-pulse-width-changed(v); }
+                                                    osc2-wave-changed(v) => { root.mlp8-osc2-wave-changed(v); } osc2-semitones-changed(v) => { root.mlp8-osc2-semitones-changed(v); } osc2-cents-changed(v) => { root.mlp8-osc2-cents-changed(v); } osc2-level-changed(v) => { root.mlp8-osc2-level-changed(v); } osc2-pulse-width-changed(v) => { root.mlp8-osc2-pulse-width-changed(v); }
+                                                    osc3-wave-changed(v) => { root.mlp8-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.mlp8-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.mlp8-osc3-cents-changed(v); } osc3-level-changed(v) => { root.mlp8-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.mlp8-osc3-pulse-width-changed(v); }
+                                                    attack-changed(v) => { root.mlp8-attack-changed(v); } decay-changed(v) => { root.mlp8-decay-changed(v); } sustain-changed(v) => { root.mlp8-sustain-changed(v); } release-changed(v) => { root.mlp8-release-changed(v); }
+                                                    glide-changed(v) => { root.mlp8-glide-changed(v); } sub-level-changed(v) => { root.mlp8-sub-level-changed(v); } noise-level-changed(v) => { root.mlp8-noise-level-changed(v); } noise-color-changed(v) => { root.mlp8-noise-color-changed(v); }
+                                                    xmod12-changed(v) => { root.mlp8-xmod12-changed(v); } xmod13-changed(v) => { root.mlp8-xmod13-changed(v); } xmod21-changed(v) => { root.mlp8-xmod21-changed(v); } xmod23-changed(v) => { root.mlp8-xmod23-changed(v); }
+                                                    xmod31-changed(v) => { root.mlp8-xmod31-changed(v); } xmod32-changed(v) => { root.mlp8-xmod32-changed(v); } noise-osc1-changed(v) => { root.mlp8-noise-osc1-changed(v); } noise-osc2-changed(v) => { root.mlp8-noise-osc2-changed(v); }
+                                                    noise-osc3-changed(v) => { root.mlp8-noise-osc3-changed(v); } feedback1-changed(v) => { root.mlp8-feedback1-changed(v); } feedback2-changed(v) => { root.mlp8-feedback2-changed(v); } feedback3-changed(v) => { root.mlp8-feedback3-changed(v); }
+                                                    sub-octave-changed(v) => { root.mlp8-sub-octave-changed(v); } sub-wave-changed(v) => { root.mlp8-sub-wave-changed(v); } sub-source-changed(v) => { root.mlp8-sub-source-changed(v); } sync1-changed(v) => { root.mlp8-sync1-changed(v); }
+                                                    sync2-changed(v) => { root.mlp8-sync2-changed(v); } sync3-changed(v) => { root.mlp8-sync3-changed(v); }
+                                                    modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
+                                                    modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
+                                                    modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
+                                                }
+
                                                 if !root.editing-bus : DeviceHeader {
                                                     x: DeviceRackMetrics.rail-width; y: 0px; width: parent.content-width;
                                                     name: root.source-kind == 0 ? "Sampler"
                                                         : root.source-kind == 1 ? "Drum Synth"
                                                         : root.source-kind == 2 ? "Mono Synth"
-                                                        : root.source-kind == 3 ? "Poly Synth" : "ML-M1";
+                                                        : root.source-kind == 3 ? "Poly Synth"
+                                                        : root.source-kind == 4 ? "ML-M1" : "ML-P8";
                                                     kind: "SOURCE / 3U";
                                                     device-color: Theme.accent;
                                                 }

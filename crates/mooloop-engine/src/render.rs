@@ -7,7 +7,8 @@ use arc_swap::ArcSwapOption;
 use mooloop_core::{
     compile_bus_graph, AutomationLane, ChannelSource, CompiledBusGraph, DeviceKind,
     DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams, ModDestinationDescriptor,
-    ModRack, MonoSynthParams, MlM1Params, ParamAddr, ParamOwner, PolySynthParams, Project,
+    ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
+    Project,
     SamplerParams,
     DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
@@ -16,7 +17,7 @@ use mooloop_core::{
 use mooloop_dsp::build_effect;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, DrumSynth,
-    DryAlign, Event, EventList, ModulatorRack, MonoSynth, MlM1, NoteGateEvents, PolySynth,
+    DryAlign, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8, NoteGateEvents, PolySynth,
     ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
 };
@@ -75,6 +76,7 @@ fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
         DeviceKind::MonoSynth => GeneratorParams::MonoSynth(MonoSynthParams::default()),
         DeviceKind::PolySynth => GeneratorParams::PolySynth(PolySynthParams::default()),
         DeviceKind::MlM1 => GeneratorParams::MlM1(MlM1Params::default()),
+        DeviceKind::MlP8 => GeneratorParams::MlP8(MlP8Params::default()),
         DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
     }
 }
@@ -911,6 +913,7 @@ pub struct ChannelStrip {
     mono_synth: MonoSynth,
     poly_synth: PolySynth,
     mlm1: MlM1,
+    mlp8: MlP8,
     active_source: DeviceKind,
     /// The knob value for the active generator's parameters. The device
     /// retains only the value it was last sent, so this is what lets a knob
@@ -932,6 +935,7 @@ impl ChannelStrip {
             mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
             poly_synth: PolySynth::new(PolySynthParams::default(), sample_rate),
             mlm1: MlM1::new(MlM1Params::default(), sample_rate),
+            mlp8: MlP8::new(MlP8Params::default(), sample_rate),
             active_source: DeviceKind::Sampler,
             source_base: GeneratorParams::Sampler(SamplerParams::default()),
             effects: EffectChain::new(),
@@ -948,11 +952,13 @@ impl ChannelStrip {
         self.mono_synth.reset();
         self.poly_synth.reset();
         self.mlm1.reset();
+        self.mlp8.reset();
         self.sampler.set_params(SamplerParams::default());
         self.drum_synth.set_params(DrumSynthParams::default());
         self.mono_synth.set_params(MonoSynthParams::default());
         self.poly_synth.set_params(PolySynthParams::default());
         self.mlm1.set_params(MlM1Params::default());
+        self.mlp8.set_params(MlP8Params::default());
         self.active_source = source;
     }
 
@@ -986,6 +992,10 @@ impl ChannelStrip {
                 self.mlm1.set_params(state.params);
                 GeneratorParams::MlM1(state.params)
             }
+            ChannelSource::MlP8(state) => {
+                self.mlp8.set_params(state.params);
+                GeneratorParams::MlP8(state.params)
+            }
         };
     }
 
@@ -993,7 +1003,10 @@ impl ChannelStrip {
         match self.active_source {
             DeviceKind::Sampler => self.sampler.choke_group(),
             DeviceKind::DrumSynth => self.drum_synth.choke_group(),
-            DeviceKind::MonoSynth | DeviceKind::PolySynth | DeviceKind::MlM1 => 0,
+            DeviceKind::MonoSynth
+            | DeviceKind::PolySynth
+            | DeviceKind::MlM1
+            | DeviceKind::MlP8 => 0,
         }
     }
 
@@ -1010,6 +1023,7 @@ impl ChannelStrip {
                 .poly_synth
                 .process(context, &mut self.bus, events, None),
             DeviceKind::MlM1 => self.mlm1.process(context, &mut self.bus, events, None),
+            DeviceKind::MlP8 => self.mlp8.process(context, &mut self.bus, events, None),
         }
     }
 }
@@ -1549,6 +1563,7 @@ impl RenderState {
                     GeneratorParams::MonoSynth(params) => strip.mono_synth.set_params(params),
                     GeneratorParams::PolySynth(params) => strip.poly_synth.set_params(params),
                     GeneratorParams::MlM1(params) => strip.mlm1.set_params(params),
+                    GeneratorParams::MlP8(params) => strip.mlp8.set_params(params),
                     GeneratorParams::DrumSynth => {}
                 }
             }
@@ -1918,6 +1933,12 @@ impl RenderState {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.mlm1.set_params(params);
                     strip.source_base = GeneratorParams::MlM1(params);
+                }
+            }
+            EngineCommand::SetChannelMlP8Params { channel, params } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.mlp8.set_params(params);
+                    strip.source_base = GeneratorParams::MlP8(params);
                 }
             }
             EngineCommand::SetChannelPolySynthParams { channel, params } => {
@@ -4605,7 +4626,14 @@ mod footprint {
         assert_eq!(size_of::<EffectSlot>(), 496);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
         assert_eq!(size_of::<EffectChain>(), 20_544);
-        assert_eq!(size_of::<ChannelStrip>(), 27_512);
+        // A strip holds one node of every generator kind, so a new device is
+        // paid for on every live channel whether or not anything uses it.
+        // The ML-P8's eight voices are 2,016 bytes of it -- a voice carries
+        // three oscillators, their modulation taps and sync carries, a sub,
+        // and coloured noise -- and the strip grew by 2,656 because adding it
+        // also moved the padding between its neighbours.
+        assert_eq!(size_of::<MlP8>(), 2_016);
+        assert_eq!(size_of::<ChannelStrip>(), 30_168);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -4616,11 +4644,13 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 45_952);
+        assert_eq!(per_live, 48_608);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
-        // project, with both ceilings untouched.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_157);
+        // project, with both ceilings untouched. A sixth generator kind moved
+        // it by 41 KiB, which is what a device costs now: linear in the
+        // channels a project has rather than in the channels it could address.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_198);
     }
 }
 

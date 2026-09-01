@@ -919,7 +919,8 @@ pub fn validate_setups(setups: &[ChannelSetup]) -> Result<(), Error> {
 mod tests {
     use super::*;
     use mooloop_core::{
-        AutomationLane, AutomationPoint, DrumSynthParams, MlM1Params, MonoSynthParams, NoteEvent,
+        AutomationLane, AutomationPoint, DrumSynthParams, MlM1Params, MlP8Params, MonoSynthParams,
+        NoteEvent,
         ParamAddr, PatternPlacement, MAX_CHOKE_GROUP,
     };
     use tempfile::tempdir;
@@ -1628,6 +1629,61 @@ id = "default_kick"
         assert_eq!(loaded, MlM1Params::default());
     }
 
+    /// The ML-P8 carries `#[serde(default)]` from the start too. Truncated at
+    /// the network amounts, which is the shape a project saved before step 02
+    /// of the plan filled them in would have.
+    #[test]
+    fn mlp8_params_load_from_a_manifest_missing_later_fields() {
+        let written = toml::to_string(&MlP8Params::default()).unwrap();
+        let (before_network, _) = written.split_once("xmod").unwrap();
+        let loaded: MlP8Params = toml::from_str(before_network).unwrap();
+        assert_eq!(loaded, MlP8Params::default());
+    }
+
+    #[test]
+    fn mlp8_source_round_trips_in_a_song() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("mlp8.mooloop");
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::mlp8(0, 1);
+        let params = &mut project.channels[0].setup.mlp8_state_mut().unwrap().params;
+        params.xmod[mooloop_core::mlp8::xmod_index(1, 0)] = -62.5;
+        params.osc_feedback[2] = 41.0;
+        params.noise_to_osc[0] = 18.0;
+        params.sync_source[0] = mooloop_core::SyncSource::Osc3;
+        params.sub_level = 0.4;
+        params.sub_octave = mooloop_core::SubOctave::Minus2;
+        params.noise_color = -30.0;
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        assert!(manifest.contains("type = \"mlp8\""), "{manifest}");
+        assert_eq!(
+            load_bundle(&bundle).unwrap().document,
+            LoadedDocument::Song(project)
+        );
+    }
+
+    /// A signed percent out of range is repaired rather than refused, like
+    /// every other range in the document.
+    #[test]
+    fn mlp8_validation_clamps_an_out_of_range_route_amount() {
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::mlp8(0, 1);
+        project.channels[0]
+            .setup
+            .mlp8_state_mut()
+            .unwrap()
+            .params
+            .xmod[0] = 900.0;
+
+        assert!(integrity::repair_project(&mut project).is_usable());
+        assert_eq!(
+            project.channels[0].setup.mlp8_state().unwrap().params.xmod[0],
+            100.0
+        );
+    }
+
     #[test]
     fn mlm1_source_round_trips_in_a_song() {
         let temp = tempdir().unwrap();
@@ -1699,6 +1755,7 @@ id = "default_kick"
             ChannelSource::MonoSynth(mooloop_core::MonoSynthState::default()),
             ChannelSource::PolySynth(mooloop_core::PolySynthState::default()),
             ChannelSource::MlM1(mooloop_core::MlM1State::default()),
+            ChannelSource::MlP8(mooloop_core::MlP8State::default()),
         ];
         for (index, source) in sources.into_iter().enumerate() {
             let info = PresetInfo {

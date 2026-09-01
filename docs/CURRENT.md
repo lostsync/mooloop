@@ -246,9 +246,10 @@ boundary.
 
 - `AudioNode` provides one in-place DSP interface for instruments and effects.
 - `DrumSynth` (kick/snare/hat), the v1 `MonoSynth`, the filter/performance-led
-  `MlM1`, and `PolySynth` use the same timed note path as the sampler in realtime
-  and offline renders. Their oscillator and envelope types are shared DSP
-  primitives; their voice engines are deliberately separate.
+  `MlM1`, the eight-voice `MlP8` and its oscillator network, and `PolySynth`
+  use the same timed note path as the sampler in realtime and offline renders.
+  Their oscillator and envelope types are shared DSP primitives; their voice
+  engines are deliberately separate.
 - `EventList` carries fixed-capacity, sample-timed NoteOn, NoteOff, and generic
   ParamValue events.
 - `StereoBus` ownership is centralized in the graph, leaving room for sends,

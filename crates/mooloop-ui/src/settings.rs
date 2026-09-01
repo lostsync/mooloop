@@ -563,6 +563,7 @@ fn kind_slug(kind: DeviceKind) -> &'static str {
         // Renaming it would orphan every generator preset already saved
         // under presets/generators/mlm1/.
         DeviceKind::MlM1 => "ml1",
+        DeviceKind::MlP8 => "mlp8",
     }
 }
 

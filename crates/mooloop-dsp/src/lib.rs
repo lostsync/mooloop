@@ -9,6 +9,8 @@
 //! - [`mlm1`]: the ML-M1, built around its filter and its note
 //!   behaviour rather than around being the poly synth with one voice.
 //! - [`polysynth`]: the three-oscillator poly synth.
+//! - [`mlp8`]: the ML-P8, eight voices around a three-oscillator network
+//!   rather than three oscillators layered.
 //! - [`effects`]: chainable effects that run after a channel's generator
 //!   (see `docs/EFFECTS_PLAN.md` and `docs/MODULATION_PLAN.md`).
 //! - [`align`]: the dry-path latency delay the engine's effect container
@@ -38,6 +40,7 @@ pub mod heldnotes;
 pub mod lfo;
 pub mod modulator;
 pub mod mlm1;
+pub mod mlp8;
 pub mod monosynth;
 pub mod node;
 pub mod osc;
@@ -62,6 +65,7 @@ pub use effects::{
 };
 pub use event::{Event, EventList, TimedEvent};
 pub use mlm1::MlM1;
+pub use mlp8::MlP8;
 pub use monosynth::MonoSynth;
 pub use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 pub use node::{AudioNode, DynamicsFrame, ProcessContext};

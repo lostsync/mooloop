@@ -22,7 +22,8 @@ use std::fmt;
 
 use mooloop_core::{
     sanitize_route, BusSetup, ChannelSetup, ChannelSource, DrumSynthParams, EffectSlotState,
-    MlM1Params, ModRack, MonoSynthParams, NoteId, PolySynthParams, Project, ProjectChannel,
+    MlM1Params, MlP8Params, ModRack, MonoSynthParams, NoteId, PolySynthParams, Project,
+    ProjectChannel,
     SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL,
     MAX_AUTOMATION_POINTS_PER_LANE, MAX_BUSES, MAX_CHANNELS, MAX_CHOKE_GROUP,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS,
@@ -1152,6 +1153,7 @@ fn check_source(doctor: &mut Doctor, who: &str, source: &mut ChannelSource) {
         ChannelSource::MonoSynth(state) => check_mono_synth(doctor, who, &mut state.params),
         ChannelSource::PolySynth(state) => check_poly_synth(doctor, who, &mut state.params),
         ChannelSource::MlM1(state) => check_mlm1(doctor, who, &mut state.params),
+        ChannelSource::MlP8(state) => check_mlp8(doctor, who, &mut state.params),
     }
 }
 
@@ -1439,6 +1441,58 @@ fn check_mlm1(doctor: &mut Doctor, who: &str, params: &mut MlM1Params) {
             "channel.ml1.range",
             who,
             &format!("{field} (ML-M1)"),
+            value,
+            min,
+            max,
+        );
+    }
+}
+
+/// The ML-P8's amplitude envelope and its network amounts. The oscillator
+/// blocks go through the shared check; everything below the envelope is this
+/// device's own, and the modulation amounts are signed percent rather than the
+/// unit ranges the other synths use.
+fn check_mlp8(doctor: &mut Doctor, who: &str, params: &mut MlP8Params) {
+    check_oscillators(doctor, who, "ML-P8", &mut params.osc);
+    let mut fields: Vec<(String, &mut f32, f32, f32)> = vec![
+        ("the attack".into(), &mut params.attack, 0.0, 10.0),
+        ("the decay".into(), &mut params.decay, 0.0, 10.0),
+        ("the sustain".into(), &mut params.sustain, 0.0, 1.0),
+        ("the release".into(), &mut params.release, 0.0, 10.0),
+        ("the glide".into(), &mut params.glide, 0.0, 10.0),
+        ("the sub level".into(), &mut params.sub_level, 0.0, 1.0),
+        ("the noise level".into(), &mut params.noise_level, 0.0, 1.0),
+        (
+            "the noise colour".into(),
+            &mut params.noise_color,
+            -100.0,
+            100.0,
+        ),
+    ];
+    for (index, amount) in params.xmod.iter_mut().enumerate() {
+        fields.push((format!("cross-modulation amount {}", index + 1), amount, -100.0, 100.0));
+    }
+    for (index, amount) in params.noise_to_osc.iter_mut().enumerate() {
+        fields.push((
+            format!("the noise amount into oscillator {}", index + 1),
+            amount,
+            -100.0,
+            100.0,
+        ));
+    }
+    for (index, amount) in params.osc_feedback.iter_mut().enumerate() {
+        fields.push((
+            format!("oscillator {}'s feedback", index + 1),
+            amount,
+            -100.0,
+            100.0,
+        ));
+    }
+    for (field, value, min, max) in fields {
+        doctor.fit(
+            "channel.mlp8.range",
+            who,
+            &format!("{field} (ML-P8)"),
             value,
             min,
             max,
