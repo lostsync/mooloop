@@ -979,6 +979,78 @@ mod tests {
         );
     }
 
+    /// Stretch settings survive a save, and -- the part that actually
+    /// matters -- a song written before they existed still loads, with
+    /// stretch off and the ratio at unity.
+    ///
+    /// Asserted against TOML with the keys physically absent rather than
+    /// against a struct with defaults filled in, because a `#[serde(default)]`
+    /// that is never exercised by a document missing the key is not evidence
+    /// of anything.
+    #[test]
+    fn stretch_settings_round_trip_and_older_songs_load_without_them() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        {
+            let state = project.channels[0].setup.sampler_state_mut().unwrap();
+            state.params.stretch_enabled = true;
+            state.params.stretch_mode = mooloop_core::StretchMode::Grain;
+            state.params.stretch_ratio = 6.5;
+            state.params.stretch_grain = 192;
+        }
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let loaded = load_bundle(&bundle).unwrap();
+        assert_eq!(loaded.document, LoadedDocument::Song(project.clone()));
+
+        // What a song saved before this feature actually looks like: no
+        // stretch keys at all.
+        let source = toml::to_string(&project.channels[0].setup.source).unwrap();
+        let legacy: String = source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("stretch_"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !legacy.contains("stretch_"),
+            "the legacy fixture still mentions stretch"
+        );
+
+        let restored: ChannelSource = toml::from_str(&legacy).unwrap();
+        let params = match &restored {
+            ChannelSource::Sampler(state) => state.params,
+            other => panic!("expected a sampler, got {other:?}"),
+        };
+        assert!(!params.stretch_enabled, "an old song must not start stretching");
+        assert_eq!(params.stretch_ratio, 1.0);
+        assert_eq!(params.stretch_grain, 1024);
+        assert_eq!(params.stretch_mode, mooloop_core::StretchMode::Music);
+    }
+
+    /// A hand-edited or corrupted document must be repaired rather than
+    /// refused, like every other out-of-range field.
+    #[test]
+    fn an_out_of_range_stretch_setting_is_repaired() {
+        let mut project = Project::default();
+        {
+            let state = project.channels[0].setup.sampler_state_mut().unwrap();
+            state.params.stretch_ratio = 900.0;
+            state.params.stretch_grain = 3;
+        }
+        let diagnosis = crate::integrity::repair_project(&mut project);
+        assert!(
+            diagnosis
+                .repairs()
+                .any(|issue| issue.code.starts_with("channel.sampler.")),
+            "the out-of-range stretch settings should have been repaired"
+        );
+
+        let params = project.channels[0].setup.sampler_state().unwrap().params;
+        assert_eq!(params.stretch_ratio, mooloop_core::MAX_STRETCH_RATIO);
+        assert_eq!(params.stretch_grain, mooloop_core::MIN_STRETCH_GRAIN);
+    }
+
     #[test]
     fn two_lanes_on_one_destination_are_rejected() {
         let mut project = Project::default();

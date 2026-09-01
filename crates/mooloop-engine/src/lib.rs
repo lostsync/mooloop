@@ -23,7 +23,7 @@ use mooloop_core::{
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, DryAlign, SampleData,
-    SpectrumAnalyzer, SPECTRUM_BINS,
+    SpectrumAnalyzer, StretchPool, SPECTRUM_BINS,
 };
 use rtrb::{Consumer, Producer};
 
@@ -98,6 +98,19 @@ pub enum StructuralCommand {
         storage: Box<ChannelStorage>,
         source: DeviceKind,
     },
+    /// Give a channel's sampler its time-stretch state, or take it away.
+    ///
+    /// Structural rather than a parameter because the pool is ~1.6 MB and has
+    /// to be allocated on this thread; `Sampler::set_params` runs on the
+    /// realtime command drain and must not allocate. `SamplerParams::
+    /// stretch_enabled` records the intent this command realizes, and a
+    /// sampler whose intent is on but whose pool has not arrived plays
+    /// unstretched rather than falling silent -- so the two can be applied in
+    /// either order.
+    SetSamplerStretch {
+        channel: u8,
+        pool: Option<Box<StretchPool>>,
+    },
 }
 
 /// GUI -> audio for the sample browser's audition voice. Owned here rather
@@ -123,6 +136,10 @@ pub(crate) enum StructuralReclaim {
     /// ownership round trip as an effect node: the sample's last reference
     /// must not be dropped on the realtime thread.
     PreviewSample { sample: Arc<SampleData> },
+    /// Stretch state displaced by an install, or surrendered when a sampler
+    /// stopped stretching. Same reason as the rest: megabytes of `Box` must
+    /// not be freed on the audio thread.
+    SamplerStretch(Box<StretchPool>),
 }
 
 /// A project that has already been instantiated and allocated off the audio
@@ -388,6 +405,7 @@ impl EngineHandle {
                 StructuralReclaim::Effect(effect) => drop(effect),
                 StructuralReclaim::RenderState(render) => drop(render),
                 StructuralReclaim::PreviewSample { sample } => drop(sample),
+                StructuralReclaim::SamplerStretch(pool) => drop(pool),
             }
         }
         loop {

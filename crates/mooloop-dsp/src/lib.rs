@@ -50,9 +50,12 @@ pub mod sampler;
 pub mod scale;
 pub mod shaper;
 pub mod smooth;
+pub mod stretch;
+
 mod synth_voice;
 
 pub use align::DryAlign;
+pub use stretch::{StretchPool, StretchReader, Stretcher};
 pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};
 pub use buffer_device::{buffer_allocation_key, BufferDevice, TimedBufferEvent};
 pub use modulator::{ModulatorRack, NoteGateEvents, CONTROL_RATE_FRAMES};

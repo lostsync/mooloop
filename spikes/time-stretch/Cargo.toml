@@ -1,0 +1,21 @@
+[package]
+name = "mooloop-spike-time-stretch"
+description = "Throwaway comparison harness for issue #32. Not shipped."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "stretch-spike"
+path = "src/main.rs"
+
+[dependencies]
+# Spike-only. Neither dependency is proposed for a production crate: `hound`
+# is already in the workspace lock for WAV export, and `rustfft` exists here
+# so the phase-vocoder candidate is measured with the same FFT a real
+# implementation would use, rather than a hand-rolled one that would make the
+# rejected option look slower than it is.
+hound = "3"
+rustfft = "6"

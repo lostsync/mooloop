@@ -472,6 +472,12 @@ export component ParameterKnob inherits Rectangle {
     in property <bool> bipolar;
     in property <length> diameter: 44px;
     in property <color> fill: Theme.accent;
+    // A knob normally carries its own name and value, stacked above and
+    // below the face. A caller that already shows both -- a row that puts the
+    // label and an editable field beside the knob -- turns them off here
+    // rather than drawing them twice and paying three rows of height for it.
+    in property <bool> show-label: true;
+    in property <bool> show-value-text: true;
     // Callers opt only legal, continuous destinations into this mode. While
     // active, every ordinary knob gesture adjusts this source's route depth
     // and leaves `value` — the authored base — untouched.
@@ -494,8 +500,8 @@ export component ParameterKnob inherits Rectangle {
     private property <float> normalized: root.normalized-value(root.value);
     private property <bool> modulation-active: root.modulation-armed && root.modulation-allowed;
 
-    width: 56px;
-    height: 80px;
+    width: root.show-label ? 56px : root.diameter;
+    height: root.show-label || root.show-value-text ? 80px : root.diameter;
     accessible-role: slider;
     accessible-label: root.tooltip;
     accessible-value: root.value-text;
@@ -547,7 +553,7 @@ export component ParameterKnob inherits Rectangle {
         spacing: 3px;
         alignment: center;
 
-        Text {
+        if root.show-label : Text {
             text: root.label;
             color: !root.enabled ? Theme.text-faint
                 : root.modulation-active ? Theme.warning : Theme.text-muted;
@@ -579,7 +585,7 @@ export component ParameterKnob inherits Rectangle {
             }
         }
 
-        Rectangle {
+        if root.show-value-text : Rectangle {
             width: root.width;
             height: 16px;
             ValueReadout {
@@ -657,6 +663,135 @@ export component ParameterKnob inherits Rectangle {
     // knob's tooltip exists to confirm the exact value, not restate itself.
     Tooltip { text: @markdown("\{root.value-text}"); }
 }
+
+/// One row: a name, a small knob, and a typed field -- `Tune o [      ]`.
+///
+/// The knob keeps the whole modulation contract -- arming, depth drag, route
+/// count, the live offset readout -- because that machinery is bound to the
+/// knob gesture and splitting it would mean two places that can disagree
+/// about what a parameter's base value is. The field is a plain text entry
+/// over the same value, for the cases a knob is bad at: typing an exact
+/// number, or reading one back without hovering.
+///
+/// The field commits on Enter or on losing focus, and reverts to the
+/// authoritative text on anything it cannot parse. It deliberately does not
+/// participate in modulation arming: while a source is armed the knob edits
+/// route depth rather than the base, and a text box that quietly wrote the
+/// base underneath that would be a trap.
+export component KnobField inherits Rectangle {
+    in property <string> label;
+    in property <string> tooltip: root.label;
+    /// What the field shows when it is not being edited. The caller formats
+    /// it, so units and precision stay wherever the rest of that parameter's
+    /// formatting lives.
+    in property <string> display-text;
+    in-out property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> default-value: root.minimum;
+    in property <float> step: 0;
+    in property <ValueScale> scale: ValueScale.linear;
+    in property <bool> bipolar;
+    in property <length> diameter: 30px;
+    in property <length> label-width: 34px;
+    in property <length> field-width: 62px;
+    in property <bool> modulation-armed;
+    in property <bool> modulation-allowed: true;
+    in-out property <float> modulation-depth;
+    in property <float> modulation-offset;
+    in property <int> modulation-route-count;
+    callback changed(float);
+    /// The typed string, unparsed. Rust owns the parsing: it already owns the
+    /// formatting, and a unit-aware parser written twice in two languages is
+    /// a unit-aware parser that disagrees with itself.
+    callback text-committed(string);
+    callback modulation-depth-changed(float);
+    callback modulation-edit-started();
+    callback modulation-edit-finished();
+
+    // Placed rather than laid out, because the three parts have to line up on
+    // one baseline and a layout that stretches any of them vertically breaks
+    // that. The height is the knob's, so a row of these costs one knob.
+    height: max(root.diameter, 20px);
+    width: root.label-width + root.diameter + root.field-width + 9px;
+
+    Text {
+        x: 0;
+        y: 0;
+        width: root.label-width;
+        height: root.height;
+        text: root.label;
+        color: root.modulation-armed && root.modulation-allowed
+            ? Theme.warning : Theme.text-muted;
+        font-size: 9px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    knob := ParameterKnob {
+        x: root.label-width + 4px;
+        y: (root.height - self.height) / 2;
+        // The name is in this row's own label and the value is in the field
+        // beside it; the knob draws neither again.
+        show-label: false;
+        show-value-text: false;
+        diameter: root.diameter;
+        label: root.label;
+        tooltip: root.tooltip;
+        value <=> root.value;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        default-value: root.default-value;
+        step: root.step;
+        scale: root.scale;
+        bipolar: root.bipolar;
+        value-text: root.display-text;
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed;
+        modulation-depth <=> root.modulation-depth;
+        modulation-offset: root.modulation-offset;
+        modulation-route-count: root.modulation-route-count;
+        changed(v) => { root.changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(v); }
+        modulation-edit-started => { root.modulation-edit-started(); }
+        modulation-edit-finished => { root.modulation-edit-finished(); }
+    }
+
+    Rectangle {
+        x: root.label-width + root.diameter + 9px;
+        y: (root.height - self.height) / 2;
+        width: root.field-width;
+        height: 20px;
+        border-radius: Theme.radius-md;
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: entry.has-focus ? Theme.accent : Theme.border;
+        accessible-role: text-input;
+        accessible-label: root.tooltip;
+
+        entry := TextInput {
+            x: 4px;
+            width: parent.width - 8px;
+            height: 100%;
+            // Rebinds whenever the caller's text changes, which is what pulls
+            // the field back into agreement after a knob drag or a modulated
+            // value lands.
+            text: root.display-text;
+            color: Theme.text;
+            font-size: 9px;
+            font-family: "monospace";
+            single-line: true;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            accepted => {
+                root.text-committed(self.text);
+                self.clear-focus();
+            }
+            edited => { }
+        }
+    }
+}
+
 
 // Delay time can be a free-running millisecond value or one of a short,
 // visible set of musical divisions. The audio-facing value remains the same

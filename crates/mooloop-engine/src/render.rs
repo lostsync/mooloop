@@ -10,7 +10,7 @@ use mooloop_core::{
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
     SamplerParams,
-    DEFAULT_STEPS, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
+    DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
 #[cfg(test)]
@@ -18,14 +18,14 @@ use mooloop_dsp::build_effect;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, DrumSynth,
     DryAlign, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8, NoteGateEvents, PolySynth,
-    ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, TimedEvent,
+    ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, StretchPool, TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
 };
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
-use crate::{PreviewCommand, StructuralCommand};
+use crate::{PreviewCommand, StructuralCommand, StructuralReclaim};
 
 /// A displaced effect-slot occupant: the node plus the dry-align delay the
 /// container allocated alongside it. Both halves are heap objects built on
@@ -969,11 +969,31 @@ impl ChannelStrip {
         self.destination = MASTER_BUS;
     }
 
-    fn load_source(&mut self, source: &ChannelSource) {
+    /// Install a channel's source device state.
+    ///
+    /// Takes `sample_rate` because the sampler's stretch pool is sized to it
+    /// and provisioned here. That is safe precisely because `load_project`
+    /// only ever runs while a `RenderState` is being prepared on the control
+    /// thread or for an offline render -- never from the audio callback -- so
+    /// this is the one path that may allocate the pool inline instead of
+    /// installing it structurally.
+    fn load_source(&mut self, source: &ChannelSource, sample_rate: u32) {
         self.reset_sources_to_defaults(source.kind());
         self.source_base = match source {
             ChannelSource::Sampler(state) => {
                 self.sampler.set_params(state.params);
+                // Reconcile intent with state, so a saved project plays
+                // stretched from its first note rather than after a round
+                // trip through the structural queue.
+                if state.params.stretch_enabled {
+                    self.sampler.install_stretch(Box::new(StretchPool::new(
+                        state.params.stretch_mode,
+                        sample_rate,
+                        MAX_SAMPLER_VOICES as usize,
+                    )));
+                } else {
+                    self.sampler.take_stretch();
+                }
                 GeneratorParams::Sampler(state.params)
             }
             ChannelSource::DrumSynth(state) => {
@@ -1398,7 +1418,7 @@ impl RenderState {
         self.sequencer.load_project(project);
         for (index, strip) in self.strips.iter_mut().enumerate() {
             if let Some(channel) = project.channels.get(index) {
-                strip.load_source(&channel.setup.source);
+                strip.load_source(&channel.setup.source, self.sample_rate);
                 strip.output.muted = channel.setup.channel.muted;
                 strip.output.set_volume(channel.setup.channel.volume);
                 strip.output.set_pan(channel.setup.channel.pan);
@@ -1643,7 +1663,14 @@ impl RenderState {
     /// the realtime thread from the ordered control stream; the boxes
     /// themselves were allocated on the control thread. Returns whatever the
     /// edit displaced, so the caller can hand it to the reclaim ring.
-    pub(crate) fn apply_structural(&mut self, cmd: StructuralCommand) -> Option<ReclaimedEffect> {
+    /// Apply a structural edit, returning whatever it displaced so the caller
+    /// can send it back for off-thread disposal. Returns the reclaim variant
+    /// rather than a bare effect, because not everything structural is an
+    /// effect any more.
+    pub(crate) fn apply_structural(
+        &mut self,
+        cmd: StructuralCommand,
+    ) -> Option<StructuralReclaim> {
         match cmd {
             StructuralCommand::InstallEffect {
                 target,
@@ -1676,6 +1703,8 @@ impl RenderState {
                         channel: None,
                     })
                 }
+                .filter(|displaced| !displaced.is_empty())
+                .map(StructuralReclaim::Effect)
             }
             StructuralCommand::ReplaceEffect {
                 target,
@@ -1704,17 +1733,19 @@ impl RenderState {
                         channel: None,
                     })
                 }
+                .filter(|displaced| !displaced.is_empty())
+                .map(StructuralReclaim::Effect)
             }
             StructuralCommand::AddChannel { storage, source } => {
                 let channel = self.sequencer.active_channels();
                 if channel >= MAX_CHANNELS {
-                    return Some(ReclaimedEffect {
+                    return Some(StructuralReclaim::Effect(ReclaimedEffect {
                         node: None,
                         align: None,
                         analyzer: None,
                         state: None,
                         channel: Some(storage),
-                    });
+                    }));
                 }
                 // The graph only grows. A channel removed earlier left its
                 // storage behind, so this may already have somewhere to go —
@@ -1728,19 +1759,36 @@ impl RenderState {
                 self.set_channel_modulation(channel, ModRack::default());
                 self.sequencer.clear_channel(channel);
                 self.sequencer.set_active_channels(channel + 1);
-                returned.map(|storage| ReclaimedEffect {
-                    node: None,
-                    align: None,
-                    analyzer: None,
-                    state: None,
-                    channel: Some(storage),
-                })
+                returned
+                    .map(|storage| ReclaimedEffect {
+                        node: None,
+                        align: None,
+                        analyzer: None,
+                        state: None,
+                        channel: Some(storage),
+                    })
+                    .map(StructuralReclaim::Effect)
             }
             StructuralCommand::RemoveEffect { target, slot } => {
                 Self::chain_for(&mut self.strips, &mut self.buses, target)
                     .map(|chain| chain.remove(slot as usize))
             }
-            .filter(|displaced| !displaced.is_empty()),
+            .filter(|displaced| !displaced.is_empty())
+            .map(StructuralReclaim::Effect),
+            StructuralCommand::SetSamplerStretch { channel, pool } => {
+                let Some(strip) = self.strips.get_mut(channel as usize) else {
+                    // Nothing to install into. Hand the pool straight back
+                    // rather than dropping it here -- this is the realtime
+                    // thread, and an unaddressable channel is not a reason to
+                    // free 1.6 MB on it.
+                    return pool.map(StructuralReclaim::SamplerStretch);
+                };
+                match pool {
+                    Some(pool) => strip.sampler.install_stretch(pool),
+                    None => strip.sampler.take_stretch(),
+                }
+                .map(StructuralReclaim::SamplerStretch)
+            }
         }
     }
 
@@ -2624,6 +2672,110 @@ mod tests {
     /// audible source, not specifically sampler behavior — point a sampler
     /// channel at the legacy builtin kick the same way an old saved project
     /// would.
+    /// A saved project that stretches must play stretched from its first
+    /// note. `load_project` runs on the control thread, so it provisions the
+    /// pool inline rather than waiting for a round trip through the
+    /// structural queue.
+    #[test]
+    fn loading_a_project_provisions_the_stretch_it_asks_for() {
+        let mut project = synth_project(ProjectChannel::sampler(0, 1));
+        if let Some(state) = project.channels[0].setup.sampler_state_mut() {
+            state.params.stretch_enabled = true;
+            state.params.stretch_ratio = 2.0;
+        }
+        let render = RenderState::from_project(48_000, &project, &[]);
+        assert!(render.strips[0].sampler.has_stretch());
+        assert!(render.strips[0].sampler.wants_stretch());
+        // Channels the project does not describe are not provisioned because
+        // they are not built at all -- a stronger statement than "built and
+        // left empty", and the one the graph actually makes now.
+        assert_eq!(render.strips.len(), 1);
+    }
+
+    /// The inverse, which is the part that actually saves the memory: a
+    /// project that does not stretch must not carry the state for it.
+    #[test]
+    fn loading_a_project_without_stretch_provisions_nothing() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let render = RenderState::from_project(48_000, &project, &[]);
+        assert!(!render.strips[0].sampler.has_stretch());
+    }
+
+    /// Installing and removing through the structural path, with the displaced
+    /// state coming back rather than being freed on the audio thread.
+    #[test]
+    fn the_structural_path_installs_and_reclaims_stretch_state() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+
+        let installed = render.apply_structural(StructuralCommand::SetSamplerStretch {
+            channel: 0,
+            pool: Some(Box::new(StretchPool::new(
+                mooloop_core::StretchMode::Music,
+                48_000,
+                MAX_SAMPLER_VOICES as usize,
+            ))),
+        });
+        assert!(installed.is_none(), "nothing was displaced by the first install");
+        assert!(render.strips[0].sampler.has_stretch());
+
+        let replaced = render.apply_structural(StructuralCommand::SetSamplerStretch {
+            channel: 0,
+            pool: Some(Box::new(StretchPool::new(
+                mooloop_core::StretchMode::Grain,
+                48_000,
+                MAX_SAMPLER_VOICES as usize,
+            ))),
+        });
+        assert!(
+            matches!(replaced, Some(StructuralReclaim::SamplerStretch(_))),
+            "the displaced pool must be handed back, not dropped here"
+        );
+
+        let removed = render.apply_structural(StructuralCommand::SetSamplerStretch {
+            channel: 0,
+            pool: None,
+        });
+        assert!(matches!(
+            removed,
+            Some(StructuralReclaim::SamplerStretch(_))
+        ));
+        assert!(!render.strips[0].sampler.has_stretch());
+    }
+
+    /// `apply_structural` hands the pool back when the channel does not
+    /// exist, because dropping it would free megabytes on the realtime
+    /// thread.
+    ///
+    /// That guard was written when it could not fire: `MAX_CHANNELS` is 256
+    /// and the command addresses channels with a `u8`, so every address was
+    /// backed by a strip that had been reserved up front. Reserving them
+    /// stopped (`docs/plans/modulator-capacity/`) -- the graph now builds
+    /// only the channels a project describes -- so an in-range `u8` can
+    /// address a strip that is simply not there, and the guard became load
+    /// bearing rather than defensive. This is the case that reaches it.
+    #[test]
+    fn a_pool_aimed_at_a_channel_that_does_not_exist_comes_back() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        // Addressable, and beyond what this project materialized.
+        assert!(usize::from(u8::MAX) < MAX_CHANNELS);
+        assert!(render.strips.len() <= usize::from(u8::MAX));
+
+        let turned_away = render.apply_structural(StructuralCommand::SetSamplerStretch {
+            channel: u8::MAX,
+            pool: Some(Box::new(StretchPool::new(
+                mooloop_core::StretchMode::Music,
+                48_000,
+                1,
+            ))),
+        });
+        assert!(
+            matches!(turned_away, Some(StructuralReclaim::SamplerStretch(_))),
+            "a pool with nowhere to go must be handed back, not freed here"
+        );
+    }
+
     fn synth_project(mut channel: ProjectChannel) -> Project {
         if let Some(sampler) = channel.setup.sampler_state_mut() {
             sampler.sample = mooloop_core::SampleReference::Builtin {
@@ -4630,10 +4782,11 @@ mod footprint {
         // paid for on every live channel whether or not anything uses it.
         // The ML-P8's eight voices are 2,016 bytes of it -- a voice carries
         // three oscillators, their modulation taps and sync carries, a sub,
-        // and coloured noise -- and the strip grew by 2,656 because adding it
-        // also moved the padding between its neighbours.
+        // and coloured noise. Sampler stretch adds another 160 bytes for its
+        // pool pointer, tempo, and per-voice struck pitches; the ~1.6 MB pool
+        // itself is allocated only when a sampler asks for stretching.
         assert_eq!(size_of::<MlP8>(), 2_016);
-        assert_eq!(size_of::<ChannelStrip>(), 30_168);
+        assert_eq!(size_of::<ChannelStrip>(), 30_328);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -4644,14 +4797,13 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 48_608);
+        assert_eq!(per_live, 48_768);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
         // it by 41 KiB, which is what a device costs now: linear in the
         // channels a project has rather than in the channels it could address.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_198);
+        assert_eq!((fixed + per_live * 16) / 1024, 1_201);
     }
 }
-
 

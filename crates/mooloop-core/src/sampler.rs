@@ -44,6 +44,91 @@ impl LoopMode {
     }
 }
 
+/// How the time stretcher sizes its window and whether it looks for a splice
+/// point.
+///
+/// `Grain` is not a lower quality than the other two. The similarity search
+/// places every join where the waveform continues coherently; declining to
+/// search leaves a phase discontinuity once per hop, which is the rattling,
+/// woodblock character of a break stretched far past musical range. That is a
+/// sound people reach for, so it is a mode rather than a failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StretchMode {
+    /// ~21 ms window, search on. Transparent, and the only mode that
+    /// preserves a low fundamental.
+    #[default]
+    Music,
+    /// ~11 ms window, search on. Sharper transients; destroys bass, so it is
+    /// percussion-only.
+    Drums,
+    /// Free window, no search. The artifact mode.
+    Grain,
+}
+
+impl StretchMode {
+    pub fn all() -> [StretchMode; 3] {
+        [StretchMode::Music, StretchMode::Drums, StretchMode::Grain]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            StretchMode::Music => "Music",
+            StretchMode::Drums => "Drums",
+            StretchMode::Grain => "Grain",
+        }
+    }
+}
+
+/// Bar-count bounds for tempo-synced stretching.
+pub const MIN_STRETCH_BARS: f32 = 0.0625;
+pub const MAX_STRETCH_BARS: f32 = 64.0;
+
+/// Snap a length in bars to the nearer power of two.
+///
+/// The rule, in Adam's words: find the power-of-two bracket the length falls
+/// in and take whichever end it is closer to -- one bar or two, two or four,
+/// four or eight. The split is the *arithmetic* midpoint, so 1.5 bars rounds
+/// up to 2 and 2.9 rounds down to 2, and it generalizes below a bar so a
+/// half-bar chop lands on 1/2 rather than being dragged up to 1.
+///
+/// This is what a freshly enabled fit-to-tempo guesses. A loop is nearly
+/// always some power of two of bars, and the length it was recorded at is
+/// nearly always slightly off that, so guessing well is the difference
+/// between the feature working on the first click and needing a knob turn
+/// every time.
+pub fn snap_bars_to_power_of_two(bars: f32) -> f32 {
+    if !bars.is_finite() || bars <= 0.0 {
+        return 1.0;
+    }
+    let bars = bars.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS);
+    let low = bars.log2().floor().exp2();
+    let high = low * 2.0;
+    let snapped = if bars >= (low + high) * 0.5 { high } else { low };
+    snapped.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS)
+}
+
+/// Frames in one bar at a tempo. Four beats to the bar, matching the
+/// convention the buffer device already uses -- `beats_per_bar` is project
+/// metadata the audio thread is not given, and inventing a second answer here
+/// would put two devices on different grids.
+pub fn frames_per_bar(sample_rate: u32, bpm: f64) -> f64 {
+    f64::from(sample_rate) * 240.0 / bpm.max(1.0)
+}
+
+/// Stretch ratio bounds. Output frames per input frame, so above 1.0 is
+/// slower. The ceiling is far past the range that stays clean, on purpose --
+/// extreme slow-down is a destination, and the cost does not grow with the
+/// ratio.
+pub const MIN_STRETCH_RATIO: f32 = 0.25;
+pub const MAX_STRETCH_RATIO: f32 = 16.0;
+
+/// Grain window bounds, in frames. The repetition sits at
+/// `sample_rate / (grain / 2)`, so this is a pitch control: at 48 kHz the
+/// range buzzes from about 23 Hz to 1.5 kHz.
+pub const MIN_STRETCH_GRAIN: u16 = 64;
+pub const MAX_STRETCH_GRAIN: u16 = 4096;
+
 /// How note-off events affect sample playback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -158,6 +243,18 @@ pub struct SamplerParams {
     pub tune_semitones: f32,
     /// Fine tuning offset in cents.
     pub tune_cents: f32,
+    /// Whether a change to `tune_semitones`/`tune_cents` (by hand or by
+    /// modulation) is heard on every currently sounding voice, or only on the
+    /// next one triggered.
+    ///
+    /// On is the musically ordinary choice -- it is what makes a tune knob
+    /// behave like a tune knob while a note is held, and what a pitch
+    /// modulation route needs to be audible at all rather than silently doing
+    /// nothing until the next note-on. Off reproduces the sampler's original
+    /// behavior, for anyone who was relying on a held note's pitch staying
+    /// put under an unrelated tune edit.
+    #[serde(default = "default_retune_live")]
+    pub retune_live: bool,
     /// Loop start point as a fraction.
     pub loop_start: f32,
     /// Loop end point as a fraction.
@@ -190,6 +287,43 @@ pub struct SamplerParams {
     /// generators instead of well above them.
     #[serde(default = "legacy_output_gain")]
     pub output_gain: f32,
+    /// Whether this sampler stretches at all.
+    ///
+    /// Unlike every other field here, turning this on cannot take effect from
+    /// the realtime command drain: the stretch state is about 1.6 MB per
+    /// sampler and has to be allocated on the control thread, then installed
+    /// structurally. So this records *intent*, and the engine reconciles it by
+    /// provisioning or reclaiming the pool. A sampler whose intent is on but
+    /// whose pool has not arrived yet simply plays unstretched, which is the
+    /// same thing it did the frame before.
+    #[serde(default)]
+    pub stretch_enabled: bool,
+    /// Window sizing and whether the splice point is searched for.
+    #[serde(default)]
+    pub stretch_mode: StretchMode,
+    /// Output frames per input frame. Above 1.0 is slower.
+    #[serde(default = "unity_stretch_ratio")]
+    pub stretch_ratio: f32,
+    /// Grain window in frames, used only by [`StretchMode::Grain`]. Free and
+    /// continuous because it is a timbre, not a quality setting.
+    #[serde(default = "default_stretch_grain")]
+    pub stretch_grain: u16,
+    /// Fit the loop to the project tempo instead of using `stretch_ratio`
+    /// directly.
+    ///
+    /// When this is on the ratio is *derived*, not set: the region is made to
+    /// last `stretch_bars` bars whatever the tempo and whatever the voice is
+    /// transposed to. That last part is the point -- the playback rate enters
+    /// the derivation, so pitching a voice up shortens nothing. Pitch and
+    /// duration become genuinely independent controls, which is the whole
+    /// reason to have a stretcher at all.
+    #[serde(default)]
+    pub stretch_sync: bool,
+    /// How many bars the region should last when `stretch_sync` is on.
+    /// Seeded by [`snap_bars_to_power_of_two`] when the feature is switched
+    /// on, then free to edit.
+    #[serde(default = "default_stretch_bars")]
+    pub stretch_bars: f32,
     /// The filter envelope's own stages, or `None` to follow the amplitude
     /// envelope.
     ///
@@ -203,6 +337,22 @@ pub struct SamplerParams {
     /// see its siblings.
     #[serde(default)]
     pub filter_env: Option<EnvTimes>,
+}
+
+fn default_retune_live() -> bool {
+    true
+}
+
+fn unity_stretch_ratio() -> f32 {
+    1.0
+}
+
+fn default_stretch_grain() -> u16 {
+    1024
+}
+
+fn default_stretch_bars() -> f32 {
+    1.0
 }
 
 /// The trim a project saved before the field existed plays at. Those mixes
@@ -225,6 +375,7 @@ impl Default for SamplerParams {
             root_note: 60,
             tune_semitones: 0.0,
             tune_cents: 0.0,
+            retune_live: true,
             loop_start: 0.0,
             loop_end: 1.0,
             loop_mode: LoopMode::Off,
@@ -239,6 +390,12 @@ impl Default for SamplerParams {
             bit_reduction: 0.0,
             rate_reduction: 0.0,
             output_gain: default_output_gain(),
+            stretch_enabled: false,
+            stretch_mode: StretchMode::Music,
+            stretch_ratio: 1.0,
+            stretch_grain: 1024,
+            stretch_sync: false,
+            stretch_bars: 1.0,
             filter_env: None,
         }
     }
@@ -349,5 +506,67 @@ rate_reduction = 0.0
         assert_eq!(loaded.amp_env().decay, 1.5);
         assert_eq!(loaded.resolved_filter_env().decay, 0.01);
         assert_eq!(loaded.resolved_filter_env().attack, 0.3, "seeded from amp");
+    }
+}
+
+#[cfg(test)]
+mod stretch_tests {
+    use super::*;
+
+    /// The snapping rule, spelled out from the examples it was specified
+    /// with: whichever end of the power-of-two bracket the length is nearer,
+    /// split at the arithmetic midpoint.
+    #[test]
+    fn a_loop_length_snaps_to_the_nearer_power_of_two_bars() {
+        // The boundary cases the rule was described by.
+        assert_eq!(snap_bars_to_power_of_two(1.49), 1.0);
+        assert_eq!(snap_bars_to_power_of_two(1.5), 2.0);
+        assert_eq!(snap_bars_to_power_of_two(2.99), 2.0);
+        assert_eq!(snap_bars_to_power_of_two(3.0), 4.0);
+        assert_eq!(snap_bars_to_power_of_two(5.99), 4.0);
+        assert_eq!(snap_bars_to_power_of_two(6.0), 8.0);
+
+        // Exact lengths stay put rather than drifting to a neighbour.
+        for bars in [0.25f32, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0] {
+            assert_eq!(snap_bars_to_power_of_two(bars), bars, "{bars} moved");
+        }
+
+        // A slightly long or short recording lands on the intended length,
+        // which is the case the whole rule exists for.
+        assert_eq!(snap_bars_to_power_of_two(2.02), 2.0);
+        assert_eq!(snap_bars_to_power_of_two(3.97), 4.0);
+    }
+
+    /// It generalizes below a bar, so a half-bar chop is not dragged up to a
+    /// whole one.
+    #[test]
+    fn the_rule_holds_below_a_single_bar() {
+        assert_eq!(snap_bars_to_power_of_two(0.6), 0.5);
+        assert_eq!(snap_bars_to_power_of_two(0.8), 1.0);
+        assert_eq!(snap_bars_to_power_of_two(0.3), 0.25);
+        assert_eq!(snap_bars_to_power_of_two(0.4), 0.5);
+    }
+
+    /// Nonsense in, something usable out. This runs off a measured sample
+    /// length, and an empty or unloaded sample measures zero.
+    #[test]
+    fn a_meaningless_length_snaps_to_one_bar() {
+        assert_eq!(snap_bars_to_power_of_two(0.0), 1.0);
+        assert_eq!(snap_bars_to_power_of_two(-3.0), 1.0);
+        assert_eq!(snap_bars_to_power_of_two(f32::NAN), 1.0);
+        // Infinity falls in with the other nonsense rather than clamping to
+        // the ceiling: a 64-bar guess from a broken measurement would be a
+        // worse answer than one bar, not a better one.
+        assert_eq!(snap_bars_to_power_of_two(f32::INFINITY), 1.0);
+    }
+
+    /// Four beats to the bar, matching the buffer device, and inversely
+    /// proportional to tempo.
+    #[test]
+    fn a_bar_is_four_beats_at_the_project_tempo() {
+        assert_eq!(frames_per_bar(48_000, 120.0), 96_000.0);
+        assert_eq!(frames_per_bar(48_000, 60.0), 192_000.0);
+        // A zero or negative tempo must not divide by zero.
+        assert!(frames_per_bar(48_000, 0.0).is_finite());
     }
 }

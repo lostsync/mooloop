@@ -352,6 +352,18 @@ work session you can recall being part of, and don't stress over precision.
   caveat it could not have known: the skip reads target levels and levels are
   smoothed, so a knob reaching zero un-needs a source while its ramp is still
   running, replacing the ramp with the step the smoother exists to prevent.
+  Investigated the `spike/sampler-time-stretch` spike (#32),
+  found its "build vs. buy" conclusion under-argued, and merged it to `main`
+  once Adam decided to own the build regardless. Built the sampler's #13
+  time-stretch on top of it: a WSOLA unit with a grain mode that leaves the
+  similarity search off on purpose, because the phase-discontinuity rattle
+  it produces at extreme ratios is the target sound (NIN *Year Zero*
+  territory), not an artifact to suppress. Composed the stretcher with the
+  existing transposing reader so pitch and rate are independent controls,
+  moved its ~1.6 MB per-voice state to one device-level pool provisioned off
+  the realtime thread instead of paying it per voice, and added a
+  fit-to-tempo mode that derives the stretch ratio from bars/tempo/playback
+  rate so a sample's loop locks to the grid however it's transposed.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
@@ -362,8 +374,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-26
-- Sessions: 17
+- Last seen: 2026-09-01
+- Sessions: 18
 - Notes: Rounded out the UI mockup tool's palette with the remaining real
   controls (meters, mute/solo, trim knob, device chassis), fixed its
   selection tab and click-vs-drag handling, and wired a launcher into
@@ -396,6 +408,14 @@ work session you can recall being part of, and don't stress over precision.
   fixed the response curve's Q falloff, made coincident band points
   separately clickable, and fixed a drag-test harness bug where a fixed
   Window width/height literal silently ignored `set_size()` in tests.
+  Sampler bugfix pass: fixed a browser-load race where a channel's own
+  default-sample reset could overwrite the file the user had just picked,
+  reworked the pitch-and-speed group's layout after a knob/field composition
+  bug clipped its own controls off the face, and made a sampler's tuning
+  live -- it was baked into a voice's playback rate once at trigger and
+  never revisited, so retuning a held or looping note (by hand or by
+  modulation) silently did nothing until the next note-on. Added an opt-out
+  toggle for the old per-trigger behavior, defaulting to live.
 
 ### GLM 5.3 Flash (glm-5.3-flash) — opencode
 - First seen: 2026-08-23
@@ -443,8 +463,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### GPT-5 — Codex
 - First seen: 2026-08-21
-- Last seen: 2026-08-30
-- Sessions: 72
+- Last seen: 2026-09-01
+- Sessions: 73
 - Notes: Audio-core architecture, realtime project swaps, compiled bus graphs,
   latency/gain hardening, device-host controls, command-history foundation, and
   realtime capacity policy, mixer signal-slot design, CI, packaging, and the
@@ -461,6 +481,8 @@ work session you can recall being part of, and don't stress over precision.
   Refocused the active work on distinct Mono and Poly identities followed by
   the Buffer's ordinary composition workflow. Integrated the composable-device
   unit contract with the existing realtime and modulation architecture.
+  Reconciled and merged the local ML-P8 work with the newer sampler
+  time-stretch history on GitHub main.
 
 ### GPT-5.6 Terra — Zed
 - First seen: 2026-08-23

@@ -755,6 +755,7 @@ export component MainWindow inherits Window {
     in-out property <float> tune-semitones;
     in-out property <float> tune-cents;
     in-out property <string> tune-label;
+    in-out property <bool> retune-live;
     in-out property <float> filter-cutoff;
     in-out property <float> filter-resonance;
     in-out property <float> filter-env;
@@ -773,6 +774,16 @@ export component MainWindow inherits Window {
     in-out property <int> sampler-polyphony: 1;
     in-out property <int> retrigger-mode;   // 0=Restart 1=Layer
     in-out property <int> choke-group;
+    in-out property <bool> stretch-enabled;
+    in-out property <int> stretch-mode;
+    in-out property <float> stretch-ratio: 0.3333;
+    in-out property <string> stretch-ratio-label;
+    in-out property <float> stretch-grain: 0.6667;
+    in-out property <string> stretch-grain-label;
+    in-out property <bool> stretch-ratio-clean: true;
+    in-out property <bool> stretch-sync;
+    in-out property <float> stretch-bars: 0.4;
+    in-out property <string> stretch-bars-label;
     in-out property <string> sample-name;
     in-out property <string> sample-description;
     in-out property <float> sample-duration;
@@ -801,11 +812,22 @@ export component MainWindow inherits Window {
     callback root-note-changed(int);
     callback tune-semitones-changed(float);
     callback tune-cents-changed(float);
+    callback retune-live-changed(bool);
     callback loop-mode-changed(int);
     callback voice-mode-changed(int);
     callback sampler-polyphony-changed(int);
     callback retrigger-mode-changed(int);
     callback choke-group-changed(int);
+    callback stretch-enabled-changed(bool);
+    callback stretch-mode-changed(int);
+    callback stretch-ratio-changed(float);
+    callback stretch-grain-changed(float);
+    callback stretch-sync-changed(bool);
+    callback stretch-bars-changed(float);
+    callback stretch-ratio-typed(string);
+    callback stretch-bars-typed(string);
+    callback stretch-grain-typed(string);
+    callback tune-typed(string);
     callback filter-cutoff-changed(float);
     callback filter-resonance-changed(float);
     callback filter-env-changed(float);
@@ -2503,6 +2525,7 @@ export component MainWindow inherits Window {
                                                     tune-semitones <=> root.tune-semitones;
                                                     tune-cents <=> root.tune-cents;
                                                     tune-label <=> root.tune-label;
+                                                    retune-live <=> root.retune-live;
                                                     filter-cutoff <=> root.filter-cutoff;
                                                     filter-resonance <=> root.filter-resonance;
                                                     filter-env <=> root.filter-env;
@@ -2525,6 +2548,16 @@ export component MainWindow inherits Window {
                                                     polyphony <=> root.sampler-polyphony;
                                                     retrigger-mode <=> root.retrigger-mode;
                                                     choke-group <=> root.choke-group;
+                                                    stretch-enabled <=> root.stretch-enabled;
+                                                    stretch-mode <=> root.stretch-mode;
+                                                    stretch-ratio <=> root.stretch-ratio;
+                                                    stretch-ratio-label <=> root.stretch-ratio-label;
+                                                    stretch-grain <=> root.stretch-grain;
+                                                    stretch-grain-label <=> root.stretch-grain-label;
+                                                    stretch-ratio-clean <=> root.stretch-ratio-clean;
+                                                    stretch-sync <=> root.stretch-sync;
+                                                    stretch-bars <=> root.stretch-bars;
+                                                    stretch-bars-label <=> root.stretch-bars-label;
                                                     sample-name <=> root.sample-name;
                                                     sample-description <=> root.sample-description;
                                                     waveform <=> root.waveform;
@@ -2549,11 +2582,22 @@ export component MainWindow inherits Window {
                                                     root-note-changed(v) => { root.root-note-changed(v); }
                                                     tune-semitones-changed(v) => { root.tune-semitones-changed(v); }
                                                     tune-cents-changed(v) => { root.tune-cents-changed(v); }
+                                                    retune-live-changed(v) => { root.retune-live-changed(v); }
                                                     loop-mode-changed(v) => { root.loop-mode-changed(v); }
                                                     voice-mode-changed(v) => { root.voice-mode-changed(v); }
                                                     polyphony-changed(v) => { root.sampler-polyphony-changed(v); }
                                                     retrigger-mode-changed(v) => { root.retrigger-mode-changed(v); }
                                                     choke-group-changed(v) => { root.choke-group-changed(v); }
+                                                    stretch-enabled-changed(v) => { root.stretch-enabled-changed(v); }
+                                                    stretch-mode-changed(v) => { root.stretch-mode-changed(v); }
+                                                    stretch-ratio-changed(v) => { root.stretch-ratio-changed(v); }
+                                                    stretch-grain-changed(v) => { root.stretch-grain-changed(v); }
+                                                    stretch-sync-changed(v) => { root.stretch-sync-changed(v); }
+                                                    stretch-bars-changed(v) => { root.stretch-bars-changed(v); }
+                                                    stretch-ratio-typed(t) => { root.stretch-ratio-typed(t); }
+                                                    stretch-bars-typed(t) => { root.stretch-bars-typed(t); }
+                                                    stretch-grain-typed(t) => { root.stretch-grain-typed(t); }
+                                                    tune-typed(t) => { root.tune-typed(t); }
                                                     filter-cutoff-changed(v) => { root.filter-cutoff-changed(v); }
                                                     modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
                                                     modulation-edit-started(p) => { root.source-modulation-edit-started(p); }

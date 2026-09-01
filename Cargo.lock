@@ -2903,6 +2903,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mooloop-spike-time-stretch"
+version = "0.1.1"
+dependencies = [
+ "hound",
+ "rustfft",
+]
+
+[[package]]
 name = "mooloop-ui"
 version = "0.1.1"
 dependencies = [

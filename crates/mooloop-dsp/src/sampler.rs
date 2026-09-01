@@ -21,6 +21,7 @@ use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::filter::apply_drive;
 use crate::interpolate::{Region, RegionEdge, SincTable};
+use crate::stretch::{StretchPool, StretchReader};
 use crate::node::{AudioNode, ProcessContext};
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
@@ -38,6 +39,16 @@ const MIN_STAGE_S: f32 = 1.0e-4;
 /// attached to the sound, long enough that a jump across the whole range --
 /// by hand, by automation, or by modulation -- ramps instead of clicking.
 const OUTPUT_GAIN_SMOOTHING_S: f32 = 0.01;
+
+/// The tune knobs' combined contribution to playback rate, as a multiplier.
+/// Deliberately wider than the descriptor's `[-24, 24]` / `[-100, 100]`
+/// ranges, so a modulation route can still push tuning past what the base
+/// knob alone reaches.
+fn tuning_ratio(params: SamplerParams) -> f64 {
+    let semitones = f64::from(params.tune_semitones.clamp(-48.0, 48.0))
+        + f64::from(params.tune_cents.clamp(-100.0, 100.0)) / 100.0;
+    2.0_f64.powf(semitones / 12.0)
+}
 
 /// Keep the trim inside the shared +12 dB ceiling, and treat a non-finite
 /// value as silence rather than letting it reach the bus.
@@ -220,6 +231,13 @@ struct Voice {
     sample: Option<Arc<SampleData>>,
     play_pos: f64,
     playback_rate: f64,
+    /// `playback_rate` with the tuning knobs' contribution divided back out:
+    /// the sample-rate conversion ratio times the note's own transposition
+    /// from the root key. Fixed for the voice's life, because which note was
+    /// struck does not change; `playback_rate` itself is re-derived from this
+    /// every segment so a tune edit reaches an already-sounding voice. See
+    /// `SamplerParams::retune_live`.
+    key_pitch_ratio: f64,
     direction: f64,
     env: AdsrEnv,
     /// The filter's own envelope, advanced beside the amplitude one.
@@ -248,6 +266,7 @@ impl Voice {
             sample: None,
             play_pos: 0.0,
             playback_rate: 1.0,
+            key_pitch_ratio: 1.0,
             direction: 1.0,
             env: AdsrEnv::new(sample_rate),
             filter_env: AdsrEnv::new(sample_rate),
@@ -270,6 +289,7 @@ impl Voice {
         self.age = 0;
         self.play_pos = 0.0;
         self.playback_rate = 1.0;
+        self.key_pitch_ratio = 1.0;
         self.direction = 1.0;
         self.env = AdsrEnv::new(sample_rate);
         self.env.configure(params.amp_env());
@@ -285,6 +305,18 @@ impl Voice {
     }
 }
 
+/// Everything a voice render needs that is fixed for the whole segment.
+///
+/// Grouped rather than passed loose because they always travel together: the
+/// block is already split at every event, so parameters and transport cannot
+/// change inside one segment by construction.
+#[derive(Clone, Copy)]
+struct VoiceContext {
+    params: SamplerParams,
+    sample_rate: u32,
+    bpm: f64,
+}
+
 /// The sampler node.
 pub struct Sampler {
     sample_slot: Arc<ArcSwapOption<SampleData>>,
@@ -292,6 +324,21 @@ pub struct Sampler {
     sample_rate: u32,
     voices: [Voice; MAX_SAMPLER_VOICES as usize],
     next_age: u64,
+    /// Per-voice time-stretch state, or `None` when this sampler does not
+    /// stretch.
+    ///
+    /// Device-level and optional because a `StretchReader` is ~100 KB and
+    /// every one of the 256 addressable channels builds a `Sampler` with 16
+    /// voices at startup. Held here it costs nothing until used; held in
+    /// `Voice` it would cost hundreds of megabytes for an empty project.
+    /// Installed and reclaimed structurally, never allocated on the audio
+    /// thread -- `set_params` runs on the realtime command drain.
+    stretch: Option<Box<StretchPool>>,
+    /// Last tempo the transport reported. Only read when `stretch_sync` is
+    /// on, where the bar length is what the ratio is derived from. Held here
+    /// because `render_range` splits a block at event offsets and would
+    /// otherwise have to carry it through every split.
+    bpm: f64,
     /// The device's patch-level output trim, lagged so it cannot click.
     ///
     /// One gain for the whole sampler, not one per voice: every voice copies
@@ -327,6 +374,8 @@ impl Sampler {
             sample_rate,
             voices,
             next_age: 1,
+            stretch: None,
+            bpm: 120.0,
             output_gain: Smoothed::new(
                 clamp_output_gain(params.output_gain),
                 OUTPUT_GAIN_SMOOTHING_S,
@@ -380,6 +429,103 @@ impl Sampler {
     /// knob; the engine keeps the knob separately.
     pub fn params(&self) -> SamplerParams {
         self.params
+    }
+
+    /// Whether the patch asks to stretch. This is intent; `has_stretch`
+    /// reports whether the state to do it has actually been installed. The
+    /// engine reconciles the two off the realtime thread.
+    pub fn wants_stretch(&self) -> bool {
+        self.params.stretch_enabled
+    }
+
+    pub fn has_stretch(&self) -> bool {
+        self.stretch.is_some()
+    }
+
+    /// Install prepared stretch state, returning whatever it displaced so the
+    /// caller can hand it back for off-thread disposal. Realtime-safe: this
+    /// moves boxes, it does not allocate or drop.
+    pub fn install_stretch(&mut self, pool: Box<StretchPool>) -> Option<Box<StretchPool>> {
+        self.stretch.replace(pool)
+    }
+
+    /// Surrender the stretch state, for the same round trip in reverse. The
+    /// realtime thread must never be the one to drop it.
+    pub fn take_stretch(&mut self) -> Option<Box<StretchPool>> {
+        self.stretch.take()
+    }
+
+    /// Whether stretching should actually run, as opposed to merely being
+    /// switched on.
+    ///
+    /// Unity ratio in a searching mode is deliberately a bypass: today's
+    /// reader is sample-exact at unity and WSOLA is only *nearly* so, and
+    /// enabling stretch without moving the ratio should not quietly change
+    /// how an existing patch sounds. `Grain` has no such exemption -- its
+    /// character is the point at any ratio.
+    ///
+    /// Reverse and ping-pong are refused rather than approximated. The
+    /// stretcher's analysis pointer only moves forwards, and the spike
+    /// measured neither; the UI disables the combination, and this makes the
+    /// DSP independent of the UI being right about that.
+    fn stretch_is_active(params: SamplerParams) -> bool {
+        params.stretch_enabled
+            && !params.reverse
+            && params.loop_mode != LoopMode::Pingpong
+            && (params.stretch_sync
+                || params.stretch_mode == mooloop_core::StretchMode::Grain
+                || (params.stretch_ratio - 1.0).abs() > 1.0e-4)
+    }
+
+    /// The ratio the stretcher should actually run.
+    ///
+    /// With `stretch_sync` off this is just the knob. With it on the ratio is
+    /// *derived* so the region lasts `stretch_bars` bars, and the derivation
+    /// is the reason pitch and duration stop fighting:
+    ///
+    /// ```text
+    /// output_frames * rate = stretched_frames
+    /// stretched_frames / ratio = source_frames
+    /// ```
+    ///
+    /// so holding `output_frames` at a musical length while `source_frames`
+    /// is fixed at the region means `ratio = target * rate / region`. The
+    /// playback rate is in the numerator, which is the whole trick: transpose
+    /// a voice up an octave and the ratio doubles to match, so the loop still
+    /// lands on the bar. Pitch becomes a tuning control rather than a speed
+    /// control, and modulating either one leaves the other alone.
+    ///
+    /// The loop is what gets fitted when there is one, since the loop is the
+    /// thing that repeats against the grid; otherwise the playback region is.
+    fn effective_ratio(
+        params: SamplerParams,
+        len: usize,
+        sample_rate: u32,
+        bpm: f64,
+        playback_rate: f64,
+    ) -> f64 {
+        if !params.stretch_sync {
+            return f64::from(params.stretch_ratio);
+        }
+        let (region_start, region_end) = if params.loop_mode == LoopMode::Off {
+            Self::resolve_playback_bounds(params, len)
+        } else {
+            Self::resolve_loop_bounds(params, len)
+        };
+        let region = region_end - region_start;
+        if region <= 0.0 {
+            return 1.0;
+        }
+        let bars = f64::from(
+            params
+                .stretch_bars
+                .clamp(mooloop_core::MIN_STRETCH_BARS, mooloop_core::MAX_STRETCH_BARS),
+        );
+        let target = bars * mooloop_core::frames_per_bar(sample_rate, bpm);
+        (target * playback_rate / region).clamp(
+            f64::from(mooloop_core::MIN_STRETCH_RATIO),
+            f64::from(mooloop_core::MAX_STRETCH_RATIO),
+        )
     }
 
     pub fn choke_group(&self) -> u8 {
@@ -451,9 +597,9 @@ impl Sampler {
         let (start, end) = Self::resolve_playback_bounds(self.params, len);
         let root_note = self.params.root_note.min(127);
         let key_semitones = i16::from(note.min(127)) - i16::from(root_note);
-        let tuning = f64::from(self.params.tune_semitones.clamp(-48.0, 48.0))
-            + f64::from(self.params.tune_cents.clamp(-100.0, 100.0)) / 100.0;
-        let pitch_ratio = 2.0_f64.powf((f64::from(key_semitones) + tuning) / 12.0);
+        let key_pitch_ratio =
+            sample.sample_rate as f64 / self.sample_rate as f64
+                * 2.0_f64.powf(f64::from(key_semitones) / 12.0);
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1).max(1);
 
@@ -471,7 +617,8 @@ impl Sampler {
         } else {
             start
         };
-        voice.playback_rate = sample.sample_rate as f64 / self.sample_rate as f64 * pitch_ratio;
+        voice.key_pitch_ratio = key_pitch_ratio;
+        voice.playback_rate = key_pitch_ratio * tuning_ratio(self.params);
         voice.direction = if self.params.reverse { -1.0 } else { 1.0 };
         voice.velocity_amp = f32::from(velocity) / 127.0;
         voice.filter_low = [0.0, 0.0];
@@ -483,6 +630,19 @@ impl Sampler {
         voice.env.note_on();
         voice.filter_env.configure(self.params.resolved_filter_env());
         voice.filter_env.note_on();
+
+        // Point this voice's stretcher at the same frame the read head starts
+        // on, so output frame 0 is input frame `start` and the note has no
+        // more latency than an unstretched one.
+        let params = self.params;
+        let start_pos = self.voices[index].play_pos;
+        if let Some(reader) = self.stretch.as_mut().and_then(|pool| pool.reader_mut(index)) {
+            let stretcher = reader.stretcher_mut();
+            stretcher.set_mode(params.stretch_mode);
+            stretcher.set_grain_frames(u32::from(params.stretch_grain));
+            stretcher.set_ratio(f64::from(params.stretch_ratio));
+            reader.reset(start_pos);
+        }
     }
 
     fn release_note(&mut self, event_id: u64) {
@@ -616,14 +776,21 @@ impl Sampler {
     /// Render the voice into `bus[start..end]`, adding into the buffers.
     /// Handles looping, envelope advancement, and voice termination.
     fn render_voice_range(
-        params: SamplerParams,
-        sample_rate: u32,
+        cx: VoiceContext,
         voice: &mut Voice,
+        stretch: Option<&mut StretchReader>,
         output_gain: &mut Smoothed,
         bus: &mut StereoBus,
-        start: usize,
-        end: usize,
+        // One range rather than two loose indices: they are always the
+        // segment the block was split into, never independent.
+        range: core::ops::Range<usize>,
     ) {
+        let VoiceContext {
+            params,
+            sample_rate,
+            bpm,
+        } = cx;
+        let (start, end) = (range.start, range.end);
         if !voice.active {
             return;
         }
@@ -645,6 +812,31 @@ impl Sampler {
             LoopMode::Off
         };
         let table = SincTable::shared();
+
+        // Re-derive the rate from the voice's fixed key/sample-rate ratio and
+        // the tune knobs' *current* value, so a retune while this voice is
+        // sounding is heard this segment rather than only on the next
+        // trigger. Skipped when the toggle is off, which reproduces the
+        // original behavior: `playback_rate` stays whatever `trigger` last
+        // set it to. Has to run before the stretch block below, since
+        // fit-to-tempo derives its ratio from `playback_rate` precisely so
+        // that retuning does not change the region's duration.
+        if params.retune_live {
+            voice.playback_rate = voice.key_pitch_ratio * tuning_ratio(params);
+        }
+
+        // Resolved once for the segment, like the bounds above: parameters do
+        // not move inside a segment, because the block is already split at
+        // every event.
+        let mut stretch = stretch.filter(|_| Self::stretch_is_active(params));
+        if let Some(reader) = stretch.as_mut() {
+            let ratio =
+                Self::effective_ratio(params, len, sample_rate, bpm, voice.playback_rate);
+            let stretcher = reader.stretcher_mut();
+            stretcher.set_mode(params.stretch_mode);
+            stretcher.set_grain_frames(u32::from(params.stretch_grain));
+            stretcher.set_ratio(ratio);
+        }
 
         for i in start..end {
             let Some(sample) = voice.sample.as_ref() else {
@@ -689,17 +881,29 @@ impl Sampler {
                     edge: RegionEdge::Silent,
                 }
             };
-            let frame = Self::shape_frame(
-                params,
-                sample_rate,
-                voice,
-                table.read(&sample.frames, pos, voice.playback_rate, region),
-            );
+            let raw = match stretch.as_mut() {
+                Some(reader) => reader.read(&sample.frames, region, voice.playback_rate),
+                None => table.read(&sample.frames, pos, voice.playback_rate, region),
+            };
+            let frame = Self::shape_frame(params, sample_rate, voice, raw);
             bus.l[i] += amp * frame[0];
             bus.r[i] += amp * frame[1];
 
             // Advance the read position and handle looping / end-of-region.
-            voice.play_pos += voice.direction * voice.playback_rate;
+            //
+            // A stretching voice does not step its own head: the reader
+            // reports where the frame just handed out came from, and
+            // mirroring that into `play_pos` keeps end-of-region detection,
+            // the loop checks below, and the UI playhead all reading one
+            // value. Deliberately the *sounding* position and not the
+            // stretcher's analysis frontier, which runs ahead by up to a hop
+            // and would end a one-shot before its tail had been played. The
+            // reader has already wrapped inside a forward loop, so the wrap
+            // below finds nothing to do.
+            match stretch.as_ref() {
+                Some(reader) => voice.play_pos = reader.source_pos(),
+                None => voice.play_pos += voice.direction * voice.playback_rate,
+            }
 
             match loop_mode {
                 LoopMode::Off => {
@@ -734,13 +938,22 @@ impl Sampler {
 
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let params = self.params;
-        let sample_rate = self.sample_rate;
+        let cx = VoiceContext {
+            params,
+            sample_rate: self.sample_rate,
+            bpm: self.bpm,
+        };
         self.output_gain
             .set_target(clamp_output_gain(params.output_gain));
         let entry = self.output_gain;
-        for voice in &mut self.voices[..params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize] {
+        let limit = params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize;
+        let mut readers = self.stretch.as_mut().map(|pool| pool.readers_mut());
+        for voice in &mut self.voices[..limit] {
             let mut gain = entry;
-            Self::render_voice_range(params, sample_rate, voice, &mut gain, bus, start, end);
+            // Advanced in lockstep with the voices, so voice `n` always gets
+            // reader `n` whether or not it is sounding.
+            let reader = readers.as_mut().and_then(Iterator::next);
+            Self::render_voice_range(cx, voice, reader, &mut gain, bus, start..end);
         }
         // A voice that ends mid-segment stops walking its copy, and a silent
         // sampler renders no voices at all, so the trim advances here rather
@@ -768,6 +981,7 @@ impl AudioNode for Sampler {
         _events_out: Option<&mut EventList>,
     ) {
         let frames = ctx.frames.min(bus.capacity());
+        self.bpm = ctx.bpm;
 
         if !ctx.playing {
             self.release_all();
@@ -816,6 +1030,289 @@ mod tests {
         });
         let slot = Arc::new(ArcSwapOption::from(Some(sample)));
         Sampler::new(slot, params, sr)
+    }
+
+    /// Fit-to-tempo derives the ratio so the region lasts the requested
+    /// number of bars. One bar at 120 BPM is 96,000 frames, so a 48,000-frame
+    /// sample has to be stretched 2x to fill it.
+    #[test]
+    fn fit_to_tempo_derives_the_ratio_from_the_bar_length() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            ..SamplerParams::default()
+        };
+        let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 1.0);
+        assert!((ratio - 2.0).abs() < 1.0e-6, "expected 2x, got {ratio}");
+
+        // Half the tempo, twice the bar, twice the stretch.
+        let slower = Sampler::effective_ratio(params, 48_000, 48_000, 60.0, 1.0);
+        assert!((slower - 4.0).abs() < 1.0e-6, "expected 4x, got {slower}");
+
+        // Two bars of the same sample needs twice as much again.
+        let two_bars = Sampler::effective_ratio(
+            SamplerParams {
+                stretch_bars: 2.0,
+                ..params
+            },
+            48_000,
+            48_000,
+            120.0,
+            1.0,
+        );
+        assert!((two_bars - 4.0).abs() < 1.0e-6, "expected 4x, got {two_bars}");
+    }
+
+    /// The reason fit-to-tempo exists: transposing a voice must not change how
+    /// long it lasts. The playback rate enters the derivation, so pitching up
+    /// an octave doubles the ratio to compensate and the loop still lands on
+    /// the bar.
+    #[test]
+    fn fit_to_tempo_makes_pitch_and_duration_independent() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            ..SamplerParams::default()
+        };
+        let unity = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 1.0);
+        for rate in [0.5, 1.0, 2.0, 3.0] {
+            let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, rate);
+            // Output length is `region * ratio / rate`; holding that constant
+            // is exactly what keeps the loop on the grid.
+            let output = 48_000.0 * ratio / rate;
+            let reference = 48_000.0 * unity / 1.0;
+            assert!(
+                (output - reference).abs() < 1.0,
+                "rate {rate} changed the duration: {output} vs {reference}"
+            );
+        }
+    }
+
+    /// With sync off the knob is the ratio, untouched.
+    #[test]
+    fn without_sync_the_ratio_is_the_knob() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: false,
+            stretch_ratio: 3.25,
+            ..SamplerParams::default()
+        };
+        let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 2.0);
+        assert!((ratio - 3.25).abs() < 1.0e-6, "the rate leaked in: {ratio}");
+    }
+
+    /// The loop is what gets fitted when there is one, since the loop is the
+    /// part that repeats against the grid.
+    #[test]
+    fn fit_to_tempo_measures_the_loop_when_there_is_one() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.0,
+            loop_end: 0.5,
+            ..SamplerParams::default()
+        };
+        // Half of a 48,000-frame sample is 24,000 frames, so filling a
+        // 96,000-frame bar takes 4x rather than 2x.
+        let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 1.0);
+        assert!((ratio - 4.0).abs() < 1.0e-6, "expected 4x, got {ratio}");
+    }
+
+    /// A derived ratio still has to land inside what the stretcher accepts:
+    /// an absurd tempo or a one-frame loop must not produce a ratio the DSP
+    /// would have to clamp silently later.
+    #[test]
+    fn a_derived_ratio_stays_inside_the_supported_range() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: mooloop_core::MAX_STRETCH_BARS,
+            ..SamplerParams::default()
+        };
+        let ratio = Sampler::effective_ratio(params, 64, 48_000, 20.0, 4.0);
+        assert!(ratio <= f64::from(mooloop_core::MAX_STRETCH_RATIO));
+
+        let tiny = Sampler::effective_ratio(
+            SamplerParams {
+                stretch_bars: mooloop_core::MIN_STRETCH_BARS,
+                ..params
+            },
+            48_000_000,
+            48_000,
+            300.0,
+            0.25,
+        );
+        assert!(tiny >= f64::from(mooloop_core::MIN_STRETCH_RATIO));
+    }
+
+    /// Sync on is enough to make stretching active even at a knob ratio of
+    /// exactly 1.0, because the knob is not what is being used.
+    #[test]
+    fn sync_activates_stretching_regardless_of_the_knob() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_ratio: 1.0,
+            ..SamplerParams::default()
+        };
+        assert!(Sampler::stretch_is_active(params));
+    }
+
+    /// Play one note and report how far through the sample the head reached.
+    fn playhead_after(mut sampler: Sampler, sr: u32, frames: usize) -> f32 {
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+        sampler.voice_positions()[0]
+    }
+
+    fn stretching_params(ratio: f32) -> SamplerParams {
+        SamplerParams {
+            attack: 0.0,
+            decay: 8.0,
+            sustain: 1.0,
+            output_gain: 1.0,
+            stretch_enabled: true,
+            stretch_ratio: ratio,
+            ..SamplerParams::default()
+        }
+    }
+
+    /// Intent without state must be harmless. A patch can be loaded with
+    /// stretch on before the engine has provisioned the pool, and in that
+    /// window the sampler simply plays the way it did the frame before rather
+    /// than falling silent or allocating.
+    #[test]
+    fn a_sampler_that_wants_stretch_but_has_no_pool_plays_unstretched() {
+        let sr = 48_000;
+        let sampler = sampler_with_frames(sr, 8_192, stretching_params(2.0));
+        assert!(sampler.wants_stretch());
+        assert!(!sampler.has_stretch());
+
+        let stretched = playhead_after(sampler, sr, 1_024);
+        let plain = playhead_after(
+            sampler_with_frames(sr, 8_192, SamplerParams {
+                attack: 0.0,
+                decay: 8.0,
+                sustain: 1.0,
+                output_gain: 1.0,
+                ..SamplerParams::default()
+            }),
+            sr,
+            1_024,
+        );
+        assert!(
+            (stretched - plain).abs() < 1.0e-4,
+            "unprovisioned stretch changed playback: {stretched} vs {plain}"
+        );
+    }
+
+    /// With the pool installed, the stretcher owns the read head: at ratio 2
+    /// the same number of output frames consumes half as much sample.
+    #[test]
+    fn an_installed_pool_slows_the_read_head() {
+        let sr = 48_000;
+        let len = 8_192;
+        let frames = 1_024;
+
+        let plain = playhead_after(
+            sampler_with_frames(sr, len, SamplerParams {
+                attack: 0.0,
+                decay: 8.0,
+                sustain: 1.0,
+                output_gain: 1.0,
+                ..SamplerParams::default()
+            }),
+            sr,
+            frames,
+        );
+
+        let mut stretched = sampler_with_frames(sr, len, stretching_params(2.0));
+        assert!(stretched
+            .install_stretch(Box::new(StretchPool::new(
+                mooloop_core::StretchMode::Music,
+                sr,
+                MAX_SAMPLER_VOICES as usize,
+            )))
+            .is_none());
+        assert!(stretched.has_stretch());
+        let slowed = playhead_after(stretched, sr, frames);
+
+        let ratio = slowed / plain;
+        assert!(
+            (0.4..0.6).contains(&ratio),
+            "ratio 2 should halve the head's travel, got {slowed} vs {plain}"
+        );
+    }
+
+    /// Unity ratio in a searching mode is a bypass on purpose: switching
+    /// stretch on without moving the ratio must not change how a patch
+    /// sounds, and today's reader is sample-exact at unity where WSOLA is
+    /// only nearly so.
+    #[test]
+    fn enabling_stretch_at_unity_changes_nothing() {
+        let params = stretching_params(1.0);
+        assert!(!Sampler::stretch_is_active(params));
+        // ...but the artifact mode has no such exemption.
+        assert!(Sampler::stretch_is_active(SamplerParams {
+            stretch_mode: mooloop_core::StretchMode::Grain,
+            ..params
+        }));
+    }
+
+    /// Reverse and ping-pong were never measured and the analysis pointer
+    /// only moves forwards. The UI disables the combination; the DSP refuses
+    /// it too, so it does not depend on the UI being right.
+    #[test]
+    fn stretch_refuses_reverse_and_pingpong() {
+        let params = stretching_params(2.0);
+        assert!(Sampler::stretch_is_active(params));
+        assert!(!Sampler::stretch_is_active(SamplerParams {
+            reverse: true,
+            ..params
+        }));
+        assert!(!Sampler::stretch_is_active(SamplerParams {
+            loop_mode: LoopMode::Pingpong,
+            ..params
+        }));
+    }
+
+    /// The ownership round trip the realtime thread depends on: state goes in
+    /// and comes back out as a box the caller disposes of elsewhere.
+    #[test]
+    fn stretch_state_can_be_installed_and_surrendered() {
+        let sr = 48_000;
+        let mut sampler = sampler_with_frames(sr, 1_024, stretching_params(2.0));
+        let first = Box::new(StretchPool::new(
+            mooloop_core::StretchMode::Music,
+            sr,
+            MAX_SAMPLER_VOICES as usize,
+        ));
+        assert!(sampler.install_stretch(first).is_none());
+
+        let second = Box::new(StretchPool::new(
+            mooloop_core::StretchMode::Grain,
+            sr,
+            MAX_SAMPLER_VOICES as usize,
+        ));
+        assert!(
+            sampler.install_stretch(second).is_some(),
+            "the displaced pool must come back rather than be dropped here"
+        );
+        assert!(sampler.take_stretch().is_some());
+        assert!(!sampler.has_stretch());
     }
 
     fn ctx(frames: usize, sr: u32) -> ProcessContext {
@@ -1064,6 +1561,99 @@ mod tests {
 
         assert!((render_with(12.0, 0.0) - 200.0).abs() < 0.001);
         assert!((render_with(0.0, 100.0) - 105.946).abs() < 0.01);
+    }
+
+    /// A tune edit while a voice is sounding -- the ordinary case for a
+    /// looping or held note -- has to be heard this segment, not on the
+    /// voice's next trigger. Regression test for the bug where `playback_rate`
+    /// was computed once in `trigger` and never revisited.
+    #[test]
+    fn retuning_a_sounding_voice_changes_its_rate_without_a_new_trigger() {
+        let sr = 48_000;
+        let params = SamplerParams {
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.0,
+            loop_end: 1.0,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(sr, 4096, params);
+        let mut bus = StereoBus::with_capacity(100);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 0,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(100, sr), &mut bus, &events, None);
+        let before = sampler.voices[0].play_pos;
+
+        let mut retuned = sampler.params();
+        retuned.tune_semitones = 12.0;
+        sampler.set_params(retuned);
+        sampler.process(&ctx(100, sr), &mut bus, &EventList::empty(), None);
+        let after = sampler.voices[0].play_pos;
+
+        // 100 frames at the doubled rate, not the original one: a frozen
+        // `playback_rate` would advance by 100 here, not 200.
+        assert!(
+            (after - before - 200.0).abs() < 0.001,
+            "expected the octave-up rate to apply immediately: before {before}, after {after}"
+        );
+    }
+
+    /// The opt-out: with `retune_live` off, a sounding voice keeps the rate it
+    /// was triggered with, exactly as the sampler behaved before the toggle
+    /// existed.
+    #[test]
+    fn retune_live_off_freezes_a_sounding_voice_rate_until_its_next_trigger() {
+        let sr = 48_000;
+        let params = SamplerParams {
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.0,
+            loop_end: 1.0,
+            retune_live: false,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(sr, 4096, params);
+        let mut bus = StereoBus::with_capacity(100);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 0,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(100, sr), &mut bus, &events, None);
+        let before = sampler.voices[0].play_pos;
+
+        let mut retuned = sampler.params();
+        retuned.tune_semitones = 12.0;
+        sampler.set_params(retuned);
+        sampler.process(&ctx(100, sr), &mut bus, &EventList::empty(), None);
+        let after = sampler.voices[0].play_pos;
+
+        assert!(
+            (after - before - 100.0).abs() < 0.001,
+            "expected the original rate to persist: before {before}, after {after}"
+        );
+
+        // The next trigger picks up the new tuning, same as it always did.
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(100, sr), &mut bus, &events, None);
+        assert!((sampler.voices[0].play_pos - 200.0).abs() < 0.001);
     }
 
     #[test]
