@@ -251,6 +251,16 @@ work session you can recall being part of, and don't stress over precision.
   the outputs array already holds last tick's value everywhere the pass has
   not reached, so self-reference is bounded by the module's own output clamp
   rather than by a cycle check.
+  Then the grid: the shelf's tile row became a real grid of modules beside
+  the selected module's full surface, and a module's input -- an envelope's
+  gate channel, a math module's source slot -- became a labelled jack rather
+  than one more knob in the row. Lifting the header and the jack strip out of
+  the five kind editors deleted five copies of each. Grew the rack from four
+  slots to eight after measuring what it costs rather than assuming: the whole
+  rack rides the command ring by value, so a slot is 72 bytes on every
+  preallocated entry and eight slots take the ring from 552 KiB to 840 KiB.
+  Pinned that arithmetic in a test, since the number is the thing a future
+  capacity change has to argue with.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

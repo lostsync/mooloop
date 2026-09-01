@@ -76,6 +76,13 @@ const MAX_TIME_S: f32 = 2.0;
 /// commands used to enter separate relay queues and lose their relative
 /// order. These typed senders share one queue while preserving the convenient
 /// `.send(...)` call shape used by the callback wiring below.
+///
+/// The width is `EngineCommand`'s, which is the modulation rack it carries by
+/// value (`bridge.rs` documents why that is deliberate). This queue is drained
+/// on the UI thread into the preallocated ring, so evening the variants out
+/// with a `Box` would trade a fixed stack copy for an allocation per command
+/// and cost the `Copy` the wiring relies on.
+#[allow(clippy::large_enum_variant)]
 enum PendingEngineMessage {
     Command(EngineCommand),
     ResizeBuffers {
@@ -3071,6 +3078,23 @@ impl UiState {
         let Some(channel) = self.channels.get(self.selected) else {
             return;
         };
+        // Each grid tile's meter, touched in place: rebuilding the source
+        // rows on the pump tick would fight selection and the add menu for
+        // the same reason the effect rows are updated field-wise here.
+        let outputs = self.modulation_outputs.get();
+        for index in 0..self.modulation_source_model.row_count() {
+            let Some(mut row) = self.modulation_source_model.row_data(index) else {
+                continue;
+            };
+            let next = usize::try_from(row.slot)
+                .ok()
+                .and_then(|slot| outputs.get(slot).copied())
+                .unwrap_or(0.0);
+            if row.output != next {
+                row.output = next;
+                self.modulation_source_model.set_row_data(index, row);
+            }
+        }
         window.set_source_modulation_offsets(self.destination_offsets(
             channel.generator_params().kind().descriptors(),
             |param| ParamAddr {
@@ -3132,6 +3156,7 @@ impl UiState {
         self.modulation_selected_slot.set(selected);
         self.modulation_armed_slot.set(armed);
         let bpm = f64::from(window.get_bpm().max(1));
+        let outputs = self.modulation_outputs.get();
         let sources: Vec<ModulationSourceRow> = channel
             .modulation
             .slots
@@ -3150,6 +3175,7 @@ impl UiState {
                     pulse_width: 0.5,
                     preview_sustain: 0.7,
                     step_length: MOD_STEP_MAX_STEPS as i32,
+                    output: outputs.get(slot).copied().unwrap_or(0.0),
                     selected: selected == Some(slot as u8),
                     ..Default::default()
                 };
@@ -3266,6 +3292,12 @@ impl UiState {
         window.set_modulation_selected_slot(selected.map_or(-1, i32::from));
         window.set_modulation_armed_slot(armed.map_or(-1, i32::from));
         window.set_modulation_max_sources(MAX_MODULATORS_PER_CHANNEL as i32);
+        // The grid's slot names come from the protocol constant, so raising
+        // the rack's capacity never needs a matching UI edit.
+        let slot_names: Vec<slint::SharedString> = (1..=MAX_MODULATORS_PER_CHANNEL)
+            .map(|slot| slot.to_string().into())
+            .collect();
+        window.set_modulation_slot_names(slot_names.as_slice().into());
 
         // The selected source's own controls. One editor is shown, so the shelf
         // reads scalars rather than searching the source rows for the

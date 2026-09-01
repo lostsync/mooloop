@@ -600,6 +600,7 @@ export component MainWindow inherits Window {
     in property <float> modulation-selected-envelope-preview-decay;
     in property <float> modulation-selected-envelope-preview-release;
     in property <int> modulation-max-sources;
+    in property <[string]> modulation-slot-names;
     callback modulation-shelf-toggled();
     callback modulation-source-selected(int);
     callback modulation-assignment-toggled();
@@ -3111,6 +3112,7 @@ export component MainWindow inherits Window {
                                             selected-envelope-preview-decay: root.modulation-selected-envelope-preview-decay;
                                             selected-envelope-preview-release: root.modulation-selected-envelope-preview-release;
                                             max-sources: root.modulation-max-sources;
+                                            slot-names: root.modulation-slot-names;
                                             toggled => { root.modulation-shelf-toggled(); }
                                             source-selected(slot) => { root.modulation-source-selected(slot); }
                                             assignment-toggled => { root.modulation-assignment-toggled(); }

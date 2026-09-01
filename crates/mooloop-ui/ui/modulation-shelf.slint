@@ -17,6 +17,9 @@ export struct ModulationSourceRow {
     step-length: int,
     // Math-only: the operator, which is the whole face a math tile has.
     math-op: int,
+    // The module's current `-1..1` output, refreshed on the pump tick. This
+    // is telemetry, unlike the parameter-derived face above it.
+    output: float,
     rate: float,
     depth: float,
     phase: float,
@@ -51,7 +54,25 @@ export struct ModulationRouteRow {
 // header; it does not steal height from the fixed device faces above it.
 export global ModulationShelfMetrics {
     out property <length> closed-height: 30px;
-    out property <length> open-height: 120px;
+    // The grid is two rows of modules beside the selected module's full
+    // surface. The rack derives its own height from this, so the shelf pays
+    // for its own space rather than the layout guessing at it.
+    out property <length> open-height: 240px;
+}
+
+// Grid geometry in one place. Capacity is an engine protocol boundary, so
+// the grid wraps at a fixed column count and grows downward rather than the
+// layout being retuned every time a slot is added.
+global ModuleGrid {
+    out property <int> columns: 4;
+    out property <length> tile-width: 58px;
+    out property <length> tile-height: 70px;
+    out property <length> gap: 4px;
+    out property <int> rows: 2;
+    // Stated rather than measured from the children: an overlay sized off a
+    // container that is itself sized by its children is a binding loop.
+    out property <length> row-width: root.columns * root.tile-width + (root.columns - 1) * root.gap;
+    out property <length> column-height: root.rows * root.tile-height + (root.rows - 1) * root.gap;
 }
 
 // Descriptor ids, mirroring mooloop-core's `LFO_PARAM_*` and `ENV_PARAM_*`
@@ -347,7 +368,9 @@ component StepBank inherits Rectangle {
     }
 }
 
-component SourceTile inherits Rectangle {
+// One module in the grid: its parameter-derived face, its name, and a live
+// output meter fed from `ModulatorMeters`.
+component ModuleTile inherits Rectangle {
     in property <string> name;
     in property <int> waveform;
     in property <int> kind;
@@ -363,12 +386,13 @@ component SourceTile inherits Rectangle {
     in property <[float]> steps;
     in property <int> step-length: 16;
     in property <int> math-op;
+    in property <float> output;
     in property <bool> selected;
     in property <bool> armed;
     callback clicked();
 
-    width: 46px;
-    height: 44px;
+    width: ModuleGrid.tile-width;
+    height: ModuleGrid.tile-height;
     border-radius: Theme.radius-md;
     border-width: root.selected ? 1px : 0px;
     border-color: root.armed ? Theme.focus : Theme.accent;
@@ -397,13 +421,27 @@ component SourceTile inherits Rectangle {
             line-color: root.armed ? Theme.focus : Theme.accent;
         }
         Text {
-            height: 13px;
+            height: 12px;
             text: root.name;
             color: root.selected ? Theme.text : Theme.text-muted;
             font-size: 8px;
             horizontal-alignment: center;
             vertical-alignment: center;
             overflow: elide;
+        }
+        // Live output, centre-origin: this is the one part of a tile that is
+        // telemetry rather than a preview of the configured signal.
+        Rectangle {
+            height: 5px;
+            background: Theme.surface;
+            border-radius: 1px;
+            Rectangle {
+                x: parent.width / 2 + min(0, clamp(root.output, -1, 1)) * parent.width / 2;
+                width: max(1px, abs(clamp(root.output, -1, 1)) * parent.width / 2);
+                height: parent.height;
+                border-radius: 1px;
+                background: root.armed ? Theme.focus : Theme.accent;
+            }
         }
     }
     tap := TouchArea {
@@ -613,8 +651,11 @@ export component ModulationShelf inherits Rectangle {
     in property <float> selected-envelope-preview-decay;
     in property <float> selected-envelope-preview-release;
     // Capacity is an engine protocol boundary, not a UI layout constant
-    // (docs/MODULATOR_SYSTEM_SPEC.md), so Rust reports it.
+    // (docs/MODULATOR_SYSTEM_SPEC.md), so Rust reports it. The slot names the
+    // math jack picks from come from the same place, so growing the rack
+    // stays a protocol edit rather than a UI one.
     in property <int> max-sources: 0;
+    in property <[string]> slot-names;
     callback toggled();
     callback source-selected(int);
     callback assignment-toggled();
@@ -637,6 +678,29 @@ export component ModulationShelf inherits Rectangle {
     private property <bool> add-source-menu-open: false;
     private property <bool> assigning: root.armed-slot >= 0;
 
+    pure function kind-name(kind: int) -> string {
+        return kind == 0 ? "LFO" : kind == 1 ? "ENVELOPE" : kind == 2 ? "STEP"
+            : kind == 3 ? "RANDOM" : "MATH";
+    }
+    pure function kind-signal(kind: int) -> string {
+        return kind == 1 ? "UNIPOLAR"
+            : kind == 2 ? "STEPPED"
+            : kind == 3 ? (root.selected-values[RandomParam.bipolar] > 0.5 ? "STEPPED" : "STEPPED UNIPOLAR")
+            : "BIPOLAR";
+    }
+    // What a module's one input is called, and what it is worth saying about
+    // it once it is connected.
+    pure function jack-label(kind: int) -> string {
+        return kind == 0 ? "RESET" : kind == 1 ? "GATE" : kind == 4 ? "INPUT" : "CLOCK";
+    }
+    pure function jack-note(kind: int) -> string {
+        if (kind == 1) { return "CHANNEL NOTE GATE"; }
+        if (kind == 4) {
+            return round(root.selected-values[MathParam.input-slot]) < root.selected-slot
+                ? "READS THIS TICK" : "READS THE PREVIOUS TICK";
+        }
+        return "";
+    }
     pure function kind-badge(kind: int) -> string {
         return kind == 0 ? "LFO" : kind == 1 ? "ENV" : kind == 2 ? "STEP"
             : kind == 3 ? "RND" : "MATH";
@@ -713,27 +777,30 @@ export component ModulationShelf inherits Rectangle {
                 padding: 6px;
                 spacing: 6px;
 
-                // Source collection: compact/iconified until selected, in the
-                // spirit of Bitwig's modulator strip. The add action opens a
-                // kind chooser; adding more source families extends this menu.
+                // The grid. Every module is one tile with its own face and a
+                // live output meter; the rack underneath is unchanged, which
+                // is what keeps this a presentation rather than an engine
+                // step (docs/plans/modulator-modules/03-the-grid.md).
                 Rectangle {
-                    width: 220px;
+                    width: ModuleGrid.row-width + 10px;
                     border-width: 1px;
                     border-color: Theme.border;
                     background: Theme.panel;
                     VerticalLayout {
-                        padding: 3px;
-                        spacing: 2px;
+                        padding: 4px;
+                        spacing: 3px;
                         HorizontalLayout {
                             height: 10px;
-                            Text { text: "CONTROL SOURCES"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                            Text { text: "MODULES"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; }
                             Text { text: root.sources.length + "/" + root.max-sources; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
                         }
-                        HorizontalLayout {
-                            spacing: 4px;
-                            alignment: start;
-                            for source in root.sources : SourceTile {
+                        Rectangle {
+                            vertical-stretch: 1;
+                            width: ModuleGrid.row-width;
+                            for source[index] in root.sources : ModuleTile {
+                                x: mod(index, ModuleGrid.columns) * (ModuleGrid.tile-width + ModuleGrid.gap);
+                                y: floor(index / ModuleGrid.columns) * (ModuleGrid.tile-height + ModuleGrid.gap);
                                 name: source.name;
                                 kind: source.kind;
                                 waveform: source.waveform;
@@ -749,6 +816,7 @@ export component ModulationShelf inherits Rectangle {
                                 steps: source.steps;
                                 step-length: source.step-length;
                                 math-op: source.math-op;
+                                output: source.output;
                                 selected: source.selected;
                                 armed: root.armed-slot == source.slot;
                                 clicked => {
@@ -756,38 +824,47 @@ export component ModulationShelf inherits Rectangle {
                                     root.source-selected(source.slot);
                                 }
                             }
-                            if !root.add-source-menu-open : ToolButton {
+                            // The add affordance takes the next free cell, so
+                            // the grid reads as filling rather than as a wall
+                            // of permanent empty bays.
+                            if root.sources.length < root.max-sources && !root.add-source-menu-open : ToolButton {
+                                x: mod(root.sources.length, ModuleGrid.columns) * (ModuleGrid.tile-width + ModuleGrid.gap);
+                                y: floor(root.sources.length / ModuleGrid.columns) * (ModuleGrid.tile-height + ModuleGrid.gap);
+                                width: ModuleGrid.tile-width;
+                                height: ModuleGrid.tile-height;
                                 text: "+";
-                                tooltip: "Add a control source";
-                                enabled: root.sources.length < root.max-sources;
-                                min-width: 46px;
-                                max-width: 46px;
-                                min-height: 44px;
-                                max-height: 44px;
+                                tooltip: "Add a control module";
                                 clicked => { root.add-source-menu-open = true; }
                             }
                             if root.add-source-menu-open : Rectangle {
-                                width: 82px;
-                                height: 68px;
+                                x: 0px;
+                                y: 0px;
+                                width: ModuleGrid.row-width;
+                                height: ModuleGrid.column-height;
+                                background: Theme.surface;
                                 border-width: 1px;
                                 border-color: Theme.accent;
-                                background: Theme.surface-raised;
+                                border-radius: Theme.radius-sm;
                                 VerticalLayout {
-                                    padding: 3px;
-                                    spacing: 2px;
-                                    Text { height: 8px; text: "ADD SOURCE"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                                    for row in [
-                                        { left: 0, right: 1 },
-                                        { left: 2, right: 3 },
-                                        { left: 4, right: -1 },
-                                    ] : HorizontalLayout {
-                                        height: 16px;
-                                        spacing: 2px;
+                                    padding: 4px;
+                                    spacing: 3px;
+                                    HorizontalLayout {
+                                        height: 10px;
+                                        Text { text: "ADD MODULE"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                                        Rectangle { horizontal-stretch: 1; }
+                                        ToolButton {
+                                            text: "×";
+                                            tooltip: "Cancel";
+                                            min-width: 18px; max-width: 18px; min-height: 10px; max-height: 10px;
+                                            text-color: Theme.text-muted;
+                                            clicked => { root.add-source-menu-open = false; }
+                                        }
+                                    }
+                                    for row in [{ left: 0, right: 1 }, { left: 2, right: 3 }, { left: 4, right: -1 }] : HorizontalLayout {
+                                        spacing: 4px;
                                         ToolButton {
                                             text: root.kind-badge(row.left);
                                             tooltip: root.kind-tooltip(row.left);
-                                            min-height: 16px;
-                                            max-height: 16px;
                                             clicked => {
                                                 root.add-source-menu-open = false;
                                                 root.source-added(row.left);
@@ -796,8 +873,6 @@ export component ModulationShelf inherits Rectangle {
                                         if row.right >= 0 : ToolButton {
                                             text: root.kind-badge(row.right);
                                             tooltip: root.kind-tooltip(row.right);
-                                            min-height: 16px;
-                                            max-height: 16px;
                                             clicked => {
                                                 root.add-source-menu-open = false;
                                                 root.source-added(row.right);
@@ -807,774 +882,701 @@ export component ModulationShelf inherits Rectangle {
                                     }
                                 }
                             }
-                            Rectangle { horizontal-stretch: 1; }
                         }
                     }
                 }
 
-                // Selected source editor: a Thor-like compact control panel.
-                // Trigger is presented as an input signal, so future device
-                // and cross-channel outlets extend this chooser instead of
-                // becoming special LFO modes.
-                Rectangle {
-                    width: 520px;
-                    border-width: 1px;
-                    border-color: root.assigning ? Theme.accent : Theme.border;
-                    background: Theme.panel;
-                    if root.selected-slot < 0 : Text {
-                        x: 12px;
-                        width: parent.width - 24px;
-                        text: root.sources.length == 0
-                            ? "Add a control source to begin."
-                            : "Select a source to open its controls.";
-                        color: Theme.text-muted;
-                        font-size: 10px;
-                        vertical-alignment: center;
-                    }
-                    if root.selected-slot >= 0 && root.selected-kind == 0 : VerticalLayout {
-                        padding: 3px;
-                        spacing: 2px;
-                        HorizontalLayout {
-                            height: 14px;
-                            spacing: 5px;
-                            Text {
-                                text: "LFO " + (root.selected-slot + 1);
-                                color: Theme.text;
-                                font-size: 9px;
-                                vertical-alignment: center;
-                            }
-                            Text {
-                                text: "BIPOLAR  ·  32 FRAME";
-                                color: Theme.text-faint;
-                                font-size: 7px;
-                                vertical-alignment: center;
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                            ToggleButton {
-                                text: root.assigning ? "ASSIGNING" : "ASSIGN";
-                                tooltip: root.assigning
-                                    ? "Stop assigning routes and edit base values"
-                                    : "Assign this source to highlighted controls";
-                                checked: root.assigning;
-                                min-width: 76px;
-                                max-width: 76px;
-                                min-height: 14px;
-                                max-height: 14px;
-                                toggled(value) => { root.assignment-toggled(); }
-                            }
-                            ToolButton {
-                                text: "×";
-                                tooltip: "Remove this source and its routes";
-                                min-width: 22px;
-                                max-width: 22px;
-                                min-height: 14px;
-                                max-height: 14px;
-                                text-color: Theme.text-muted;
-                                clicked => { root.source-removed(root.selected-slot); }
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 4px;
-                            ModulatorShape {
-                                width: 68px;
-                                height: 40px;
-                                waveform: round(root.selected-values[LfoParam.waveform]);
-                                kind: 0;
-                                amount: root.selected-values[LfoParam.depth];
-                                phase: root.selected-values[LfoParam.phase];
-                                pulse-width: root.selected-values[LfoParam.pulse-width];
-                                fade-cycles: root.selected-preview-fade-cycles;
-                                smoothing-cycles: root.selected-preview-smoothing-cycles;
-                                line-color: root.assigning ? Theme.focus : Theme.accent;
-                            }
-                            VerticalLayout {
-                                width: 154px;
-                                spacing: 2px;
-                                HorizontalLayout {
-                                    height: 19px;
-                                    spacing: 3px;
-                                    Text { width: 30px; text: "SHAPE"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
-                                    SelectorBank {
-                                        options: ["SIN", "TRI", "SAW", "SQR", "RND"];
-                                        selected-index: round(root.selected-values[LfoParam.waveform]);
-                                        segment-width: 24px;
-                                        min-height: 18px;
-                                        max-height: 18px;
-                                        tooltip: "LFO waveform";
-                                        selected(index) => { root.param-changed(root.selected-slot, LfoParam.waveform, index); }
-                                    }
+                // The selected module, expanded: one header and one jack
+                // strip for every kind, then that kind's own knob surface,
+                // with its destinations underneath.
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 6px;
+                    Rectangle {
+                        vertical-stretch: 1;
+                        border-width: 1px;
+                        border-color: root.assigning ? Theme.accent : Theme.border;
+                        background: Theme.panel;
+                        VerticalLayout {
+                            padding: 4px;
+                            spacing: 3px;
+                            if root.selected-slot >= 0 : HorizontalLayout {
+                                height: 15px;
+                                spacing: 5px;
+                                Text {
+                                    text: root.kind-name(root.selected-kind) + " " + (root.selected-slot + 1);
+                                    color: Theme.text;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
                                 }
+                                Text {
+                                    text: root.kind-signal(root.selected-kind) + "  ·  32 FRAME";
+                                    color: Theme.text-faint;
+                                    font-size: 7px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                ToggleButton {
+                                    text: root.assigning ? "ASSIGNING" : "ASSIGN";
+                                    tooltip: root.assigning
+                                        ? "Stop assigning routes and edit base values"
+                                        : "Assign this module to highlighted controls";
+                                    checked: root.assigning;
+                                    min-width: 82px; max-width: 82px; min-height: 15px; max-height: 15px;
+                                    toggled(value) => { root.assignment-toggled(); }
+                                }
+                                ToolButton {
+                                    text: "×";
+                                    tooltip: "Remove this module and its routes";
+                                    min-width: 22px; max-width: 22px; min-height: 15px; max-height: 15px;
+                                    text-color: Theme.text-muted;
+                                    clicked => { root.source-removed(root.selected-slot); }
+                                }
+                            }
+                            // Inputs are jacks, not knobs. A module's gate,
+                            // clock, or source slot is what it is patched to,
+                            // so it reads as a connection rather than as one
+                            // more parameter in the row.
+                            if root.selected-slot >= 0 : Rectangle {
+                                height: 22px;
+                                background: Theme.surface;
+                                border-radius: Theme.radius-sm;
                                 HorizontalLayout {
-                                    height: 19px;
-                                    spacing: 3px;
-                                    Text { width: 30px; text: "RESET"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
-                                    SelectorBank {
+                                    padding-left: 5px;
+                                    padding-right: 5px;
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text {
+                                        width: 46px;
+                                        text: root.jack-label(root.selected-kind);
+                                        color: Theme.text-faint;
+                                        font-size: 7px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        width: 9px;
+                                        text: "\u{25c0}";
+                                        color: root.selected-kind == 0 && root.selected-values[LfoParam.retrigger] < 0.5
+                                            ? Theme.text-faint : Theme.accent;
+                                        font-size: 8px;
+                                        vertical-alignment: center;
+                                    }
+                                    if root.selected-kind == 0 : SelectorBank {
+                                        height: 16px;
                                         options: ["FREE", "NOTE ON"];
                                         selected-index: root.selected-values[LfoParam.retrigger] > 0.5 ? 1 : 0;
-                                        segment-width: 59px;
-                                        min-height: 18px;
-                                        max-height: 18px;
+                                        segment-width: 54px;
                                         tooltip: "Input signal that restarts this LFO";
                                         selected(index) => { root.param-changed(root.selected-slot, LfoParam.retrigger, index); }
                                     }
+                                    if root.selected-kind == 1 : gate-input := ComboBox {
+                                        width: 150px;
+                                        height: 18px;
+                                        model: root.input-channels;
+                                        current-index: root.selected-envelope-input-channel;
+                                        selected(value) => { root.envelope-input-channel-changed(root.selected-slot, gate-input.current-index); }
+                                    }
+                                    if root.selected-kind == 2 : SelectorBank {
+                                        height: 16px;
+                                        options: ["TRANSPORT", "NOTE ON"];
+                                        selected-index: round(root.selected-values[StepParam.trigger]);
+                                        segment-width: 62px;
+                                        tooltip: "Advance from the transport clock, or one step per note";
+                                        selected(index) => { root.param-changed(root.selected-slot, StepParam.trigger, index); }
+                                    }
+                                    if root.selected-kind == 3 : SelectorBank {
+                                        height: 16px;
+                                        options: ["TRANSPORT", "NOTE ON"];
+                                        selected-index: round(root.selected-values[RandomParam.trigger]);
+                                        segment-width: 62px;
+                                        tooltip: "Draw on the clock, or once per note";
+                                        selected(index) => { root.param-changed(root.selected-slot, RandomParam.trigger, index); }
+                                    }
+                                    if root.selected-kind == 4 : SelectorBank {
+                                        height: 16px;
+                                        options: root.slot-names;
+                                        selected-index: round(root.selected-values[MathParam.input-slot]);
+                                        segment-width: 26px;
+                                        tooltip: "Module this one reads. A lower slot resolves this tick; itself or a higher one reads the previous tick";
+                                        selected(index) => { root.param-changed(root.selected-slot, MathParam.input-slot, index); }
+                                    }
+                                    Text {
+                                        text: root.jack-note(root.selected-kind);
+                                        color: Theme.text-faint;
+                                        font-size: 7px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
                                 }
                             }
-                            SyncMiniKnob {
-                                label: "RATE";
-                                free-value: root.selected-values[LfoParam.rate];
-                                free-minimum: 0.05;
-                                free-maximum: 20;
-                                free-default: 1;
-                                free-scale: ValueScale.logarithmic;
-                                free-value-text: round(root.selected-values[LfoParam.rate] * 10) / 10 + " Hz";
-                                synced: root.selected-values[LfoParam.tempo-sync] > 0.5;
-                                division: round(root.selected-values[LfoParam.rate-division]);
-                                free-changed(value) => { root.param-changed(root.selected-slot, LfoParam.rate, value); }
-                                sync-changed(value) => { root.param-changed(root.selected-slot, LfoParam.tempo-sync, value ? 1 : 0); }
-                                division-changed(value) => { root.param-changed(root.selected-slot, LfoParam.rate-division, value); }
-                                edit-started => { root.param-edit-started(); }
-                                edit-finished => { root.param-edit-finished(); }
+                            // The module pane is a layout now, so the empty
+                            // state takes its width from the layout rather
+                            // than reading it back off its parent.
+                            if root.selected-slot < 0 : Text {
+                                vertical-stretch: 1;
+                                text: root.sources.length == 0
+                                    ? "Add a module to begin."
+                                    : "Select a module to open its surface.";
+                                color: Theme.text-muted;
+                                font-size: 10px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
                             }
-                            SyncMiniKnob {
-                                label: "FADE";
-                                free-value: root.selected-values[LfoParam.fade-in];
-                                free-minimum: 0;
-                                free-maximum: 16;
-                                free-default: 0;
-                                free-value-text: root.selected-values[LfoParam.fade-in] < 1
-                                    ? round(root.selected-values[LfoParam.fade-in] * 1000) + " ms"
-                                    : round(root.selected-values[LfoParam.fade-in] * 10) / 10 + " s";
-                                synced: root.selected-values[LfoParam.fade-sync] > 0.5;
-                                division: round(root.selected-values[LfoParam.fade-division]);
-                                free-changed(value) => { root.param-changed(root.selected-slot, LfoParam.fade-in, value); }
-                                sync-changed(value) => { root.param-changed(root.selected-slot, LfoParam.fade-sync, value ? 1 : 0); }
-                                division-changed(value) => { root.param-changed(root.selected-slot, LfoParam.fade-division, value); }
-                                edit-started => { root.param-edit-started(); }
-                                edit-finished => { root.param-edit-finished(); }
-                            }
-                            VerticalLayout {
-                                width: 40px;
-                                height: 51px;
-                                spacing: 1px;
-                                alignment: center;
-                                Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "LFO source amount";
-                                    value: root.selected-values[LfoParam.depth];
-                                    default-value: 1;
-                                    value-text: round(root.selected-values[LfoParam.depth] * 100) + "%";
-                                    diameter: 20px;
-                                    changed(value) => { root.param-changed(root.selected-slot, LfoParam.depth, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[LfoParam.depth] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 40px;
-                                height: 51px;
-                                spacing: 1px;
-                                alignment: center;
-                                Text { height: 8px; text: "PHASE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "LFO reset phase";
-                                    value: root.selected-values[LfoParam.phase];
-                                    default-value: 0;
-                                    value-text: round(root.selected-values[LfoParam.phase] * 360) + "\u{b0}";
-                                    diameter: 20px;
-                                    changed(value) => { root.param-changed(root.selected-slot, LfoParam.phase, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[LfoParam.phase] * 360) + "\u{b0}"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 40px;
-                                height: 51px;
-                                spacing: 1px;
-                                alignment: center;
-                                Text { height: 8px; text: "SMOOTH"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "LFO smoothing";
-                                    value: root.selected-values[LfoParam.smoothing];
-                                    minimum: 0;
-                                    maximum: 2;
-                                    default-value: 0;
-                                    value-text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF"
-                                        : round(root.selected-values[LfoParam.smoothing] * 1000) + " ms";
-                                    diameter: 20px;
-                                    changed(value) => { root.param-changed(root.selected-slot, LfoParam.smoothing, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF" : round(root.selected-values[LfoParam.smoothing] * 1000) + "ms"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 40px;
-                                height: 51px;
-                                spacing: 1px;
-                                alignment: center;
-                                Text { height: 8px; text: "P WIDTH"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Square pulse width";
-                                    value: root.selected-values[LfoParam.pulse-width];
-                                    minimum: 0.01;
-                                    maximum: 0.99;
-                                    default-value: 0.5;
-                                    enabled: round(root.selected-values[LfoParam.waveform]) == 3;
-                                    value-text: round(root.selected-values[LfoParam.pulse-width] * 100) + "%";
-                                    diameter: 20px;
-                                    changed(value) => { root.param-changed(root.selected-slot, LfoParam.pulse-width, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[LfoParam.pulse-width] * 100) + "%"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            Rectangle { horizontal-stretch: 1; }
+                if root.selected-slot >= 0 && root.selected-kind == 0 : VerticalLayout {
+                    padding: 3px;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        ModulatorShape {
+                            width: 68px;
+                            height: 40px;
+                            waveform: round(root.selected-values[LfoParam.waveform]);
+                            kind: 0;
+                            amount: root.selected-values[LfoParam.depth];
+                            phase: root.selected-values[LfoParam.phase];
+                            pulse-width: root.selected-values[LfoParam.pulse-width];
+                            fade-cycles: root.selected-preview-fade-cycles;
+                            smoothing-cycles: root.selected-preview-smoothing-cycles;
+                            line-color: root.assigning ? Theme.focus : Theme.accent;
                         }
-                    }
-                    if root.selected-slot >= 0 && root.selected-kind == 1 : VerticalLayout {
-                        padding: 3px;
-                        spacing: 2px;
-                        HorizontalLayout {
-                            height: 14px;
-                            spacing: 5px;
-                            Text { text: "ENVELOPE " + (root.selected-slot + 1); color: Theme.text; font-size: 9px; vertical-alignment: center; }
-                            Text { text: "UNIPOLAR  ·  32 FRAME"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
-                            Rectangle { horizontal-stretch: 1; }
-                            ToggleButton {
-                                text: root.assigning ? "ASSIGNING" : "ASSIGN";
-                                checked: root.assigning;
-                                min-width: 76px; max-width: 76px; min-height: 14px; max-height: 14px;
-                                toggled(value) => { root.assignment-toggled(); }
-                            }
-                            ToolButton {
-                                text: "×";
-                                tooltip: "Remove this source and its routes";
-                                min-width: 22px;
-                                max-width: 22px;
-                                min-height: 14px;
-                                max-height: 14px;
-                                text-color: Theme.text-muted;
-                                clicked => { root.source-removed(root.selected-slot); }
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 4px;
-                            ModulatorShape {
-                                width: 68px;
-                                height: 40px;
-                                kind: 1;
-                                waveform: 0;
-                                amount: root.selected-values[EnvParam.amount];
-                                attack: root.selected-envelope-preview-attack;
-                                decay: root.selected-envelope-preview-decay;
-                                sustain: root.selected-values[EnvParam.sustain];
-                                release: root.selected-envelope-preview-release;
-                                line-color: root.assigning ? Theme.focus : Theme.accent;
-                            }
-                            VerticalLayout {
-                                width: 112px;
-                                spacing: 2px;
-                                Text { height: 9px; text: "GATE INPUT"; color: Theme.text-faint; font-size: 7px; }
-                                gate-input := ComboBox {
-                                    height: 24px;
-                                    model: root.input-channels;
-                                    current-index: root.selected-envelope-input-channel;
-                                    selected(value) => { root.envelope-input-channel-changed(root.selected-slot, gate-input.current-index); }
-                                }
-                                Text { height: 9px; text: "CHANNEL NOTE GATE"; color: Theme.text-faint; font-size: 6px; }
-                            }
-                            SyncMiniKnob {
-                                label: "ATTACK"; free-value: root.selected-values[EnvParam.attack]; free-minimum: 0; free-maximum: 16; free-default: 0.01;
-                                free-value-text: root.selected-values[EnvParam.attack] < 1 ? round(root.selected-values[EnvParam.attack] * 1000) + " ms" : round(root.selected-values[EnvParam.attack] * 10) / 10 + " s";
-                                synced: root.selected-values[EnvParam.attack-sync] > 0.5;
-                                division: round(root.selected-values[EnvParam.attack-division]);
-                                free-changed(value) => { root.param-changed(root.selected-slot, EnvParam.attack, value); }
-                                sync-changed(value) => { root.param-changed(root.selected-slot, EnvParam.attack-sync, value ? 1 : 0); }
-                                division-changed(value) => { root.param-changed(root.selected-slot, EnvParam.attack-division, value); }
-                                edit-started => { root.param-edit-started(); }
-                                edit-finished => { root.param-edit-finished(); }
-                            }
-                            SyncMiniKnob {
-                                label: "DECAY"; free-value: root.selected-values[EnvParam.decay]; free-minimum: 0; free-maximum: 16; free-default: 0.2;
-                                free-value-text: root.selected-values[EnvParam.decay] < 1 ? round(root.selected-values[EnvParam.decay] * 1000) + " ms" : round(root.selected-values[EnvParam.decay] * 10) / 10 + " s";
-                                synced: root.selected-values[EnvParam.decay-sync] > 0.5;
-                                division: round(root.selected-values[EnvParam.decay-division]);
-                                free-changed(value) => { root.param-changed(root.selected-slot, EnvParam.decay, value); }
-                                sync-changed(value) => { root.param-changed(root.selected-slot, EnvParam.decay-sync, value ? 1 : 0); }
-                                division-changed(value) => { root.param-changed(root.selected-slot, EnvParam.decay-division, value); }
-                                edit-started => { root.param-edit-started(); }
-                                edit-finished => { root.param-edit-finished(); }
-                            }
-                            VerticalLayout {
-                                width: 40px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "SUSTAIN"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Envelope sustain";
-                                    value: root.selected-values[EnvParam.sustain];
-                                    default-value: 0.7;
-                                    value-text: round(root.selected-values[EnvParam.sustain] * 100) + "%";
-                                    diameter: 20px;
-                                    changed(value) => { root.param-changed(root.selected-slot, EnvParam.sustain, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[EnvParam.sustain] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            SyncMiniKnob {
-                                label: "RELEASE"; free-value: root.selected-values[EnvParam.release]; free-minimum: 0; free-maximum: 16; free-default: 0.4;
-                                free-value-text: root.selected-values[EnvParam.release] < 1 ? round(root.selected-values[EnvParam.release] * 1000) + " ms" : round(root.selected-values[EnvParam.release] * 10) / 10 + " s";
-                                synced: root.selected-values[EnvParam.release-sync] > 0.5;
-                                division: round(root.selected-values[EnvParam.release-division]);
-                                free-changed(value) => { root.param-changed(root.selected-slot, EnvParam.release, value); }
-                                sync-changed(value) => { root.param-changed(root.selected-slot, EnvParam.release-sync, value ? 1 : 0); }
-                                division-changed(value) => { root.param-changed(root.selected-slot, EnvParam.release-division, value); }
-                                edit-started => { root.param-edit-started(); }
-                                edit-finished => { root.param-edit-finished(); }
-                            }
-                            VerticalLayout {
-                                width: 40px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Envelope amount";
-                                    value: root.selected-values[EnvParam.amount];
-                                    default-value: 1;
-                                    value-text: round(root.selected-values[EnvParam.amount] * 100) + "%";
-                                    diameter: 20px;
-                                    changed(value) => { root.param-changed(root.selected-slot, EnvParam.amount, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[EnvParam.amount] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                        }
-                    }
-                    if root.selected-slot >= 0 && root.selected-kind == 2 : VerticalLayout {
-                        padding: 3px;
-                        spacing: 2px;
-                        HorizontalLayout {
-                            height: 14px;
-                            spacing: 5px;
-                            Text { text: "STEP " + (root.selected-slot + 1); color: Theme.text; font-size: 9px; vertical-alignment: center; }
-                            Text { text: "STEPPED  ·  32 FRAME"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
-                            Rectangle { horizontal-stretch: 1; }
-                            ToggleButton {
-                                text: root.assigning ? "ASSIGNING" : "ASSIGN";
-                                checked: root.assigning;
-                                min-width: 76px; max-width: 76px; min-height: 14px; max-height: 14px;
-                                toggled(value) => { root.assignment-toggled(); }
-                            }
-                            ToolButton {
-                                text: "×";
-                                tooltip: "Remove this source and its routes";
-                                min-width: 22px; max-width: 22px; min-height: 14px; max-height: 14px;
-                                text-color: Theme.text-muted;
-                                clicked => { root.source-removed(root.selected-slot); }
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 4px;
-                            StepBank {
-                                horizontal-stretch: 1;
-                                height: 51px;
-                                values: root.selected-values;
-                                offset: StepParam.value-base;
-                                length: round(root.selected-values[StepParam.length]);
-                                line-color: root.assigning ? Theme.focus : Theme.accent;
-                                changed(column, level) => {
-                                    root.param-changed(root.selected-slot, StepParam.value-base + column, level);
-                                }
-                                edit-started => { root.param-edit-started(); }
-                                edit-finished => { root.param-edit-finished(); }
-                            }
-                            VerticalLayout {
-                                width: 44px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "RATE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Step rate";
-                                    value: root.selected-values[StepParam.division];
-                                    minimum: 0;
-                                    maximum: 20;
-                                    default-value: 13;
-                                    step: 1;
-                                    diameter: 22px;
-                                    value-text: Divisions.label(round(root.selected-values[StepParam.division]));
-                                    changed(value) => { root.param-changed(root.selected-slot, StepParam.division, round(value)); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: Divisions.label(round(root.selected-values[StepParam.division])); color: Theme.focus; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 40px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "LENGTH"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Steps played";
-                                    value: root.selected-values[StepParam.length];
-                                    minimum: 1;
-                                    maximum: 16;
-                                    default-value: 8;
-                                    step: 1;
-                                    diameter: 20px;
-                                    value-text: round(root.selected-values[StepParam.length]) + "";
-                                    changed(value) => { root.param-changed(root.selected-slot, StepParam.length, round(value)); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[StepParam.length]) + " STEPS"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 40px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "GLIDE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Step glide";
-                                    value: root.selected-values[StepParam.glide];
-                                    default-value: 0;
-                                    diameter: 20px;
-                                    value-text: root.selected-values[StepParam.glide] <= 0.0001 ? "OFF"
-                                        : round(root.selected-values[StepParam.glide] * 100) + "%";
-                                    changed(value) => { root.param-changed(root.selected-slot, StepParam.glide, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: root.selected-values[StepParam.glide] <= 0.0001 ? "OFF" : round(root.selected-values[StepParam.glide] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 64px; height: 51px; spacing: 2px; alignment: center;
-                                Text { height: 8px; text: "TRIGGER"; color: Theme.text-muted; font-size: 7px; }
+                        VerticalLayout {
+                            width: 154px;
+                            spacing: 2px;
+                            HorizontalLayout {
+                                height: 19px;
+                                spacing: 3px;
+                                Text { width: 30px; text: "SHAPE"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
                                 SelectorBank {
-                                    height: 20px;
-                                    options: ["CLK", "NOTE"];
-                                    selected-index: round(root.selected-values[StepParam.trigger]);
-                                    segment-width: 30px;
-                                    tooltip: "Advance from the transport clock, or one step per note";
-                                    selected(index) => { root.param-changed(root.selected-slot, StepParam.trigger, index); }
+                                    options: ["SIN", "TRI", "SAW", "SQR", "RND"];
+                                    selected-index: round(root.selected-values[LfoParam.waveform]);
+                                    segment-width: 24px;
+                                    min-height: 18px;
+                                    max-height: 18px;
+                                    tooltip: "LFO waveform";
+                                    selected(index) => { root.param-changed(root.selected-slot, LfoParam.waveform, index); }
                                 }
-                                Rectangle { vertical-stretch: 1; }
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                        }
-                    }
-                    if root.selected-slot >= 0 && root.selected-kind == 3 : VerticalLayout {
-                        padding: 3px;
-                        spacing: 2px;
-                        HorizontalLayout {
-                            height: 14px;
-                            spacing: 5px;
-                            Text { text: "RANDOM " + (root.selected-slot + 1); color: Theme.text; font-size: 9px; vertical-alignment: center; }
-                            Text {
-                                text: (root.selected-values[RandomParam.bipolar] > 0.5 ? "BIPOLAR" : "UNIPOLAR") + "  ·  32 FRAME";
-                                color: Theme.text-faint; font-size: 7px; vertical-alignment: center;
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                            ToggleButton {
-                                text: root.assigning ? "ASSIGNING" : "ASSIGN";
-                                checked: root.assigning;
-                                min-width: 76px; max-width: 76px; min-height: 14px; max-height: 14px;
-                                toggled(value) => { root.assignment-toggled(); }
-                            }
-                            ToolButton {
-                                text: "×";
-                                tooltip: "Remove this source and its routes";
-                                min-width: 22px; max-width: 22px; min-height: 14px; max-height: 14px;
-                                text-color: Theme.text-muted;
-                                clicked => { root.source-removed(root.selected-slot); }
                             }
                         }
-                        HorizontalLayout {
-                            spacing: 4px;
-                            ModulatorShape {
-                                width: 68px;
-                                height: 46px;
-                                kind: 3;
-                                line-color: root.assigning ? Theme.focus : Theme.accent;
-                            }
-                            SyncMiniKnob {
-                                label: "RATE";
-                                free-value: root.selected-values[RandomParam.rate];
-                                free-minimum: 0.05;
-                                free-maximum: 20;
-                                free-default: 2;
-                                free-scale: ValueScale.logarithmic;
-                                free-value-text: round(root.selected-values[RandomParam.rate] * 100) / 100 + " Hz";
-                                synced: root.selected-values[RandomParam.tempo-sync] > 0.5;
-                                division: round(root.selected-values[RandomParam.rate-division]);
-                                free-changed(value) => { root.param-changed(root.selected-slot, RandomParam.rate, value); }
-                                sync-changed(value) => { root.param-changed(root.selected-slot, RandomParam.tempo-sync, value ? 1 : 0); }
-                                division-changed(value) => { root.param-changed(root.selected-slot, RandomParam.rate-division, value); }
+                        SyncMiniKnob {
+                            label: "RATE";
+                            free-value: root.selected-values[LfoParam.rate];
+                            free-minimum: 0.05;
+                            free-maximum: 20;
+                            free-default: 1;
+                            free-scale: ValueScale.logarithmic;
+                            free-value-text: round(root.selected-values[LfoParam.rate] * 10) / 10 + " Hz";
+                            synced: root.selected-values[LfoParam.tempo-sync] > 0.5;
+                            division: round(root.selected-values[LfoParam.rate-division]);
+                            free-changed(value) => { root.param-changed(root.selected-slot, LfoParam.rate, value); }
+                            sync-changed(value) => { root.param-changed(root.selected-slot, LfoParam.tempo-sync, value ? 1 : 0); }
+                            division-changed(value) => { root.param-changed(root.selected-slot, LfoParam.rate-division, value); }
+                            edit-started => { root.param-edit-started(); }
+                            edit-finished => { root.param-edit-finished(); }
+                        }
+                        SyncMiniKnob {
+                            label: "FADE";
+                            free-value: root.selected-values[LfoParam.fade-in];
+                            free-minimum: 0;
+                            free-maximum: 16;
+                            free-default: 0;
+                            free-value-text: root.selected-values[LfoParam.fade-in] < 1
+                                ? round(root.selected-values[LfoParam.fade-in] * 1000) + " ms"
+                                : round(root.selected-values[LfoParam.fade-in] * 10) / 10 + " s";
+                            synced: root.selected-values[LfoParam.fade-sync] > 0.5;
+                            division: round(root.selected-values[LfoParam.fade-division]);
+                            free-changed(value) => { root.param-changed(root.selected-slot, LfoParam.fade-in, value); }
+                            sync-changed(value) => { root.param-changed(root.selected-slot, LfoParam.fade-sync, value ? 1 : 0); }
+                            division-changed(value) => { root.param-changed(root.selected-slot, LfoParam.fade-division, value); }
+                            edit-started => { root.param-edit-started(); }
+                            edit-finished => { root.param-edit-finished(); }
+                        }
+                        VerticalLayout {
+                            width: 40px;
+                            height: 51px;
+                            spacing: 1px;
+                            alignment: center;
+                            Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "LFO source amount";
+                                value: root.selected-values[LfoParam.depth];
+                                default-value: 1;
+                                value-text: round(root.selected-values[LfoParam.depth] * 100) + "%";
+                                diameter: 20px;
+                                changed(value) => { root.param-changed(root.selected-slot, LfoParam.depth, value); }
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            VerticalLayout {
-                                width: 42px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "CHANCE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Chance a due draw lands";
-                                    value: root.selected-values[RandomParam.probability];
-                                    default-value: 1;
-                                    diameter: 20px;
-                                    value-text: round(root.selected-values[RandomParam.probability] * 100) + "%";
-                                    changed(value) => { root.param-changed(root.selected-slot, RandomParam.probability, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[RandomParam.probability] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 42px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "QUANT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Levels a draw snaps to";
-                                    value: root.selected-values[RandomParam.quantize];
-                                    minimum: 0;
-                                    maximum: 16;
-                                    default-value: 0;
-                                    step: 1;
-                                    diameter: 20px;
-                                    value-text: round(root.selected-values[RandomParam.quantize]) < 2 ? "OFF"
-                                        : round(root.selected-values[RandomParam.quantize]) + "";
-                                    changed(value) => { root.param-changed(root.selected-slot, RandomParam.quantize, round(value)); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[RandomParam.quantize]) < 2 ? "OFF" : round(root.selected-values[RandomParam.quantize]) + " LVL"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 42px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "WALK"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Largest drunk step";
-                                    value: root.selected-values[RandomParam.walk];
-                                    minimum: 0.01;
-                                    maximum: 1;
-                                    default-value: 0.25;
-                                    enabled: root.selected-values[RandomParam.drunk] > 0.5;
-                                    diameter: 20px;
-                                    value-text: round(root.selected-values[RandomParam.walk] * 100) + "%";
-                                    changed(value) => { root.param-changed(root.selected-slot, RandomParam.walk, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[RandomParam.walk] * 100) + "%"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 132px; height: 51px; spacing: 1px;
-                                Text { height: 8px; text: "TRIGGER"; color: Theme.text-muted; font-size: 7px; }
-                                SelectorBank {
-                                    height: 18px;
-                                    options: ["CLK", "NOTE"];
-                                    selected-index: round(root.selected-values[RandomParam.trigger]);
-                                    segment-width: 32px;
-                                    tooltip: "Draw on the clock, or once per note";
-                                    selected(index) => { root.param-changed(root.selected-slot, RandomParam.trigger, index); }
-                                }
-                                // Two lamps on one row: the panel has 51px to
-                                // spend and a clipped flag is worse than a
-                                // tighter one.
-                                HorizontalLayout {
-                                    height: 12px;
-                                    spacing: 4px;
-                                LedToggle {
-                                    width: 60px;
-                                    label: "BIPOLAR";
-                                    on: root.selected-values[RandomParam.bipolar] > 0.5;
-                                    tooltip: "Draw across −1..1 rather than 0..1";
-                                    toggled(value) => { root.param-changed(root.selected-slot, RandomParam.bipolar, value ? 1 : 0); }
-                                }
-                                LedToggle {
-                                    width: 56px;
-                                    label: "DRUNK";
-                                    on: root.selected-values[RandomParam.drunk] > 0.5;
-                                    tooltip: "Walk from the held value instead of jumping";
-                                    toggled(value) => { root.param-changed(root.selected-slot, RandomParam.drunk, value ? 1 : 0); }
-                                }
-                                }
-                                Rectangle { vertical-stretch: 1; }
-                            }
-                            Rectangle { horizontal-stretch: 1; }
+                            Text { height: 8px; text: round(root.selected-values[LfoParam.depth] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                         }
-                    }
-                    if root.selected-slot >= 0 && root.selected-kind == 4 : VerticalLayout {
-                        padding: 3px;
-                        spacing: 2px;
-                        HorizontalLayout {
-                            height: 14px;
-                            spacing: 5px;
-                            Text { text: "MATH " + (root.selected-slot + 1); color: Theme.text; font-size: 9px; vertical-alignment: center; }
-                            Text { text: "BIPOLAR  ·  32 FRAME"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
-                            Rectangle { horizontal-stretch: 1; }
-                            ToggleButton {
-                                text: root.assigning ? "ASSIGNING" : "ASSIGN";
-                                checked: root.assigning;
-                                min-width: 76px; max-width: 76px; min-height: 14px; max-height: 14px;
-                                toggled(value) => { root.assignment-toggled(); }
+                        VerticalLayout {
+                            width: 40px;
+                            height: 51px;
+                            spacing: 1px;
+                            alignment: center;
+                            Text { height: 8px; text: "PHASE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "LFO reset phase";
+                                value: root.selected-values[LfoParam.phase];
+                                default-value: 0;
+                                value-text: round(root.selected-values[LfoParam.phase] * 360) + "\u{b0}";
+                                diameter: 20px;
+                                changed(value) => { root.param-changed(root.selected-slot, LfoParam.phase, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
                             }
-                            ToolButton {
-                                text: "×";
-                                tooltip: "Remove this source and its routes";
-                                min-width: 22px; max-width: 22px; min-height: 14px; max-height: 14px;
-                                text-color: Theme.text-muted;
-                                clicked => { root.source-removed(root.selected-slot); }
-                            }
+                            Text { height: 8px; text: round(root.selected-values[LfoParam.phase] * 360) + "\u{b0}"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                         }
-                        HorizontalLayout {
-                            spacing: 4px;
-                            VerticalLayout {
-                                width: 100px; height: 51px; spacing: 2px;
-                                Text { height: 8px; text: "INPUT SLOT"; color: Theme.text-muted; font-size: 7px; }
-                                SelectorBank {
-                                    height: 20px;
-                                    options: ["1", "2", "3", "4"];
-                                    selected-index: round(root.selected-values[MathParam.input-slot]);
-                                    segment-width: 23px;
-                                    tooltip: "Slot this module reads. A lower slot resolves this tick; itself or a higher one reads the previous tick";
-                                    selected(index) => { root.param-changed(root.selected-slot, MathParam.input-slot, index); }
-                                }
-                                Text {
-                                    height: 10px;
-                                    text: round(root.selected-values[MathParam.input-slot]) < root.selected-slot
-                                        ? "SAME TICK" : "PREVIOUS TICK";
-                                    color: Theme.text-faint;
-                                    font-size: 6px;
-                                }
+                        VerticalLayout {
+                            width: 40px;
+                            height: 51px;
+                            spacing: 1px;
+                            alignment: center;
+                            Text { height: 8px; text: "SMOOTH"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "LFO smoothing";
+                                value: root.selected-values[LfoParam.smoothing];
+                                minimum: 0;
+                                maximum: 2;
+                                default-value: 0;
+                                value-text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF"
+                                    : round(root.selected-values[LfoParam.smoothing] * 1000) + " ms";
+                                diameter: 20px;
+                                changed(value) => { root.param-changed(root.selected-slot, LfoParam.smoothing, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
                             }
-                            VerticalLayout {
-                                width: 218px; height: 51px; spacing: 2px;
-                                Text { height: 8px; text: "OPERATOR"; color: Theme.text-muted; font-size: 7px; }
-                                SelectorBank {
-                                    height: 20px;
-                                    options: MathOps.labels;
-                                    selected-index: round(root.selected-values[MathParam.op]);
-                                    segment-width: 30px;
-                                    tooltip: "What this module does to its input";
-                                    selected(index) => { root.param-changed(root.selected-slot, MathParam.op, index); }
-                                }
-                                Text {
-                                    height: 10px;
-                                    text: round(root.selected-values[MathParam.op]) == MathOps.clamp-index
-                                        ? "SLOT " + (round(root.selected-values[MathParam.input-slot]) + 1)
-                                            + " → " + round(root.selected-values[MathParam.clamp-low] * 100) / 100
-                                            + "…" + round(root.selected-values[MathParam.clamp-high] * 100) / 100
-                                        : "SLOT " + (round(root.selected-values[MathParam.input-slot]) + 1)
-                                            + " " + MathOps.labels[round(root.selected-values[MathParam.op])]
-                                            + " " + round(root.selected-values[MathParam.operand] * 100) / 100;
-                                    color: Theme.accent;
-                                    font-size: 7px;
-                                    overflow: elide;
-                                }
-                            }
-                            VerticalLayout {
-                                width: 44px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "OPERAND"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Constant operand";
-                                    value: root.selected-values[MathParam.operand];
-                                    minimum: -4;
-                                    maximum: 4;
-                                    default-value: 1;
-                                    bipolar: true;
-                                    enabled: round(root.selected-values[MathParam.op]) != MathOps.clamp-index;
-                                    diameter: 22px;
-                                    value-text: round(root.selected-values[MathParam.operand] * 100) / 100 + "";
-                                    changed(value) => { root.param-changed(root.selected-slot, MathParam.operand, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[MathParam.operand] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.accent; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 42px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "LOW"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Clamp floor";
-                                    value: root.selected-values[MathParam.clamp-low];
-                                    minimum: -1;
-                                    maximum: 1;
-                                    default-value: -1;
-                                    bipolar: true;
-                                    enabled: round(root.selected-values[MathParam.op]) == MathOps.clamp-index;
-                                    diameter: 20px;
-                                    value-text: round(root.selected-values[MathParam.clamp-low] * 100) / 100 + "";
-                                    changed(value) => { root.param-changed(root.selected-slot, MathParam.clamp-low, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[MathParam.clamp-low] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            VerticalLayout {
-                                width: 42px; height: 51px; spacing: 1px; alignment: center;
-                                Text { height: 8px; text: "HIGH"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob {
-                                    label: "Clamp ceiling";
-                                    value: root.selected-values[MathParam.clamp-high];
-                                    minimum: -1;
-                                    maximum: 1;
-                                    default-value: 1;
-                                    bipolar: true;
-                                    enabled: round(root.selected-values[MathParam.op]) == MathOps.clamp-index;
-                                    diameter: 20px;
-                                    value-text: round(root.selected-values[MathParam.clamp-high] * 100) / 100 + "";
-                                    changed(value) => { root.param-changed(root.selected-slot, MathParam.clamp-high, value); }
-                                    edit-started => { root.param-edit-started(); }
-                                    edit-finished => { root.param-edit-finished(); }
-                                }
-                                Text { height: 8px; text: round(root.selected-values[MathParam.clamp-high] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                            }
-                            Rectangle { horizontal-stretch: 1; }
+                            Text { height: 8px; text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF" : round(root.selected-values[LfoParam.smoothing] * 1000) + "ms"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                         }
+                        VerticalLayout {
+                            width: 40px;
+                            height: 51px;
+                            spacing: 1px;
+                            alignment: center;
+                            Text { height: 8px; text: "P WIDTH"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Square pulse width";
+                                value: root.selected-values[LfoParam.pulse-width];
+                                minimum: 0.01;
+                                maximum: 0.99;
+                                default-value: 0.5;
+                                enabled: round(root.selected-values[LfoParam.waveform]) == 3;
+                                value-text: round(root.selected-values[LfoParam.pulse-width] * 100) + "%";
+                                diameter: 20px;
+                                changed(value) => { root.param-changed(root.selected-slot, LfoParam.pulse-width, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[LfoParam.pulse-width] * 100) + "%"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                 }
-
-                // Destination-first route inspector. More routes scroll in
-                // this same module; a matrix is not required for ordinary use.
-                Rectangle {
-                    horizontal-stretch: 1;
-                    min-width: 170px;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    background: Theme.panel;
-                    VerticalLayout {
-                        padding: 3px;
-                        spacing: 3px;
-                        HorizontalLayout {
-                            height: 10px;
-                            Text { text: "DESTINATIONS"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
-                            Rectangle { horizontal-stretch: 1; }
-                            Text { text: root.routes.length + " ROUTES"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                if root.selected-slot >= 0 && root.selected-kind == 1 : VerticalLayout {
+                    padding: 3px;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        ModulatorShape {
+                            width: 68px;
+                            height: 40px;
+                            kind: 1;
+                            waveform: 0;
+                            amount: root.selected-values[EnvParam.amount];
+                            attack: root.selected-envelope-preview-attack;
+                            decay: root.selected-envelope-preview-decay;
+                            sustain: root.selected-values[EnvParam.sustain];
+                            release: root.selected-envelope-preview-release;
+                            line-color: root.assigning ? Theme.focus : Theme.accent;
                         }
-                        if root.routes.length == 0 : Text {
-                            text: root.assigning
-                                ? "Drag a highlighted parameter to create a route."
-                                : root.selected-slot < 0
-                                    ? "Select a source to inspect or assign it."
-                                    : "Choose Assign, then drag a destination.";
-                            color: Theme.text-muted;
-                            font-size: 9px;
-                            wrap: word-wrap;
+                        SyncMiniKnob {
+                            label: "ATTACK"; free-value: root.selected-values[EnvParam.attack]; free-minimum: 0; free-maximum: 16; free-default: 0.01;
+                            free-value-text: root.selected-values[EnvParam.attack] < 1 ? round(root.selected-values[EnvParam.attack] * 1000) + " ms" : round(root.selected-values[EnvParam.attack] * 10) / 10 + " s";
+                            synced: root.selected-values[EnvParam.attack-sync] > 0.5;
+                            division: round(root.selected-values[EnvParam.attack-division]);
+                            free-changed(value) => { root.param-changed(root.selected-slot, EnvParam.attack, value); }
+                            sync-changed(value) => { root.param-changed(root.selected-slot, EnvParam.attack-sync, value ? 1 : 0); }
+                            division-changed(value) => { root.param-changed(root.selected-slot, EnvParam.attack-division, value); }
+                            edit-started => { root.param-edit-started(); }
+                            edit-finished => { root.param-edit-finished(); }
                         }
-                        if root.routes.length > 0 : ScrollView {
+                        SyncMiniKnob {
+                            label: "DECAY"; free-value: root.selected-values[EnvParam.decay]; free-minimum: 0; free-maximum: 16; free-default: 0.2;
+                            free-value-text: root.selected-values[EnvParam.decay] < 1 ? round(root.selected-values[EnvParam.decay] * 1000) + " ms" : round(root.selected-values[EnvParam.decay] * 10) / 10 + " s";
+                            synced: root.selected-values[EnvParam.decay-sync] > 0.5;
+                            division: round(root.selected-values[EnvParam.decay-division]);
+                            free-changed(value) => { root.param-changed(root.selected-slot, EnvParam.decay, value); }
+                            sync-changed(value) => { root.param-changed(root.selected-slot, EnvParam.decay-sync, value ? 1 : 0); }
+                            division-changed(value) => { root.param-changed(root.selected-slot, EnvParam.decay-division, value); }
+                            edit-started => { root.param-edit-started(); }
+                            edit-finished => { root.param-edit-finished(); }
+                        }
+                        VerticalLayout {
+                            width: 40px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "SUSTAIN"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Envelope sustain";
+                                value: root.selected-values[EnvParam.sustain];
+                                default-value: 0.7;
+                                value-text: round(root.selected-values[EnvParam.sustain] * 100) + "%";
+                                diameter: 20px;
+                                changed(value) => { root.param-changed(root.selected-slot, EnvParam.sustain, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[EnvParam.sustain] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        SyncMiniKnob {
+                            label: "RELEASE"; free-value: root.selected-values[EnvParam.release]; free-minimum: 0; free-maximum: 16; free-default: 0.4;
+                            free-value-text: root.selected-values[EnvParam.release] < 1 ? round(root.selected-values[EnvParam.release] * 1000) + " ms" : round(root.selected-values[EnvParam.release] * 10) / 10 + " s";
+                            synced: root.selected-values[EnvParam.release-sync] > 0.5;
+                            division: round(root.selected-values[EnvParam.release-division]);
+                            free-changed(value) => { root.param-changed(root.selected-slot, EnvParam.release, value); }
+                            sync-changed(value) => { root.param-changed(root.selected-slot, EnvParam.release-sync, value ? 1 : 0); }
+                            division-changed(value) => { root.param-changed(root.selected-slot, EnvParam.release-division, value); }
+                            edit-started => { root.param-edit-started(); }
+                            edit-finished => { root.param-edit-finished(); }
+                        }
+                        VerticalLayout {
+                            width: 40px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Envelope amount";
+                                value: root.selected-values[EnvParam.amount];
+                                default-value: 1;
+                                value-text: round(root.selected-values[EnvParam.amount] * 100) + "%";
+                                diameter: 20px;
+                                changed(value) => { root.param-changed(root.selected-slot, EnvParam.amount, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[EnvParam.amount] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                if root.selected-slot >= 0 && root.selected-kind == 2 : VerticalLayout {
+                    padding: 3px;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        StepBank {
                             horizontal-stretch: 1;
-                            vertical-stretch: 1;
-                            viewport-width: self.visible-width;
-                            viewport-height: max(self.visible-height, root.routes.length * 25px);
-                            VerticalLayout {
-                                spacing: 1px;
-                                for route in root.routes : RouteRow {
-                                    destination: route.destination;
-                                    depth: route.depth;
-                                    polarity: route.polarity;
-                                    allowed: route.allowed;
-                                    polarity-selected(value) => {
-                                        root.route-polarity-changed(route.route-index, value);
-                                    }
-                                    removed => { root.route-removed(route.route-index); }
-                                }
+                            height: 51px;
+                            values: root.selected-values;
+                            offset: StepParam.value-base;
+                            length: round(root.selected-values[StepParam.length]);
+                            line-color: root.assigning ? Theme.focus : Theme.accent;
+                            changed(column, level) => {
+                                root.param-changed(root.selected-slot, StepParam.value-base + column, level);
+                            }
+                            edit-started => { root.param-edit-started(); }
+                            edit-finished => { root.param-edit-finished(); }
+                        }
+                        VerticalLayout {
+                            width: 44px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "RATE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Step rate";
+                                value: root.selected-values[StepParam.division];
+                                minimum: 0;
+                                maximum: 20;
+                                default-value: 13;
+                                step: 1;
+                                diameter: 22px;
+                                value-text: Divisions.label(round(root.selected-values[StepParam.division]));
+                                changed(value) => { root.param-changed(root.selected-slot, StepParam.division, round(value)); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: Divisions.label(round(root.selected-values[StepParam.division])); color: Theme.focus; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        VerticalLayout {
+                            width: 40px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "LENGTH"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Steps played";
+                                value: root.selected-values[StepParam.length];
+                                minimum: 1;
+                                maximum: 16;
+                                default-value: 8;
+                                step: 1;
+                                diameter: 20px;
+                                value-text: round(root.selected-values[StepParam.length]) + "";
+                                changed(value) => { root.param-changed(root.selected-slot, StepParam.length, round(value)); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[StepParam.length]) + " STEPS"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        VerticalLayout {
+                            width: 40px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "GLIDE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Step glide";
+                                value: root.selected-values[StepParam.glide];
+                                default-value: 0;
+                                diameter: 20px;
+                                value-text: root.selected-values[StepParam.glide] <= 0.0001 ? "OFF"
+                                    : round(root.selected-values[StepParam.glide] * 100) + "%";
+                                changed(value) => { root.param-changed(root.selected-slot, StepParam.glide, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: root.selected-values[StepParam.glide] <= 0.0001 ? "OFF" : round(root.selected-values[StepParam.glide] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                if root.selected-slot >= 0 && root.selected-kind == 3 : VerticalLayout {
+                    padding: 3px;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        ModulatorShape {
+                            width: 68px;
+                            height: 46px;
+                            kind: 3;
+                            line-color: root.assigning ? Theme.focus : Theme.accent;
+                        }
+                        SyncMiniKnob {
+                            label: "RATE";
+                            free-value: root.selected-values[RandomParam.rate];
+                            free-minimum: 0.05;
+                            free-maximum: 20;
+                            free-default: 2;
+                            free-scale: ValueScale.logarithmic;
+                            free-value-text: round(root.selected-values[RandomParam.rate] * 100) / 100 + " Hz";
+                            synced: root.selected-values[RandomParam.tempo-sync] > 0.5;
+                            division: round(root.selected-values[RandomParam.rate-division]);
+                            free-changed(value) => { root.param-changed(root.selected-slot, RandomParam.rate, value); }
+                            sync-changed(value) => { root.param-changed(root.selected-slot, RandomParam.tempo-sync, value ? 1 : 0); }
+                            division-changed(value) => { root.param-changed(root.selected-slot, RandomParam.rate-division, value); }
+                            edit-started => { root.param-edit-started(); }
+                            edit-finished => { root.param-edit-finished(); }
+                        }
+                        VerticalLayout {
+                            width: 42px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "CHANCE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Chance a due draw lands";
+                                value: root.selected-values[RandomParam.probability];
+                                default-value: 1;
+                                diameter: 20px;
+                                value-text: round(root.selected-values[RandomParam.probability] * 100) + "%";
+                                changed(value) => { root.param-changed(root.selected-slot, RandomParam.probability, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[RandomParam.probability] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        VerticalLayout {
+                            width: 42px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "QUANT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Levels a draw snaps to";
+                                value: root.selected-values[RandomParam.quantize];
+                                minimum: 0;
+                                maximum: 16;
+                                default-value: 0;
+                                step: 1;
+                                diameter: 20px;
+                                value-text: round(root.selected-values[RandomParam.quantize]) < 2 ? "OFF"
+                                    : round(root.selected-values[RandomParam.quantize]) + "";
+                                changed(value) => { root.param-changed(root.selected-slot, RandomParam.quantize, round(value)); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[RandomParam.quantize]) < 2 ? "OFF" : round(root.selected-values[RandomParam.quantize]) + " LVL"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        VerticalLayout {
+                            width: 42px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "WALK"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Largest drunk step";
+                                value: root.selected-values[RandomParam.walk];
+                                minimum: 0.01;
+                                maximum: 1;
+                                default-value: 0.25;
+                                enabled: root.selected-values[RandomParam.drunk] > 0.5;
+                                diameter: 20px;
+                                value-text: round(root.selected-values[RandomParam.walk] * 100) + "%";
+                                changed(value) => { root.param-changed(root.selected-slot, RandomParam.walk, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[RandomParam.walk] * 100) + "%"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        VerticalLayout {
+                            width: 132px; height: 51px; spacing: 1px;
+                            // Two lamps on one row: the panel has 51px to
+                            // spend and a clipped flag is worse than a
+                            // tighter one.
+                            HorizontalLayout {
+                                height: 12px;
+                                spacing: 4px;
+                            LedToggle {
+                                width: 60px;
+                                label: "BIPOLAR";
+                                on: root.selected-values[RandomParam.bipolar] > 0.5;
+                                tooltip: "Draw across −1..1 rather than 0..1";
+                                toggled(value) => { root.param-changed(root.selected-slot, RandomParam.bipolar, value ? 1 : 0); }
+                            }
+                            LedToggle {
+                                width: 56px;
+                                label: "DRUNK";
+                                on: root.selected-values[RandomParam.drunk] > 0.5;
+                                tooltip: "Walk from the held value instead of jumping";
+                                toggled(value) => { root.param-changed(root.selected-slot, RandomParam.drunk, value ? 1 : 0); }
+                            }
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                if root.selected-slot >= 0 && root.selected-kind == 4 : VerticalLayout {
+                    padding: 3px;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        VerticalLayout {
+                            width: 218px; height: 51px; spacing: 2px;
+                            Text { height: 8px; text: "OPERATOR"; color: Theme.text-muted; font-size: 7px; }
+                            SelectorBank {
+                                height: 20px;
+                                options: MathOps.labels;
+                                selected-index: round(root.selected-values[MathParam.op]);
+                                segment-width: 30px;
+                                tooltip: "What this module does to its input";
+                                selected(index) => { root.param-changed(root.selected-slot, MathParam.op, index); }
+                            }
+                            Text {
+                                height: 10px;
+                                text: round(root.selected-values[MathParam.op]) == MathOps.clamp-index
+                                    ? "SLOT " + (round(root.selected-values[MathParam.input-slot]) + 1)
+                                        + " → " + round(root.selected-values[MathParam.clamp-low] * 100) / 100
+                                        + "…" + round(root.selected-values[MathParam.clamp-high] * 100) / 100
+                                    : "SLOT " + (round(root.selected-values[MathParam.input-slot]) + 1)
+                                        + " " + MathOps.labels[round(root.selected-values[MathParam.op])]
+                                        + " " + round(root.selected-values[MathParam.operand] * 100) / 100;
+                                color: Theme.accent;
+                                font-size: 7px;
+                                overflow: elide;
                             }
                         }
-                        Rectangle { vertical-stretch: 1; }
+                        VerticalLayout {
+                            width: 44px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "OPERAND"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Constant operand";
+                                value: root.selected-values[MathParam.operand];
+                                minimum: -4;
+                                maximum: 4;
+                                default-value: 1;
+                                bipolar: true;
+                                enabled: round(root.selected-values[MathParam.op]) != MathOps.clamp-index;
+                                diameter: 22px;
+                                value-text: round(root.selected-values[MathParam.operand] * 100) / 100 + "";
+                                changed(value) => { root.param-changed(root.selected-slot, MathParam.operand, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[MathParam.operand] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        VerticalLayout {
+                            width: 42px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "LOW"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Clamp floor";
+                                value: root.selected-values[MathParam.clamp-low];
+                                minimum: -1;
+                                maximum: 1;
+                                default-value: -1;
+                                bipolar: true;
+                                enabled: round(root.selected-values[MathParam.op]) == MathOps.clamp-index;
+                                diameter: 20px;
+                                value-text: round(root.selected-values[MathParam.clamp-low] * 100) / 100 + "";
+                                changed(value) => { root.param-changed(root.selected-slot, MathParam.clamp-low, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[MathParam.clamp-low] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        VerticalLayout {
+                            width: 42px; height: 51px; spacing: 1px; alignment: center;
+                            Text { height: 8px; text: "HIGH"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            MiniKnob {
+                                label: "Clamp ceiling";
+                                value: root.selected-values[MathParam.clamp-high];
+                                minimum: -1;
+                                maximum: 1;
+                                default-value: 1;
+                                bipolar: true;
+                                enabled: round(root.selected-values[MathParam.op]) == MathOps.clamp-index;
+                                diameter: 20px;
+                                value-text: round(root.selected-values[MathParam.clamp-high] * 100) / 100 + "";
+                                changed(value) => { root.param-changed(root.selected-slot, MathParam.clamp-high, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            Text { height: 8px; text: round(root.selected-values[MathParam.clamp-high] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                     }
+                }
+                        }
+                    }
+            // Destination-first route inspector. More routes scroll in
+            // this same module; a matrix is not required for ordinary use.
+            Rectangle {
+                horizontal-stretch: 1;
+                min-width: 170px;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: Theme.panel;
+                VerticalLayout {
+                    padding: 3px;
+                    spacing: 3px;
+                    HorizontalLayout {
+                        height: 10px;
+                        Text { text: "DESTINATIONS"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text { text: root.routes.length + " ROUTES"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                    }
+                    if root.routes.length == 0 : Text {
+                        text: root.assigning
+                            ? "Drag a highlighted parameter to create a route."
+                            : root.selected-slot < 0
+                                ? "Select a source to inspect or assign it."
+                                : "Choose Assign, then drag a destination.";
+                        color: Theme.text-muted;
+                        font-size: 9px;
+                        wrap: word-wrap;
+                    }
+                    if root.routes.length > 0 : ScrollView {
+                        horizontal-stretch: 1;
+                        vertical-stretch: 1;
+                        viewport-width: self.visible-width;
+                        viewport-height: max(self.visible-height, root.routes.length * 25px);
+                        VerticalLayout {
+                            spacing: 1px;
+                            for route in root.routes : RouteRow {
+                                destination: route.destination;
+                                depth: route.depth;
+                                polarity: route.polarity;
+                                allowed: route.allowed;
+                                polarity-selected(value) => {
+                                    root.route-polarity-changed(route.route-index, value);
+                                }
+                                removed => { root.route-removed(route.route-index); }
+                            }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    }
+                }
                 }
             }
         }

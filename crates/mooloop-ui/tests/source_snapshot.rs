@@ -279,6 +279,7 @@ fn render_sampler_source_editor() {
             steps: Vec::<f32>::new().as_slice().into(),
             step_length: 16,
             math_op: 0,
+            output: -0.42,
             retrigger: false,
             selected: false,
         },
@@ -300,6 +301,7 @@ fn render_sampler_source_editor() {
             steps: Vec::<f32>::new().as_slice().into(),
             step_length: 16,
             math_op: 0,
+            output: 0.68,
             retrigger: true,
             selected: true,
         },
@@ -316,6 +318,7 @@ fn render_sampler_source_editor() {
             .as_slice()
             .into(),
             step_length: 8,
+            output: 0.8,
             depth: 1.0,
             pulse_width: 0.5,
             preview_sustain: 0.7,
@@ -328,6 +331,7 @@ fn render_sampler_source_editor() {
             math_op: 2,
             steps: Vec::<f32>::new().as_slice().into(),
             step_length: 16,
+            output: -0.25,
             depth: 1.0,
             pulse_width: 0.5,
             preview_sustain: 0.7,
@@ -346,7 +350,21 @@ fn render_sampler_source_editor() {
             allowed: true,
         },
     ]))));
-    ui.set_modulation_max_sources(4);
+    ui.set_modulation_max_sources(8);
+    ui.set_modulation_slot_names(
+        vec![
+            SharedString::from("1"),
+            SharedString::from("2"),
+            SharedString::from("3"),
+            SharedString::from("4"),
+            SharedString::from("5"),
+            SharedString::from("6"),
+            SharedString::from("7"),
+            SharedString::from("8"),
+        ]
+        .as_slice()
+        .into(),
+    );
     ui.set_modulation_selected_kind(1);
     ui.set_modulation_input_channels(
         vec![SharedString::from("1 · Kick"), SharedString::from("2 · Snare")]
