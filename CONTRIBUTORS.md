@@ -282,6 +282,19 @@ work session you can recall being part of, and don't stress over precision.
   could not scroll, and a per-slot segment bank -- with a test that renders
   the same shelf at eight and sixteen so a regression is visible rather than
   theoretical.
+  Then went to size the engine's per-channel arrays by the live channel
+  count and found the plan I had just written was wrong about where the
+  memory was. It said 3.1 MiB and named the modulator arrays, because the
+  measurement behind it had only tallied what the modulator work touched.
+  The render graph actually reserves 42.8 MiB, of which modulation is 433
+  KiB -- one percent -- and 37.7 MiB is the channel strip, almost all of it
+  `EffectChain`. The cause is that `MAX_CHANNELS` and
+  `MAX_EFFECTS_PER_CHANNEL` are both the u8 index space, so the graph
+  reserves their product: 65,536 effect slots, each with a 320-byte pending
+  queue. No individual definition looks unreasonable; the number only exists
+  when they are multiplied, which is why it went unnoticed and why the fix
+  is a pinned test rather than a paragraph. Stopped short of the refactor
+  and rewrote the plan against the real numbers instead.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

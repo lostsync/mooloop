@@ -4153,3 +4153,50 @@ mod tests {
         );
     }
 }
+
+
+#[cfg(test)]
+mod footprint {
+    use super::*;
+
+    /// What the render graph preallocates, and why. Every per-channel array
+    /// is sized at `MAX_CHANNELS`, and the effect chain inside each one is
+    /// sized at `MAX_EFFECTS_PER_CHANNEL`. Both ceilings are `u8::MAX + 1`,
+    /// so the graph reserves the *product* of two full index spaces: 65,536
+    /// effect slots that a project will never populate.
+    ///
+    /// This is pinned rather than described because it is invisible at every
+    /// individual definition — no single array looks unreasonable, and the
+    /// number only appears when they are multiplied. If this test fails,
+    /// something changed a ceiling or widened a per-slot struct; check the
+    /// new total is one worth paying before updating it.
+    ///
+    /// `docs/plans/modulator-capacity/02-size-by-what-exists.md`.
+    #[test]
+    fn the_render_graph_preallocates_a_measured_amount() {
+        use core::mem::size_of;
+
+        // Both ceilings are the u8 index space, which is what makes the
+        // product large rather than either one being unreasonable alone.
+        assert_eq!(MAX_CHANNELS, 256);
+        assert_eq!(MAX_EFFECTS_PER_CHANNEL, 256);
+
+        // The effect chain dominates a strip: its five generators together
+        // are under 7 KiB, and the chain is 140 KiB of per-slot arrays.
+        assert_eq!(size_of::<PendingEffectParams>(), 320);
+        assert_eq!(size_of::<EffectChain>(), 143_936);
+        assert_eq!(size_of::<ChannelStrip>(), 150_904);
+
+        let per_channel = size_of::<ChannelStrip>()
+            + size_of::<EventList>()
+            + size_of::<ModRack>()
+            + size_of::<ModulatorRack>()
+            + size_of::<ControlOutputs>();
+        let total = per_channel * MAX_CHANNELS;
+
+        // 42.8 MiB reserved at startup for a project that typically uses a
+        // few dozen channels and a few effects each.
+        assert_eq!(per_channel, 171_076);
+        assert_eq!(total / 1024, 42_769);
+    }
+}

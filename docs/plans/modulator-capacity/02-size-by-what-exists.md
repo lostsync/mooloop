@@ -1,49 +1,86 @@
 # 02 — Size by what exists
 
-The measurement in `00-status.md` says the expensive thing is not modules,
-it is `MAX_CHANNELS`. At eight slots the engine preallocates 2 MiB of
-control outputs and 200 KiB of DSP racks for **256 channels**, whatever
-the project actually contains. Every capacity increase multiplies that
-same waste.
+**This step was rewritten on 2026-09-01 after measuring properly.** The
+first draft said the expensive per-channel arrays were the modulation ones
+and put the total at 3.1 MiB. Both were wrong, because the measurement
+behind them only tallied what the modulator work had touched.
 
-This step is worth taking even if the slot count never moves again.
+## What is actually reserved
 
-## The shape
+`the_render_graph_preallocates_a_measured_amount` in `render.rs` pins it:
 
-- `RenderGraph` already holds `modulators: Vec<ModulatorRack>` and a
-  parallel control-output buffer, both built with `(0..MAX_CHANNELS)` at
-  construction. Grow them with the project's channel count instead, on
-  the same structural path that already adds a channel.
-- Growth allocates, so it happens where allocation is already legal: the
-  UI thread, through the existing structural command route, with the old
-  buffer handed back for the UI thread to drop. This is the install and
-  reclaim pattern the effect chain already uses; unlike the modulator
-  slots themselves, a whole-graph buffer is exactly the case it was
-  built for.
-- The realtime path keeps indexing by channel with no bounds surprise,
-  because the graph is only ever asked for channels it has been told
-  exist.
-- `ModulatorMeters` is a lock-free published table read by the UI. It is
-  8 KiB at eight slots and not worth the risk of resizing under a reader;
-  leave it dimensioned at `MAX_CHANNELS` and say so.
+| Per channel | Size | × 256 channels |
+| --- | --- | --- |
+| `ChannelStrip` | 150,904 B | **37.7 MiB** |
+| `EventList` | 10,248 B | 2.5 MiB |
+| `ControlOutputs` | 8,192 B | 2.0 MiB |
+| `ModRack` | 932 B | 233 KiB |
+| `ModulatorRack` | 800 B | 200 KiB |
+| **Total** | 171,076 B | **42.8 MiB** |
 
-## The number to beat
+Modulation is 433 KiB of that — one percent. The strip is 88%, and inside
+the strip it is not the generators (all five together are under 7 KiB); it
+is `EffectChain` at 140 KiB.
 
-3.1 MiB total at eight slots and 256 channels. A sixteen-channel project
-should land near 200 KiB for the same capacity. Measure it the way step 03
-measured the ring rather than asserting it, and keep the table in
-`00-status.md` honest.
+## The actual cause: a product of two index spaces
 
-## Explicitly not in this step
+`MAX_CHANNELS` and `MAX_EFFECTS_PER_CHANNEL` are both `u8::MAX + 1 = 256`.
+Each is defensible on its own — the limit is the width of the index, and
+`EFFECTS_FEEDBACK.md` explicitly asked for an effect ceiling "high enough
+that your cpu would choke from DSP before you hit it". Neither array looks
+unreasonable at its own definition.
 
-- No change to `MAX_CHANNELS` itself. 256 as a ceiling is fine once
-  nothing is preallocated against it.
-- No change to the command ring, which is step 03's business.
+The cost is that they multiply. The graph reserves **65,536 effect slots**,
+each carrying a `PendingEffectParams` queue (320 B) and an
+`Option<EffectParams>` (140 B), for a project that will populate a few
+dozen. That is 21 MiB of pending-event queues alone.
+
+So this is not a modulation problem and never was. It is one line of
+arithmetic that is invisible at every individual definition and only
+appears when the definitions are multiplied.
+
+## Two shapes, and the one to take
+
+**Shape A — materialize channels on demand.** Make the per-channel
+collections `Vec<Option<Box<ChannelStrip>>>` and friends, with a channel
+built on the UI thread and installed through a structural command, the way
+`InstallEffect` already works. The vector of pointers is 2 KiB; a live
+sixteen-channel project pays 2.7 MiB instead of 42.8 MiB. It also makes
+the block loop skip absent channels instead of walking 256 strips.
+
+**Shape B — size the effect chain to its installed length.** Keep 256
+channels but stop giving each one 256 effect slots up front. `bound`
+already tracks the populated prefix, so the chain knows it is sparse.
+
+A is the better trade. It fixes all five arrays at once rather than the
+biggest one, it preserves both ceilings exactly as they are — nobody has
+to argue about how many effects a channel may have — and it reuses an
+install/reclaim pattern the codebase already runs on the audio path. B
+only moves the effect line and still leaves 5 MiB of events and control
+outputs reserved for channels that do not exist.
+
+Take A. Take B only if A's structural-command plumbing turns out to fight
+something in the block loop that is not visible from here.
+
+## The risk to respect
+
+This is the realtime path, not a UI surface. The rules that must hold:
+
+- No allocation and no `Box` drop on the audio thread. A new channel
+  arrives pre-built through the structural ring; a removed one leaves
+  through reclaim, exactly as effect nodes do.
+- An absent channel behaves as a silent one, not as a panic. Every
+  `strips[i]` becomes a checked access, and the block loop skips rather
+  than processes.
+- Offline render and realtime render stay identical, which the existing
+  render tests already pin.
 
 ## Done when
 
-- A project's engine memory tracks its channel count rather than the
-  ceiling, measured before and after.
-- Adding and removing channels while playing does not allocate on the
-  audio thread, pinned by the existing structural-command tests.
-- Offline render matches realtime, unchanged.
+- A project's engine memory tracks its channel count, measured before and
+  after, with `the_render_graph_preallocates_a_measured_amount` updated to
+  describe the live figure rather than the ceiling.
+- Adding and removing channels while playing allocates nothing on the
+  audio thread.
+- `cargo test --workspace` on the build box, with the existing render and
+  structural-command tests unchanged.

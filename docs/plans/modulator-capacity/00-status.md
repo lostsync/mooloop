@@ -12,25 +12,39 @@ depends on; that is the precondition this plan builds on.
 
 ## What it costs today, measured
 
-Every number below is `MAX_CHANNELS = 256` multiplied by a per-channel
-array, preallocated at startup. Measured on 2026-09-01 at three capacities:
+Modulator capacity itself is cheap, and grows linearly:
 
-| Slots | Command ring | DSP racks | Control outputs | Meters | Total |
-| --- | --- | --- | --- | --- | --- |
-| 8 | 936 KiB | 200 KiB | 2048 KiB | 8 KiB | **3.1 MiB** |
-| 16 | 1544 KiB | 400 KiB | 4096 KiB | 16 KiB | **5.9 MiB** |
-| 32 | 2760 KiB | 800 KiB | 8192 KiB | 32 KiB | **11.5 MiB** |
+| Slots | Command ring | DSP racks | Control outputs | Meters |
+| --- | --- | --- | --- | --- |
+| 8 | 936 KiB | 200 KiB | 2048 KiB | 8 KiB |
+| 16 | 1544 KiB | 400 KiB | 4096 KiB | 16 KiB |
+| 32 | 2760 KiB | 800 KiB | 8192 KiB | 32 KiB |
 
-The surprise is where the weight sits. The command ring is the thing
-`bridge.rs` warns about and the thing step 03 pinned a test to, but it is
-not the biggest line: **control outputs are**, at roughly twice the ring.
-`ControlOutputs` is `[[f32; slots]; 256 control ticks]` per channel, held
-for 256 channels — a full block's worth of resolved control signal for
-every channel a project could ever have, whether or not it exists.
+**A first version of this plan stopped there and drew the wrong
+conclusion.** Measuring only the modulator arrays put the graph's total at
+3.1 MiB and named control outputs as the biggest line. Measuring the whole
+render graph, which step 02 now pins in a test, says otherwise:
 
-So the honest reading is that capacity is not expensive; **dimensioning
-everything at `MAX_CHANNELS` is**. A project with sixteen channels pays
-for two hundred and forty it does not have, at every capacity.
+| Per channel | × 256 channels |
+| --- | --- |
+| `ChannelStrip` 150,904 B | **37.7 MiB** |
+| `EventList` 10,248 B | 2.5 MiB |
+| `ControlOutputs` 8,192 B | 2.0 MiB |
+| `ModRack` + `ModulatorRack` 1,732 B | 433 KiB |
+| **171,076 B** | **42.8 MiB** |
+
+Modulation is one percent of it. The strip is 88%, and inside the strip
+the weight is `EffectChain` at 140 KiB — because `MAX_CHANNELS` and
+`MAX_EFFECTS_PER_CHANNEL` are both the u8 index space, so the graph
+reserves the *product*: 65,536 effect slots, each with a 320-byte pending
+queue, for a project that will populate a few dozen.
+
+So the conclusion survives in a stronger form than it was first written.
+Capacity is not expensive; **dimensioning by ceilings is**, and it is
+expensive whether or not the modulator count ever moves. The lesson worth
+keeping is that the number was invisible at every individual definition
+and only appeared when they were multiplied — which is why step 02 leaves
+a test behind rather than a paragraph.
 
 ## Order
 
@@ -41,9 +55,12 @@ for two hundred and forty it does not have, at every capacity.
    input jack became a name-carrying picker, and
    `the_module_grid_scales_with_capacity_alone` renders the shelf at eight
    and sixteen so a re-introduced literal fails a test.
-2. `02-size-by-what-exists.md` — dimension the per-channel engine arrays
-   by the live channel count rather than by `MAX_CHANNELS`. This is where
-   the memory actually is, and it pays off at every capacity.
+2. `02-size-by-what-exists.md` — materialize channels on demand instead
+   of reserving 256 of everything. This is where the memory actually is —
+   42.8 MiB, of which modulation is 433 KiB — and it pays off whether or
+   not the modulator count ever moves. **Not started**; the measurement
+   and the two candidate shapes are written up, and the footprint is
+   pinned by a test.
 3. `03-per-slot-commands.md` — stop shipping the whole rack by value on
    every edit, so the ring stops growing with capacity at all.
 
