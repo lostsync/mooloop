@@ -7,6 +7,22 @@ not measured. Section names in parentheses refer to the harness's CSV output.
 Ratio throughout means **output frames per input frame**: `1.5` is longer and
 slower, `0.75` is shorter and faster.
 
+Preset names in the tables below are abbreviated by window size. Two WSOLA
+presets share window 1024, so read the abbreviations as:
+
+| Table label | CSV preset | Onset snapping |
+| --- | --- | --- |
+| wsola 512 | `wsola_fast` | off |
+| wsola 768 | `wsola_break` | off |
+| wsola 1024 | `wsola_nosnap` | off |
+| wsola 2048 | `wsola_smooth` | on |
+
+**Every headline WSOLA number below is `wsola_nosnap`**, i.e. snapping off,
+which is what the recommendation actually proposes to ship -- snapping is
+deferred to #33. The snapping preset (`wsola_music`, same 1024 window) is
+reported only in the deferrals section, where it costs up to 255 cents on a
+held bass note.
+
 ## Recommendation
 
 **Own a WSOLA time-domain stretcher in `mooloop-dsp`. No external dependency,
@@ -182,7 +198,7 @@ Recommend **live**. Measured basis:
 | Latency | 0 frames. `latency_frames()` returns 0; nothing to compensate. |
 | Sample lookahead | `window + search` = 1536 frames past the nominal analysis position. A region bound, not latency. |
 | Tail | None beyond the voice's own amp envelope. No flush at note-off. |
-| Ratio change | Applied at the next block boundary. No crossfade, no declick, no re-preparation. |
+| Ratio change | Takes effect at the next OLA hop, not the next block: `set_ratio` only updates the value `produce_frame` reads, so a change waits up to one hop (~10.7 ms at the default window). No crossfade, no declick, no re-preparation. |
 | Live vs prepared | Live per voice. Prepared/cached assets explicitly out of scope. |
 | Quality modes | Two. `Music` (1024) is the default. `Drums` (512) extends usable ratios to 2.0 on a break but must be labelled percussion-only. |
 | CPU per voice | 65.9 µs mean / 298 µs worst per 128-frame block (2.5% / 11.2% of the 2667 µs budget). |
