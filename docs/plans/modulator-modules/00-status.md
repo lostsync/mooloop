@@ -6,8 +6,29 @@ collapsed onto one `param-changed` verb (net −351 lines), param edits
 undo, and sources can be removed. The envelope's gate input stayed a
 dedicated jack verb by design. The mono/poly device-LFO surface is a
 separate legacy surface that would benefit from the same collapse later;
-it is not part of this plan. Steps 02 and 03 are not started, and each
-starts from a fresh worktree off `main` once the previous step merges.
+it is not part of this plan.
+
+Step 02 landed on `feat/module-vocabulary` (2026-09-01): step, random,
+and math kinds, each a descriptor table plus a tick, with the add menu's
+two callbacks collapsed into one `source-added(kind)` verb and the
+per-kind name matches replaced by `ModulatorKind::badge`. Three things
+the plan left open resolved in the doing:
+
+- The slot-order rule needed no machinery. `outputs` already holds last
+  tick's value everywhere the evaluation pass has not reached, so a math
+  module reading a lower slot sees this tick and one reading itself or a
+  higher slot sees the previous — for free, and self-reference is bounded
+  by the module's own output clamp rather than by a cycle check.
+- Random kept the LFO's three-id tempo-syncable rate rather than the
+  division-only clock the plan describes, because it is a promotion of
+  that LFO's hidden sample-and-hold and dropping the free rate would be a
+  regression for anything migrating off the waveform. Step is
+  division-only, as written.
+- `Clamp` needed a second and third id (`clamp_low`, `clamp_high`) beside
+  the arithmetic operand, so all three defaults could be no-ops.
+
+Step 03 is not started, and starts from a fresh worktree off `main` once
+step 02 merges.
 
 Adam pulled this in explicitly on 2026-08-31: the modulation
 rack becomes the power plant of the app — a grid of small modules, each a
@@ -29,6 +50,7 @@ nothing here replaces `ParamAddr`, routes, destination policy, or the
    param edits become undoable, and sources become deletable.
 2. `02-the-module-vocabulary.md` — first new module kinds (step sequencer,
    random/drunk, math/clamp), proving the refactor made kinds cheap.
+   **Landed 2026-09-01.**
 3. `03-the-grid.md` — the expanded grid presentation and capacity growth.
 
 Each step is one branch. A step lands playable, saveable, and renderable
