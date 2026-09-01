@@ -61,6 +61,9 @@
 //! cents on a held bass note — so it waits for the detector in #33.
 
 use crate::interpolate::{Region, SincTable, MAX_HALF_TAPS};
+use mooloop_core::{
+    StretchMode, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
+};
 
 /// Window length the default mode aims for, in milliseconds.
 ///
@@ -84,8 +87,8 @@ const DRUMS_WINDOW_MS: f64 = 10.667;
 /// Frames, because this control's meaning is the repetition rate it produces
 /// — `sample_rate / (grain / 2)` — and a user sweeping it is chasing a pitch,
 /// not a duration. At 48 kHz the range buzzes from about 23 Hz to 1.5 kHz.
-pub const GRAIN_MIN_FRAMES: u32 = 64;
-pub const GRAIN_MAX_FRAMES: u32 = 4096;
+pub const GRAIN_MIN_FRAMES: u32 = MIN_STRETCH_GRAIN as u32;
+pub const GRAIN_MAX_FRAMES: u32 = MAX_STRETCH_GRAIN as u32;
 pub const GRAIN_DEFAULT_FRAMES: u32 = 1024;
 
 /// Ratio bounds. Output frames per input frame, so above 1.0 is slower.
@@ -96,8 +99,8 @@ pub const GRAIN_DEFAULT_FRAMES: u32 = 1024;
 /// cost is per output hop and the output hop rate is fixed however slowly the
 /// analysis pointer crawls. The floor is where speeding up stops resembling
 /// the source at all.
-pub const MIN_RATIO: f64 = 0.25;
-pub const MAX_RATIO: f64 = 16.0;
+pub const MIN_RATIO: f64 = MIN_STRETCH_RATIO as f64;
+pub const MAX_RATIO: f64 = MAX_STRETCH_RATIO as f64;
 
 /// Resolution of the shared Hann prototype. Read with linear interpolation at
 /// whatever the active window length is, so changing grain size mid-render
@@ -105,29 +108,15 @@ pub const MAX_RATIO: f64 = 16.0;
 /// window — which would mean thousands of `cos` calls on the audio thread.
 const HANN_TABLE: usize = 4096;
 
-/// How the window is sized and whether the splice point is searched for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum StretchMode {
-    /// 21.3 ms window, similarity search on. Transparent, preserves bass,
-    /// and the default for anything pitched.
-    #[default]
-    Music,
-    /// 10.7 ms window, similarity search on. Sharper transients and usable to
-    /// ratio 2.0 on a break, but it destroys low fundamentals — surface it as
-    /// percussion-only.
-    Drums,
-    /// Free window, **no similarity search**. Fixed grains repeating at the
-    /// hop rate: the rattle. Not a lower quality setting than the other two;
-    /// a different instrument.
-    Grain,
-}
-
-impl StretchMode {
-    /// Whether this mode hunts for the best splice point. The one structural
-    /// difference between transparency and rattle.
-    fn searches(self) -> bool {
-        !matches!(self, Self::Grain)
-    }
+/// Whether a mode hunts for the best splice point. The one structural
+/// difference between transparency and rattle.
+///
+/// A free function rather than a method because [`StretchMode`] is
+/// `mooloop_core`'s -- it is serialized into projects and addressed by
+/// descriptor, so it belongs with the other device parameters rather than
+/// here, and this crate cannot hang inherent methods on it.
+fn searches(mode: StretchMode) -> bool {
+    !matches!(mode, StretchMode::Grain)
 }
 
 /// Window length in frames for a mode at a sample rate.
@@ -222,7 +211,7 @@ impl Stretcher {
             window,
             hop,
             overlap: window - hop,
-            search: if mode.searches() { hop } else { 0 },
+            search: if searches(mode) { hop } else { 0 },
             corr_decim: 2,
             pending: None,
             hann: hann_table(),
@@ -331,7 +320,7 @@ impl Stretcher {
         self.window = window;
         self.hop = window / 2;
         self.overlap = window - self.hop;
-        self.search = if mode.searches() { self.hop } else { 0 };
+        self.search = if searches(mode) { self.hop } else { 0 };
         self.pending = None;
     }
 
@@ -456,7 +445,7 @@ impl Stretcher {
 
         let nominal = self.analysis_pos.round() as i64;
 
-        let chosen = if self.first_frame || !self.mode.searches() {
+        let chosen = if self.first_frame || !searches(self.mode) {
             // `Grain` never searches: the splice lands wherever the analysis
             // pointer says, which is what makes the repetition periodic and
             // the rattle pitched. On the first frame there is also nothing to
@@ -633,6 +622,17 @@ pub struct StretchReader {
     produced: i64,
     /// Fractional read position in the stretched stream.
     pos: f64,
+    /// Where in the *source* the frame being handed out right now came from.
+    ///
+    /// Not the same as the stretcher's analysis pointer, which is the
+    /// production frontier: it runs ahead by up to a whole hop plus the
+    /// scratch fill, because a hop is computed before any of it is consumed.
+    /// Using the frontier as a playhead puts the cursor ahead of what is
+    /// audible, and -- worse -- using it for end-of-region detection ends a
+    /// one-shot early and drops its tail. So this integrates at *consumption*
+    /// time instead: each output frame eats `rate` stretched frames, and each
+    /// stretched frame is `1 / ratio` of a source frame.
+    source_pos: f64,
 }
 
 impl StretchReader {
@@ -643,6 +643,7 @@ impl StretchReader {
             base: 0,
             produced: 0,
             pos: 0.0,
+            source_pos: 0.0,
         };
         reader.reset(0.0);
         reader
@@ -665,10 +666,16 @@ impl StretchReader {
         self.stretcher.state_bytes() + self.scratch.capacity() * 8
     }
 
-    /// Where in the *source* the output is currently speaking from, for a
-    /// playhead display.
+    /// The stretcher's production frontier. Ahead of what is sounding; use
+    /// [`Self::source_pos`] for anything the listener or the user sees.
     pub fn analysis_pos(&self) -> f64 {
         self.stretcher.analysis_pos()
+    }
+
+    /// Where in the source the frame just handed out came from. This is the
+    /// playhead, and it is what end-of-region detection must compare.
+    pub fn source_pos(&self) -> f64 {
+        self.source_pos
     }
 
     /// Restart at an absolute input frame. Allocation- and drop-free.
@@ -684,6 +691,7 @@ impl StretchReader {
         self.base = -MARGIN;
         self.produced = 0;
         self.pos = 0.0;
+        self.source_pos = start_frame;
     }
 
     /// Produce one output frame at `rate`, where 1.0 is the source's own
@@ -704,6 +712,12 @@ impl StretchReader {
             Region::whole(SCRATCH),
         );
         self.pos += rate;
+        self.source_pos += rate / self.stretcher.ratio();
+        if let Some(span) = region_span(region) {
+            while self.source_pos >= region.end {
+                self.source_pos -= span;
+            }
+        }
         frame
     }
 
@@ -726,6 +740,60 @@ impl StretchReader {
             }
             self.produced += 1;
         }
+    }
+}
+
+/// Every voice's stretch state for one sampler, allocated as a unit.
+///
+/// This lives on the *device*, not the voice, and it is why: a `StretchReader`
+/// is about 100 KB, `RenderState` builds a `ChannelStrip` for all 256
+/// addressable channels at startup, and each of those eagerly constructs a
+/// `Sampler` with 16 voices. A reader per voice would therefore allocate
+/// roughly 390 MiB before a project is even loaded, almost all of it for
+/// channels that hold nothing. Voices are small and must stay small.
+///
+/// So the pool is `None` until a sampler actually stretches, it is built on
+/// the control thread, and it is handed to the realtime thread already
+/// allocated -- the same ownership round trip installed effect nodes make.
+/// Turning stretch on is consequently a *structural* change rather than a
+/// parameter: `Sampler::set_params` runs on the realtime command drain and
+/// cannot allocate. Ratio, mode, and grain size stay ordinary parameters and
+/// remain modulatable; only the existence of the state crosses threads.
+pub struct StretchPool {
+    readers: Box<[StretchReader]>,
+}
+
+impl StretchPool {
+    /// Build a pool covering `voices` voices. Control thread only -- this is
+    /// the allocation the whole design exists to keep off the audio thread.
+    pub fn new(mode: StretchMode, sample_rate: u32, voices: usize) -> Self {
+        Self {
+            readers: (0..voices)
+                .map(|_| StretchReader::new(mode, sample_rate))
+                .collect(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.readers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.readers.is_empty()
+    }
+
+    pub fn reader_mut(&mut self, voice: usize) -> Option<&mut StretchReader> {
+        self.readers.get_mut(voice)
+    }
+
+    pub fn readers_mut(&mut self) -> impl Iterator<Item = &mut StretchReader> {
+        self.readers.iter_mut()
+    }
+
+    /// Total heap held, so the memory cost of enabling stretch on a sampler
+    /// is a number someone can look up rather than estimate.
+    pub fn state_bytes(&self) -> usize {
+        self.readers.iter().map(StretchReader::state_bytes).sum()
     }
 }
 
@@ -1370,6 +1438,40 @@ mod tests {
         let rms =
             (out.iter().map(|f| f[0] * f[0]).sum::<f32>() / out.len() as f32).sqrt();
         assert!(rms > 0.05, "extreme grain settings went silent: rms {rms}");
+    }
+
+    /// The reason the pool exists. A reader is large; a voice is not. If a
+    /// reader ever ends up inside `Voice`, 256 channels x 16 voices of eager
+    /// construction turns into hundreds of megabytes at startup for an empty
+    /// project. This pins the per-reader cost so that regression is visible
+    /// as a number rather than as a memory graph.
+    #[test]
+    fn a_reader_is_far_too_large_to_live_in_a_voice() {
+        let reader = StretchReader::new(StretchMode::Music, SR);
+        let bytes = reader.state_bytes();
+        assert!(
+            (96_000..=110_000).contains(&bytes),
+            "reader footprint moved to {bytes}"
+        );
+        // What that would have cost per voice across the addressable channels.
+        let naive = bytes * 256 * 16;
+        assert!(
+            naive > 300 * 1024 * 1024,
+            "the eager-per-voice cost this design avoids is {naive}"
+        );
+    }
+
+    /// A pool covers the sampler's voices and is built in one place, on the
+    /// thread that is allowed to allocate.
+    #[test]
+    fn a_pool_covers_every_voice_it_was_asked_for() {
+        let mut pool = StretchPool::new(StretchMode::Music, SR, 16);
+        assert_eq!(pool.len(), 16);
+        assert!(pool.reader_mut(15).is_some());
+        assert!(pool.reader_mut(16).is_none());
+        // ~1.6 MB for a sampler that is actually stretching, which is the
+        // trade the device-level pool buys.
+        assert!(pool.state_bytes() < 2 * 1024 * 1024);
     }
 
     /// An empty sample must not panic or read out of bounds -- a voice can be

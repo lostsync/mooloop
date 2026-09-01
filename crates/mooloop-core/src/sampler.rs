@@ -44,6 +44,55 @@ impl LoopMode {
     }
 }
 
+/// How the time stretcher sizes its window and whether it looks for a splice
+/// point.
+///
+/// `Grain` is not a lower quality than the other two. The similarity search
+/// places every join where the waveform continues coherently; declining to
+/// search leaves a phase discontinuity once per hop, which is the rattling,
+/// woodblock character of a break stretched far past musical range. That is a
+/// sound people reach for, so it is a mode rather than a failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StretchMode {
+    /// ~21 ms window, search on. Transparent, and the only mode that
+    /// preserves a low fundamental.
+    #[default]
+    Music,
+    /// ~11 ms window, search on. Sharper transients; destroys bass, so it is
+    /// percussion-only.
+    Drums,
+    /// Free window, no search. The artifact mode.
+    Grain,
+}
+
+impl StretchMode {
+    pub fn all() -> [StretchMode; 3] {
+        [StretchMode::Music, StretchMode::Drums, StretchMode::Grain]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            StretchMode::Music => "Music",
+            StretchMode::Drums => "Drums",
+            StretchMode::Grain => "Grain",
+        }
+    }
+}
+
+/// Stretch ratio bounds. Output frames per input frame, so above 1.0 is
+/// slower. The ceiling is far past the range that stays clean, on purpose --
+/// extreme slow-down is a destination, and the cost does not grow with the
+/// ratio.
+pub const MIN_STRETCH_RATIO: f32 = 0.25;
+pub const MAX_STRETCH_RATIO: f32 = 16.0;
+
+/// Grain window bounds, in frames. The repetition sits at
+/// `sample_rate / (grain / 2)`, so this is a pitch control: at 48 kHz the
+/// range buzzes from about 23 Hz to 1.5 kHz.
+pub const MIN_STRETCH_GRAIN: u16 = 64;
+pub const MAX_STRETCH_GRAIN: u16 = 4096;
+
 /// How note-off events affect sample playback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -190,6 +239,27 @@ pub struct SamplerParams {
     /// generators instead of well above them.
     #[serde(default = "legacy_output_gain")]
     pub output_gain: f32,
+    /// Whether this sampler stretches at all.
+    ///
+    /// Unlike every other field here, turning this on cannot take effect from
+    /// the realtime command drain: the stretch state is about 1.6 MB per
+    /// sampler and has to be allocated on the control thread, then installed
+    /// structurally. So this records *intent*, and the engine reconciles it by
+    /// provisioning or reclaiming the pool. A sampler whose intent is on but
+    /// whose pool has not arrived yet simply plays unstretched, which is the
+    /// same thing it did the frame before.
+    #[serde(default)]
+    pub stretch_enabled: bool,
+    /// Window sizing and whether the splice point is searched for.
+    #[serde(default)]
+    pub stretch_mode: StretchMode,
+    /// Output frames per input frame. Above 1.0 is slower.
+    #[serde(default = "unity_stretch_ratio")]
+    pub stretch_ratio: f32,
+    /// Grain window in frames, used only by [`StretchMode::Grain`]. Free and
+    /// continuous because it is a timbre, not a quality setting.
+    #[serde(default = "default_stretch_grain")]
+    pub stretch_grain: u16,
     /// The filter envelope's own stages, or `None` to follow the amplitude
     /// envelope.
     ///
@@ -203,6 +273,14 @@ pub struct SamplerParams {
     /// see its siblings.
     #[serde(default)]
     pub filter_env: Option<EnvTimes>,
+}
+
+fn unity_stretch_ratio() -> f32 {
+    1.0
+}
+
+fn default_stretch_grain() -> u16 {
+    1024
 }
 
 /// The trim a project saved before the field existed plays at. Those mixes
@@ -239,6 +317,10 @@ impl Default for SamplerParams {
             bit_reduction: 0.0,
             rate_reduction: 0.0,
             output_gain: default_output_gain(),
+            stretch_enabled: false,
+            stretch_mode: StretchMode::Music,
+            stretch_ratio: 1.0,
+            stretch_grain: 1024,
             filter_env: None,
         }
     }

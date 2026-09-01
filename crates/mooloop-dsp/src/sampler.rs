@@ -21,6 +21,7 @@ use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::filter::apply_drive;
 use crate::interpolate::{Region, RegionEdge, SincTable};
+use crate::stretch::{StretchPool, StretchReader};
 use crate::node::{AudioNode, ProcessContext};
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
@@ -292,6 +293,16 @@ pub struct Sampler {
     sample_rate: u32,
     voices: [Voice; MAX_SAMPLER_VOICES as usize],
     next_age: u64,
+    /// Per-voice time-stretch state, or `None` when this sampler does not
+    /// stretch.
+    ///
+    /// Device-level and optional because a `StretchReader` is ~100 KB and
+    /// every one of the 256 addressable channels builds a `Sampler` with 16
+    /// voices at startup. Held here it costs nothing until used; held in
+    /// `Voice` it would cost hundreds of megabytes for an empty project.
+    /// Installed and reclaimed structurally, never allocated on the audio
+    /// thread -- `set_params` runs on the realtime command drain.
+    stretch: Option<Box<StretchPool>>,
     /// The device's patch-level output trim, lagged so it cannot click.
     ///
     /// One gain for the whole sampler, not one per voice: every voice copies
@@ -327,6 +338,7 @@ impl Sampler {
             sample_rate,
             voices,
             next_age: 1,
+            stretch: None,
             output_gain: Smoothed::new(
                 clamp_output_gain(params.output_gain),
                 OUTPUT_GAIN_SMOOTHING_S,
@@ -380,6 +392,51 @@ impl Sampler {
     /// knob; the engine keeps the knob separately.
     pub fn params(&self) -> SamplerParams {
         self.params
+    }
+
+    /// Whether the patch asks to stretch. This is intent; `has_stretch`
+    /// reports whether the state to do it has actually been installed. The
+    /// engine reconciles the two off the realtime thread.
+    pub fn wants_stretch(&self) -> bool {
+        self.params.stretch_enabled
+    }
+
+    pub fn has_stretch(&self) -> bool {
+        self.stretch.is_some()
+    }
+
+    /// Install prepared stretch state, returning whatever it displaced so the
+    /// caller can hand it back for off-thread disposal. Realtime-safe: this
+    /// moves boxes, it does not allocate or drop.
+    pub fn install_stretch(&mut self, pool: Box<StretchPool>) -> Option<Box<StretchPool>> {
+        self.stretch.replace(pool)
+    }
+
+    /// Surrender the stretch state, for the same round trip in reverse. The
+    /// realtime thread must never be the one to drop it.
+    pub fn take_stretch(&mut self) -> Option<Box<StretchPool>> {
+        self.stretch.take()
+    }
+
+    /// Whether stretching should actually run, as opposed to merely being
+    /// switched on.
+    ///
+    /// Unity ratio in a searching mode is deliberately a bypass: today's
+    /// reader is sample-exact at unity and WSOLA is only *nearly* so, and
+    /// enabling stretch without moving the ratio should not quietly change
+    /// how an existing patch sounds. `Grain` has no such exemption -- its
+    /// character is the point at any ratio.
+    ///
+    /// Reverse and ping-pong are refused rather than approximated. The
+    /// stretcher's analysis pointer only moves forwards, and the spike
+    /// measured neither; the UI disables the combination, and this makes the
+    /// DSP independent of the UI being right about that.
+    fn stretch_is_active(params: SamplerParams) -> bool {
+        params.stretch_enabled
+            && !params.reverse
+            && params.loop_mode != LoopMode::Pingpong
+            && (params.stretch_mode == mooloop_core::StretchMode::Grain
+                || (params.stretch_ratio - 1.0).abs() > 1.0e-4)
     }
 
     pub fn choke_group(&self) -> u8 {
@@ -483,6 +540,19 @@ impl Sampler {
         voice.env.note_on();
         voice.filter_env.configure(self.params.resolved_filter_env());
         voice.filter_env.note_on();
+
+        // Point this voice's stretcher at the same frame the read head starts
+        // on, so output frame 0 is input frame `start` and the note has no
+        // more latency than an unstretched one.
+        let params = self.params;
+        let start_pos = self.voices[index].play_pos;
+        if let Some(reader) = self.stretch.as_mut().and_then(|pool| pool.reader_mut(index)) {
+            let stretcher = reader.stretcher_mut();
+            stretcher.set_mode(params.stretch_mode);
+            stretcher.set_grain_frames(u32::from(params.stretch_grain));
+            stretcher.set_ratio(f64::from(params.stretch_ratio));
+            reader.reset(start_pos);
+        }
     }
 
     fn release_note(&mut self, event_id: u64) {
@@ -619,11 +689,14 @@ impl Sampler {
         params: SamplerParams,
         sample_rate: u32,
         voice: &mut Voice,
+        stretch: Option<&mut StretchReader>,
         output_gain: &mut Smoothed,
         bus: &mut StereoBus,
-        start: usize,
-        end: usize,
+        // One range rather than two loose indices: they are always the
+        // segment the block was split into, never independent.
+        range: core::ops::Range<usize>,
     ) {
+        let (start, end) = (range.start, range.end);
         if !voice.active {
             return;
         }
@@ -645,6 +718,17 @@ impl Sampler {
             LoopMode::Off
         };
         let table = SincTable::shared();
+
+        // Resolved once for the segment, like the bounds above: parameters do
+        // not move inside a segment, because the block is already split at
+        // every event.
+        let mut stretch = stretch.filter(|_| Self::stretch_is_active(params));
+        if let Some(reader) = stretch.as_mut() {
+            let stretcher = reader.stretcher_mut();
+            stretcher.set_mode(params.stretch_mode);
+            stretcher.set_grain_frames(u32::from(params.stretch_grain));
+            stretcher.set_ratio(f64::from(params.stretch_ratio));
+        }
 
         for i in start..end {
             let Some(sample) = voice.sample.as_ref() else {
@@ -689,17 +773,29 @@ impl Sampler {
                     edge: RegionEdge::Silent,
                 }
             };
-            let frame = Self::shape_frame(
-                params,
-                sample_rate,
-                voice,
-                table.read(&sample.frames, pos, voice.playback_rate, region),
-            );
+            let raw = match stretch.as_mut() {
+                Some(reader) => reader.read(&sample.frames, region, voice.playback_rate),
+                None => table.read(&sample.frames, pos, voice.playback_rate, region),
+            };
+            let frame = Self::shape_frame(params, sample_rate, voice, raw);
             bus.l[i] += amp * frame[0];
             bus.r[i] += amp * frame[1];
 
             // Advance the read position and handle looping / end-of-region.
-            voice.play_pos += voice.direction * voice.playback_rate;
+            //
+            // A stretching voice does not step its own head: the reader
+            // reports where the frame just handed out came from, and
+            // mirroring that into `play_pos` keeps end-of-region detection,
+            // the loop checks below, and the UI playhead all reading one
+            // value. Deliberately the *sounding* position and not the
+            // stretcher's analysis frontier, which runs ahead by up to a hop
+            // and would end a one-shot before its tail had been played. The
+            // reader has already wrapped inside a forward loop, so the wrap
+            // below finds nothing to do.
+            match stretch.as_ref() {
+                Some(reader) => voice.play_pos = reader.source_pos(),
+                None => voice.play_pos += voice.direction * voice.playback_rate,
+            }
 
             match loop_mode {
                 LoopMode::Off => {
@@ -738,9 +834,22 @@ impl Sampler {
         self.output_gain
             .set_target(clamp_output_gain(params.output_gain));
         let entry = self.output_gain;
-        for voice in &mut self.voices[..params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize] {
+        let limit = params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize;
+        let mut readers = self.stretch.as_mut().map(|pool| pool.readers_mut());
+        for voice in &mut self.voices[..limit] {
             let mut gain = entry;
-            Self::render_voice_range(params, sample_rate, voice, &mut gain, bus, start, end);
+            // Advanced in lockstep with the voices, so voice `n` always gets
+            // reader `n` whether or not it is sounding.
+            let reader = readers.as_mut().and_then(Iterator::next);
+            Self::render_voice_range(
+                params,
+                sample_rate,
+                voice,
+                reader,
+                &mut gain,
+                bus,
+                start..end,
+            );
         }
         // A voice that ends mid-segment stops walking its copy, and a silent
         // sampler renders no voices at all, so the trim advances here rather
@@ -816,6 +925,159 @@ mod tests {
         });
         let slot = Arc::new(ArcSwapOption::from(Some(sample)));
         Sampler::new(slot, params, sr)
+    }
+
+    /// Play one note and report how far through the sample the head reached.
+    fn playhead_after(mut sampler: Sampler, sr: u32, frames: usize) -> f32 {
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+        sampler.voice_positions()[0]
+    }
+
+    fn stretching_params(ratio: f32) -> SamplerParams {
+        SamplerParams {
+            attack: 0.0,
+            decay: 8.0,
+            sustain: 1.0,
+            output_gain: 1.0,
+            stretch_enabled: true,
+            stretch_ratio: ratio,
+            ..SamplerParams::default()
+        }
+    }
+
+    /// Intent without state must be harmless. A patch can be loaded with
+    /// stretch on before the engine has provisioned the pool, and in that
+    /// window the sampler simply plays the way it did the frame before rather
+    /// than falling silent or allocating.
+    #[test]
+    fn a_sampler_that_wants_stretch_but_has_no_pool_plays_unstretched() {
+        let sr = 48_000;
+        let sampler = sampler_with_frames(sr, 8_192, stretching_params(2.0));
+        assert!(sampler.wants_stretch());
+        assert!(!sampler.has_stretch());
+
+        let stretched = playhead_after(sampler, sr, 1_024);
+        let plain = playhead_after(
+            sampler_with_frames(sr, 8_192, SamplerParams {
+                attack: 0.0,
+                decay: 8.0,
+                sustain: 1.0,
+                output_gain: 1.0,
+                ..SamplerParams::default()
+            }),
+            sr,
+            1_024,
+        );
+        assert!(
+            (stretched - plain).abs() < 1.0e-4,
+            "unprovisioned stretch changed playback: {stretched} vs {plain}"
+        );
+    }
+
+    /// With the pool installed, the stretcher owns the read head: at ratio 2
+    /// the same number of output frames consumes half as much sample.
+    #[test]
+    fn an_installed_pool_slows_the_read_head() {
+        let sr = 48_000;
+        let len = 8_192;
+        let frames = 1_024;
+
+        let plain = playhead_after(
+            sampler_with_frames(sr, len, SamplerParams {
+                attack: 0.0,
+                decay: 8.0,
+                sustain: 1.0,
+                output_gain: 1.0,
+                ..SamplerParams::default()
+            }),
+            sr,
+            frames,
+        );
+
+        let mut stretched = sampler_with_frames(sr, len, stretching_params(2.0));
+        assert!(stretched
+            .install_stretch(Box::new(StretchPool::new(
+                mooloop_core::StretchMode::Music,
+                sr,
+                MAX_SAMPLER_VOICES as usize,
+            )))
+            .is_none());
+        assert!(stretched.has_stretch());
+        let slowed = playhead_after(stretched, sr, frames);
+
+        let ratio = slowed / plain;
+        assert!(
+            (0.4..0.6).contains(&ratio),
+            "ratio 2 should halve the head's travel, got {slowed} vs {plain}"
+        );
+    }
+
+    /// Unity ratio in a searching mode is a bypass on purpose: switching
+    /// stretch on without moving the ratio must not change how a patch
+    /// sounds, and today's reader is sample-exact at unity where WSOLA is
+    /// only nearly so.
+    #[test]
+    fn enabling_stretch_at_unity_changes_nothing() {
+        let params = stretching_params(1.0);
+        assert!(!Sampler::stretch_is_active(params));
+        // ...but the artifact mode has no such exemption.
+        assert!(Sampler::stretch_is_active(SamplerParams {
+            stretch_mode: mooloop_core::StretchMode::Grain,
+            ..params
+        }));
+    }
+
+    /// Reverse and ping-pong were never measured and the analysis pointer
+    /// only moves forwards. The UI disables the combination; the DSP refuses
+    /// it too, so it does not depend on the UI being right.
+    #[test]
+    fn stretch_refuses_reverse_and_pingpong() {
+        let params = stretching_params(2.0);
+        assert!(Sampler::stretch_is_active(params));
+        assert!(!Sampler::stretch_is_active(SamplerParams {
+            reverse: true,
+            ..params
+        }));
+        assert!(!Sampler::stretch_is_active(SamplerParams {
+            loop_mode: LoopMode::Pingpong,
+            ..params
+        }));
+    }
+
+    /// The ownership round trip the realtime thread depends on: state goes in
+    /// and comes back out as a box the caller disposes of elsewhere.
+    #[test]
+    fn stretch_state_can_be_installed_and_surrendered() {
+        let sr = 48_000;
+        let mut sampler = sampler_with_frames(sr, 1_024, stretching_params(2.0));
+        let first = Box::new(StretchPool::new(
+            mooloop_core::StretchMode::Music,
+            sr,
+            MAX_SAMPLER_VOICES as usize,
+        ));
+        assert!(sampler.install_stretch(first).is_none());
+
+        let second = Box::new(StretchPool::new(
+            mooloop_core::StretchMode::Grain,
+            sr,
+            MAX_SAMPLER_VOICES as usize,
+        ));
+        assert!(
+            sampler.install_stretch(second).is_some(),
+            "the displaced pool must come back rather than be dropped here"
+        );
+        assert!(sampler.take_stretch().is_some());
+        assert!(!sampler.has_stretch());
     }
 
     fn ctx(frames: usize, sr: u32) -> ProcessContext {

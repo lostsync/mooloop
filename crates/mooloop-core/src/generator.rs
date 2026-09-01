@@ -15,7 +15,9 @@
 use crate::{
     DeviceKind, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode, MonoSynthParams, MlM1Params,
     NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PolySynthParams, RetriggerMode,
-    SamplerParams, VoiceMode, MAX_LINEAR_GAIN, MAX_POLY_VOICES, MAX_SAMPLER_VOICES,
+    SamplerParams, StretchMode, VoiceMode, MAX_LINEAR_GAIN, MAX_POLY_VOICES,
+    MAX_SAMPLER_VOICES, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_GRAIN,
+    MIN_STRETCH_RATIO,
 };
 
 // --- Sampler ---------------------------------------------------------------
@@ -47,6 +49,10 @@ pub const SAMPLER_PARAM_FILTER_ATTACK: u32 = 23;
 pub const SAMPLER_PARAM_FILTER_DECAY: u32 = 24;
 pub const SAMPLER_PARAM_FILTER_SUSTAIN: u32 = 25;
 pub const SAMPLER_PARAM_FILTER_RELEASE: u32 = 26;
+pub const SAMPLER_PARAM_STRETCH_ENABLED: u32 = 27;
+pub const SAMPLER_PARAM_STRETCH_MODE: u32 = 28;
+pub const SAMPLER_PARAM_STRETCH_RATIO: u32 = 29;
+pub const SAMPLER_PARAM_STRETCH_GRAIN: u32 = 30;
 
 /// Envelope stages share this range across every generator. Exponential, so
 /// the fast end where percussion lives gets most of the travel.
@@ -89,7 +95,7 @@ const fn stepped(id: u32, name: &'static str, steps: u8, default: f32) -> ParamD
     }
 }
 
-static SAMPLER_DESCRIPTORS: [ParamDescriptor; 27] = [
+static SAMPLER_DESCRIPTORS: [ParamDescriptor; 31] = [
     unit(SAMPLER_PARAM_START, "Start", 0.0),
     unit(SAMPLER_PARAM_END, "End", 1.0),
     stepped(SAMPLER_PARAM_REVERSE, "Reverse", 2, 0.0),
@@ -176,6 +182,35 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 27] = [
     seconds(SAMPLER_PARAM_FILTER_DECAY, "Filter decay", 0.25),
     unit(SAMPLER_PARAM_FILTER_SUSTAIN, "Filter sustain", 1.0),
     seconds(SAMPLER_PARAM_FILTER_RELEASE, "Filter release", 0.05),
+    // Stretch. `Stretch` is intent rather than state: the pool it needs is
+    // allocated on the control thread, so the engine reconciles this rather
+    // than the realtime drain acting on it. The other three are ordinary
+    // parameters and are modulatable like any other.
+    stepped(SAMPLER_PARAM_STRETCH_ENABLED, "Stretch", 2, 0.0),
+    stepped(SAMPLER_PARAM_STRETCH_MODE, "Stretch mode", 3, 0.0),
+    ParamDescriptor {
+        id: SAMPLER_PARAM_STRETCH_RATIO,
+        name: "Stretch",
+        unit: "x",
+        min: MIN_STRETCH_RATIO,
+        max: MAX_STRETCH_RATIO,
+        // Exponential, because the band that stays clean sits just around
+        // unity while the ceiling is deliberately far past it. Linear travel
+        // would spend almost all of the knob on extremes.
+        curve: ParamCurve::Exponential,
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: SAMPLER_PARAM_STRETCH_GRAIN,
+        name: "Grain",
+        unit: "fr",
+        min: MIN_STRETCH_GRAIN as f32,
+        max: MAX_STRETCH_GRAIN as f32,
+        // The window maps to a repetition frequency, so equal ratios of it
+        // should feel like equal musical intervals.
+        curve: ParamCurve::Exponential,
+        default: 1024.0,
+    },
 ];
 
 // --- Shared synth voice ----------------------------------------------------
@@ -612,6 +647,14 @@ impl GeneratorParams {
                 SAMPLER_PARAM_FILTER_DECAY => p.resolved_filter_env().decay,
                 SAMPLER_PARAM_FILTER_SUSTAIN => p.resolved_filter_env().sustain,
                 SAMPLER_PARAM_FILTER_RELEASE => p.resolved_filter_env().release,
+                SAMPLER_PARAM_STRETCH_ENABLED => f32::from(u8::from(p.stretch_enabled)),
+                SAMPLER_PARAM_STRETCH_MODE => match p.stretch_mode {
+                    StretchMode::Music => 0.0,
+                    StretchMode::Drums => 1.0,
+                    StretchMode::Grain => 2.0,
+                },
+                SAMPLER_PARAM_STRETCH_RATIO => p.stretch_ratio,
+                SAMPLER_PARAM_STRETCH_GRAIN => f32::from(p.stretch_grain),
                 _ => return None,
             }),
             Self::MonoSynth(p) => {
@@ -727,6 +770,25 @@ impl GeneratorParams {
                 SAMPLER_PARAM_FILTER_DECAY => p.filter_env_mut().decay = value,
                 SAMPLER_PARAM_FILTER_SUSTAIN => p.filter_env_mut().sustain = value,
                 SAMPLER_PARAM_FILTER_RELEASE => p.filter_env_mut().release = value,
+                // Intent only: the engine provisions or reclaims the stretch
+                // pool off the realtime thread in response. See
+                // `SamplerParams::stretch_enabled`.
+                SAMPLER_PARAM_STRETCH_ENABLED => p.stretch_enabled = value >= 0.5,
+                SAMPLER_PARAM_STRETCH_MODE => {
+                    p.stretch_mode = match value.round() as i32 {
+                        1 => StretchMode::Drums,
+                        2 => StretchMode::Grain,
+                        _ => StretchMode::Music,
+                    }
+                }
+                SAMPLER_PARAM_STRETCH_RATIO => {
+                    p.stretch_ratio = value.clamp(MIN_STRETCH_RATIO, MAX_STRETCH_RATIO)
+                }
+                SAMPLER_PARAM_STRETCH_GRAIN => {
+                    p.stretch_grain = (value.round() as i32)
+                        .clamp(i32::from(MIN_STRETCH_GRAIN), i32::from(MAX_STRETCH_GRAIN))
+                        as u16
+                }
                 _ => return None,
             },
             Self::MonoSynth(p) => {

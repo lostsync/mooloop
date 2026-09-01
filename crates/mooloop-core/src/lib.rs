@@ -123,7 +123,8 @@ pub use project::{
     DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };
 pub use sampler::{
-    clamp01, EnvTimes, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP,
+    clamp01, EnvTimes, LoopMode, RetriggerMode, SamplerParams, StretchMode, VoiceMode,
+    MAX_CHOKE_GROUP, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
     MAX_SAMPLER_VOICES,
 };
 pub use synth::{
