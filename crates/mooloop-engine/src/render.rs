@@ -1318,8 +1318,11 @@ impl RenderState {
         };
         let previous = *saved;
         *saved = modulation;
-        for (slot, params) in modulation.slots.into_iter().enumerate() {
-            runtime.set_slot(slot, params);
+        // The runtime rack holds behaviour, not identity: it is addressed by
+        // slot, and the durable ids stay on the control side where routes are
+        // resolved.
+        for (slot, entry) in modulation.slots.into_iter().enumerate() {
+            runtime.set_slot(slot, entry.map(|entry| entry.params));
         }
         // A removed route must return the device to its knob value at the
         // next block. Without this, it would hold the final LFO-resolved value
@@ -2430,12 +2433,16 @@ mod tests {
 
     fn strip_route(param: u32, depth: f32) -> ModRack {
         let mut rack = ModRack::default();
-        rack.add_route(mooloop_core::ModRoute {
-            source_slot: 0,
-            destination: ParamAddr::strip(EffectTarget::Channel(0), param),
+        rack.install(
+            0,
+            mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams::default()),
+        );
+        rack.add_route(mooloop_core::ModRoute::to_slot(
+            0,
+            ParamAddr::strip(EffectTarget::Channel(0), param),
             depth,
-            polarity: mooloop_core::ModPolarity::Bipolar,
-        })
+            mooloop_core::ModPolarity::Bipolar,
+        ))
         .expect("route fits the matrix");
         rack
     }
@@ -2494,7 +2501,7 @@ mod tests {
     #[test]
     fn strip_modulation_reaches_the_rendered_block() {
         let mut channel = ProjectChannel::sampler(0, 1);
-        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 // A quarter-cycle per 32-frame subdivision at 48 kHz.
                 rate_hz: 375.0,
@@ -2544,7 +2551,7 @@ mod tests {
     #[test]
     fn a_channel_note_trigger_restarts_its_played_lfo_on_the_control_tick() {
         let mut channel = ProjectChannel::sampler(0, 1);
-        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 rate_hz: 375.0,
                 waveform: mooloop_core::ModLfoWaveform::Saw,
@@ -2572,7 +2579,7 @@ mod tests {
     #[test]
     fn an_envelope_can_subscribe_to_another_channels_note_gate() {
         let mut target = ProjectChannel::sampler(0, 1);
-        target.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Envelope(
+        target.setup.modulation.install(0, mooloop_core::ModulatorParams::Envelope(
             mooloop_core::ModEnvelopeParams {
                 input_channel: 1,
                 attack_seconds: 0.0,
@@ -2604,7 +2611,7 @@ mod tests {
             .push(mooloop_core::EffectSlotState::of_kind(
                 mooloop_core::EffectKind::Eq,
             ));
-        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 rate_hz: 375.0,
                 ..mooloop_core::ModLfoParams::default()
@@ -2614,12 +2621,12 @@ mod tests {
         assert!(channel
             .setup
             .modulation
-            .add_route(mooloop_core::ModRoute {
-                source_slot: 0,
-                destination: stepped,
-                depth: 1.0,
-                polarity: mooloop_core::ModPolarity::Bipolar,
-            })
+            .add_route(mooloop_core::ModRoute::to_slot(
+                0,
+                stepped,
+                1.0,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
             .is_some());
 
         let project = synth_project(channel);
@@ -2664,7 +2671,7 @@ mod tests {
                     ..mooloop_core::FilterParams::default()
                 },
             ));
-        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 // 32 frames advance the LFO by a quarter-cycle at 48 kHz,
                 // giving this block four clear control-rate landmarks.
@@ -2675,16 +2682,16 @@ mod tests {
         assert!(channel
             .setup
             .modulation
-            .add_route(mooloop_core::ModRoute {
-                source_slot: 0,
-                destination: ParamAddr::effect(
+            .add_route(mooloop_core::ModRoute::to_slot(
+                0,
+                ParamAddr::effect(
                     EffectTarget::Channel(0),
                     0,
                     mooloop_core::FILTER_PARAM_CUTOFF_HZ,
                 ),
-                depth: 0.25,
-                polarity: mooloop_core::ModPolarity::Bipolar,
-            })
+                0.25,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
             .is_some());
 
         let project = synth_project(channel);
@@ -2840,7 +2847,7 @@ mod tests {
     #[test]
     fn a_lane_supplies_the_base_that_modulation_then_offsets() {
         let mut channel = filter_channel(1_000.0);
-        channel.setup.modulation.slots[0] = Some(mooloop_core::ModulatorParams::Lfo(
+        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 rate_hz: 375.0,
                 ..mooloop_core::ModLfoParams::default()
@@ -2849,12 +2856,12 @@ mod tests {
         assert!(channel
             .setup
             .modulation
-            .add_route(mooloop_core::ModRoute {
-                source_slot: 0,
-                destination: CUTOFF,
-                depth: 0.25,
-                polarity: mooloop_core::ModPolarity::Bipolar,
-            })
+            .add_route(mooloop_core::ModRoute::to_slot(
+                0,
+                CUTOFF,
+                0.25,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
             .is_some());
         let project = synth_project(channel);
 

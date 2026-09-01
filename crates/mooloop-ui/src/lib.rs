@@ -3018,9 +3018,7 @@ impl UiState {
             .channels
             .get_mut(selected)?
             .modulation
-            .slots
-            .get_mut(slot)?
-            .as_mut()?;
+            .params_mut(slot)?;
         match params {
             ModulatorParams::Envelope(envelope) => Some(envelope),
             _ => None,
@@ -3162,8 +3160,8 @@ impl UiState {
             .slots
             .iter()
             .enumerate()
-            .filter_map(|(slot, params)| {
-                let params = (*params)?;
+            .filter_map(|(slot, entry)| {
+                let params = (*entry)?.params;
                 // One row shape for every kind: the tile's face is whichever
                 // fields the kind actually fills, and the rest keep the
                 // shape component's own resting values.
@@ -3246,10 +3244,7 @@ impl UiState {
                 let route = route.as_ref()?;
                 let source_name = channel
                     .modulation
-                    .slots
-                    .get(route.source_slot as usize)
-                    .copied()
-                    .flatten()
+                    .params(route.source_slot as usize)
                     .map_or_else(
                         || "SOURCE ?".to_string(),
                         |params| {
@@ -3302,14 +3297,7 @@ impl UiState {
         // The selected source's own controls. One editor is shown, so the shelf
         // reads scalars rather than searching the source rows for the
         // selected one.
-        let selected_params = selected.and_then(|slot| {
-            channel
-                .modulation
-                .slots
-                .get(slot as usize)
-                .copied()
-                .flatten()
-        });
+        let selected_params = selected.and_then(|slot| channel.modulation.params(slot as usize));
         let selected_lfo = selected_params.and_then(|params| match params {
             ModulatorParams::Lfo(lfo) => Some(lfo),
             _ => None,
@@ -3499,13 +3487,7 @@ impl UiState {
         let Some(channel) = self.channels.get_mut(self.selected) else {
             return false;
         };
-        let default_polarity = match channel
-            .modulation
-            .slots
-            .get(source_slot as usize)
-            .copied()
-            .flatten()
-        {
+        let default_polarity = match channel.modulation.params(source_slot as usize) {
             // Sources that only ever swing one way default to a unipolar
             // route, so their resting value is the destination's base.
             Some(ModulatorParams::Envelope(_)) => ModPolarity::Unipolar,
@@ -3524,12 +3506,12 @@ impl UiState {
         }
         if channel
             .modulation
-            .add_route(ModRoute {
+            .add_route(ModRoute::to_slot(
                 source_slot,
                 destination,
                 depth,
-                polarity: default_polarity,
-            })
+                default_polarity,
+            ))
             .is_none()
         {
             return false;
@@ -7668,8 +7650,7 @@ impl AppUi {
                 let exists = state
                     .channels
                     .get(state.selected)
-                    .and_then(|channel| channel.modulation.slots.get(slot as usize))
-                    .is_some_and(Option::is_some);
+                    .is_some_and(|channel| channel.modulation.params(slot as usize).is_some());
                 if !exists {
                     return;
                 }
@@ -7682,6 +7663,57 @@ impl AppUi {
                 }
                 state.modulation_shelf_open = true;
                 state.refresh_modulation(&window);
+            });
+        }
+        // Reordering the grid. The rack compacts as it moves, so the target
+        // is a position among the occupied modules; routes follow by
+        // identity and a math module's input is remapped by the rack.
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_modulation_source_moved(move |slot, target| {
+                let (Some(window), Ok(slot), Ok(target)) = (
+                    weak.upgrade(),
+                    usize::try_from(slot),
+                    usize::try_from(target),
+                ) else {
+                    return;
+                };
+                let before = {
+                    let state = st.borrow();
+                    project_snapshot(&state, &window)
+                };
+                let moved = {
+                    let mut state = st.borrow_mut();
+                    let selected = state.selected;
+                    // Selection and arming follow the module, not the slot it
+                    // used to be in, or a reorder would silently retarget the
+                    // assignment gesture.
+                    let selected_slot = state.modulation_selected_slot.get();
+                    let armed_slot = state.modulation_armed_slot.get();
+                    let Some(channel) = state.channels.get_mut(selected) else {
+                        return;
+                    };
+                    let source_of = |slot: Option<u8>| {
+                        slot.and_then(|slot| channel.modulation.source_id(slot as usize))
+                    };
+                    let selected_id = source_of(selected_slot);
+                    let armed_id = source_of(armed_slot);
+                    if !channel.modulation.move_module(slot, target) {
+                        return;
+                    }
+                    let next_selected = selected_id.and_then(|id| channel.modulation.slot_of(id));
+                    let next_armed = armed_id.and_then(|id| channel.modulation.slot_of(id));
+                    state.modulation_selected_slot.set(next_selected);
+                    state.modulation_armed_slot.set(next_armed);
+                    state.send_channel_modulation(&window, &tx);
+                    true
+                };
+                if moved {
+                    record_project_history(&commands, before, &st, &window, "Module moved");
+                }
             });
         }
         {
@@ -7701,9 +7733,7 @@ impl AppUi {
                     state
                         .channels
                         .get(state.selected)
-                        .and_then(|channel| channel.modulation.slots.get(slot as usize))
-                        .copied()
-                        .flatten()
+                        .and_then(|channel| channel.modulation.params(slot as usize))
                         .map(|params| format!("{} {}", params.kind().badge(), slot + 1))
                 });
                 state.refresh_modulation(&window);
@@ -7741,8 +7771,7 @@ impl AppUi {
                     let Some(channel) = state.channels.get_mut(selected) else {
                         return;
                     };
-                    let Some(slot) = channel.modulation.slots.iter().position(Option::is_none)
-                    else {
+                    let Some(slot) = channel.modulation.free_slot() else {
                         return;
                     };
                     let mut params = kind.default_params();
@@ -7751,7 +7780,7 @@ impl AppUi {
                     if let ModulatorParams::Envelope(envelope) = &mut params {
                         envelope.input_channel = selected as u8;
                     }
-                    channel.modulation.slots[slot] = Some(params);
+                    channel.modulation.install(slot, params);
                     state.modulation_selected_slot.set(Some(slot as u8));
                     state.modulation_armed_slot.set(None);
                     state.modulation_shelf_open = true;
@@ -7819,8 +7848,7 @@ impl AppUi {
                     let Some(params) = state
                         .channels
                         .get_mut(selected)
-                        .and_then(|channel| channel.modulation.slots.get_mut(slot))
-                        .and_then(Option::as_mut)
+                        .and_then(|channel| channel.modulation.params_mut(slot))
                     else {
                         return;
                     };
@@ -7874,17 +7902,12 @@ impl AppUi {
                     let Some(channel) = state.channels.get_mut(selected) else {
                         return;
                     };
-                    let Some(entry) = channel.modulation.slots.get_mut(slot as usize) else {
-                        return;
-                    };
-                    if entry.take().is_none() {
+                    // The rack drops the module's routes by identity, so a
+                    // route aimed at a different module in the same slot
+                    // cannot be caught up in the removal.
+                    if !channel.modulation.clear(slot as usize) {
                         false
                     } else {
-                        for route in &mut channel.modulation.routes {
-                            if route.is_some_and(|route| route.source_slot == slot) {
-                                *route = None;
-                            }
-                        }
                         if state.modulation_selected_slot.get() == Some(slot) {
                             state.modulation_selected_slot.set(None);
                         }

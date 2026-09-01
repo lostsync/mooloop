@@ -242,7 +242,7 @@ fn sequence_bleep() -> FactoryPatch {
     let mut modulation = ModRack::default();
     // Stepped random, retriggered, one step per sixteenth: the cutoff lands
     // somewhere new on each note rather than drifting between them.
-    modulation.slots[0] = Some(ModulatorParams::Lfo(ModLfoParams {
+    modulation.install(0, ModulatorParams::Lfo(ModLfoParams {
         waveform: ModLfoWaveform::Random,
         tempo_sync: true,
         rate_division: ModTimeDivision::Sixteenth,
@@ -253,32 +253,32 @@ fn sequence_bleep() -> FactoryPatch {
     // Free-running and slow, so the pulse width drifts across the sequence
     // instead of resetting with it. Unipolar because a pulse width either
     // side of centre sounds the same, and only one direction is interesting.
-    modulation.slots[1] = Some(ModulatorParams::Lfo(ModLfoParams {
+    modulation.install(1, ModulatorParams::Lfo(ModLfoParams {
         waveform: ModLfoWaveform::Sine,
         rate_hz: 0.35,
         depth: 1.0,
         ..ModLfoParams::default()
     }));
-    modulation.routes[0] = Some(ModRoute {
-        source_slot: 0,
-        destination: ParamAddr {
+    modulation.add_route(ModRoute::to_slot(
+        0,
+        ParamAddr {
             scope: AUTHORED_SCOPE,
             owner: ParamOwner::Source,
             param: SYNTH_PARAM_FILTER_CUTOFF,
         },
-        depth: 0.3,
-        polarity: ModPolarity::Bipolar,
-    });
-    modulation.routes[1] = Some(ModRoute {
-        source_slot: 1,
-        destination: ParamAddr {
+        0.3,
+        ModPolarity::Bipolar,
+    ));
+    modulation.add_route(ModRoute::to_slot(
+        1,
+        ParamAddr {
             scope: AUTHORED_SCOPE,
             owner: ParamOwner::Source,
             param: synth_osc_param(0, OSC_OFFSET_PULSE_WIDTH),
         },
-        depth: 0.35,
-        polarity: ModPolarity::Unipolar,
-    });
+        0.35,
+        ModPolarity::Unipolar,
+    ));
 
     FactoryPatch {
         name: "Sequence Bleep",
@@ -383,7 +383,7 @@ mod tests {
     fn every_route_names_a_populated_modulator_slot() {
         for patch in patches() {
             for route in patch.modulation.routes.iter().flatten() {
-                let slot = patch.modulation.slots[route.source_slot as usize];
+                let slot = patch.modulation.params(route.source_slot as usize);
                 assert!(
                     slot.is_some(),
                     "{} routes from empty slot {}",

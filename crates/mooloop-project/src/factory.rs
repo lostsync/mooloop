@@ -236,28 +236,28 @@ mod tests {
     #[test]
     fn loading_points_a_saved_rack_at_the_channel_it_lands_on() {
         let mut setup = ChannelSetup::mlm1("test");
-        setup.modulation.routes[0] = Some(ModRoute {
-            source_slot: 0,
-            destination: ParamAddr {
+        setup.modulation.routes[0] = Some(ModRoute::to_slot(
+            0,
+            ParamAddr {
                 scope: EffectTarget::Channel(3),
                 owner: ParamOwner::Source,
                 param: 5,
             },
-            depth: 0.5,
-            polarity: ModPolarity::Bipolar,
-        });
+            0.5,
+            ModPolarity::Bipolar,
+        ));
         // A bus destination is shared state that exists whatever channel
         // loaded the preset, so it must be left where it points.
-        setup.modulation.routes[1] = Some(ModRoute {
-            source_slot: 0,
-            destination: ParamAddr {
+        setup.modulation.routes[1] = Some(ModRoute::to_slot(
+            0,
+            ParamAddr {
                 scope: EffectTarget::Bus(1),
                 owner: ParamOwner::Strip,
                 param: 0,
             },
-            depth: 0.5,
-            polarity: ModPolarity::Bipolar,
-        });
+            0.5,
+            ModPolarity::Bipolar,
+        ));
 
         rescope_modulation(&mut setup, 7);
 

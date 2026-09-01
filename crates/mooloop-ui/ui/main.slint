@@ -603,6 +603,7 @@ export component MainWindow inherits Window {
     in property <[string]> modulation-slot-names;
     callback modulation-shelf-toggled();
     callback modulation-source-selected(int);
+    callback modulation-source-moved(int, int);
     callback modulation-assignment-toggled();
     callback modulation-source-added(int);
     callback modulation-param-changed(int, int, float);
@@ -3115,6 +3116,7 @@ export component MainWindow inherits Window {
                                             slot-names: root.modulation-slot-names;
                                             toggled => { root.modulation-shelf-toggled(); }
                                             source-selected(slot) => { root.modulation-source-selected(slot); }
+                                            source-moved(slot, target) => { root.modulation-source-moved(slot, target); }
                                             assignment-toggled => { root.modulation-assignment-toggled(); }
                                             source-added(kind) => { root.modulation-source-added(kind); }
                                             param-changed(slot, id, value) => { root.modulation-param-changed(slot, id, value); }

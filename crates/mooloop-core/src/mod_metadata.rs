@@ -322,9 +322,12 @@ pub fn local_slot_sources(rack: &ModRack) -> Vec<(u8, ModSourceDescriptor)> {
     rack.slots
         .iter()
         .enumerate()
-        .filter_map(|(slot, params)| {
-            let params = (*params)?;
-            let id = ModSourceId(slot as u32);
+        .filter_map(|(slot, entry)| {
+            let entry = (*entry)?;
+            // The rack's own durable identity, not the slot number: this
+            // table is what a route's `ModSourceRef::Id` resolves against.
+            let id = entry.id;
+            let params = entry.params;
             let name = format!("{} {}", params.kind().badge(), slot + 1);
             let descriptor = match params {
                 ModulatorParams::Lfo(lfo) => {
@@ -394,16 +397,21 @@ mod tests {
     #[test]
     fn legacy_lfo_slots_decode_as_sources() {
         let mut rack = ModRack::default();
-        rack.slots[1] = Some(ModulatorParams::Lfo(crate::modulation::ModLfoParams {
-            retrigger: true,
-            ..crate::modulation::ModLfoParams::default()
-        }));
+        rack.install(
+            1,
+            ModulatorParams::Lfo(crate::modulation::ModLfoParams {
+                retrigger: true,
+                ..crate::modulation::ModLfoParams::default()
+            }),
+        );
 
         let sources = local_slot_sources(&rack);
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].0, 1);
         let source = &sources[0].1;
-        assert_eq!(source.id, ModSourceId(1));
+        // The identity is minted, not the slot number: this is the first
+        // module installed, so it is id 0 even though it sits in slot 1.
+        assert_eq!(source.id, ModSourceId(0));
         assert_eq!(source.kind, ModSourceKind::Lfo);
         assert_eq!(source.signal, SignalShape::Bipolar);
         assert_eq!(source.update, ControlRate::Subdivision32);
@@ -415,9 +423,10 @@ mod tests {
     #[test]
     fn envelope_slots_declare_a_unipolar_immediate_source() {
         let mut rack = ModRack::default();
-        rack.slots[0] = Some(ModulatorParams::Envelope(
-            crate::modulation::ModEnvelopeParams::default(),
-        ));
+        rack.install(
+            0,
+            ModulatorParams::Envelope(crate::modulation::ModEnvelopeParams::default()),
+        );
         let sources = local_slot_sources(&rack);
         assert_eq!(sources[0].1.kind, ModSourceKind::Envelope);
         assert_eq!(sources[0].1.signal, SignalShape::Unipolar);
@@ -430,18 +439,17 @@ mod tests {
     #[test]
     fn source_refs_resolve_to_runtime_slots() {
         let mut rack = ModRack::default();
-        rack.slots[2] = Some(ModulatorParams::Lfo(
-            crate::modulation::ModLfoParams::default(),
-        ));
+        rack.install(
+            2,
+            ModulatorParams::Lfo(crate::modulation::ModLfoParams::default()),
+        );
         let sources = local_slot_sources(&rack);
 
+        let id = rack.source_id(2).unwrap();
         assert_eq!(ModSourceRef::LocalSlot(1).to_local_slot(&sources), Some(1));
+        assert_eq!(ModSourceRef::Id(id).to_local_slot(&sources), Some(2));
         assert_eq!(
-            ModSourceRef::Id(ModSourceId(2)).to_local_slot(&sources),
-            Some(2)
-        );
-        assert_eq!(
-            ModSourceRef::Id(ModSourceId(0)).to_local_slot(&sources),
+            ModSourceRef::Id(ModSourceId(9_999)).to_local_slot(&sources),
             None
         );
     }

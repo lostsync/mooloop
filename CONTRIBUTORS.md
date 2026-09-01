@@ -261,6 +261,16 @@ work session you can recall being part of, and don't stress over precision.
   preallocated entry and eight slots take the ring from 552 KiB to 840 KiB.
   Pinned that arithmetic in a test, since the number is the thing a future
   capacity change has to argue with.
+  Then made routes stop meaning "slot 2": a rack slot now carries a durable
+  `ModSourceId` that routes persist instead of a slot number, so reordering
+  the grid moves modules without touching what any route means. The part that
+  needed care was not the routes -- they resolve by identity -- but the math
+  module's input, which is a slot reference the user never sees; a reorder
+  remaps it through the permutation, because a hidden pointer is exactly the
+  thing that would have broken silently. Legacy projects decode through the
+  `ModSourceRef` adapter `mod_metadata.rs` had been shipping unconsumed since
+  the spec landed, taking each slot number as its own id so an old route
+  keeps pointing at what it always did.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

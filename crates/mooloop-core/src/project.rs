@@ -593,21 +593,21 @@ mod tests {
     fn project_round_trip_keeps_channel_modulation() {
         let mut project = Project::default();
         let rack = &mut project.channels[0].setup.modulation;
-        rack.slots[0] = Some(crate::ModulatorParams::Lfo(crate::ModLfoParams {
+        rack.install(0, crate::ModulatorParams::Lfo(crate::ModLfoParams {
             rate_hz: 2.5,
             ..crate::ModLfoParams::default()
         }));
         assert!(rack
-            .add_route(crate::ModRoute {
-                source_slot: 0,
-                destination: crate::ParamAddr::effect(
+            .add_route(crate::ModRoute::to_slot(
+                0,
+                crate::ParamAddr::effect(
                     crate::EffectTarget::Channel(0),
                     0,
                     crate::FILTER_PARAM_CUTOFF_HZ,
                 ),
-                depth: 0.3,
-                polarity: crate::ModPolarity::Bipolar,
-            })
+                0.3,
+                crate::ModPolarity::Bipolar,
+            ))
             .is_some());
 
         let text = toml::to_string(&project).unwrap();

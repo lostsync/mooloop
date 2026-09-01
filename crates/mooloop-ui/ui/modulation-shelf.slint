@@ -389,7 +389,12 @@ component ModuleTile inherits Rectangle {
     in property <float> output;
     in property <bool> selected;
     in property <bool> armed;
+    // Position in the grid, which is what a drag names. The rack slot behind
+    // it is the caller's business.
+    in property <int> position;
+    in property <int> count;
     callback clicked();
+    callback reorder-requested(int);
 
     width: ModuleGrid.tile-width;
     height: ModuleGrid.tile-height;
@@ -444,9 +449,23 @@ component ModuleTile inherits Rectangle {
             }
         }
     }
+    // One gesture for both jobs, the way the effect rack's header handle
+    // works: on release, a movement past half a cell moves the module and
+    // anything smaller is a plain selection.
     tap := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        mouse-cursor: root.selected ? move : pointer;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.up) {
+                let across = round((tap.mouse-x - tap.pressed-x) / (ModuleGrid.tile-width + ModuleGrid.gap));
+                let down = round((tap.mouse-y - tap.pressed-y) / (ModuleGrid.tile-height + ModuleGrid.gap));
+                let target = clamp(root.position + across + down * ModuleGrid.columns, 0, root.count - 1);
+                if (target == root.position) {
+                    root.clicked();
+                } else {
+                    root.reorder-requested(target);
+                }
+            }
+        }
     }
 }
 
@@ -658,6 +677,9 @@ export component ModulationShelf inherits Rectangle {
     in property <[string]> slot-names;
     callback toggled();
     callback source-selected(int);
+    // (rack slot, target position in the grid). The rack compacts as it
+    // reorders, so the destination is a grid position rather than a slot.
+    callback source-moved(int, int);
     callback assignment-toggled();
     // One add verb for every kind, carrying `ModulatorKind::to_index`. The
     // menu grew from two entries to five without growing the contract.
@@ -819,9 +841,15 @@ export component ModulationShelf inherits Rectangle {
                                 output: source.output;
                                 selected: source.selected;
                                 armed: root.armed-slot == source.slot;
+                                position: index;
+                                count: root.sources.length;
                                 clicked => {
                                     root.add-source-menu-open = false;
                                     root.source-selected(source.slot);
+                                }
+                                reorder-requested(target) => {
+                                    root.add-source-menu-open = false;
+                                    root.source-moved(source.slot, target);
                                 }
                             }
                             // The add affordance takes the next free cell, so

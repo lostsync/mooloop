@@ -12,7 +12,7 @@
 
 use crate::effect::{ParamCurve, ParamDescriptor};
 use crate::gain::MAX_LINEAR_GAIN;
-use crate::mod_metadata::ModDestinationDescriptor;
+use crate::mod_metadata::{ModDestinationDescriptor, ModSourceId, ModSourceRef};
 use crate::EffectTarget;
 
 /// Which device inside a channel or bus owns the parameter.
@@ -583,12 +583,7 @@ pub const ENVELOPE_DESCRIPTORS: [ParamDescriptor; 11] = [
 
 /// An enum as a descriptor: `positions` discrete slots carried as the
 /// enum's `ALL` index, the same projection `division` makes for time.
-const fn selector(
-    id: u32,
-    name: &'static str,
-    positions: u8,
-    default: f32,
-) -> ParamDescriptor {
+const fn selector(id: u32, name: &'static str, positions: u8, default: f32) -> ParamDescriptor {
     ParamDescriptor {
         id,
         name,
@@ -637,7 +632,12 @@ pub const STEP_DESCRIPTORS: [ParamDescriptor; 4 + MOD_STEP_MAX_STEPS] = {
         curve: ParamCurve::Linear,
         default: 0.0,
     };
-    table[3] = selector(STEP_PARAM_TRIGGER, "Trigger", ModStepTrigger::ALL.len() as u8, 0.0);
+    table[3] = selector(
+        STEP_PARAM_TRIGGER,
+        "Trigger",
+        ModStepTrigger::ALL.len() as u8,
+        0.0,
+    );
     let mut index = 0;
     while index < MOD_STEP_MAX_STEPS {
         table[4 + index] = ParamDescriptor {
@@ -823,7 +823,6 @@ impl Default for ModEnvelopeParams {
         }
     }
 }
-
 
 /// A clocked pattern of control values — the Reason Matrix gesture at
 /// modulator scale, and the rack's first genuinely stepped source. The step
@@ -1146,7 +1145,9 @@ impl ModulatorKind {
     /// The inverse, for the add menu. Out-of-range indices fail closed
     /// rather than silently adding an LFO.
     pub fn from_index(index: i32) -> Option<Self> {
-        usize::try_from(index).ok().and_then(|index| Self::ALL.get(index).copied())
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| Self::ALL.get(index).copied())
     }
 
     pub fn default_params(self) -> ModulatorParams {
@@ -1190,12 +1191,42 @@ pub enum ModPolarity {
 /// One matrix row: a modulator slot driving one parameter.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModRoute {
+    /// Which module drives this route, durably. Stamped by
+    /// [`ModRack::add_route`] from the slot the route was authored against,
+    /// and the only form that persists: a route must not mean "slot 2" once
+    /// modules can be reordered in a grid.
+    pub source: ModSourceId,
+    /// The same source as a bounded runtime slot, which is what the realtime
+    /// path indexes. Derived from `source` whenever the rack changes and
+    /// never authored directly; an unresolvable source parks it out of range,
+    /// where `offset_for` reads no output and contributes nothing.
     pub source_slot: u8,
     pub destination: ParamAddr,
     /// Signed, `-1..1`, as a fraction of the destination's full range. The
     /// drag depth of the assignment gesture.
     pub depth: f32,
     pub polarity: ModPolarity,
+}
+
+impl ModRoute {
+    /// A route authored against a slot, which is what an assignment gesture
+    /// and a factory patch both know. The durable identity is a placeholder
+    /// until [`ModRack::add_route`] stamps it from the rack, so build routes
+    /// this way and add them rather than writing `routes[i]` directly.
+    pub const fn to_slot(
+        source_slot: u8,
+        destination: ParamAddr,
+        depth: f32,
+        polarity: ModPolarity,
+    ) -> Self {
+        Self {
+            source: ModSourceId(0),
+            source_slot,
+            destination,
+            depth,
+            polarity,
+        }
+    }
 }
 
 /// Fixed rack size. Eight slots per channel: four stopped being enough the
@@ -1211,11 +1242,28 @@ pub const MAX_MODULATORS_PER_CHANNEL: usize = 8;
 /// and the whole rack stays `Copy`.
 pub const MAX_MOD_ROUTES_PER_CHANNEL: usize = 16;
 
+/// A slot number that resolves to no module. Routes whose source is gone
+/// park here: `offset_for` finds no output for it and adds nothing, which
+/// keeps a stale route inert and inspectable rather than deleted.
+pub const UNRESOLVED_SLOT: u8 = u8::MAX;
+
+/// One occupied rack slot: a module and the identity routes name it by.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModSlot {
+    /// Stable within the channel. Minted when the module is added, carried
+    /// through reorders, and never reused, so a route outlives a slot number.
+    pub id: ModSourceId,
+    pub params: ModulatorParams,
+}
+
 /// One channel's complete modulation state.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModRack {
-    pub slots: [Option<ModulatorParams>; MAX_MODULATORS_PER_CHANNEL],
+    pub slots: [Option<ModSlot>; MAX_MODULATORS_PER_CHANNEL],
     pub routes: [Option<ModRoute>; MAX_MOD_ROUTES_PER_CHANNEL],
+    /// Next identity to mint. Monotonic, so removing a module and adding
+    /// another never hands the newcomer a departed module's routes.
+    pub next_source_id: u32,
 }
 
 /// The persisted form stays sparse: TOML has no `null`, so serializing the
@@ -1227,13 +1275,33 @@ struct SavedModRack {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     slots: Vec<SavedModulatorSlot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    routes: Vec<ModRoute>,
+    routes: Vec<SavedModRoute>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SavedModulatorSlot {
     slot: u8,
+    /// Absent in projects written before durable identity. Those decode with
+    /// the slot number as the id, which is exactly the id
+    /// `mod_metadata::local_slot_sources` was already handing out for them,
+    /// so a legacy route's `source_slot` maps onto it unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<u32>,
     params: ModulatorParams,
+}
+
+/// A route's persisted form. New projects write `source`; older ones wrote
+/// `source_slot`, and decode through `ModSourceRef` — the adapter
+/// `mod_metadata.rs` has been shipping unconsumed since the spec landed.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedModRoute {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_slot: Option<u8>,
+    destination: ParamAddr,
+    depth: f32,
+    polarity: ModPolarity,
 }
 
 impl serde::Serialize for ModRack {
@@ -1245,14 +1313,29 @@ impl serde::Serialize for ModRack {
             .slots
             .iter()
             .enumerate()
-            .filter_map(|(slot, params)| {
-                params.map(|params| SavedModulatorSlot {
+            .filter_map(|(slot, entry)| {
+                entry.map(|entry| SavedModulatorSlot {
                     slot: slot as u8,
-                    params,
+                    id: Some(entry.id.0),
+                    params: entry.params,
                 })
             })
             .collect();
-        let routes = self.routes.iter().flatten().copied().collect();
+        // Routes persist their durable source only. The runtime slot is
+        // derived on load, so a saved project cannot disagree with itself
+        // about where a module lives.
+        let routes = self
+            .routes
+            .iter()
+            .flatten()
+            .map(|route| SavedModRoute {
+                source: Some(route.source.0),
+                source_slot: None,
+                destination: route.destination,
+                depth: route.depth,
+                polarity: route.polarity,
+            })
+            .collect();
         SavedModRack { slots, routes }.serialize(serializer)
     }
 }
@@ -1265,13 +1348,42 @@ impl<'de> serde::Deserialize<'de> for ModRack {
         let saved = SavedModRack::deserialize(deserializer)?;
         let mut rack = Self::default();
         for saved_slot in saved.slots {
-            if let Some(slot) = rack.slots.get_mut(saved_slot.slot as usize) {
-                *slot = Some(saved_slot.params);
-            }
+            let Some(slot) = rack.slots.get_mut(saved_slot.slot as usize) else {
+                continue;
+            };
+            *slot = Some(ModSlot {
+                // A pre-identity project's slot number is its id, which keeps
+                // its legacy routes resolving to exactly what they meant.
+                id: ModSourceId(saved_slot.id.unwrap_or(u32::from(saved_slot.slot))),
+                params: saved_slot.params,
+            });
         }
-        for route in saved.routes {
-            let _ = rack.add_route(route);
+        rack.next_source_id = rack.mint_floor();
+
+        // A decoded rack is the source table its own legacy routes resolve
+        // against, so build it once and read both route forms through it.
+        let sources = crate::mod_metadata::local_slot_sources(&rack);
+        for saved_route in saved.routes {
+            let reference = match (saved_route.source, saved_route.source_slot) {
+                (Some(id), _) => ModSourceRef::Id(ModSourceId(id)),
+                (None, Some(slot)) => ModSourceRef::LocalSlot(slot),
+                (None, None) => continue,
+            };
+            let Some(source_slot) = reference.to_local_slot(&sources) else {
+                continue;
+            };
+            let Some(source) = rack.source_id(source_slot as usize) else {
+                continue;
+            };
+            let _ = rack.add_route(ModRoute {
+                source,
+                source_slot,
+                destination: saved_route.destination,
+                depth: saved_route.depth,
+                polarity: saved_route.polarity,
+            });
         }
+        rack.resolve_routes();
         Ok(rack)
     }
 }
@@ -1281,6 +1393,7 @@ impl Default for ModRack {
         Self {
             slots: [None; MAX_MODULATORS_PER_CHANNEL],
             routes: [None; MAX_MOD_ROUTES_PER_CHANNEL],
+            next_source_id: 0,
         }
     }
 }
@@ -1290,16 +1403,209 @@ impl ModRack {
         self.slots.iter().all(Option::is_none)
     }
 
+    /// The module in `slot`, if any. Most callers want the parameters and
+    /// not the identity, so this is the ordinary way to read a slot.
+    pub fn params(&self, slot: usize) -> Option<ModulatorParams> {
+        self.slots
+            .get(slot)
+            .copied()
+            .flatten()
+            .map(|entry| entry.params)
+    }
+
+    pub fn params_mut(&mut self, slot: usize) -> Option<&mut ModulatorParams> {
+        self.slots
+            .get_mut(slot)?
+            .as_mut()
+            .map(|entry| &mut entry.params)
+    }
+
+    pub fn source_id(&self, slot: usize) -> Option<ModSourceId> {
+        self.slots
+            .get(slot)
+            .copied()
+            .flatten()
+            .map(|entry| entry.id)
+    }
+
+    /// Where a durable id currently lives. The inverse of `source_id`, and
+    /// the whole reason a route can survive a reorder.
+    pub fn slot_of(&self, id: ModSourceId) -> Option<u8> {
+        self.slots
+            .iter()
+            .position(|entry| entry.is_some_and(|entry| entry.id == id))
+            .map(|slot| slot as u8)
+    }
+
+    /// The first free slot, for the add action.
+    pub fn free_slot(&self) -> Option<usize> {
+        self.slots.iter().position(Option::is_none)
+    }
+
+    /// Put a module in `slot`. Re-installing over an occupied slot keeps its
+    /// identity, so editing a module never orphans the routes it drives;
+    /// filling an empty one mints a fresh id.
+    pub fn install(&mut self, slot: usize, params: ModulatorParams) -> Option<ModSourceId> {
+        let minted = ModSourceId(self.next_source_id);
+        let entry = self.slots.get_mut(slot)?;
+        let id = match entry {
+            Some(existing) => {
+                existing.params = params;
+                existing.id
+            }
+            None => {
+                *entry = Some(ModSlot { id: minted, params });
+                self.next_source_id = self.next_source_id.wrapping_add(1);
+                minted
+            }
+        };
+        Some(id)
+    }
+
+    /// Empty a slot and drop every route it drove. Returns whether anything
+    /// was there.
+    pub fn clear(&mut self, slot: usize) -> bool {
+        let Some(entry) = self.slots.get_mut(slot) else {
+            return false;
+        };
+        let Some(removed) = entry.take() else {
+            return false;
+        };
+        for route in self.routes.iter_mut() {
+            if route.is_some_and(|route| route.source == removed.id) {
+                *route = None;
+            }
+        }
+        self.resolve_routes();
+        true
+    }
+
+    /// Exchange two grid positions. Routes follow their modules because they
+    /// name identities, not slots; only the resolved locators move.
+    pub fn swap_slots(&mut self, a: usize, b: usize) -> bool {
+        if a == b || a >= MAX_MODULATORS_PER_CHANNEL || b >= MAX_MODULATORS_PER_CHANNEL {
+            return false;
+        }
+        self.slots.swap(a, b);
+        let mut remap = Self::identity_map();
+        remap[a] = b as u8;
+        remap[b] = a as u8;
+        self.retarget(&remap);
+        true
+    }
+
+    /// The occupied slots, in order. The grid draws this, so a module's
+    /// position in it is what a reorder gesture names.
+    pub fn occupied(&self) -> impl Iterator<Item = (usize, ModSlot)> + '_ {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, entry)| entry.map(|entry| (slot, entry)))
+    }
+
+    /// Move the module in `from` to position `to` among the occupied slots,
+    /// compacting the rack so the grid has no holes in the middle of it.
+    ///
+    /// Everything that pointed at a moved module is carried over: routes
+    /// because they name identities, and a math module's input because this
+    /// rewrites it through the permutation. A slot reference that the user
+    /// never sees must not be the thing that breaks when the grid is tidied.
+    pub fn move_module(&mut self, from: usize, to: usize) -> bool {
+        let order: Vec<usize> = self.occupied().map(|(slot, _)| slot).collect();
+        let Some(position) = order.iter().position(|slot| *slot == from) else {
+            return false;
+        };
+        let target = to.min(order.len().saturating_sub(1));
+        if target == position {
+            return false;
+        }
+        let mut order = order;
+        let moved = order.remove(position);
+        order.insert(target, moved);
+
+        let previous = self.slots;
+        let mut remap = [UNRESOLVED_SLOT; MAX_MODULATORS_PER_CHANNEL];
+        self.slots = [None; MAX_MODULATORS_PER_CHANNEL];
+        for (index, old_slot) in order.into_iter().enumerate() {
+            self.slots[index] = previous[old_slot];
+            remap[old_slot] = index as u8;
+        }
+        self.retarget(&remap);
+        true
+    }
+
+    const fn identity_map() -> [u8; MAX_MODULATORS_PER_CHANNEL] {
+        let mut map = [0u8; MAX_MODULATORS_PER_CHANNEL];
+        let mut index = 0;
+        while index < MAX_MODULATORS_PER_CHANNEL {
+            map[index] = index as u8;
+            index += 1;
+        }
+        map
+    }
+
+    /// Re-point everything that names a slot after the slots have moved.
+    /// `remap` is old slot -> new slot; routes resolve from identity instead,
+    /// so they only need their locators refreshed.
+    fn retarget(&mut self, remap: &[u8; MAX_MODULATORS_PER_CHANNEL]) {
+        for entry in self.slots.iter_mut().flatten() {
+            if let ModulatorParams::Math(math) = &mut entry.params {
+                if let Some(moved) = remap.get(math.input_slot as usize).copied() {
+                    if moved != UNRESOLVED_SLOT {
+                        math.input_slot = moved;
+                    }
+                }
+            }
+        }
+        self.resolve_routes();
+    }
+
+    /// Re-derive every route's runtime slot from its durable source. Called
+    /// after anything that moves a module, and once after loading.
+    pub fn resolve_routes(&mut self) {
+        for index in 0..self.routes.len() {
+            let Some(route) = self.routes[index] else {
+                continue;
+            };
+            let slot = self.slot_of(route.source).unwrap_or(UNRESOLVED_SLOT);
+            if let Some(route) = self.routes[index].as_mut() {
+                route.source_slot = slot;
+            }
+            let _ = slot;
+        }
+    }
+
+    /// The highest id in use, plus one: what `next_source_id` has to be for
+    /// a decoded rack to keep minting uniquely.
+    fn mint_floor(&self) -> u32 {
+        self.slots
+            .iter()
+            .flatten()
+            .map(|entry| entry.id.0.wrapping_add(1))
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Add a route, returning its index. Returns `None` when the matrix is
-    /// full rather than silently dropping the assignment.
+    /// full, or when the authored slot holds no module, rather than silently
+    /// dropping the assignment or minting a route with no source.
+    ///
+    /// The caller authors against a slot, because that is what the gesture
+    /// knows; the durable identity is stamped here, from the rack that owns
+    /// both sides of the fact.
     pub fn add_route(&mut self, route: ModRoute) -> Option<usize> {
+        let source = self.source_id(route.source_slot as usize)?;
+        let route = ModRoute {
+            source,
+            source_slot: route.source_slot,
+            ..route
+        };
         // An existing row for the same pair is retuned rather than doubled:
         // dragging depth on an already-assigned knob must not stack a second
         // route on top of the first.
         if let Some(index) = self.routes.iter().position(|existing| {
             existing.is_some_and(|existing| {
-                existing.source_slot == route.source_slot
-                    && existing.destination == route.destination
+                existing.source == source && existing.destination == route.destination
             })
         }) {
             self.routes[index] = Some(route);
@@ -1382,6 +1688,17 @@ mod tests {
         ParamAddr::effect(EffectTarget::Channel(0), 0, param)
     }
 
+    /// A rack with `count` modules installed. Routes need a real source to
+    /// stamp an identity from, so tests about route arithmetic still have to
+    /// say what is driving them.
+    fn rack_with_sources(count: usize) -> ModRack {
+        let mut rack = ModRack::default();
+        for slot in 0..count {
+            rack.install(slot, ModulatorParams::Lfo(ModLfoParams::default()));
+        }
+        rack
+    }
+
     fn open(param: u32) -> ModDestinationDescriptor {
         ModDestinationDescriptor::unrestricted(param)
     }
@@ -1423,13 +1740,8 @@ retrigger = true
     /// stack routes until the matrix filled up.
     #[test]
     fn reassigning_a_pair_retunes_rather_than_stacking() {
-        let mut rack = ModRack::default();
-        let route = ModRoute {
-            source_slot: 0,
-            destination: addr(7),
-            depth: 0.25,
-            polarity: ModPolarity::Bipolar,
-        };
+        let mut rack = rack_with_sources(2);
+        let route = ModRoute::to_slot(0, addr(7), 0.25, ModPolarity::Bipolar);
         assert_eq!(rack.add_route(route), Some(0));
         assert_eq!(
             rack.add_route(ModRoute {
@@ -1454,24 +1766,14 @@ retrigger = true
 
     #[test]
     fn a_full_matrix_refuses_rather_than_dropping_silently() {
-        let mut rack = ModRack::default();
+        let mut rack = rack_with_sources(1);
         for param in 0..MAX_MOD_ROUTES_PER_CHANNEL as u32 {
             assert!(rack
-                .add_route(ModRoute {
-                    source_slot: 0,
-                    destination: addr(param),
-                    depth: 1.0,
-                    polarity: ModPolarity::Bipolar,
-                })
+                .add_route(ModRoute::to_slot(0, addr(param), 1.0, ModPolarity::Bipolar,))
                 .is_some());
         }
         assert_eq!(
-            rack.add_route(ModRoute {
-                source_slot: 0,
-                destination: addr(999),
-                depth: 1.0,
-                polarity: ModPolarity::Bipolar,
-            }),
+            rack.add_route(ModRoute::to_slot(0, addr(999), 1.0, ModPolarity::Bipolar,)),
             None
         );
     }
@@ -1480,19 +1782,9 @@ retrigger = true
     /// base value sits at the centre of the swing or at its floor.
     #[test]
     fn offsets_sum_and_polarity_shapes_the_swing() {
-        let mut rack = ModRack::default();
-        rack.add_route(ModRoute {
-            source_slot: 0,
-            destination: addr(1),
-            depth: 0.5,
-            polarity: ModPolarity::Bipolar,
-        });
-        rack.add_route(ModRoute {
-            source_slot: 1,
-            destination: addr(1),
-            depth: 1.0,
-            polarity: ModPolarity::Unipolar,
-        });
+        let mut rack = rack_with_sources(2);
+        rack.add_route(ModRoute::to_slot(0, addr(1), 0.5, ModPolarity::Bipolar));
+        rack.add_route(ModRoute::to_slot(1, addr(1), 1.0, ModPolarity::Unipolar));
         let mut outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
 
         // Both sources at full negative: bipolar swings down, unipolar rests
@@ -1517,13 +1809,8 @@ retrigger = true
     /// depth limit clamps the route rather than trusting the stored depth.
     #[test]
     fn the_destination_policy_gates_and_clamps_its_routes() {
-        let mut rack = ModRack::default();
-        rack.add_route(ModRoute {
-            source_slot: 0,
-            destination: addr(1),
-            depth: 1.0,
-            polarity: ModPolarity::Bipolar,
-        });
+        let mut rack = rack_with_sources(2);
+        rack.add_route(ModRoute::to_slot(0, addr(1), 1.0, ModPolarity::Bipolar));
         let mut outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
         outputs[0] = 1.0;
 
@@ -1567,14 +1854,9 @@ retrigger = true
 
     #[test]
     fn removing_a_route_leaves_its_neighbours() {
-        let mut rack = ModRack::default();
+        let mut rack = rack_with_sources(2);
         for slot in 0..2u8 {
-            rack.add_route(ModRoute {
-                source_slot: slot,
-                destination: addr(1),
-                depth: 1.0,
-                polarity: ModPolarity::Bipolar,
-            });
+            rack.add_route(ModRoute::to_slot(slot, addr(1), 1.0, ModPolarity::Bipolar));
         }
         rack.remove_route(0, addr(1));
         let remaining: Vec<_> = rack.routes.iter().flatten().collect();
@@ -1585,22 +1867,23 @@ retrigger = true
     #[test]
     fn sparse_rack_round_trips_through_toml() {
         let mut rack = ModRack::default();
-        rack.slots[2] = Some(ModulatorParams::Lfo(ModLfoParams {
-            rate_hz: 3.5,
-            ..ModLfoParams::default()
-        }));
-        rack.slots[1] = Some(ModulatorParams::Envelope(ModEnvelopeParams {
-            input_channel: 3,
-            attack_tempo_sync: true,
-            sustain: 0.42,
-            ..ModEnvelopeParams::default()
-        }));
-        rack.add_route(ModRoute {
-            source_slot: 2,
-            destination: addr(4),
-            depth: -0.75,
-            polarity: ModPolarity::Unipolar,
-        });
+        rack.install(
+            2,
+            ModulatorParams::Lfo(ModLfoParams {
+                rate_hz: 3.5,
+                ..ModLfoParams::default()
+            }),
+        );
+        rack.install(
+            1,
+            ModulatorParams::Envelope(ModEnvelopeParams {
+                input_channel: 3,
+                attack_tempo_sync: true,
+                sustain: 0.42,
+                ..ModEnvelopeParams::default()
+            }),
+        );
+        rack.add_route(ModRoute::to_slot(2, addr(4), -0.75, ModPolarity::Unipolar));
 
         let text = toml::to_string(&rack).unwrap();
         assert!(text.contains("slot = 2"));
@@ -1646,7 +1929,8 @@ retrigger = true
 
                 // A mid-range write reads back as written (snapped when
                 // stepped, which get/set both express in index space).
-                let target = descriptor.clamp_natural(descriptor.min * 0.25 + descriptor.max * 0.75);
+                let target =
+                    descriptor.clamp_natural(descriptor.min * 0.25 + descriptor.max * 0.75);
                 params.set(descriptor.id, target);
                 assert_eq!(
                     params.get(descriptor.id),
@@ -1666,7 +1950,10 @@ retrigger = true
         let mut params = ModulatorParams::Lfo(ModLfoParams::default());
         params.set(LFO_PARAM_WAVEFORM, 3.0);
         params.set(LFO_PARAM_TEMPO_SYNC, 1.0);
-        params.set(LFO_PARAM_RATE_DIVISION, ModTimeDivision::Eighth.to_index() as f32);
+        params.set(
+            LFO_PARAM_RATE_DIVISION,
+            ModTimeDivision::Eighth.to_index() as f32,
+        );
         params.set(LFO_PARAM_RATE_HZ, 999.0);
         params.set(LFO_PARAM_PULSE_WIDTH, -4.0);
         let ModulatorParams::Lfo(lfo) = params else {
@@ -1703,22 +1990,258 @@ retrigger = true
     fn the_rack_is_what_a_command_ring_entry_costs() {
         use core::mem::size_of;
 
-        // One slot is one `Option<ModulatorParams>`, and the widest kind is
-        // the step pattern's sixteen values.
-        let slot = size_of::<Option<ModulatorParams>>();
-        assert_eq!(slot, 72);
+        // One slot is a module plus its durable identity, and the widest
+        // module is the step pattern's sixteen values.
+        assert_eq!(size_of::<Option<ModSlot>>(), 76);
+        assert_eq!(size_of::<ModRoute>(), 20);
         assert_eq!(
             size_of::<ModRack>(),
-            MAX_MODULATORS_PER_CHANNEL * slot
+            MAX_MODULATORS_PER_CHANNEL * size_of::<Option<ModSlot>>()
                 + MAX_MOD_ROUTES_PER_CHANNEL * size_of::<ModRoute>()
+                + size_of::<u32>()
         );
 
-        // Eight slots: 832 bytes of rack, 840 bytes an entry. At the
-        // engine's 1024-entry queue that is 840 KiB preallocated, up from
-        // 552 KiB at four slots — a fixed setup cost, never a per-command
-        // allocation, which is the trade `bridge.rs` documents.
-        assert_eq!(size_of::<ModRack>(), 832);
-        assert_eq!(size_of::<crate::EngineCommand>(), 840);
+        // Eight slots carrying durable identity: 932 bytes of rack, 936
+        // bytes an entry. At the engine's 1024-entry queue that is 936 KiB
+        // preallocated, up from 552 KiB at four anonymous slots — a fixed
+        // setup cost, never a per-command allocation, which is the trade
+        // `bridge.rs` documents.
+        assert_eq!(size_of::<ModRack>(), 932);
+        assert_eq!(size_of::<crate::EngineCommand>(), 936);
+    }
+
+    /// The whole point of durable identity: moving a module in the grid must
+    /// move its routes with it, without touching what they mean.
+    #[test]
+    fn routes_follow_their_module_across_a_reorder() {
+        let mut rack = ModRack::default();
+        rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+        rack.install(1, ModulatorParams::Envelope(ModEnvelopeParams::default()));
+        let lfo = rack.source_id(0).unwrap();
+        let envelope = rack.source_id(1).unwrap();
+        rack.add_route(ModRoute::to_slot(0, addr(7), 0.5, ModPolarity::Bipolar));
+        rack.add_route(ModRoute::to_slot(1, addr(9), 0.25, ModPolarity::Unipolar));
+
+        assert!(rack.swap_slots(0, 1));
+
+        // The modules moved...
+        assert_eq!(rack.source_id(0), Some(envelope));
+        assert_eq!(rack.source_id(1), Some(lfo));
+        // ...and each route still names the same module, now resolved to
+        // wherever that module ended up.
+        let lfo_route = rack
+            .routes
+            .iter()
+            .flatten()
+            .find(|route| route.source == lfo)
+            .unwrap();
+        assert_eq!(lfo_route.destination, addr(7));
+        assert_eq!(lfo_route.source_slot, 1);
+        let env_route = rack
+            .routes
+            .iter()
+            .flatten()
+            .find(|route| route.source == envelope)
+            .unwrap();
+        assert_eq!(env_route.destination, addr(9));
+        assert_eq!(env_route.source_slot, 0);
+
+        // And the offsets follow, which is the part a listener would hear:
+        // the LFO's route reads slot 1 now, and the envelope's reads slot 0,
+        // where an idle envelope's `-1` lifts to no offset at all.
+        let mut outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
+        outputs[0] = -1.0;
+        outputs[1] = 1.0;
+        assert_eq!(rack.offset_for(addr(7), &outputs, &open(7)), 0.5);
+        assert_eq!(rack.offset_for(addr(9), &outputs, &open(9)), 0.0);
+    }
+
+    /// Reordering compacts the grid, and everything that named a slot is
+    /// carried over: routes by identity, and a math module's input by the
+    /// permutation. A slot reference the user never sees must not be what
+    /// breaks when the grid is tidied.
+    #[test]
+    fn a_reorder_carries_routes_and_math_inputs_with_it() {
+        let mut rack = ModRack::default();
+        rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+        rack.install(1, ModulatorParams::Envelope(ModEnvelopeParams::default()));
+        // Slot 2 reads slot 0, which is a lower slot and so a same-tick read.
+        rack.install(
+            2,
+            ModulatorParams::Math(ModMathParams {
+                input_slot: 0,
+                ..ModMathParams::default()
+            }),
+        );
+        let lfo = rack.source_id(0).unwrap();
+        let math = rack.source_id(2).unwrap();
+        rack.add_route(ModRoute::to_slot(0, addr(7), 0.5, ModPolarity::Bipolar));
+        rack.add_route(ModRoute::to_slot(2, addr(8), 0.5, ModPolarity::Bipolar));
+
+        // Drag the LFO to the end of the grid.
+        assert!(rack.move_module(0, 2));
+
+        assert_eq!(rack.source_id(2), Some(lfo));
+        assert_eq!(rack.slot_of(math), Some(1));
+        // The math module still reads the LFO, which now lives in slot 2 —
+        // and reading a higher slot is now a previous-tick read, which is the
+        // rule doing its job rather than a bug.
+        let ModulatorParams::Math(moved) = rack.params(1).unwrap() else {
+            panic!("math module moved to the wrong place")
+        };
+        assert_eq!(moved.input_slot, 2);
+
+        // Both routes still name their own module.
+        let lfo_route = rack
+            .routes
+            .iter()
+            .flatten()
+            .find(|route| route.source == lfo)
+            .unwrap();
+        assert_eq!(lfo_route.destination, addr(7));
+        assert_eq!(lfo_route.source_slot, 2);
+        let math_route = rack
+            .routes
+            .iter()
+            .flatten()
+            .find(|route| route.source == math)
+            .unwrap();
+        assert_eq!(math_route.destination, addr(8));
+        assert_eq!(math_route.source_slot, 1);
+    }
+
+    /// Reorder compacts, so a rack with a hole in it closes up rather than
+    /// leaving the grid with a gap in the middle.
+    #[test]
+    fn reordering_compacts_a_sparse_rack() {
+        let mut rack = ModRack::default();
+        rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+        rack.install(3, ModulatorParams::Envelope(ModEnvelopeParams::default()));
+        let envelope = rack.source_id(3).unwrap();
+
+        assert!(rack.move_module(3, 0));
+        assert_eq!(rack.slot_of(envelope), Some(0));
+        assert_eq!(rack.occupied().count(), 2);
+        assert!(rack.params(0).is_some());
+        assert!(rack.params(1).is_some());
+        assert!(rack.params(2).is_none());
+    }
+
+    /// Identity is never recycled, so removing a module and adding another
+    /// cannot hand the newcomer the departed module's routes.
+    #[test]
+    fn a_new_module_never_inherits_a_removed_ones_routes() {
+        let mut rack = ModRack::default();
+        rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+        rack.add_route(ModRoute::to_slot(0, addr(7), 0.5, ModPolarity::Bipolar));
+        let departed = rack.source_id(0).unwrap();
+
+        assert!(rack.clear(0));
+        assert_eq!(rack.routes.iter().flatten().count(), 0);
+
+        rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+        assert_ne!(rack.source_id(0), Some(departed));
+        assert_eq!(rack.offset_for(addr(7), &[1.0; MAX_MODULATORS_PER_CHANNEL], &open(7)), 0.0);
+    }
+
+    /// Editing a module in place keeps its identity, so retuning an LFO does
+    /// not quietly drop everything it drives.
+    #[test]
+    fn reinstalling_a_slot_keeps_its_identity_and_its_routes() {
+        let mut rack = ModRack::default();
+        rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+        let id = rack.source_id(0).unwrap();
+        rack.add_route(ModRoute::to_slot(0, addr(7), 0.5, ModPolarity::Bipolar));
+
+        rack.install(
+            0,
+            ModulatorParams::Lfo(ModLfoParams {
+                rate_hz: 9.0,
+                ..ModLfoParams::default()
+            }),
+        );
+        assert_eq!(rack.source_id(0), Some(id));
+        assert_eq!(rack.routes.iter().flatten().count(), 1);
+        assert_eq!(rack.routes[0].unwrap().source, id);
+    }
+
+    /// A route authored against an empty slot is refused rather than stored
+    /// with no source to resolve.
+    #[test]
+    fn a_route_needs_a_module_to_name() {
+        let mut rack = ModRack::default();
+        assert_eq!(
+            rack.add_route(ModRoute::to_slot(0, addr(7), 0.5, ModPolarity::Bipolar)),
+            None
+        );
+        assert_eq!(rack.routes.iter().flatten().count(), 0);
+    }
+
+    /// Projects written before durable identity carry `source_slot` and no
+    /// ids. They decode through `ModSourceRef`, with the slot number as the
+    /// identity, so a legacy route keeps pointing at exactly what it did.
+    #[test]
+    fn legacy_slot_addressed_routes_decode_onto_identities() {
+        let legacy = r#"
+[[slots]]
+slot = 1
+
+[slots.params]
+kind = "lfo"
+rate_hz = 3.0
+
+[[slots]]
+slot = 2
+
+[slots.params]
+kind = "envelope"
+sustain = 0.5
+
+[[routes]]
+source_slot = 2
+depth = 0.4
+polarity = "unipolar"
+
+[routes.destination]
+scope = { channel = 0 }
+owner = { effect = { slot = 0 } }
+param = 7
+"#;
+        let rack = toml::from_str::<ModRack>(legacy).unwrap();
+        assert_eq!(rack.source_id(1), Some(ModSourceId(1)));
+        assert_eq!(rack.source_id(2), Some(ModSourceId(2)));
+        // Minting must not collide with the ids a legacy rack just claimed.
+        assert_eq!(rack.next_source_id, 3);
+
+        let route = rack.routes[0].unwrap();
+        assert_eq!(route.source, ModSourceId(2));
+        assert_eq!(route.source_slot, 2);
+        assert_eq!(route.destination, addr(7));
+
+        // Re-saving writes the durable form, and that round-trips.
+        let text = toml::to_string(&rack).unwrap();
+        assert!(text.contains("source = 2"));
+        assert!(!text.contains("source_slot"));
+        assert_eq!(toml::from_str::<ModRack>(&text).unwrap(), rack);
+    }
+
+    /// A route whose module is gone parks out of range rather than resolving
+    /// onto whatever now occupies its old slot.
+    #[test]
+    fn an_unresolvable_route_is_inert_rather_than_misaimed() {
+        let mut rack = ModRack::default();
+        rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+        rack.add_route(ModRoute::to_slot(0, addr(7), 1.0, ModPolarity::Bipolar));
+        // Drop the module without going through `clear`, as a decode of a
+        // hand-edited project could.
+        rack.slots[0] = None;
+        rack.resolve_routes();
+
+        assert_eq!(rack.routes[0].unwrap().source_slot, UNRESOLVED_SLOT);
+        assert_eq!(
+            rack.offset_for(addr(7), &[1.0; MAX_MODULATORS_PER_CHANNEL], &open(7)),
+            0.0
+        );
     }
 
     #[test]
@@ -1791,23 +2314,32 @@ retrigger = true
         let mut steps = [0.0; MOD_STEP_MAX_STEPS];
         steps[0] = 1.0;
         steps[3] = -0.5;
-        rack.slots[0] = Some(ModulatorParams::Step(ModStepParams {
-            steps,
-            length: 4,
-            division: ModTimeDivision::Eighth,
-            glide: 0.3,
-            trigger: ModStepTrigger::NoteAdvance,
-        }));
-        rack.slots[1] = Some(ModulatorParams::Random(ModRandomParams {
-            drunk: true,
-            quantize: 5,
-            ..ModRandomParams::default()
-        }));
-        rack.slots[3] = Some(ModulatorParams::Math(ModMathParams {
-            input_slot: 1,
-            op: ModMathOp::Clamp,
-            ..ModMathParams::default()
-        }));
+        rack.install(
+            0,
+            ModulatorParams::Step(ModStepParams {
+                steps,
+                length: 4,
+                division: ModTimeDivision::Eighth,
+                glide: 0.3,
+                trigger: ModStepTrigger::NoteAdvance,
+            }),
+        );
+        rack.install(
+            1,
+            ModulatorParams::Random(ModRandomParams {
+                drunk: true,
+                quantize: 5,
+                ..ModRandomParams::default()
+            }),
+        );
+        rack.install(
+            3,
+            ModulatorParams::Math(ModMathParams {
+                input_slot: 1,
+                op: ModMathOp::Clamp,
+                ..ModMathParams::default()
+            }),
+        );
 
         let text = toml::to_string(&rack).unwrap();
         assert!(text.contains("slot = 3"));
@@ -1824,7 +2356,7 @@ kind = "lfo"
 rate_hz = 2.0
 "#;
         let decoded = toml::from_str::<ModRack>(legacy).unwrap();
-        assert_eq!(decoded.slots[0].unwrap().kind(), ModulatorKind::Lfo);
-        assert_eq!(decoded.slots[0].unwrap().get(LFO_PARAM_RATE_HZ), Some(2.0));
+        assert_eq!(decoded.params(0).unwrap().kind(), ModulatorKind::Lfo);
+        assert_eq!(decoded.params(0).unwrap().get(LFO_PARAM_RATE_HZ), Some(2.0));
     }
 }
