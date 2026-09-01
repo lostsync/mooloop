@@ -21,7 +21,7 @@ use mooloop_core::gain::{db_to_linear, linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::log::Level;
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
-    compile_bus_graph, default_buses, sanitize_route, strip_descriptor, would_create_cycle,
+    compile_bus_graph, snap_bars_to_power_of_two, default_buses, sanitize_route, strip_descriptor, would_create_cycle,
     AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup,
     ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectParams,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
@@ -38,8 +38,8 @@ use mooloop_core::{
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
-    MAX_SAMPLER_VOICES, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_GRAIN,
-    MIN_STRETCH_RATIO,
+    MAX_SAMPLER_VOICES, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
+    MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
     MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
     MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, STRIP_DESCRIPTORS,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -210,6 +210,72 @@ impl PreviewSender {
 const JACK_BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 const WAVEFORM_BINS: usize = 256;
 const DRUM_PREVIEW_BINS: usize = 144;
+
+/// Parse a number a user typed into a value field.
+///
+/// Tolerant of the units the field itself displays, because the obvious thing
+/// to do with a box reading "2.00x" is to type "4x". Anything unparseable
+/// returns `None` and the field snaps back to the authoritative text rather
+/// than committing a guess.
+fn parse_typed_value(text: &str) -> Option<f32> {
+    // The *leading* number, not every digit in the string. Stripping
+    // non-digits and concatenating what is left looks equivalent and is not:
+    // the grain field reads "256 fr / 375 Hz", so clicking into it and
+    // pressing Enter unchanged would have committed 256375.
+    let text = text.trim();
+    let mut end = 0;
+    for (index, ch) in text.char_indices() {
+        let numeric = ch.is_ascii_digit()
+            || (ch == '.' && !text[..index].contains('.'))
+            || (matches!(ch, '-' | '+') && index == 0);
+        if !numeric {
+            break;
+        }
+        end = index + ch.len_utf8();
+    }
+    text[..end]
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+/// Bar counts read as "2 bar" or "0.5 bar" rather than "2.000000": the
+/// values that matter here are powers of two, and trailing zeros make a
+/// snapped length look like an arbitrary one.
+fn format_bars(bars: f32) -> String {
+    if (bars - bars.round()).abs() < 1.0e-4 {
+        format!("{} bar", bars.round() as i32)
+    } else {
+        format!("{bars:.3} bar")
+    }
+}
+
+fn stretch_bars_to_norm(bars: f32) -> f32 {
+    let bars = bars.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS);
+    (bars / MIN_STRETCH_BARS).log2() / (MAX_STRETCH_BARS / MIN_STRETCH_BARS).log2()
+}
+
+fn stretch_bars_from_norm(norm: f32) -> f32 {
+    let span = (MAX_STRETCH_BARS / MIN_STRETCH_BARS).log2();
+    (MIN_STRETCH_BARS * (norm.clamp(0.0, 1.0) * span).exp2())
+        .clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS)
+}
+
+/// How many bars a channel's loop currently measures, at the project tempo.
+///
+/// The loop is what gets fitted when there is one, matching what the DSP
+/// derives its ratio from; otherwise the playback region is.
+fn measured_loop_bars(params: SamplerParams, frames: usize, sample_rate: u32, bpm: f64) -> f32 {
+    let len = frames.max(1) as f32;
+    let (start, end) = if params.loop_mode == LoopMode::Off {
+        (params.start, params.end)
+    } else {
+        (params.loop_start, params.loop_end)
+    };
+    let region = ((end - start).max(0.0) * len).max(1.0);
+    let per_bar = mooloop_core::frames_per_bar(sample_rate, bpm) as f32;
+    region / per_bar.max(1.0)
+}
 
 /// Map the stretch ratio onto a knob's 0..1 travel, and back.
 ///
@@ -3929,6 +3995,9 @@ impl UiState {
             .into(),
         );
         window.set_stretch_ratio_clean((0.5..=1.5).contains(&p.stretch_ratio));
+        window.set_stretch_sync(p.stretch_sync);
+        window.set_stretch_bars(stretch_bars_to_norm(p.stretch_bars));
+        window.set_stretch_bars_label(format_bars(p.stretch_bars).into());
         window.set_filter_cutoff(p.filter_cutoff);
         window.set_filter_resonance(p.filter_resonance);
         window.set_filter_env((p.filter_env_amount + 1.0) * 0.5);
@@ -9191,11 +9260,27 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let stx = structural_tx.clone();
             let st = state.clone();
+            let weak = window.as_weak();
             window.on_stretch_enabled_changed(move |on| {
                 let mut st = st.borrow_mut();
                 let channel_index = st.selected;
                 let channel = &mut st.channels[channel_index];
                 channel.params.stretch_enabled = on;
+                // Guess the loop length on the way in. A loop is nearly
+                // always some power of two of bars and nearly always
+                // recorded a little off it, so seeding this is the
+                // difference between one click and a knob turn every time.
+                if on {
+                    let frames = channel
+                        .sample_data
+                        .as_ref()
+                        .map_or(0, |sample| sample.frames.len());
+                    let bpm = weak.upgrade().map_or(120.0, |w| w.get_bpm() as f64);
+                    let measured =
+                        measured_loop_bars(channel.params, frames, sample_rate, bpm);
+                    channel.params.stretch_bars = snap_bars_to_power_of_two(measured);
+                    channel.params.stretch_sync = true;
+                }
                 let params = channel.params;
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                     channel: channel_index as u8,
@@ -9213,6 +9298,91 @@ impl AppUi {
                 });
             });
         }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_stretch_sync_changed(move |on| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.params.stretch_sync = on;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params: channel.params,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_stretch_bars_changed(move |norm| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                let bars = stretch_bars_from_norm(norm);
+                channel.params.stretch_bars = bars;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params: channel.params,
+                });
+                if let Some(window) = weak.upgrade() {
+                    window.set_stretch_bars_label(format_bars(bars).into());
+                }
+            });
+        }
+
+        // Typed entry. Parsing lives here rather than in Slint because the
+        // formatting does too, and a unit-aware parser written on both sides
+        // is one that will eventually disagree with itself. Anything
+        // unparseable is dropped and the field re-reads the authoritative
+        // value, so a half-typed string never reaches the engine.
+        macro_rules! wire_typed_stretch_field {
+            ($callback:ident, $apply:expr) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                let weak = window.as_weak();
+                window.$callback(move |text| {
+                    let Some(typed) = parse_typed_value(text.as_str()) else {
+                        if let Some(window) = weak.upgrade() {
+                            st.borrow().refresh_editor(&window);
+                        }
+                        return;
+                    };
+                    {
+                        let mut st = st.borrow_mut();
+                        let channel_index = st.selected;
+                        let channel = &mut st.channels[channel_index];
+                        #[allow(clippy::redundant_closure_call)]
+                        ($apply)(&mut channel.params, typed);
+                        let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                            channel: channel_index as u8,
+                            params: channel.params,
+                        });
+                    }
+                    if let Some(window) = weak.upgrade() {
+                        st.borrow().refresh_editor(&window);
+                    }
+                });
+            }};
+        }
+
+        wire_typed_stretch_field!(on_stretch_ratio_typed, |p: &mut SamplerParams, v: f32| {
+            p.stretch_ratio = v.clamp(MIN_STRETCH_RATIO, MAX_STRETCH_RATIO);
+        });
+        wire_typed_stretch_field!(on_stretch_bars_typed, |p: &mut SamplerParams, v: f32| {
+            p.stretch_bars = v.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS);
+        });
+        wire_typed_stretch_field!(on_stretch_grain_typed, |p: &mut SamplerParams, v: f32| {
+            p.stretch_grain = (v.round() as i32)
+                .clamp(i32::from(MIN_STRETCH_GRAIN), i32::from(MAX_STRETCH_GRAIN))
+                as u16;
+        });
+        wire_typed_stretch_field!(on_tune_typed, |p: &mut SamplerParams, v: f32| {
+            p.tune_semitones = v.clamp(-48.0, 48.0);
+        });
 
         {
             let tx = cmd_tx.clone();
@@ -11870,6 +12040,73 @@ mod tests {
             (grain - 0.6667).abs() < 0.001,
             "the default grain maps to {grain}, but the control defaults to 0.6667"
         );
+    }
+
+    /// The bars knob maps like the other two, and unity -- one bar -- has to
+    /// be reachable and sit where the Slint control defaults.
+    #[test]
+    fn the_bars_mapping_round_trips_and_defaults_to_one_bar() {
+        for bars in [0.0625f32, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 64.0] {
+            let back = stretch_bars_from_norm(stretch_bars_to_norm(bars));
+            assert!((back - bars).abs() < bars * 1.0e-4, "{bars} came back {back}");
+        }
+        let norm = stretch_bars_to_norm(1.0);
+        assert!(
+            (norm - 0.4).abs() < 0.001,
+            "one bar maps to {norm}, but the control defaults to 0.4"
+        );
+    }
+
+    /// Typed entry has to survive the units the field itself displays: the
+    /// obvious thing to do with a box reading "2.00x" is to type "4x".
+    #[test]
+    fn typed_values_tolerate_the_units_the_field_shows() {
+        assert_eq!(parse_typed_value("4"), Some(4.0));
+        assert_eq!(parse_typed_value("4x"), Some(4.0));
+        assert_eq!(parse_typed_value("2.5 bar"), Some(2.5));
+        // The grain field's own text: the leading number is the value, and
+        // committing it unchanged has to be a no-op rather than a jump to
+        // 256375.
+        assert_eq!(parse_typed_value("256 fr / 375 Hz"), Some(256.0));
+        assert_eq!(parse_typed_value("-3 st"), Some(-3.0));
+        assert_eq!(parse_typed_value(" 1.75 "), Some(1.75));
+    }
+
+    /// Anything unparseable must be refused rather than guessed at, so a
+    /// half-typed string never reaches the engine.
+    #[test]
+    fn unparseable_typed_values_are_refused() {
+        for text in ["", "   ", "bar", "x", "..", "-", "nan", "inf"] {
+            assert_eq!(parse_typed_value(text), None, "{text:?} was accepted");
+        }
+    }
+
+    /// The auto-snap seed measures the loop against the tempo. At 120 BPM a
+    /// bar is 96,000 frames, so a 192,000-frame sample is two bars.
+    #[test]
+    fn the_seed_measures_the_loop_against_the_tempo() {
+        let params = SamplerParams::default();
+        let bars = measured_loop_bars(params, 192_000, 48_000, 120.0);
+        assert!((bars - 2.0).abs() < 1.0e-3, "measured {bars}");
+        assert_eq!(snap_bars_to_power_of_two(bars), 2.0);
+
+        // A slightly long recording still lands on the intended length.
+        let sloppy = measured_loop_bars(params, 196_000, 48_000, 120.0);
+        assert_eq!(snap_bars_to_power_of_two(sloppy), 2.0);
+    }
+
+    /// With a loop set, the loop is what gets measured -- not the whole
+    /// sample -- because the loop is the part that repeats against the grid.
+    #[test]
+    fn the_seed_measures_the_loop_rather_than_the_whole_sample() {
+        let params = SamplerParams {
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.0,
+            loop_end: 0.5,
+            ..SamplerParams::default()
+        };
+        let bars = measured_loop_bars(params, 192_000, 48_000, 120.0);
+        assert!((bars - 1.0).abs() < 1.0e-3, "measured {bars}");
     }
 
     /// Out-of-range input is clamped rather than propagated. Both ends of both

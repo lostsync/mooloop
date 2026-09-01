@@ -658,6 +658,105 @@ export component ParameterKnob inherits Rectangle {
     Tooltip { text: @markdown("\{root.value-text}"); }
 }
 
+/// A small knob with a typed field beside it: `o [        ]`.
+///
+/// The knob keeps the whole modulation contract -- arming, depth drag, route
+/// count, the live offset readout -- because that machinery is bound to the
+/// knob gesture and splitting it would mean two places that can disagree
+/// about what a parameter's base value is. The field is a plain text entry
+/// over the same value, for the cases a knob is bad at: typing an exact
+/// number, or reading one back without hovering.
+///
+/// The field commits on Enter or on losing focus, and reverts to the
+/// authoritative text on anything it cannot parse. It deliberately does not
+/// participate in modulation arming: while a source is armed the knob edits
+/// route depth rather than the base, and a text box that quietly wrote the
+/// base underneath that would be a trap.
+export component KnobField inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> tooltip: root.label;
+    /// What the field shows when it is not being edited. The caller formats
+    /// it, so units and precision stay wherever the rest of that parameter's
+    /// formatting lives.
+    in property <string> display-text;
+    in-out property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> default-value: root.minimum;
+    in property <length> diameter: 30px;
+    in property <length> field-width: 62px;
+    in property <bool> modulation-armed;
+    in property <bool> modulation-allowed: true;
+    in-out property <float> modulation-depth;
+    in property <float> modulation-offset;
+    in property <int> modulation-route-count;
+    callback changed(float);
+    /// The typed string, unparsed. Rust owns the parsing: it already owns the
+    /// formatting, and a unit-aware parser written twice in two languages is
+    /// a unit-aware parser that disagrees with itself.
+    callback text-committed(string);
+    callback modulation-depth-changed(float);
+    callback modulation-edit-started();
+    callback modulation-edit-finished();
+
+    spacing: 4px;
+    alignment: start;
+
+    ParameterKnob {
+        diameter: root.diameter;
+        label: root.label;
+        tooltip: root.tooltip;
+        value <=> root.value;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        default-value: root.default-value;
+        value-text: root.display-text;
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed;
+        modulation-depth <=> root.modulation-depth;
+        modulation-offset: root.modulation-offset;
+        modulation-route-count: root.modulation-route-count;
+        changed(v) => { root.changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(v); }
+        modulation-edit-started => { root.modulation-edit-started(); }
+        modulation-edit-finished => { root.modulation-edit-finished(); }
+    }
+
+    Rectangle {
+        width: root.field-width;
+        height: 20px;
+        y: (root.diameter - self.height) / 2;
+        border-radius: Theme.radius-md;
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: entry.has-focus ? Theme.accent : Theme.border;
+        accessible-role: text-input;
+        accessible-label: root.tooltip;
+
+        entry := TextInput {
+            x: 4px;
+            width: parent.width - 8px;
+            height: 100%;
+            // Rebinds whenever the caller's text changes, which is what pulls
+            // the field back into agreement after a knob drag or a modulated
+            // value lands.
+            text: root.display-text;
+            color: Theme.text;
+            font-size: 9px;
+            font-family: "monospace";
+            single-line: true;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            accepted => {
+                root.text-committed(self.text);
+                self.clear-focus();
+            }
+            edited => { }
+        }
+    }
+}
+
+
 // Delay time can be a free-running millisecond value or one of a short,
 // visible set of musical divisions. The audio-facing value remains the same
 // normalized millisecond parameter in both cases; selecting a division simply

@@ -779,6 +779,9 @@ export component MainWindow inherits Window {
     in-out property <float> stretch-grain: 0.6667;
     in-out property <string> stretch-grain-label;
     in-out property <bool> stretch-ratio-clean: true;
+    in-out property <bool> stretch-sync;
+    in-out property <float> stretch-bars: 0.4;
+    in-out property <string> stretch-bars-label;
     in-out property <string> sample-name;
     in-out property <string> sample-description;
     in-out property <float> sample-duration;
@@ -816,6 +819,12 @@ export component MainWindow inherits Window {
     callback stretch-mode-changed(int);
     callback stretch-ratio-changed(float);
     callback stretch-grain-changed(float);
+    callback stretch-sync-changed(bool);
+    callback stretch-bars-changed(float);
+    callback stretch-ratio-typed(string);
+    callback stretch-bars-typed(string);
+    callback stretch-grain-typed(string);
+    callback tune-typed(string);
     callback filter-cutoff-changed(float);
     callback filter-resonance-changed(float);
     callback filter-env-changed(float);
@@ -2496,6 +2505,9 @@ export component MainWindow inherits Window {
                                                     stretch-grain <=> root.stretch-grain;
                                                     stretch-grain-label <=> root.stretch-grain-label;
                                                     stretch-ratio-clean <=> root.stretch-ratio-clean;
+                                                    stretch-sync <=> root.stretch-sync;
+                                                    stretch-bars <=> root.stretch-bars;
+                                                    stretch-bars-label <=> root.stretch-bars-label;
                                                     sample-name <=> root.sample-name;
                                                     sample-description <=> root.sample-description;
                                                     waveform <=> root.waveform;
@@ -2529,6 +2541,12 @@ export component MainWindow inherits Window {
                                                     stretch-mode-changed(v) => { root.stretch-mode-changed(v); }
                                                     stretch-ratio-changed(v) => { root.stretch-ratio-changed(v); }
                                                     stretch-grain-changed(v) => { root.stretch-grain-changed(v); }
+                                                    stretch-sync-changed(v) => { root.stretch-sync-changed(v); }
+                                                    stretch-bars-changed(v) => { root.stretch-bars-changed(v); }
+                                                    stretch-ratio-typed(t) => { root.stretch-ratio-typed(t); }
+                                                    stretch-bars-typed(t) => { root.stretch-bars-typed(t); }
+                                                    stretch-grain-typed(t) => { root.stretch-grain-typed(t); }
+                                                    tune-typed(t) => { root.tune-typed(t); }
                                                     filter-cutoff-changed(v) => { root.filter-cutoff-changed(v); }
                                                     modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
                                                     modulation-edit-started(p) => { root.source-modulation-edit-started(p); }

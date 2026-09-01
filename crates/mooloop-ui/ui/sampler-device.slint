@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { MiniKnob, NoteFormat, ParameterKnob, SelectorBank, ToggleButton, ToolButton, TrimKnob, ValueScale, ZoomScrollBar } from "controls.slint";
+import { KnobField, MiniKnob, NoteFormat, ParameterKnob, SelectorBank, ToggleButton, ToolButton, TrimKnob, ValueScale, ZoomScrollBar } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
@@ -172,6 +172,9 @@ export component SamplerDeviceFace inherits Rectangle {
     // Whether the current ratio is inside the range the spike measured as
     // clean. Shown rather than enforced -- the extremes are a destination.
     in-out property <bool> stretch-ratio-clean: true;
+    in-out property <bool> stretch-sync;
+    in-out property <float> stretch-bars: 0.4;
+    in-out property <string> stretch-bars-label;
     in-out property <string> sample-name;
     in-out property <string> sample-description;
     in-out property <[float]> waveform;
@@ -208,6 +211,14 @@ export component SamplerDeviceFace inherits Rectangle {
     callback stretch-mode-changed(int);
     callback stretch-ratio-changed(float);
     callback stretch-grain-changed(float);
+    callback stretch-sync-changed(bool);
+    callback stretch-bars-changed(float);
+    // Typed entry. Rust parses, because Rust already formats -- a unit-aware
+    // parser written on both sides is one that disagrees with itself.
+    callback stretch-ratio-typed(string);
+    callback stretch-bars-typed(string);
+    callback stretch-grain-typed(string);
+    callback tune-typed(string);
     callback filter-cutoff-changed(float);
     callback modulation-depth-changed(int, float);
     callback modulation-edit-started(int);
@@ -426,36 +437,6 @@ export component SamplerDeviceFace inherits Rectangle {
                 spacing: 10px;
                 VerticalLayout {
                     alignment: center;
-                    spacing: 2px;
-                    HorizontalLayout {
-                        spacing: 6px;
-                        alignment: center;
-                        MiniKnob {
-                            diameter: 28px; fill: Theme.accent;
-                            label: "Coarse tuning";
-                            value <=> root.tune-semitones; minimum: -24; maximum: 24; default-value: 0; step: 1;
-                            value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
-                            changed(v) => { root.tune-semitones-changed(v); }
-                        }
-                        MiniKnob {
-                            diameter: 28px; fill: Theme.accent;
-                            label: "Fine tuning";
-                            value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
-                            value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
-                            changed(v) => { root.tune-cents-changed(v); }
-                        }
-                    }
-                    // Musically meaningful readout for the coarse/fine pair:
-                    // the note name and frequency the tuned root note lands
-                    // on, since "+3 st / +40 ct" alone doesn't say what pitch
-                    // that actually is. Doubles as the pair's label, now that
-                    // the individual "Coarse"/"Fine" captions are gone (the
-                    // tooltip still names each knob on hover).
-                    Text { text: root.tune-label; font-size: 8px; color: Theme.text-muted; horizontal-alignment: center; }
-                }
-                Rectangle { width: 1px; background: Theme.border; }
-                VerticalLayout {
-                    alignment: center;
                     spacing: 3px;
                     HorizontalLayout {
                         spacing: 4px;
@@ -538,12 +519,17 @@ export component SamplerDeviceFace inherits Rectangle {
                 }
             }
             Rectangle {
-                width: 168px; background: Theme.panel; border-radius: Theme.radius-sm;
+                width: 268px; background: Theme.panel; border-radius: Theme.radius-sm;
                 VerticalLayout {
-                    padding: 6px; spacing: 6px;
+                    padding: 6px; spacing: 5px;
                     HorizontalLayout {
                         spacing: 4px;
-                        Text { text: "STRETCH"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        // Pitch and speed live together because fit-to-tempo
+                        // makes them a pair: with it on, transposing a voice
+                        // does not change how long it lasts, so they are two
+                        // independent axes of one gesture rather than two
+                        // settings that happen to both affect playback.
+                        Text { text: "PITCH & SPEED"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
                         ToggleButton {
                             text: "ON";
@@ -551,60 +537,105 @@ export component SamplerDeviceFace inherits Rectangle {
                             toggled(on) => { root.stretch-enabled-changed(on); }
                         }
                     }
+
+                    KnobField {
+                        label: "Tune";
+                        tooltip: root.tune-label;
+                        diameter: 28px;
+                        value <=> root.tune-semitones;
+                        minimum: -24; maximum: 24; default-value: 0;
+                        display-text: root.tune-label;
+                        changed(v) => { root.tune-semitones-changed(v); }
+                        text-committed(t) => { root.tune-typed(t); }
+                    }
+                    MiniKnob {
+                        diameter: 24px; fill: Theme.accent;
+                        label: "Fine tuning";
+                        value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
+                        value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
+                        changed(v) => { root.tune-cents-changed(v); }
+                    }
+
+                    Rectangle { height: 1px; background: Theme.border; }
+
                     SelectorBank {
                         options: ["Music", "Drums", "Grain"];
                         selected-index <=> root.stretch-mode;
-                        segment-width: 48px;
+                        segment-width: 80px;
                         tooltip: "Stretch mode";
                         selected(i) => { root.stretch-mode-changed(i); }
                     }
                     HorizontalLayout {
                         spacing: 4px;
-                        ParameterKnob {
-                            diameter: 36px;
-                            label: "Ratio";
-                            tooltip: root.stretch-ratio-label;
-                            value <=> root.stretch-ratio;
-                            default-value: 0.3333;
-                            value-text: root.stretch-ratio-label;
-                            modulation-armed: root.modulation-armed;
-                            modulation-allowed: root.modulation-allowed[29];
-                            modulation-depth: root.modulation-depths[29];
-                            modulation-offset: root.modulation-offsets[29];
-                            modulation-route-count: root.modulation-route-counts[29];
-                            changed(v) => { root.stretch-ratio-changed(v); }
-                            modulation-depth-changed(v) => { root.modulation-depth-changed(29, v); }
-                            modulation-edit-started => { root.modulation-edit-started(29); }
-                            modulation-edit-finished => { root.modulation-edit-finished(29); }
-                        }
-                        // Grain size only means anything without the
-                        // similarity search, and the search is exactly what
-                        // the other two modes turn on.
-                        if root.stretch-mode == 2 : ParameterKnob {
-                            diameter: 36px;
-                            label: "Grain";
-                            tooltip: root.stretch-grain-label;
-                            value <=> root.stretch-grain;
-                            default-value: 0.6667;
-                            value-text: root.stretch-grain-label;
-                            modulation-armed: root.modulation-armed;
-                            modulation-allowed: root.modulation-allowed[30];
-                            modulation-depth: root.modulation-depths[30];
-                            modulation-offset: root.modulation-offsets[30];
-                            modulation-route-count: root.modulation-route-counts[30];
-                            changed(v) => { root.stretch-grain-changed(v); }
-                            modulation-depth-changed(v) => { root.modulation-depth-changed(30, v); }
-                            modulation-edit-started => { root.modulation-edit-started(30); }
-                            modulation-edit-finished => { root.modulation-edit-finished(30); }
-                        }
+                        Text { text: "FIT TO TEMPO"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
+                        ToggleButton {
+                            text: "SYNC";
+                            checked <=> root.stretch-sync;
+                            toggled(on) => { root.stretch-sync-changed(on); }
+                        }
+                    }
+                    // Bars when synced, ratio when not: with fit-to-tempo on
+                    // the ratio is derived, so showing it as an editable knob
+                    // would be offering a control that does nothing.
+                    if root.stretch-sync : KnobField {
+                        label: "Bars";
+                        tooltip: root.stretch-bars-label;
+                        diameter: 30px;
+                        value <=> root.stretch-bars;
+                        display-text: root.stretch-bars-label;
+                        modulation-armed: root.modulation-armed;
+                        modulation-allowed: root.modulation-allowed[32];
+                        modulation-depth: root.modulation-depths[32];
+                        modulation-offset: root.modulation-offsets[32];
+                        modulation-route-count: root.modulation-route-counts[32];
+                        changed(v) => { root.stretch-bars-changed(v); }
+                        text-committed(t) => { root.stretch-bars-typed(t); }
+                        modulation-depth-changed(v) => { root.modulation-depth-changed(32, v); }
+                        modulation-edit-started => { root.modulation-edit-started(32); }
+                        modulation-edit-finished => { root.modulation-edit-finished(32); }
+                    }
+                    if !root.stretch-sync : KnobField {
+                        label: "Speed";
+                        tooltip: root.stretch-ratio-label;
+                        diameter: 30px;
+                        value <=> root.stretch-ratio;
+                        display-text: root.stretch-ratio-label;
+                        modulation-armed: root.modulation-armed;
+                        modulation-allowed: root.modulation-allowed[29];
+                        modulation-depth: root.modulation-depths[29];
+                        modulation-offset: root.modulation-offsets[29];
+                        modulation-route-count: root.modulation-route-counts[29];
+                        changed(v) => { root.stretch-ratio-changed(v); }
+                        text-committed(t) => { root.stretch-ratio-typed(t); }
+                        modulation-depth-changed(v) => { root.modulation-depth-changed(29, v); }
+                        modulation-edit-started => { root.modulation-edit-started(29); }
+                        modulation-edit-finished => { root.modulation-edit-finished(29); }
+                    }
+                    // Grain size only means anything without the similarity
+                    // search, and the search is what the other modes turn on.
+                    if root.stretch-mode == 2 : KnobField {
+                        label: "Grain";
+                        tooltip: root.stretch-grain-label;
+                        diameter: 30px;
+                        field-width: 86px;
+                        value <=> root.stretch-grain;
+                        display-text: root.stretch-grain-label;
+                        modulation-armed: root.modulation-armed;
+                        modulation-allowed: root.modulation-allowed[30];
+                        modulation-depth: root.modulation-depths[30];
+                        modulation-offset: root.modulation-offsets[30];
+                        modulation-route-count: root.modulation-route-counts[30];
+                        changed(v) => { root.stretch-grain-changed(v); }
+                        text-committed(t) => { root.stretch-grain-typed(t); }
+                        modulation-depth-changed(v) => { root.modulation-depth-changed(30, v); }
+                        modulation-edit-started => { root.modulation-edit-started(30); }
+                        modulation-edit-finished => { root.modulation-edit-finished(30); }
                     }
                     // The clean band is marked, not enforced. Extreme
-                    // slow-down is a sound people want; the control says
-                    // where transparency stops rather than refusing to go
-                    // there.
+                    // slow-down is a sound people want.
                     Text {
-                        text: root.stretch-ratio-clean ? "" : "past clean range";
+                        text: root.stretch-sync || root.stretch-ratio-clean ? "" : "past clean range";
                         color: Theme.text-faint;
                         font-size: 8px;
                     }
