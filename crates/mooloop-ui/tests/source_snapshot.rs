@@ -826,3 +826,59 @@ fn the_module_grid_scales_with_capacity_alone() {
         );
     }
 }
+
+/// The sampler's PITCH & SPEED group is the tightest thing on a 3U face: the
+/// stretch controls have to share it with coarse and fine tune, and the group
+/// changes shape three ways -- synced or free, grain mode or not, in or out of
+/// the clean range. Every shape has to fit, so every shape gets rendered.
+#[test]
+fn render_sampler_voice_page() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .ok();
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_pattern_length(16);
+    ui.set_selected_channel_name(SharedString::from("Break"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(0);
+    ui.set_sampler_device_page(1);
+    ui.set_stretch_enabled(true);
+    ui.set_tune_label(SharedString::from("C4 · 255.0 Hz"));
+
+    // Synced: bars, no grain row, no clean warning.
+    ui.set_stretch_sync(true);
+    ui.set_stretch_mode(0);
+    ui.set_stretch_bars_label(SharedString::from("2 bars"));
+    let synced = ui.window().take_snapshot().unwrap();
+    assert_eq!((synced.width(), synced.height()), (960, 760));
+    assert!(synced.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&synced, "MOOLOOP_SAMPLER_VOICE_SYNC_SNAPSHOT");
+
+    // The tallest shape: free speed, grain mode, and the clean-range note.
+    ui.set_stretch_sync(false);
+    ui.set_stretch_mode(2);
+    ui.set_stretch_ratio_clean(false);
+    ui.set_stretch_ratio_label(SharedString::from("8.00x"));
+    ui.set_stretch_grain_label(SharedString::from("256 fr / 375 Hz"));
+    let grain = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        synced.as_bytes(),
+        grain.as_bytes(),
+        "switching off sync should swap the Bars row for Speed"
+    );
+    write_snapshot(&grain, "MOOLOOP_SAMPLER_VOICE_GRAIN_SNAPSHOT");
+
+    // Off is a distinct shape too: the group still occupies the same slot.
+    ui.set_stretch_enabled(false);
+    let off = ui.window().take_snapshot().unwrap();
+    assert_ne!(grain.as_bytes(), off.as_bytes());
+    write_snapshot(&off, "MOOLOOP_SAMPLER_VOICE_OFF_SNAPSHOT");
+}

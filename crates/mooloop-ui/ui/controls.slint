@@ -472,6 +472,12 @@ export component ParameterKnob inherits Rectangle {
     in property <bool> bipolar;
     in property <length> diameter: 44px;
     in property <color> fill: Theme.accent;
+    // A knob normally carries its own name and value, stacked above and
+    // below the face. A caller that already shows both -- a row that puts the
+    // label and an editable field beside the knob -- turns them off here
+    // rather than drawing them twice and paying three rows of height for it.
+    in property <bool> show-label: true;
+    in property <bool> show-value-text: true;
     // Callers opt only legal, continuous destinations into this mode. While
     // active, every ordinary knob gesture adjusts this source's route depth
     // and leaves `value` — the authored base — untouched.
@@ -494,8 +500,8 @@ export component ParameterKnob inherits Rectangle {
     private property <float> normalized: root.normalized-value(root.value);
     private property <bool> modulation-active: root.modulation-armed && root.modulation-allowed;
 
-    width: 56px;
-    height: 80px;
+    width: root.show-label ? 56px : root.diameter;
+    height: root.show-label || root.show-value-text ? 80px : root.diameter;
     accessible-role: slider;
     accessible-label: root.tooltip;
     accessible-value: root.value-text;
@@ -547,7 +553,7 @@ export component ParameterKnob inherits Rectangle {
         spacing: 3px;
         alignment: center;
 
-        Text {
+        if root.show-label : Text {
             text: root.label;
             color: !root.enabled ? Theme.text-faint
                 : root.modulation-active ? Theme.warning : Theme.text-muted;
@@ -579,7 +585,7 @@ export component ParameterKnob inherits Rectangle {
             }
         }
 
-        Rectangle {
+        if root.show-value-text : Rectangle {
             width: root.width;
             height: 16px;
             ValueReadout {
@@ -658,7 +664,7 @@ export component ParameterKnob inherits Rectangle {
     Tooltip { text: @markdown("\{root.value-text}"); }
 }
 
-/// A small knob with a typed field beside it: `o [        ]`.
+/// One row: a name, a small knob, and a typed field -- `Tune o [      ]`.
 ///
 /// The knob keeps the whole modulation contract -- arming, depth drag, route
 /// count, the live offset readout -- because that machinery is bound to the
@@ -672,7 +678,7 @@ export component ParameterKnob inherits Rectangle {
 /// participate in modulation arming: while a source is armed the knob edits
 /// route depth rather than the base, and a text box that quietly wrote the
 /// base underneath that would be a trap.
-export component KnobField inherits HorizontalLayout {
+export component KnobField inherits Rectangle {
     in property <string> label;
     in property <string> tooltip: root.label;
     /// What the field shows when it is not being edited. The caller formats
@@ -683,7 +689,11 @@ export component KnobField inherits HorizontalLayout {
     in property <float> minimum: 0;
     in property <float> maximum: 1;
     in property <float> default-value: root.minimum;
+    in property <float> step: 0;
+    in property <ValueScale> scale: ValueScale.linear;
+    in property <bool> bipolar;
     in property <length> diameter: 30px;
+    in property <length> label-width: 34px;
     in property <length> field-width: 62px;
     in property <bool> modulation-armed;
     in property <bool> modulation-allowed: true;
@@ -699,10 +709,32 @@ export component KnobField inherits HorizontalLayout {
     callback modulation-edit-started();
     callback modulation-edit-finished();
 
-    spacing: 4px;
-    alignment: start;
+    // Placed rather than laid out, because the three parts have to line up on
+    // one baseline and a layout that stretches any of them vertically breaks
+    // that. The height is the knob's, so a row of these costs one knob.
+    height: max(root.diameter, 20px);
+    width: root.label-width + root.diameter + root.field-width + 9px;
 
-    ParameterKnob {
+    Text {
+        x: 0;
+        y: 0;
+        width: root.label-width;
+        height: root.height;
+        text: root.label;
+        color: root.modulation-armed && root.modulation-allowed
+            ? Theme.warning : Theme.text-muted;
+        font-size: 9px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    knob := ParameterKnob {
+        x: root.label-width + 4px;
+        y: (root.height - self.height) / 2;
+        // The name is in this row's own label and the value is in the field
+        // beside it; the knob draws neither again.
+        show-label: false;
+        show-value-text: false;
         diameter: root.diameter;
         label: root.label;
         tooltip: root.tooltip;
@@ -710,6 +742,9 @@ export component KnobField inherits HorizontalLayout {
         minimum: root.minimum;
         maximum: root.maximum;
         default-value: root.default-value;
+        step: root.step;
+        scale: root.scale;
+        bipolar: root.bipolar;
         value-text: root.display-text;
         modulation-armed: root.modulation-armed;
         modulation-allowed: root.modulation-allowed;
@@ -723,9 +758,10 @@ export component KnobField inherits HorizontalLayout {
     }
 
     Rectangle {
+        x: root.label-width + root.diameter + 9px;
+        y: (root.height - self.height) / 2;
         width: root.field-width;
         height: 20px;
-        y: (root.diameter - self.height) / 2;
         border-radius: Theme.radius-md;
         background: Theme.surface-raised;
         border-width: 1px;

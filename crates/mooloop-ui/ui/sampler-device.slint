@@ -508,7 +508,7 @@ export component SamplerDeviceFace inherits Rectangle {
         if root.page == 1 : HorizontalLayout {
             spacing: 6px;
             Rectangle {
-                width: 200px; background: Theme.panel; border-radius: Theme.radius-sm;
+                width: 168px; background: Theme.panel; border-radius: Theme.radius-sm;
                 VerticalLayout {
                     padding: 6px; spacing: 6px;
                     Text { text: "VOICE"; color: Theme.text-faint; font-size: 8px; }
@@ -516,10 +516,13 @@ export component SamplerDeviceFace inherits Rectangle {
                     SelectorBank { options: ["Restart", "Layer"]; selected-index <=> root.retrigger-mode; segment-width: 74px; tooltip: "Retrigger behavior"; selected(i) => { root.retrigger-mode-changed(i); } }
                     StepperField { label: "VOICES"; value <=> root.polyphony; minimum: 1; maximum: 16; step: 1; value-width: 18px; tooltip: "Maximum simultaneous voices"; changed(v) => { root.polyphony-changed(v); } }
                     StepperField { label: "CHOKE"; value <=> root.choke-group; minimum: 0; maximum: 16; step: 1; value-width: 18px; tooltip: "Matching non-zero groups choke each other"; changed(v) => { root.choke-group-changed(v); } }
+                    // Without this the column shares its slack out between the
+                    // rows, floating them into the middle of an empty panel.
+                    Rectangle { vertical-stretch: 1; }
                 }
             }
             Rectangle {
-                width: 268px; background: Theme.panel; border-radius: Theme.radius-sm;
+                width: 204px; background: Theme.panel; border-radius: Theme.radius-sm;
                 VerticalLayout {
                     padding: 6px; spacing: 5px;
                     HorizontalLayout {
@@ -533,46 +536,66 @@ export component SamplerDeviceFace inherits Rectangle {
                         Rectangle { horizontal-stretch: 1; }
                         ToggleButton {
                             text: "ON";
+                            tooltip: "Time stretching";
+                            // Bounded, or the layout hands a toggle the whole
+                            // width the title row is not using.
+                            min-width: 40px; max-width: 40px; max-height: 20px;
                             checked <=> root.stretch-enabled;
                             toggled(on) => { root.stretch-enabled-changed(on); }
                         }
                     }
 
-                    KnobField {
-                        label: "Tune";
-                        tooltip: root.tune-label;
-                        diameter: 28px;
-                        value <=> root.tune-semitones;
-                        minimum: -24; maximum: 24; default-value: 0;
-                        display-text: root.tune-label;
-                        changed(v) => { root.tune-semitones-changed(v); }
-                        text-committed(t) => { root.tune-typed(t); }
-                    }
-                    MiniKnob {
-                        diameter: 24px; fill: Theme.accent;
-                        label: "Fine tuning";
-                        value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
-                        value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
-                        changed(v) => { root.tune-cents-changed(v); }
+                    // Coarse and fine tune on one line, so the whole group
+                    // fits a 3U face with the stretch controls under it.
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        KnobField {
+                            label: "Tune";
+                            tooltip: root.tune-label;
+                            diameter: 28px;
+                            value <=> root.tune-semitones;
+                            minimum: -24; maximum: 24; default-value: 0; step: 1;
+                            bipolar: true;
+                            field-width: 84px;
+                            display-text: root.tune-label;
+                            changed(v) => { root.tune-semitones-changed(v); }
+                            text-committed(t) => { root.tune-typed(t); }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            MiniKnob {
+                                diameter: 22px; fill: Theme.accent;
+                                label: "Fine tuning";
+                                value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
+                                bipolar: true;
+                                value-text: (root.tune-cents > 0 ? "+" : "") + round(root.tune-cents) + " ct";
+                                changed(v) => { root.tune-cents-changed(v); }
+                            }
+                        }
                     }
 
                     Rectangle { height: 1px; background: Theme.border; }
 
-                    SelectorBank {
-                        options: ["Music", "Drums", "Grain"];
-                        selected-index <=> root.stretch-mode;
-                        segment-width: 80px;
-                        tooltip: "Stretch mode";
-                        selected(i) => { root.stretch-mode-changed(i); }
-                    }
                     HorizontalLayout {
                         spacing: 4px;
-                        Text { text: "FIT TO TEMPO"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        SelectorBank {
+                            options: ["Music", "Drums", "Grain"];
+                            selected-index <=> root.stretch-mode;
+                            segment-width: 46px;
+                            tooltip: "Stretch mode";
+                            selected(i) => { root.stretch-mode-changed(i); }
+                        }
                         Rectangle { horizontal-stretch: 1; }
-                        ToggleButton {
-                            text: "SYNC";
-                            checked <=> root.stretch-sync;
-                            toggled(on) => { root.stretch-sync-changed(on); }
+                        VerticalLayout {
+                            alignment: center;
+                            ToggleButton {
+                                text: "SYNC";
+                                tooltip: "Fit the loop to the project tempo";
+                                min-width: 46px; max-width: 46px; max-height: 20px;
+                                checked <=> root.stretch-sync;
+                                toggled(on) => { root.stretch-sync-changed(on); }
+                            }
                         }
                     }
                     // Bars when synced, ratio when not: with fit-to-tempo on
@@ -581,7 +604,11 @@ export component SamplerDeviceFace inherits Rectangle {
                     if root.stretch-sync : KnobField {
                         label: "Bars";
                         tooltip: root.stretch-bars-label;
-                        diameter: 30px;
+                        diameter: 26px;
+                        // Normalized, so unity is not zero: without this a
+                        // double-click resets to the bottom of the range.
+                        default-value: 0.4;
+                        field-width: 84px;
                         value <=> root.stretch-bars;
                         display-text: root.stretch-bars-label;
                         modulation-armed: root.modulation-armed;
@@ -598,7 +625,9 @@ export component SamplerDeviceFace inherits Rectangle {
                     if !root.stretch-sync : KnobField {
                         label: "Speed";
                         tooltip: root.stretch-ratio-label;
-                        diameter: 30px;
+                        diameter: 26px;
+                        default-value: 0.3333;
+                        field-width: 84px;
                         value <=> root.stretch-ratio;
                         display-text: root.stretch-ratio-label;
                         modulation-armed: root.modulation-armed;
@@ -617,8 +646,9 @@ export component SamplerDeviceFace inherits Rectangle {
                     if root.stretch-mode == 2 : KnobField {
                         label: "Grain";
                         tooltip: root.stretch-grain-label;
-                        diameter: 30px;
-                        field-width: 86px;
+                        diameter: 26px;
+                        default-value: 0.6667;
+                        field-width: 108px;
                         value <=> root.stretch-grain;
                         display-text: root.stretch-grain-label;
                         modulation-armed: root.modulation-armed;
@@ -633,11 +663,14 @@ export component SamplerDeviceFace inherits Rectangle {
                         modulation-edit-finished => { root.modulation-edit-finished(30); }
                     }
                     // The clean band is marked, not enforced. Extreme
-                    // slow-down is a sound people want.
-                    Text {
-                        text: root.stretch-sync || root.stretch-ratio-clean ? "" : "past clean range";
+                    // slow-down is a sound people want. Conditional, because
+                    // an always-present line costs a row of a face that has
+                    // none to spare.
+                    if !root.stretch-sync && !root.stretch-ratio-clean : Text {
+                        text: "past clean range";
                         color: Theme.text-faint;
                         font-size: 8px;
+                        height: 10px;
                     }
                     Rectangle { vertical-stretch: 1; }
                 }
