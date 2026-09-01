@@ -27,8 +27,30 @@ the plan left open resolved in the doing:
 - `Clamp` needed a second and third id (`clamp_low`, `clamp_high`) beside
   the arithmetic operand, so all three defaults could be no-ops.
 
-Step 03 is not started, and starts from a fresh worktree off `main` once
-step 02 merges.
+Step 03 landed on `feat/modulator-grid` (2026-09-01): the open shelf is
+the module grid beside the selected module's full surface, capacity grew
+from four slots to eight, and routes carry durable `ModSourceId`s so a
+reorder moves modules without changing what any route means. Notes:
+
+- Capacity was measured before it was assumed, as the plan asks. A slot
+  is 72 bytes on every preallocated command-ring entry; eight slots plus
+  durable identity took the ring from 552 KiB to 936 KiB. The arithmetic
+  is pinned in `the_rack_is_what_a_command_ring_entry_costs` rather than
+  left in a commit message.
+- The reorder hazard was not the routes, which resolve by identity, but
+  the math module's `input_slot` — a slot reference the user never sees.
+  `move_module` remaps it through the permutation.
+- Module inputs became labelled jacks, which also let the header and the
+  input strip be written once instead of copied into all five kind
+  editors.
+- `MAX_MOD_ROUTES_PER_CHANNEL` stayed at 16. With eight modules that is
+  two routes each, which may want raising once the grid is lived in; it
+  was outside what this step asked for.
+
+Nothing in this plan is outstanding. What it deliberately left for later
+is unchanged: no audio-domain modules through the control rack, no node
+canvas, no second routing language, and no cross-channel sources or
+device outlets as grid citizens.
 
 Adam pulled this in explicitly on 2026-08-31: the modulation
 rack becomes the power plant of the app — a grid of small modules, each a
@@ -52,6 +74,7 @@ nothing here replaces `ParamAddr`, routes, destination policy, or the
    random/drunk, math/clamp), proving the refactor made kinds cheap.
    **Landed 2026-09-01.**
 3. `03-the-grid.md` — the expanded grid presentation and capacity growth.
+   **Landed 2026-09-01.**
 
 Each step is one branch. A step lands playable, saveable, and renderable
 before the next starts.
