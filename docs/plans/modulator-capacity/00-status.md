@@ -20,6 +20,11 @@ Modulator capacity itself is cheap, and grows linearly:
 | 16 | 1544 KiB | 400 KiB | 4096 KiB | 16 KiB |
 | 32 | 2760 KiB | 800 KiB | 8192 KiB | 32 KiB |
 
+Step 03 has since taken the command-ring column out of that table
+altogether. Modulation edits name one fact each, so the ring is 136 KiB at
+any capacity — the width is set by a synth's parameter block now, not by
+anything modulation ships.
+
 **A first version of this plan stopped there and drew the wrong
 conclusion.** Measuring only the modulator arrays put the graph's total at
 3.1 MiB and named control outputs as the biggest line. Measuring the whole
@@ -69,10 +74,33 @@ a test behind rather than a paragraph.
    11.6 MiB → 1.1 MiB at sixteen channels.
 4. `03-per-slot-commands.md` — stop shipping the whole rack by value on
    every edit, so the ring stops growing with capacity at all.
+   **Landed 2026-09-01**: `EngineCommand` 936 → 136 bytes, so the ring is
+   136 KiB rather than 936 KiB and does not move when capacity does.
 
-The remaining steps are independent of each other and of step 1. Step 1 is the
-one that has to land before the number moves; 2 and 3 are what make it
-cheap to keep moving.
+Every step has landed. Three departures from what step 03 was written
+expecting:
+
+- **The wide command was deleted rather than kept.** The plan reserved
+  `SetChannelModulation` for project load, presets and undo. All three
+  already rebuild the renderer through `EngineHandle::install_project`, so
+  once the gestures were narrowed the variant had no caller — and keeping a
+  dead wide variant would have held the ring at 936 bytes, which is the
+  whole thing this step was for. A future channel-preset verb belongs on
+  the structural ring, which may box because it has a reclaim path.
+- **A sixth command, `MoveModulator`.** The plan listed five. Reordering
+  the grid is a real gesture that would otherwise have been the one thing
+  still forcing a whole-rack send; both racks run the same permutation, so
+  routes and a math module's input slot cross the move on either side.
+- **The incremental restore was the existing diff, not new machinery.**
+  Every narrow arm runs through one `edit_modulation` helper that keeps the
+  before-and-after rack and hands back any destination that lost its last
+  route. It also reaches `restore_base_param`, which the whole-rack path
+  never did — so a route dropped from a *generator* parameter now restores
+  its base, where before only effect parameters did.
+
+Capacity is now free of memory arithmetic at every layer that used to carry
+it. Raising `MAX_MODULATORS_PER_CHANNEL` costs the DSP racks, the control
+outputs and the meters, all linear and all small; nothing else moves.
 
 ## What this plan refuses to do
 
