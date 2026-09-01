@@ -125,7 +125,7 @@ impl ProcessHandler for Graph {
                         break;
                     }
                     if let Some(displaced) = self.render.apply_structural(command) {
-                        match self.reclaim_tx.push(StructuralReclaim::Effect(displaced)) {
+                        match self.reclaim_tx.push(displaced) {
                             Ok(()) => {}
                             Err(_) => {
                                 unreachable!("reclaim capacity checked before structural edit")
