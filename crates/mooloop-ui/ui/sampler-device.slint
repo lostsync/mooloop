@@ -161,6 +161,17 @@ export component SamplerDeviceFace inherits Rectangle {
     in-out property <int> polyphony: 1;
     in-out property <int> retrigger-mode;
     in-out property <int> choke-group;
+    in-out property <bool> stretch-enabled;
+    in-out property <int> stretch-mode;
+    // Normalized 0..1 like the other knobs; the real value is formatted in
+    // Rust and arrives as a label, the way tuning already does.
+    in-out property <float> stretch-ratio: 0.3333;
+    in-out property <string> stretch-ratio-label;
+    in-out property <float> stretch-grain: 0.6667;
+    in-out property <string> stretch-grain-label;
+    // Whether the current ratio is inside the range the spike measured as
+    // clean. Shown rather than enforced -- the extremes are a destination.
+    in-out property <bool> stretch-ratio-clean: true;
     in-out property <string> sample-name;
     in-out property <string> sample-description;
     in-out property <[float]> waveform;
@@ -193,6 +204,10 @@ export component SamplerDeviceFace inherits Rectangle {
     callback polyphony-changed(int);
     callback retrigger-mode-changed(int);
     callback choke-group-changed(int);
+    callback stretch-enabled-changed(bool);
+    callback stretch-mode-changed(int);
+    callback stretch-ratio-changed(float);
+    callback stretch-grain-changed(float);
     callback filter-cutoff-changed(float);
     callback modulation-depth-changed(int, float);
     callback modulation-edit-started(int);
@@ -520,6 +535,80 @@ export component SamplerDeviceFace inherits Rectangle {
                     SelectorBank { options: ["Restart", "Layer"]; selected-index <=> root.retrigger-mode; segment-width: 74px; tooltip: "Retrigger behavior"; selected(i) => { root.retrigger-mode-changed(i); } }
                     StepperField { label: "VOICES"; value <=> root.polyphony; minimum: 1; maximum: 16; step: 1; value-width: 18px; tooltip: "Maximum simultaneous voices"; changed(v) => { root.polyphony-changed(v); } }
                     StepperField { label: "CHOKE"; value <=> root.choke-group; minimum: 0; maximum: 16; step: 1; value-width: 18px; tooltip: "Matching non-zero groups choke each other"; changed(v) => { root.choke-group-changed(v); } }
+                }
+            }
+            Rectangle {
+                width: 168px; background: Theme.panel; border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 6px; spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "STRETCH"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        ToggleButton {
+                            text: "ON";
+                            checked <=> root.stretch-enabled;
+                            toggled(on) => { root.stretch-enabled-changed(on); }
+                        }
+                    }
+                    SelectorBank {
+                        options: ["Music", "Drums", "Grain"];
+                        selected-index <=> root.stretch-mode;
+                        segment-width: 48px;
+                        tooltip: "Stretch mode";
+                        selected(i) => { root.stretch-mode-changed(i); }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        ParameterKnob {
+                            diameter: 36px;
+                            label: "Ratio";
+                            tooltip: root.stretch-ratio-label;
+                            value <=> root.stretch-ratio;
+                            default-value: 0.3333;
+                            value-text: root.stretch-ratio-label;
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[29];
+                            modulation-depth: root.modulation-depths[29];
+                            modulation-offset: root.modulation-offsets[29];
+                            modulation-route-count: root.modulation-route-counts[29];
+                            changed(v) => { root.stretch-ratio-changed(v); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(29, v); }
+                            modulation-edit-started => { root.modulation-edit-started(29); }
+                            modulation-edit-finished => { root.modulation-edit-finished(29); }
+                        }
+                        // Grain size only means anything without the
+                        // similarity search, and the search is exactly what
+                        // the other two modes turn on.
+                        if root.stretch-mode == 2 : ParameterKnob {
+                            diameter: 36px;
+                            label: "Grain";
+                            tooltip: root.stretch-grain-label;
+                            value <=> root.stretch-grain;
+                            default-value: 0.6667;
+                            value-text: root.stretch-grain-label;
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[30];
+                            modulation-depth: root.modulation-depths[30];
+                            modulation-offset: root.modulation-offsets[30];
+                            modulation-route-count: root.modulation-route-counts[30];
+                            changed(v) => { root.stretch-grain-changed(v); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(30, v); }
+                            modulation-edit-started => { root.modulation-edit-started(30); }
+                            modulation-edit-finished => { root.modulation-edit-finished(30); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    // The clean band is marked, not enforced. Extreme
+                    // slow-down is a sound people want; the control says
+                    // where transparency stops rather than refusing to go
+                    // there.
+                    Text {
+                        text: root.stretch-ratio-clean ? "" : "past clean range";
+                        color: Theme.text-faint;
+                        font-size: 8px;
+                    }
+                    Rectangle { vertical-stretch: 1; }
                 }
             }
             Rectangle {

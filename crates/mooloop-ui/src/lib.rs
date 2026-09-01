@@ -33,10 +33,13 @@ use mooloop_core::{
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
-    SamplerParams, SamplerState, SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
+    SamplerParams, SamplerState, SnareCharacter, StretchMode, VoiceMode,
+    DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
+    MAX_SAMPLER_VOICES, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_GRAIN,
+    MIN_STRETCH_RATIO,
     MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
     MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, STRIP_DESCRIPTORS,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -47,7 +50,7 @@ use mooloop_dsp::{
         fraction_from_frame, frame_from_fraction, snap_to_zero_crossing, snap_window_frames,
         SnapResult, DEFAULT_SNAP_WINDOW_MS,
     },
-    DrumSynth, DryAlign, SampleData, SpectrumAnalyzer,
+    DrumSynth, DryAlign, SampleData, SpectrumAnalyzer, StretchPool,
 };
 use mooloop_engine::{
     EffectSlot, EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer,
@@ -207,6 +210,41 @@ impl PreviewSender {
 const JACK_BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 const WAVEFORM_BINS: usize = 256;
 const DRUM_PREVIEW_BINS: usize = 144;
+
+/// Map the stretch ratio onto a knob's 0..1 travel, and back.
+///
+/// Logarithmic, matching the parameter's own `Exponential` curve: the band
+/// that stays clean sits just around unity while the ceiling is deliberately
+/// far past it, so linear travel would spend almost the whole knob on
+/// extremes. Unity lands at about a third of the way round.
+fn stretch_ratio_to_norm(ratio: f32) -> f32 {
+    let ratio = ratio.clamp(MIN_STRETCH_RATIO, MAX_STRETCH_RATIO);
+    (ratio / MIN_STRETCH_RATIO).log2() / (MAX_STRETCH_RATIO / MIN_STRETCH_RATIO).log2()
+}
+
+fn stretch_ratio_from_norm(norm: f32) -> f32 {
+    let span = (MAX_STRETCH_RATIO / MIN_STRETCH_RATIO).log2();
+    (MIN_STRETCH_RATIO * (norm.clamp(0.0, 1.0) * span).exp2())
+        .clamp(MIN_STRETCH_RATIO, MAX_STRETCH_RATIO)
+}
+
+/// Same treatment for the grain window, for the same reason: it maps to a
+/// repetition frequency, so equal knob travel should be equal musical
+/// intervals.
+fn stretch_grain_to_norm(frames: u16) -> f32 {
+    let frames = f32::from(frames.clamp(MIN_STRETCH_GRAIN, MAX_STRETCH_GRAIN));
+    (frames / f32::from(MIN_STRETCH_GRAIN)).log2()
+        / (f32::from(MAX_STRETCH_GRAIN) / f32::from(MIN_STRETCH_GRAIN)).log2()
+}
+
+fn stretch_grain_from_norm(norm: f32) -> u16 {
+    let span = (f32::from(MAX_STRETCH_GRAIN) / f32::from(MIN_STRETCH_GRAIN)).log2();
+    let frames = f32::from(MIN_STRETCH_GRAIN) * (norm.clamp(0.0, 1.0) * span).exp2();
+    (frames.round() as i32).clamp(
+        i32::from(MIN_STRETCH_GRAIN),
+        i32::from(MAX_STRETCH_GRAIN),
+    ) as u16
+}
 
 fn sync_drum_preview(window: &MainWindow, params: DrumSynthParams) {
     let (minimums, maximums) = DrumSynth::preview_waveform(params, DRUM_PREVIEW_BINS);
@@ -3871,6 +3909,26 @@ impl UiState {
             RetriggerMode::Layer => 1,
         });
         window.set_choke_group(p.choke_group as i32);
+        window.set_stretch_enabled(p.stretch_enabled);
+        window.set_stretch_mode(match p.stretch_mode {
+            StretchMode::Music => 0,
+            StretchMode::Drums => 1,
+            StretchMode::Grain => 2,
+        });
+        window.set_stretch_ratio(stretch_ratio_to_norm(p.stretch_ratio));
+        window.set_stretch_ratio_label(format!("{:.2}x", p.stretch_ratio).into());
+        window.set_stretch_grain(stretch_grain_to_norm(p.stretch_grain));
+        // Frames are what the DSP works in, but the number a player is
+        // chasing is the pitch of the rattle it produces.
+        window.set_stretch_grain_label(
+            format!(
+                "{} fr / {:.0} Hz",
+                p.stretch_grain,
+                window.get_audio_sample_rate() as f32 / (p.stretch_grain.max(2) as f32 / 2.0)
+            )
+            .into(),
+        );
+        window.set_stretch_ratio_clean((0.5..=1.5).contains(&p.stretch_ratio));
         window.set_filter_cutoff(p.filter_cutoff);
         window.set_filter_resonance(p.filter_resonance);
         window.set_filter_env((p.filter_env_amount + 1.0) * 0.5);
@@ -9124,6 +9182,104 @@ impl AppUi {
             });
         }
 
+        // Mode, ratio and grain are ordinary parameters. The enable is not:
+        // the pool it needs is ~1.6 MB and must be built here rather than on
+        // the audio thread, so it rides a structural command alongside the
+        // parameter write. The two can arrive in either order -- a sampler
+        // whose intent is on but whose pool has not landed plays unstretched.
+        {
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
+            let st = state.clone();
+            window.on_stretch_enabled_changed(move |on| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.params.stretch_enabled = on;
+                let params = channel.params;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params,
+                });
+                let _ = stx.send(StructuralCommand::SetSamplerStretch {
+                    channel: channel_index as u8,
+                    pool: on.then(|| {
+                        Box::new(StretchPool::new(
+                            params.stretch_mode,
+                            sample_rate,
+                            MAX_SAMPLER_VOICES as usize,
+                        ))
+                    }),
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_stretch_mode_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                channel.params.stretch_mode = match value {
+                    1 => StretchMode::Drums,
+                    2 => StretchMode::Grain,
+                    _ => StretchMode::Music,
+                };
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params: channel.params,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_stretch_ratio_changed(move |norm| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                let ratio = stretch_ratio_from_norm(norm);
+                channel.params.stretch_ratio = ratio;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params: channel.params,
+                });
+                if let Some(window) = weak.upgrade() {
+                    window.set_stretch_ratio_label(format!("{ratio:.2}x").into());
+                    window.set_stretch_ratio_clean((0.5..=1.5).contains(&ratio));
+                }
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_stretch_grain_changed(move |norm| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                let frames = stretch_grain_from_norm(norm);
+                channel.params.stretch_grain = frames;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: channel_index as u8,
+                    params: channel.params,
+                });
+                if let Some(window) = weak.upgrade() {
+                    window.set_stretch_grain_label(
+                        format!(
+                            "{frames} fr / {:.0} Hz",
+                            sample_rate as f32 / (frames.max(2) as f32 / 2.0)
+                        )
+                        .into(),
+                    );
+                }
+            });
+        }
+
         macro_rules! wire_drum_param {
             ($callback:ident, $field:ident) => {{
                 let tx = cmd_tx.clone();
@@ -11679,6 +11835,56 @@ fn inspect_sample(path: &Path) -> Result<SampleInspection, String> {
 
 #[cfg(test)]
 mod tests {
+    /// A knob that reports a different number from the one the engine runs is
+    /// worse than no knob. Round-trip both stretch mappings across their
+    /// declared ranges.
+    #[test]
+    fn the_stretch_mappings_round_trip() {
+        for ratio in [0.25f32, 0.5, 0.75, 1.0, 1.5, 2.0, 6.5, 16.0] {
+            let back = stretch_ratio_from_norm(stretch_ratio_to_norm(ratio));
+            assert!(
+                (back - ratio).abs() < ratio * 1.0e-4,
+                "ratio {ratio} came back as {back}"
+            );
+        }
+        for frames in [64u16, 128, 192, 256, 1024, 2048, 4096] {
+            let back = stretch_grain_from_norm(stretch_grain_to_norm(frames));
+            assert_eq!(back, frames, "grain {frames} came back as {back}");
+        }
+    }
+
+    /// Unity is the value a user returns to, so it has to be reachable and it
+    /// has to be where the knob's default sits. The Slint default is 0.3333;
+    /// this is what pins that number to something real rather than a guess.
+    #[test]
+    fn unity_stretch_sits_at_the_knobs_default_position() {
+        let norm = stretch_ratio_to_norm(1.0);
+        assert!(
+            (norm - 0.3333).abs() < 0.001,
+            "unity maps to {norm}, but the control defaults to 0.3333"
+        );
+        assert!((stretch_ratio_from_norm(0.3333) - 1.0).abs() < 0.001);
+
+        let grain = stretch_grain_to_norm(1024);
+        assert!(
+            (grain - 0.6667).abs() < 0.001,
+            "the default grain maps to {grain}, but the control defaults to 0.6667"
+        );
+    }
+
+    /// Out-of-range input is clamped rather than propagated. Both ends of both
+    /// controls, because a modulated or automated value can arrive at
+    /// anything.
+    #[test]
+    fn the_stretch_mappings_clamp_rather_than_extrapolate() {
+        assert_eq!(stretch_ratio_from_norm(-5.0), MIN_STRETCH_RATIO);
+        assert_eq!(stretch_ratio_from_norm(5.0), MAX_STRETCH_RATIO);
+        assert_eq!(stretch_grain_from_norm(-5.0), MIN_STRETCH_GRAIN);
+        assert_eq!(stretch_grain_from_norm(5.0), MAX_STRETCH_GRAIN);
+        assert_eq!(stretch_ratio_to_norm(1_000.0), 1.0);
+        assert_eq!(stretch_ratio_to_norm(0.0), 0.0);
+    }
+
     use super::*;
 
     #[test]

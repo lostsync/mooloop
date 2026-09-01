@@ -772,6 +772,13 @@ export component MainWindow inherits Window {
     in-out property <int> sampler-polyphony: 1;
     in-out property <int> retrigger-mode;   // 0=Restart 1=Layer
     in-out property <int> choke-group;
+    in-out property <bool> stretch-enabled;
+    in-out property <int> stretch-mode;
+    in-out property <float> stretch-ratio: 0.3333;
+    in-out property <string> stretch-ratio-label;
+    in-out property <float> stretch-grain: 0.6667;
+    in-out property <string> stretch-grain-label;
+    in-out property <bool> stretch-ratio-clean: true;
     in-out property <string> sample-name;
     in-out property <string> sample-description;
     in-out property <float> sample-duration;
@@ -805,6 +812,10 @@ export component MainWindow inherits Window {
     callback sampler-polyphony-changed(int);
     callback retrigger-mode-changed(int);
     callback choke-group-changed(int);
+    callback stretch-enabled-changed(bool);
+    callback stretch-mode-changed(int);
+    callback stretch-ratio-changed(float);
+    callback stretch-grain-changed(float);
     callback filter-cutoff-changed(float);
     callback filter-resonance-changed(float);
     callback filter-env-changed(float);
@@ -2478,6 +2489,13 @@ export component MainWindow inherits Window {
                                                     polyphony <=> root.sampler-polyphony;
                                                     retrigger-mode <=> root.retrigger-mode;
                                                     choke-group <=> root.choke-group;
+                                                    stretch-enabled <=> root.stretch-enabled;
+                                                    stretch-mode <=> root.stretch-mode;
+                                                    stretch-ratio <=> root.stretch-ratio;
+                                                    stretch-ratio-label <=> root.stretch-ratio-label;
+                                                    stretch-grain <=> root.stretch-grain;
+                                                    stretch-grain-label <=> root.stretch-grain-label;
+                                                    stretch-ratio-clean <=> root.stretch-ratio-clean;
                                                     sample-name <=> root.sample-name;
                                                     sample-description <=> root.sample-description;
                                                     waveform <=> root.waveform;
@@ -2507,6 +2525,10 @@ export component MainWindow inherits Window {
                                                     polyphony-changed(v) => { root.sampler-polyphony-changed(v); }
                                                     retrigger-mode-changed(v) => { root.retrigger-mode-changed(v); }
                                                     choke-group-changed(v) => { root.choke-group-changed(v); }
+                                                    stretch-enabled-changed(v) => { root.stretch-enabled-changed(v); }
+                                                    stretch-mode-changed(v) => { root.stretch-mode-changed(v); }
+                                                    stretch-ratio-changed(v) => { root.stretch-ratio-changed(v); }
+                                                    stretch-grain-changed(v) => { root.stretch-grain-changed(v); }
                                                     filter-cutoff-changed(v) => { root.filter-cutoff-changed(v); }
                                                     modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
                                                     modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
