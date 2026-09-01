@@ -383,14 +383,16 @@ struct RandomSource {
 }
 
 impl RandomSource {
-    fn new(params: ModRandomParams) -> Self {
+    /// Seeded from the slot, so two random modules on one channel are
+    /// uncorrelated rather than identical, and still deterministic: an
+    /// offline render draws the same sequence a realtime one did.
+    fn new(params: ModRandomParams, slot: usize) -> Self {
         let mut source = Self {
             params,
             held: 0.0,
-            // Deterministic per slot install, same as the LFO's S&H, so an
-            // offline render matches a realtime one.
             phase: 0.0,
-            rng: 0x9E37_79B9,
+            // Odd, so the xorshift state can never be zero and stick there.
+            rng: 0x9E37_79B9 ^ ((slot as u32).wrapping_add(1).wrapping_mul(0x85EB_CA6B) | 1),
         };
         source.held = source.fresh();
         source
@@ -624,7 +626,7 @@ impl ModulatorRack {
                 random.params = next;
             }
             (Some(ModulatorParams::Random(next)), _) => {
-                *existing = Some(Source::Random(RandomSource::new(next)))
+                *existing = Some(Source::Random(RandomSource::new(next, slot)))
             }
             (Some(ModulatorParams::Math(next)), Some(Source::Math(math))) => math.params = next,
             (Some(ModulatorParams::Math(next)), _) => {
@@ -1183,6 +1185,36 @@ mod tests {
                 (value - previous).abs()
             );
             previous = value;
+        }
+    }
+
+    /// Two random modules on one channel must not be the same random
+    /// module. Seeding from the slot decorrelates them without giving up
+    /// the determinism an offline render depends on.
+    #[test]
+    fn random_slots_draw_independent_sequences() {
+        let mut rack = rack_with(&[
+            (0, ModulatorParams::Random(ModRandomParams::default())),
+            (1, ModulatorParams::Random(ModRandomParams::default())),
+        ]);
+        let mut differed = false;
+        for _ in 0..16 {
+            rack.tick(48_000, 48_000, 120.0);
+            differed |= rack.outputs()[0] != rack.outputs()[1];
+        }
+        assert!(differed, "both slots drew the same sequence");
+
+        // Same rack, same ticks, same values: the sequence is reproducible.
+        let mut replay = rack_with(&[(0, ModulatorParams::Random(ModRandomParams::default()))]);
+        let mut first = Vec::new();
+        for _ in 0..16 {
+            replay.tick(48_000, 48_000, 120.0);
+            first.push(replay.outputs()[0]);
+        }
+        let mut again = rack_with(&[(0, ModulatorParams::Random(ModRandomParams::default()))]);
+        for expected in first {
+            again.tick(48_000, 48_000, 120.0);
+            assert_eq!(again.outputs()[0], expected);
         }
     }
 
