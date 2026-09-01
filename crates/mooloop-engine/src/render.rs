@@ -1462,27 +1462,54 @@ impl RenderState {
     /// Install a complete saved rack while retaining a same-kind LFO's phase.
     /// Copying the small matrix is realtime-safe; `ModulatorRack::set_slot`
     /// owns the phase-preserving detail.
+    /// Replace one channel's whole rack. Used where a rack genuinely arrives
+    /// entire — project load, and a channel added or removed — not for
+    /// ordinary edits, which name one fact each through `edit_modulation`.
     fn set_channel_modulation(&mut self, channel: usize, modulation: ModRack) {
-        let (Some(saved), Some(runtime)) = (
-            self.modulation.get_mut(channel),
-            self.modulators.get_mut(channel),
-        ) else {
+        self.edit_modulation(channel, |rack| {
+            *rack = modulation;
+            true
+        });
+    }
+
+    /// Apply one edit to a channel's rack and put everything that depends on
+    /// it back in step.
+    ///
+    /// Every modulation command is this shape: change one fact in the saved
+    /// rack, mirror the slots whose behaviour actually moved into the DSP
+    /// rack, and hand back any destination that just lost its last route.
+    /// The diff lives here rather than at each call site because it is the
+    /// only part a narrow command can get *wrong* rather than merely
+    /// expensive: without it, a removed route leaves the device holding
+    /// whatever the control signal last resolved, until someone happens to
+    /// touch that knob again.
+    ///
+    /// `edit` reports whether it changed anything, so a command that names a
+    /// slot or a route this rack does not hold costs a comparison and stops.
+    fn edit_modulation(&mut self, channel: usize, edit: impl FnOnce(&mut ModRack) -> bool) {
+        let Some(saved) = self.modulation.get_mut(channel) else {
             return;
         };
         let previous = *saved;
-        *saved = modulation;
+        if !edit(saved) {
+            return;
+        }
+        let modulation = *saved;
         // The runtime rack holds behaviour, not identity: it is addressed by
         // slot, and the durable ids stay on the control side where routes are
-        // resolved.
-        for (slot, entry) in modulation.slots.into_iter().enumerate() {
-            runtime.set_slot(slot, entry.map(|entry| entry.params));
+        // resolved. Only a slot whose parameters moved is re-set, so turning
+        // one knob does not touch the seven modules beside it -- and a module
+        // that keeps its kind keeps its phase, cursor and envelope stage
+        // because `set_slot` retunes in place.
+        if let Some(runtime) = self.modulators.get_mut(channel) {
+            for (slot, entry) in modulation.slots.into_iter().enumerate() {
+                let params = entry.map(|entry| entry.params);
+                if previous.slots[slot].map(|entry| entry.params) == params {
+                    continue;
+                }
+                runtime.set_slot(slot, params);
+            }
         }
-        // A removed route must return the device to its knob value at the
-        // next block. Without this, it would hold the final LFO-resolved value
-        // until someone happened to touch that knob again.
-        let Some(strip) = self.strips.get_mut(channel) else {
-            return;
-        };
         for destination in previous.destinations() {
             if modulation
                 .destinations()
@@ -1490,20 +1517,7 @@ impl RenderState {
             {
                 continue;
             }
-            let ParamAddr {
-                scope: EffectTarget::Channel(owner_channel),
-                owner: ParamOwner::Effect { slot },
-                param,
-            } = destination
-            else {
-                continue;
-            };
-            if owner_channel != channel as u8 {
-                continue;
-            }
-            if let Some(base) = strip.effects.base_param(slot as usize, param) {
-                strip.effects.queue_param(slot as usize, param, base);
-            }
+            self.restore_base_param(destination);
         }
     }
 
@@ -1969,10 +1983,50 @@ impl RenderState {
                 id,
                 value,
             } => self.set_effect_param(target, slot, id, value),
-            EngineCommand::SetChannelModulation {
+            // Every modulation edit names one fact. The rack-wide diff still
+            // runs behind each of them, so a route that disappears here
+            // returns its destination to its knob value at the next block
+            // exactly as it did when the whole rack travelled.
+            EngineCommand::SetModulatorParam {
                 channel,
-                modulation,
-            } => self.set_channel_modulation(channel as usize, modulation),
+                slot,
+                id,
+                value,
+            } => self.edit_modulation(channel as usize, |rack| {
+                let Some(params) = rack.params_mut(slot as usize) else {
+                    return false;
+                };
+                params.set(id, value);
+                true
+            }),
+            EngineCommand::InstallModulator {
+                channel,
+                slot,
+                source,
+                params,
+            } => self.edit_modulation(channel as usize, |rack| {
+                rack.install_with_id(slot as usize, source, params)
+            }),
+            EngineCommand::ClearModulator { channel, slot } => {
+                self.edit_modulation(channel as usize, |rack| rack.clear(slot as usize))
+            }
+            EngineCommand::MoveModulator { channel, from, to } => self
+                .edit_modulation(channel as usize, |rack| {
+                    rack.move_module(from as usize, to as usize)
+                }),
+            // A route names its source by durable id, so one that arrives
+            // before (or after) the module it names is refused rather than
+            // aimed at whatever else occupies that slot.
+            EngineCommand::SetModRoute { channel, route } => {
+                self.edit_modulation(channel as usize, |rack| rack.apply_route(route).is_some())
+            }
+            EngineCommand::RemoveModRoute {
+                channel,
+                source,
+                destination,
+            } => self.edit_modulation(channel as usize, |rack| {
+                rack.remove_route_by_source(source, destination)
+            }),
             EngineCommand::TriggerBuffer {
                 target,
                 slot,
@@ -2994,6 +3048,169 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// One LFO on the filter cutoff, and the durable id it was installed
+    /// under. Narrow commands name that id rather than the slot it landed in,
+    /// so the tests below can address the module the way the UI does.
+    fn lfo_on_cutoff(depth: f32) -> (mooloop_core::Project, mooloop_core::ModSourceId) {
+        let mut channel = filter_channel(1_000.0);
+        let source = channel
+            .setup
+            .modulation
+            .install(
+                0,
+                mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
+                    // A quarter-cycle every 32 frames at 48 kHz, so a
+                    // 128-frame block reads four clearly different points.
+                    rate_hz: 375.0,
+                    ..mooloop_core::ModLfoParams::default()
+                }),
+            )
+            .expect("slot 0 accepts a module");
+        assert!(channel
+            .setup
+            .modulation
+            .add_route(mooloop_core::ModRoute::to_slot(
+                0,
+                CUTOFF,
+                depth,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
+            .is_some());
+        (synth_project(channel), source)
+    }
+
+    /// The property a narrow command could get wrong rather than merely
+    /// cheap: dropping one route has to hand the device back its knob value.
+    /// Without it the filter would hold whatever the LFO last resolved, until
+    /// someone happened to touch that knob again.
+    #[test]
+    fn a_narrow_route_removal_restores_the_destinations_base() {
+        let (project, source) = lfo_on_cutoff(0.25);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        render.process_block(128);
+
+        let modulated: Vec<_> = cutoff_events(&render)
+            .iter()
+            .map(|(_, value)| *value)
+            .collect();
+        assert_eq!(modulated.len(), 4, "LFO was not resolving: {modulated:?}");
+        assert!(
+            modulated.iter().any(|value| (value - 1_000.0).abs() > 100.0),
+            "cutoff never left its base: {modulated:?}"
+        );
+
+        render.apply_command(EngineCommand::RemoveModRoute {
+            channel: 0,
+            source,
+            destination: CUTOFF,
+        });
+        render.process_block(128);
+
+        // One event, at the top of the block, carrying the knob value back.
+        let restored = cutoff_events(&render);
+        assert_eq!(
+            restored.iter().map(|(offset, _)| *offset).collect::<Vec<_>>(),
+            vec![0],
+            "expected exactly one restoring event: {restored:?}"
+        );
+        assert!(
+            (restored[0].1 - 1_000.0).abs() < 1.0,
+            "the base was not restored: {restored:?}"
+        );
+        assert!(!render.effect_is_modulated(
+            EffectTarget::Channel(0),
+            0,
+            mooloop_core::FILTER_PARAM_CUTOFF_HZ
+        ));
+    }
+
+    /// Emptying a slot is the same fact stated once for every route it drove.
+    #[test]
+    fn clearing_a_module_restores_what_it_was_driving() {
+        let (project, _) = lfo_on_cutoff(0.25);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        render.process_block(128);
+
+        render.apply_command(EngineCommand::ClearModulator {
+            channel: 0,
+            slot: 0,
+        });
+        render.process_block(128);
+
+        let restored = cutoff_events(&render);
+        assert_eq!(
+            restored.iter().map(|(offset, _)| *offset).collect::<Vec<_>>(),
+            vec![0],
+            "expected exactly one restoring event: {restored:?}"
+        );
+        assert!((restored[0].1 - 1_000.0).abs() < 1.0, "{restored:?}");
+    }
+
+    /// The ordinary knob turn: one small command, and the module it names
+    /// keeps running rather than being rebuilt around the new value.
+    #[test]
+    fn a_narrow_parameter_command_retunes_the_running_module() {
+        let (project, _) = lfo_on_cutoff(0.25);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        render.process_block(128);
+
+        render.apply_command(EngineCommand::SetModulatorParam {
+            channel: 0,
+            slot: 0,
+            id: mooloop_core::LFO_PARAM_DEPTH,
+            value: 0.0,
+        });
+        render.process_block(128);
+
+        // Still resolving four times a block, because the route is intact --
+        // but at zero depth every tick lands on the base.
+        let values: Vec<_> = cutoff_events(&render)
+            .iter()
+            .map(|(_, value)| *value)
+            .collect();
+        assert_eq!(values.len(), 4, "the route stopped resolving: {values:?}");
+        assert!(
+            values.iter().all(|value| (value - 1_000.0).abs() < 1.0),
+            "depth 0 still moved the cutoff: {values:?}"
+        );
+    }
+
+    /// The ordering trap this step had to avoid. Slot edits and route edits
+    /// arrive as separate ring entries, so a route may name a module the
+    /// engine does not hold. Because a route names a durable id and not a
+    /// slot number, that route is refused outright rather than aimed at
+    /// whatever else happens to occupy the slot.
+    #[test]
+    fn a_route_naming_an_absent_module_is_inert() {
+        let project = synth_project(filter_channel(1_000.0));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.apply_command(EngineCommand::SetModRoute {
+            channel: 0,
+            route: mooloop_core::ModRoute {
+                source: mooloop_core::ModSourceId(7),
+                source_slot: 0,
+                destination: CUTOFF,
+                depth: 1.0,
+                polarity: mooloop_core::ModPolarity::Bipolar,
+            },
+        });
+        render.play();
+        render.process_block(128);
+
+        assert!(!render.effect_is_modulated(
+            EffectTarget::Channel(0),
+            0,
+            mooloop_core::FILTER_PARAM_CUTOFF_HZ
+        ));
+        assert!(
+            cutoff_events(&render).is_empty(),
+            "an unresolvable route reached the device"
+        );
     }
 
     #[test]

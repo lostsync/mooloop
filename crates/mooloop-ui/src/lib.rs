@@ -78,11 +78,11 @@ const MAX_TIME_S: f32 = 2.0;
 /// order. These typed senders share one queue while preserving the convenient
 /// `.send(...)` call shape used by the callback wiring below.
 ///
-/// The width is `EngineCommand`'s, which is the modulation rack it carries by
-/// value (`bridge.rs` documents why that is deliberate). This queue is drained
-/// on the UI thread into the preallocated ring, so evening the variants out
-/// with a `Box` would trade a fixed stack copy for an allocation per command
-/// and cost the `Copy` the wiring relies on.
+/// The width is `StructuralCommand`'s, and `EngineCommand` (`bridge.rs`
+/// documents what sets that) is the runner-up. This queue is drained on the
+/// UI thread into the preallocated ring, so evening the variants out with a
+/// `Box` would trade a fixed stack copy for an allocation per command and
+/// cost the `Copy` the wiring relies on.
 #[allow(clippy::large_enum_variant)]
 enum PendingEngineMessage {
     Command(EngineCommand),
@@ -3448,23 +3448,53 @@ impl UiState {
         self.sync_effects();
     }
 
-    /// Mirror one updated rack to the engine, persist the UI-owned base state,
-    /// then re-render the shelf. This is intentionally a complete small `Copy`
-    /// rack command: the audio thread only installs it at a block boundary.
-    fn send_channel_modulation(&mut self, window: &MainWindow, tx: &EngineCommandSender) {
-        let channel_index = self.selected;
-        let Some(channel) = self.channels.get(channel_index) else {
+    /// Mirror one modulation edit to the engine, persist the UI-owned base
+    /// state, then re-render the shelf.
+    ///
+    /// The command names one fact — a parameter, a slot, a route — rather
+    /// than the rack it lives in, so the preallocated command ring is sized
+    /// by the widest single module instead of by modulator capacity
+    /// (`docs/plans/modulator-capacity/03-per-slot-commands.md`). The channel
+    /// index is supplied here rather than by the caller so no gesture can
+    /// address a channel other than the one it just edited.
+    fn send_modulation(
+        &mut self,
+        window: &MainWindow,
+        tx: &EngineCommandSender,
+        command: impl FnOnce(u8) -> EngineCommand,
+    ) {
+        let channel = self.selected;
+        if self.channels.get(channel).is_none() {
             return;
-        };
-        let modulation = channel.modulation;
-        let _ = tx.send(EngineCommand::SetChannelModulation {
-            channel: channel_index as u8,
-            modulation,
-        });
+        }
+        let _ = tx.send(command(channel as u8));
         self.dirty = true;
         self.revision = self.revision.wrapping_add(1);
         self.update_document_title(window);
         self.refresh_modulation(window);
+    }
+
+    /// Ship one slot's module entire, identity included. For the edits that
+    /// are not a descriptor parameter — filling an empty slot, or repatching
+    /// the envelope's gate jack — where there is no id to name the change by.
+    fn send_modulator_slot(
+        &mut self,
+        window: &MainWindow,
+        tx: &EngineCommandSender,
+        slot: usize,
+    ) {
+        let Some(rack) = self.channels.get(self.selected).map(|channel| channel.modulation) else {
+            return;
+        };
+        let (Some(source), Some(params)) = (rack.source_id(slot), rack.params(slot)) else {
+            return;
+        };
+        self.send_modulation(window, tx, |channel| EngineCommand::InstallModulator {
+            channel,
+            slot: slot as u8,
+            source,
+            params,
+        });
     }
 
     fn begin_modulation_edit(&mut self, window: &MainWindow) {
@@ -3526,20 +3556,25 @@ impl UiState {
         if current.is_some_and(|current| (current - depth).abs() < f32::EPSILON) {
             return false;
         }
-        if channel
-            .modulation
-            .add_route(ModRoute::to_slot(
-                source_slot,
-                destination,
-                depth,
-                default_polarity,
-            ))
-            .is_none()
-        {
+        let Some(index) = channel.modulation.add_route(ModRoute::to_slot(
+            source_slot,
+            destination,
+            depth,
+            default_polarity,
+        )) else {
             return false;
-        }
+        };
+        // The rack stamped the durable source id on the way in; that stamped
+        // row is what travels, so the engine resolves the route against the
+        // module the gesture meant rather than against a slot number.
+        let Some(route) = channel.modulation.routes[index] else {
+            return false;
+        };
         self.modulation_edit_changed = true;
-        self.send_channel_modulation(window, tx);
+        self.send_modulation(window, tx, |channel| EngineCommand::SetModRoute {
+            channel,
+            route,
+        });
         true
     }
 
@@ -7730,7 +7765,16 @@ impl AppUi {
                     let next_armed = armed_id.and_then(|id| channel.modulation.slot_of(id));
                     state.modulation_selected_slot.set(next_selected);
                     state.modulation_armed_slot.set(next_armed);
-                    state.send_channel_modulation(&window, &tx);
+                    // Both racks run the same permutation, so the engine's
+                    // copy carries routes and a math module's input slot
+                    // across the move exactly as this one did.
+                    state.send_modulation(&window, &tx, |channel| {
+                        EngineCommand::MoveModulator {
+                            channel,
+                            from: slot as u8,
+                            to: target as u8,
+                        }
+                    });
                     true
                 };
                 if moved {
@@ -7806,7 +7850,7 @@ impl AppUi {
                     state.modulation_selected_slot.set(Some(slot as u8));
                     state.modulation_armed_slot.set(None);
                     state.modulation_shelf_open = true;
-                    state.send_channel_modulation(&window, &tx);
+                    state.send_modulator_slot(&window, &tx, slot);
                     true
                 };
                 if added {
@@ -7882,7 +7926,14 @@ impl AppUi {
                     if in_gesture {
                         state.modulation_edit_changed = true;
                     }
-                    state.send_channel_modulation(&window, &tx);
+                    state.send_modulation(&window, &tx, |channel| {
+                        EngineCommand::SetModulatorParam {
+                            channel,
+                            slot: slot as u8,
+                            id,
+                            value,
+                        }
+                    });
                     before
                 };
                 if let Some(before) = before {
@@ -7936,7 +7987,9 @@ impl AppUi {
                         if state.modulation_armed_slot.get() == Some(slot) {
                             state.modulation_armed_slot.set(None);
                         }
-                        state.send_channel_modulation(&window, &tx);
+                        state.send_modulation(&window, &tx, |channel| {
+                            EngineCommand::ClearModulator { channel, slot }
+                        });
                         true
                     }
                 };
@@ -7963,7 +8016,9 @@ impl AppUi {
                     return;
                 };
                 envelope.input_channel = channel;
-                state.send_channel_modulation(&window, &tx);
+                // The gate is a jack rather than a descriptor id, so there is
+                // no parameter to name: the module travels entire.
+                state.send_modulator_slot(&window, &tx, slot);
             });
         }
         {
@@ -7999,7 +8054,10 @@ impl AppUi {
                         false
                     } else {
                         route.polarity = next;
-                        state.send_channel_modulation(&window, &tx);
+                        let route = *route;
+                        state.send_modulation(&window, &tx, |channel| {
+                            EngineCommand::SetModRoute { channel, route }
+                        });
                         true
                     }
                 };
@@ -8037,11 +8095,22 @@ impl AppUi {
                     else {
                         return;
                     };
-                    if route.take().is_none() {
-                        false
-                    } else {
-                        state.send_channel_modulation(&window, &tx);
-                        true
+                    // The row's durable source is read before it is taken:
+                    // the engine is told which assignment ended, not which
+                    // matrix position emptied, so the two racks cannot drift
+                    // into removing different routes.
+                    match route.take() {
+                        None => false,
+                        Some(removed) => {
+                            state.send_modulation(&window, &tx, |channel| {
+                                EngineCommand::RemoveModRoute {
+                                    channel,
+                                    source: removed.source,
+                                    destination: removed.destination,
+                                }
+                            });
+                            true
+                        }
                     }
                 };
                 if removed {

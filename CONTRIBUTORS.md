@@ -316,6 +316,19 @@ work session you can recall being part of, and don't stress over precision.
   sequencer claiming a channel the graph had no storage for -- is why there
   is a `live_channels` accessor rather than two counts that agree by
   convention.
+  Then finished the plan by taking the rack off the command ring: modulation
+  edits name one fact each -- a parameter, a slot, a route -- so an entry is
+  136 bytes rather than 936 and stops moving when capacity does. What the
+  step turned out to be about was the diff, not the width: the whole-rack
+  path was what restored a destination's base when a route vanished, so
+  every narrow command runs through one helper that keeps the before-and-
+  after rack and hands back any destination that lost its last route. Two
+  departures. The wide command was deleted rather than kept for presets and
+  undo, because those already rebuild the renderer through `install_project`
+  -- and a dead wide variant would have held the ring at 936 bytes, which is
+  the whole thing the step was for. And reordering the grid needed its own
+  narrow verb, or it would have been the one gesture still sending
+  everything.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

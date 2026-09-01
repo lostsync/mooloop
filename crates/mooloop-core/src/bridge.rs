@@ -11,22 +11,28 @@
 
 use crate::{
     AutomationPoint, BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
-    ModRack, MonoSynthParams, MlM1Params, NoteEvent, NoteId, ParamAddr, PlaybackMode, PointId,
-    PolySynthParams, SamplerParams,
+    ModRoute, ModSourceId, ModulatorParams, MonoSynthParams, MlM1Params, NoteEvent, NoteId,
+    ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
-// `SetChannelModulation` carries a whole `ModRack` (four modulator slots and
-// sixteen matrix rows), which makes this enum a few hundred bytes wide. That
-// is deliberate. The command ring is preallocated at startup and every entry
-// is already sized for the widest variant, so a wide variant costs fixed
-// setup memory, never a per-command allocation. Boxing the rack to even the
-// variants out would allocate on the GUI thread and, worse, drop that box on
-// the realtime callback -- a deallocation the executor contract forbids
-// (`docs/AUDIO_ARCHITECTURE.md`). It would also cost the `Copy` derive this
-// type is used through. A bounded stack copy through a fixed-capacity ring is
-// the cheaper half of that trade.
-#[allow(clippy::large_enum_variant)]
+// Every entry in the preallocated ring is sized for the widest variant, so
+// width here is a fixed startup cost paid 1024 times over -- never a
+// per-command allocation, and never a `Box` this enum would have to drop on
+// the realtime callback (a deallocation the executor contract forbids,
+// `docs/AUDIO_ARCHITECTURE.md`). That is why nothing here is boxed, and why
+// what each variant *names* matters: this enum once carried a whole
+// `ModRack`, so turning one LFO knob shipped every module and every route in
+// the channel, and the ring grew with modulator capacity. The modulation
+// variants below name one fact each instead.
+//
+// Nothing replaces a whole rack live. Project load, undo and the factory
+// bank all rebuild the renderer through `EngineHandle::install_project`, so
+// the wide command had no caller left once the gestures were narrowed. A
+// future channel-preset verb belongs on the structural ring rather than
+// here: that ring may carry a `Box` because it has a reclaim path back off
+// the audio thread. See
+// `docs/plans/modulator-capacity/03-per-slot-commands.md`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EngineCommand {
     /// Begin or resume playback from the current position.
@@ -201,10 +207,43 @@ pub enum EngineCommand {
         id: u32,
         value: f32,
     },
-    /// Replace one channel's fixed-size modulator rack and matrix. The
-    /// renderer applies it at a block boundary and preserves the phase of any
-    /// LFO slot that remains an LFO.
-    SetChannelModulation { channel: u8, modulation: ModRack },
+    /// Set one modulator parameter by descriptor id. This is the ordinary
+    /// modulation edit — a knob drag, a selector click — and it names the
+    /// fact that changed rather than shipping the rack it lives in.
+    SetModulatorParam {
+        channel: u8,
+        slot: u8,
+        id: u32,
+        value: f32,
+    },
+    /// Put a module in one slot, under the identity the authoring rack
+    /// minted. Retuning a slot that already holds the same kind preserves its
+    /// running state (an LFO keeps its phase, a sequencer its cursor); a kind
+    /// change rebuilds it.
+    InstallModulator {
+        channel: u8,
+        slot: u8,
+        source: ModSourceId,
+        params: ModulatorParams,
+    },
+    /// Empty one slot and drop every route it drove, restoring each orphaned
+    /// destination to its base at the next block.
+    ClearModulator { channel: u8, slot: u8 },
+    /// Move a module to another grid position, compacting the rack. Both
+    /// racks run the same permutation, so routes and a math module's input
+    /// slot stay pointed at the same modules on either side.
+    MoveModulator { channel: u8, from: u8, to: u8 },
+    /// Add or retune one route. The route names its source by durable id, so
+    /// one that arrives before the module it names is inert rather than
+    /// misaimed at whatever occupies that slot.
+    SetModRoute { channel: u8, route: ModRoute },
+    /// Drop one route by identity and restore its destination's base at the
+    /// next block.
+    RemoveModRoute {
+        channel: u8,
+        source: ModSourceId,
+        destination: ParamAddr,
+    },
     /// Fire one complete retained-audio edit at the start of the next block.
     /// The tuple is never split into parameter updates, so the read head sees
     /// one sample-accurate change.

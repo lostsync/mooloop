@@ -1462,6 +1462,31 @@ impl ModRack {
         Some(id)
     }
 
+    /// Put a module in `slot` under an identity chosen elsewhere.
+    ///
+    /// The authoring rack mints ids; a mirror of it (the engine's copy) is
+    /// told which one, so both sides agree on what a route names without the
+    /// whole rack having to travel. `next_source_id` is carried past the
+    /// installed id so a mirror that later mints on its own still mints
+    /// uniquely.
+    /// Returns whether the slot exists; an out-of-range slot is refused
+    /// rather than silently dropped, so a rack built against a larger
+    /// capacity cannot quietly lose a module here.
+    pub fn install_with_id(
+        &mut self,
+        slot: usize,
+        id: ModSourceId,
+        params: ModulatorParams,
+    ) -> bool {
+        let Some(entry) = self.slots.get_mut(slot) else {
+            return false;
+        };
+        *entry = Some(ModSlot { id, params });
+        self.next_source_id = self.next_source_id.max(id.0.wrapping_add(1));
+        self.resolve_routes();
+        true
+    }
+
     /// Empty a slot and drop every route it drove. Returns whether anything
     /// was there.
     pub fn clear(&mut self, slot: usize) -> bool {
@@ -1624,6 +1649,49 @@ impl ModRack {
                 *route = None;
             }
         }
+    }
+
+    /// Install an already-stamped route, addressed by durable identity.
+    ///
+    /// This is `add_route` for a rack that did not author the assignment: the
+    /// source id is taken as given rather than read out of a slot, and the
+    /// runtime locator is re-derived here. A route naming a module this rack
+    /// does not (yet) hold is refused outright rather than parked on
+    /// `UNRESOLVED_SLOT`, so a command that arrives ahead of the module it
+    /// names is inert instead of misaimed.
+    pub fn apply_route(&mut self, route: ModRoute) -> Option<usize> {
+        let source_slot = self.slot_of(route.source)?;
+        let route = ModRoute {
+            source_slot,
+            ..route
+        };
+        if let Some(index) = self.routes.iter().position(|existing| {
+            existing.is_some_and(|existing| {
+                existing.source == route.source && existing.destination == route.destination
+            })
+        }) {
+            self.routes[index] = Some(route);
+            return Some(index);
+        }
+        let index = self.routes.iter().position(Option::is_none)?;
+        self.routes[index] = Some(route);
+        Some(index)
+    }
+
+    /// Drop the route from `source` to `destination`, by identity rather than
+    /// by matrix position. Returns whether one was there — a removal that
+    /// names a route this rack no longer holds is a no-op, not an error, so
+    /// the same command can arrive twice without consequence.
+    pub fn remove_route_by_source(&mut self, source: ModSourceId, destination: ParamAddr) -> bool {
+        let mut removed = false;
+        for route in self.routes.iter_mut() {
+            if route.is_some_and(|route| route.source == source && route.destination == destination)
+            {
+                *route = None;
+                removed = true;
+            }
+        }
+        removed
     }
 
     /// Total signed offset applied to `destination`, as a fraction of its
@@ -1977,17 +2045,16 @@ retrigger = true
     /// The sixteen step values are one contiguous id block and nothing
     /// outside it, so the editor can walk the bank by offset and a stale
     /// automation id past the end is ignored rather than aliasing step 1.
-    /// Rack capacity is bought with preallocated ring memory, so the price
-    /// is pinned here rather than rediscovered. `SetChannelModulation` ships
-    /// a whole `ModRack` by value and is the widest `EngineCommand` variant,
-    /// so this number times the engine's queue capacity is what the command
-    /// ring costs at startup.
+    /// Modulation edits are addressed one fact at a time, so the command ring
+    /// is sized by the widest single *module* and stops growing with
+    /// modulator capacity altogether. Raising `MAX_MODULATORS_PER_CHANNEL`
+    /// must not move `EngineCommand`.
     ///
     /// If this test fails, something changed the width of a command. That is
     /// allowed — but confirm the new ring size is one you meant to pay for
     /// before updating the number.
     #[test]
-    fn the_rack_is_what_a_command_ring_entry_costs() {
+    fn capacity_no_longer_moves_the_command_ring() {
         use core::mem::size_of;
 
         // One slot is a module plus its durable identity, and the widest
@@ -2000,14 +2067,27 @@ retrigger = true
                 + MAX_MOD_ROUTES_PER_CHANNEL * size_of::<ModRoute>()
                 + size_of::<u32>()
         );
-
-        // Eight slots carrying durable identity: 932 bytes of rack, 936
-        // bytes an entry. At the engine's 1024-entry queue that is 936 KiB
-        // preallocated, up from 552 KiB at four anonymous slots — a fixed
-        // setup cost, never a per-command allocation, which is the trade
-        // `bridge.rs` documents.
         assert_eq!(size_of::<ModRack>(), 932);
-        assert_eq!(size_of::<crate::EngineCommand>(), 936);
+
+        // The rack no longer travels. `InstallModulator` is the widest
+        // modulation command and it carries one module — a step pattern's
+        // sixteen values, a durable id, two indices — which is not wide
+        // enough to set the ring's floor any more: `SetChannelSource`'s
+        // synth parameter block is. 136 bytes an entry, so the engine's
+        // 1024-entry queue costs 136 KiB rather than the 936 KiB the rack
+        // used to make it.
+        assert_eq!(size_of::<crate::EngineCommand>(), 136);
+
+        // The property this step bought, stated so it fails if it is lost: a
+        // module fits inside an entry that something else already sized, so
+        // a rack of thirty-two slots would leave this number alone.
+        let widest_module =
+            size_of::<ModulatorParams>() + size_of::<ModSourceId>() + 2 * size_of::<u8>();
+        assert!(
+            widest_module <= size_of::<crate::EngineCommand>(),
+            "a module is {widest_module} bytes and a ring entry is {}",
+            size_of::<crate::EngineCommand>()
+        );
     }
 
     /// The whole point of durable identity: moving a module in the grid must
