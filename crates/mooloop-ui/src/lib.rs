@@ -27,7 +27,7 @@ use mooloop_core::{
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
-    ModLfoParams, ModLfoWaveform, ModPolarity, ModRack, ModRoute, ModTimeDivision,
+    ModLfoParams, ModPolarity, ModRack, ModRoute,
     ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State, NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
@@ -1649,30 +1649,6 @@ fn lfo_wave_to_int(wave: LfoWave) -> i32 {
     }
 }
 
-/// The channel modulation LFO intentionally has its own type from the
-/// synth's legacy per-device LFO. Keeping the UI conversion here makes the
-/// shelf speak the current rack vocabulary rather than smuggling values
-/// through `LfoWave`.
-fn mod_lfo_waveform_from_int(value: i32) -> ModLfoWaveform {
-    match value {
-        1 => ModLfoWaveform::Triangle,
-        2 => ModLfoWaveform::Saw,
-        3 => ModLfoWaveform::Square,
-        4 => ModLfoWaveform::Random,
-        _ => ModLfoWaveform::Sine,
-    }
-}
-
-fn mod_lfo_waveform_to_int(waveform: ModLfoWaveform) -> i32 {
-    match waveform {
-        ModLfoWaveform::Sine => 0,
-        ModLfoWaveform::Triangle => 1,
-        ModLfoWaveform::Saw => 2,
-        ModLfoWaveform::Square => 3,
-        ModLfoWaveform::Random => 4,
-    }
-}
-
 /// Length of an id-indexed parameter array. Ids are dense and small in
 /// practice, but a gap costs one unused entry rather than a wrong lookup.
 fn descriptor_slots(descriptors: &[ParamDescriptor]) -> usize {
@@ -3027,21 +3003,6 @@ impl UiState {
             .map_or(0.0, |route| route.depth)
     }
 
-    fn modulation_lfo_mut(&mut self, slot: usize) -> Option<&mut ModLfoParams> {
-        let selected = self.selected;
-        let params = self
-            .channels
-            .get_mut(selected)?
-            .modulation
-            .slots
-            .get_mut(slot)?
-            .as_mut()?;
-        match params {
-            ModulatorParams::Lfo(lfo) => Some(lfo),
-            ModulatorParams::Envelope(_) => None,
-        }
-    }
-
     fn modulation_envelope_mut(&mut self, slot: usize) -> Option<&mut ModEnvelopeParams> {
         let selected = self.selected;
         let params = self
@@ -3224,7 +3185,7 @@ impl UiState {
                         common(
                             format!("LFO {}", slot + 1),
                             0,
-                            mod_lfo_waveform_to_int(lfo.waveform),
+                            lfo.waveform.to_index(),
                             lfo.rate_hz,
                             lfo.depth,
                             lfo.phase,
@@ -3348,34 +3309,20 @@ impl UiState {
             Some(ModulatorParams::Envelope(_)) => 1,
             None => -1,
         });
-        window.set_modulation_selected_waveform(
-            selected_lfo.map_or(0, |lfo| mod_lfo_waveform_to_int(lfo.waveform)),
-        );
-        window.set_modulation_selected_rate(selected_lfo.map_or(1.0, |lfo| lfo.rate_hz));
-        window.set_modulation_selected_rate_tempo_sync(
-            selected_lfo.is_some_and(|lfo| lfo.tempo_sync),
-        );
-        window.set_modulation_selected_rate_division(
-            selected_lfo.map_or(ModTimeDivision::Quarter.to_index(), |lfo| {
-                lfo.rate_division.to_index()
-            }),
-        );
-        window.set_modulation_selected_depth(selected_lfo.map_or(1.0, |lfo| lfo.depth));
-        window.set_modulation_selected_phase(selected_lfo.map_or(0.0, |lfo| lfo.phase));
-        window.set_modulation_selected_retrigger(selected_lfo.is_some_and(|lfo| lfo.retrigger));
-        window.set_modulation_selected_fade_in(selected_lfo.map_or(0.0, |lfo| lfo.fade_in_seconds));
-        window.set_modulation_selected_fade_tempo_sync(
-            selected_lfo.is_some_and(|lfo| lfo.fade_in_tempo_sync),
-        );
-        window.set_modulation_selected_fade_division(
-            selected_lfo.map_or(ModTimeDivision::Quarter.to_index(), |lfo| {
-                lfo.fade_in_division.to_index()
-            }),
-        );
-        window.set_modulation_selected_smoothing(
-            selected_lfo.map_or(0.0, |lfo| lfo.smoothing_seconds),
-        );
-        window.set_modulation_selected_pulse_width(selected_lfo.map_or(0.5, |lfo| lfo.pulse_width));
+        // The one visible editor reads its values by descriptor id, exactly
+        // as the destination overlays already do; the kind decides which id
+        // table the array answers for.
+        let selected_values: Vec<f32> = selected_params.map_or_else(Vec::new, |params| {
+            let descriptors = params.kind().descriptors();
+            let mut values = vec![0.0; descriptor_slots(descriptors)];
+            for descriptor in descriptors {
+                if let Some(value) = params.get(descriptor.id) {
+                    values[descriptor.id as usize] = value;
+                }
+            }
+            values
+        });
+        window.set_modulation_selected_values(selected_values.as_slice().into());
         let selected_lfo_cycle_seconds = selected_lfo.map_or(1.0, |lfo| {
             if lfo.tempo_sync {
                 lfo.rate_division.seconds(bpm)
@@ -3404,45 +3351,6 @@ impl UiState {
             .set_modulation_input_channels(ModelRc::from(Rc::new(VecModel::from(input_channels))));
         window.set_modulation_selected_envelope_input_channel(
             selected_envelope.map_or(self.selected as i32, |env| i32::from(env.input_channel)),
-        );
-        window.set_modulation_selected_envelope_attack(
-            selected_envelope.map_or(0.01, |env| env.attack_seconds),
-        );
-        window.set_modulation_selected_envelope_attack_sync(
-            selected_envelope.is_some_and(|env| env.attack_tempo_sync),
-        );
-        window.set_modulation_selected_envelope_attack_division(
-            selected_envelope.map_or(ModTimeDivision::Sixteenth.to_index(), |env| {
-                env.attack_division.to_index()
-            }),
-        );
-        window.set_modulation_selected_envelope_decay(
-            selected_envelope.map_or(0.2, |env| env.decay_seconds),
-        );
-        window.set_modulation_selected_envelope_decay_sync(
-            selected_envelope.is_some_and(|env| env.decay_tempo_sync),
-        );
-        window.set_modulation_selected_envelope_decay_division(
-            selected_envelope.map_or(ModTimeDivision::Eighth.to_index(), |env| {
-                env.decay_division.to_index()
-            }),
-        );
-        window.set_modulation_selected_envelope_sustain(
-            selected_envelope.map_or(0.7, |env| env.sustain),
-        );
-        window.set_modulation_selected_envelope_release(
-            selected_envelope.map_or(0.4, |env| env.release_seconds),
-        );
-        window.set_modulation_selected_envelope_release_sync(
-            selected_envelope.is_some_and(|env| env.release_tempo_sync),
-        );
-        window.set_modulation_selected_envelope_release_division(
-            selected_envelope.map_or(ModTimeDivision::Quarter.to_index(), |env| {
-                env.release_division.to_index()
-            }),
-        );
-        window.set_modulation_selected_envelope_amount(
-            selected_envelope.map_or(1.0, |env| env.amount),
         );
         window.set_modulation_selected_envelope_preview_attack(selected_envelope.map_or(
             0.0,
@@ -7874,221 +7782,116 @@ impl AppUi {
                 }
             });
         }
+        // One descriptor-addressed edit path for every modulator parameter.
+        // A knob drag arrives bracketed by edit-started/finished and lands as
+        // one undo step; a discrete edit (selector click, LED toggle) arrives
+        // bare and records immediately.
         {
             let st = state.clone();
+            let weak = window.as_weak();
+            window.on_modulation_param_edit_started(move || {
+                let Some(window) = weak.upgrade() else { return };
+                st.borrow_mut().begin_modulation_edit(&window);
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
-            window.on_modulation_lfo_wave_changed(move |slot, waveform| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let selected = state.selected;
-                let Some(Some(ModulatorParams::Lfo(lfo))) = state
-                    .channels
-                    .get_mut(selected)
-                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
+            window.on_modulation_param_changed(move |slot, id, value| {
+                let (Some(window), Ok(slot), Ok(id)) =
+                    (weak.upgrade(), usize::try_from(slot), u32::try_from(id))
                 else {
                     return;
                 };
-                lfo.waveform = mod_lfo_waveform_from_int(waveform);
-                state.send_channel_modulation(&window, &tx);
+                let before = {
+                    let mut state = st.borrow_mut();
+                    let in_gesture = state.modulation_edit_before.is_some();
+                    let before = (!in_gesture).then(|| project_snapshot(&state, &window));
+                    let selected = state.selected;
+                    let Some(params) = state
+                        .channels
+                        .get_mut(selected)
+                        .and_then(|channel| channel.modulation.slots.get_mut(slot))
+                        .and_then(Option::as_mut)
+                    else {
+                        return;
+                    };
+                    let previous = params.get(id);
+                    params.set(id, value);
+                    if params.get(id) == previous {
+                        return;
+                    }
+                    if in_gesture {
+                        state.modulation_edit_changed = true;
+                    }
+                    state.send_channel_modulation(&window, &tx);
+                    before
+                };
+                if let Some(before) = before {
+                    record_project_history(&commands, before, &st, &window, "Modulator edited");
+                }
             });
         }
         {
             let st = state.clone();
-            let tx = cmd_tx.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
-            window.on_modulation_lfo_rate_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let selected = state.selected;
-                let Some(Some(ModulatorParams::Lfo(lfo))) = state
-                    .channels
-                    .get_mut(selected)
-                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
-                else {
-                    return;
-                };
-                lfo.rate_hz = value.clamp(0.05, 20.0);
-                state.send_channel_modulation(&window, &tx);
+            window.on_modulation_param_edit_finished(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = st.borrow_mut().finish_modulation_edit();
+                if let Some(before) = before {
+                    record_project_history(&commands, before, &st, &window, "Modulator edited");
+                }
             });
         }
+        // Removing a source drops the slot and every route it feeds; the
+        // engine restores those destinations' bases through the
+        // `set_channel_modulation` diff.
         {
             let st = state.clone();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
-            window.on_modulation_lfo_rate_sync_changed(move |slot, enabled| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
+            window.on_modulation_source_removed(move |slot| {
+                let (Some(window), Ok(slot)) = (weak.upgrade(), u8::try_from(slot)) else {
                     return;
                 };
-                let mut state = st.borrow_mut();
-                let Some(lfo) = state.modulation_lfo_mut(slot) else {
-                    return;
+                let before = {
+                    let state = st.borrow();
+                    project_snapshot(&state, &window)
                 };
-                lfo.tempo_sync = enabled;
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_lfo_rate_division_changed(move |slot, division| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
+                let removed = {
+                    let mut state = st.borrow_mut();
+                    let selected = state.selected;
+                    let Some(channel) = state.channels.get_mut(selected) else {
+                        return;
+                    };
+                    let Some(entry) = channel.modulation.slots.get_mut(slot as usize) else {
+                        return;
+                    };
+                    if entry.take().is_none() {
+                        false
+                    } else {
+                        for route in &mut channel.modulation.routes {
+                            if route.is_some_and(|route| route.source_slot == slot) {
+                                *route = None;
+                            }
+                        }
+                        if state.modulation_selected_slot.get() == Some(slot) {
+                            state.modulation_selected_slot.set(None);
+                        }
+                        if state.modulation_armed_slot.get() == Some(slot) {
+                            state.modulation_armed_slot.set(None);
+                        }
+                        state.send_channel_modulation(&window, &tx);
+                        true
+                    }
                 };
-                let mut state = st.borrow_mut();
-                let Some(lfo) = state.modulation_lfo_mut(slot) else {
-                    return;
-                };
-                lfo.rate_division = ModTimeDivision::from_index(division);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_lfo_depth_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let selected = state.selected;
-                let Some(Some(ModulatorParams::Lfo(lfo))) = state
-                    .channels
-                    .get_mut(selected)
-                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
-                else {
-                    return;
-                };
-                lfo.depth = value.clamp(0.0, 1.0);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_lfo_phase_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let selected = state.selected;
-                let Some(Some(ModulatorParams::Lfo(lfo))) = state
-                    .channels
-                    .get_mut(selected)
-                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
-                else {
-                    return;
-                };
-                lfo.phase = value.clamp(0.0, 1.0);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_lfo_retrigger_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let selected = state.selected;
-                let Some(Some(ModulatorParams::Lfo(lfo))) = state
-                    .channels
-                    .get_mut(selected)
-                    .and_then(|channel| channel.modulation.slots.get_mut(slot))
-                else {
-                    return;
-                };
-                lfo.retrigger = value;
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_lfo_fade_in_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(lfo) = state.modulation_lfo_mut(slot) else {
-                    return;
-                };
-                lfo.fade_in_seconds = value.clamp(0.0, 16.0);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_lfo_fade_sync_changed(move |slot, enabled| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(lfo) = state.modulation_lfo_mut(slot) else {
-                    return;
-                };
-                lfo.fade_in_tempo_sync = enabled;
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_lfo_fade_division_changed(move |slot, division| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(lfo) = state.modulation_lfo_mut(slot) else {
-                    return;
-                };
-                lfo.fade_in_division = ModTimeDivision::from_index(division);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_lfo_smoothing_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(lfo) = state.modulation_lfo_mut(slot) else {
-                    return;
-                };
-                lfo.smoothing_seconds = value.clamp(0.0, 2.0);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_lfo_pulse_width_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(lfo) = state.modulation_lfo_mut(slot) else {
-                    return;
-                };
-                lfo.pulse_width = value.clamp(0.01, 0.99);
-                state.send_channel_modulation(&window, &tx);
+                if removed {
+                    record_project_history(&commands, before, &st, &window, "Modulator removed");
+                }
             });
         }
         {
@@ -8109,182 +7912,6 @@ impl AppUi {
                     return;
                 };
                 envelope.input_channel = channel;
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_attack_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.attack_seconds = value.clamp(0.0, 16.0);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_attack_sync_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.attack_tempo_sync = value;
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_attack_division_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.attack_division = ModTimeDivision::from_index(value);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_decay_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.decay_seconds = value.clamp(0.0, 16.0);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_decay_sync_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.decay_tempo_sync = value;
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_decay_division_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.decay_division = ModTimeDivision::from_index(value);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_sustain_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.sustain = value.clamp(0.0, 1.0);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_release_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.release_seconds = value.clamp(0.0, 16.0);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_release_sync_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.release_tempo_sync = value;
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_release_division_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.release_division = ModTimeDivision::from_index(value);
-                state.send_channel_modulation(&window, &tx);
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_amount_changed(move |slot, value| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), usize::try_from(slot)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let Some(env) = state.modulation_envelope_mut(slot) else {
-                    return;
-                };
-                env.amount = value.clamp(0.0, 1.0);
                 state.send_channel_modulation(&window, &tx);
             });
         }

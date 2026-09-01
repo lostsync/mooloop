@@ -589,33 +589,13 @@ export component MainWindow inherits Window {
     // assignment mode, so inspecting an LFO never changes what a knob drag
     // means. The selected source's values and the rack capacity come from
     // Rust rather than being inferred by the shelf.
-    in property <int> modulation-selected-waveform;
-    in property <float> modulation-selected-rate;
-    in property <bool> modulation-selected-rate-tempo-sync;
-    in property <int> modulation-selected-rate-division: 7;
-    in property <float> modulation-selected-depth;
-    in property <float> modulation-selected-phase;
-    in property <bool> modulation-selected-retrigger;
-    in property <float> modulation-selected-fade-in;
-    in property <bool> modulation-selected-fade-tempo-sync;
-    in property <int> modulation-selected-fade-division: 7;
-    in property <float> modulation-selected-smoothing;
-    in property <float> modulation-selected-pulse-width: 0.5;
+    // The selected source's parameters, indexed by descriptor id; the shelf's
+    // editors are the sole consumer.
+    in property <[float]> modulation-selected-values;
     in property <float> modulation-selected-preview-fade-cycles;
     in property <float> modulation-selected-preview-smoothing-cycles;
     in property <[string]> modulation-input-channels;
     in property <int> modulation-selected-envelope-input-channel;
-    in property <float> modulation-selected-envelope-attack;
-    in property <bool> modulation-selected-envelope-attack-sync;
-    in property <int> modulation-selected-envelope-attack-division: 13;
-    in property <float> modulation-selected-envelope-decay;
-    in property <bool> modulation-selected-envelope-decay-sync;
-    in property <int> modulation-selected-envelope-decay-division: 10;
-    in property <float> modulation-selected-envelope-sustain: 0.7;
-    in property <float> modulation-selected-envelope-release;
-    in property <bool> modulation-selected-envelope-release-sync;
-    in property <int> modulation-selected-envelope-release-division: 7;
-    in property <float> modulation-selected-envelope-amount: 1;
     in property <float> modulation-selected-envelope-preview-attack;
     in property <float> modulation-selected-envelope-preview-decay;
     in property <float> modulation-selected-envelope-preview-release;
@@ -625,30 +605,11 @@ export component MainWindow inherits Window {
     callback modulation-assignment-toggled();
     callback modulation-lfo-added();
     callback modulation-envelope-added();
-    callback modulation-lfo-wave-changed(int, int);
-    callback modulation-lfo-rate-changed(int, float);
-    callback modulation-lfo-rate-sync-changed(int, bool);
-    callback modulation-lfo-rate-division-changed(int, int);
-    callback modulation-lfo-depth-changed(int, float);
-    callback modulation-lfo-phase-changed(int, float);
-    callback modulation-lfo-retrigger-changed(int, bool);
-    callback modulation-lfo-fade-in-changed(int, float);
-    callback modulation-lfo-fade-sync-changed(int, bool);
-    callback modulation-lfo-fade-division-changed(int, int);
-    callback modulation-lfo-smoothing-changed(int, float);
-    callback modulation-lfo-pulse-width-changed(int, float);
+    callback modulation-param-changed(int, int, float);
+    callback modulation-param-edit-started();
+    callback modulation-param-edit-finished();
+    callback modulation-source-removed(int);
     callback modulation-envelope-input-channel-changed(int, int);
-    callback modulation-envelope-attack-changed(int, float);
-    callback modulation-envelope-attack-sync-changed(int, bool);
-    callback modulation-envelope-attack-division-changed(int, int);
-    callback modulation-envelope-decay-changed(int, float);
-    callback modulation-envelope-decay-sync-changed(int, bool);
-    callback modulation-envelope-decay-division-changed(int, int);
-    callback modulation-envelope-sustain-changed(int, float);
-    callback modulation-envelope-release-changed(int, float);
-    callback modulation-envelope-release-sync-changed(int, bool);
-    callback modulation-envelope-release-division-changed(int, int);
-    callback modulation-envelope-amount-changed(int, float);
     callback modulation-route-polarity-changed(int, int);
     callback modulation-route-removed(int);
     // Generator and strip destinations, indexed by descriptor position the
@@ -3142,33 +3103,11 @@ export component MainWindow inherits Window {
                                             selected-slot: root.modulation-selected-slot;
                                             armed-slot: root.modulation-armed-slot;
                                             selected-kind: root.modulation-selected-kind;
-                                            selected-waveform: root.modulation-selected-waveform;
-                                            selected-rate: root.modulation-selected-rate;
-                                            selected-rate-tempo-sync: root.modulation-selected-rate-tempo-sync;
-                                            selected-rate-division: root.modulation-selected-rate-division;
-                                            selected-depth: root.modulation-selected-depth;
-                                            selected-phase: root.modulation-selected-phase;
-                                            selected-retrigger: root.modulation-selected-retrigger;
-                                            selected-fade-in: root.modulation-selected-fade-in;
-                                            selected-fade-tempo-sync: root.modulation-selected-fade-tempo-sync;
-                                            selected-fade-division: root.modulation-selected-fade-division;
-                                            selected-smoothing: root.modulation-selected-smoothing;
-                                            selected-pulse-width: root.modulation-selected-pulse-width;
+                                            selected-values: root.modulation-selected-values;
                                             selected-preview-fade-cycles: root.modulation-selected-preview-fade-cycles;
                                             selected-preview-smoothing-cycles: root.modulation-selected-preview-smoothing-cycles;
                                             input-channels: root.modulation-input-channels;
                                             selected-envelope-input-channel: root.modulation-selected-envelope-input-channel;
-                                            selected-envelope-attack: root.modulation-selected-envelope-attack;
-                                            selected-envelope-attack-sync: root.modulation-selected-envelope-attack-sync;
-                                            selected-envelope-attack-division: root.modulation-selected-envelope-attack-division;
-                                            selected-envelope-decay: root.modulation-selected-envelope-decay;
-                                            selected-envelope-decay-sync: root.modulation-selected-envelope-decay-sync;
-                                            selected-envelope-decay-division: root.modulation-selected-envelope-decay-division;
-                                            selected-envelope-sustain: root.modulation-selected-envelope-sustain;
-                                            selected-envelope-release: root.modulation-selected-envelope-release;
-                                            selected-envelope-release-sync: root.modulation-selected-envelope-release-sync;
-                                            selected-envelope-release-division: root.modulation-selected-envelope-release-division;
-                                            selected-envelope-amount: root.modulation-selected-envelope-amount;
                                             selected-envelope-preview-attack: root.modulation-selected-envelope-preview-attack;
                                             selected-envelope-preview-decay: root.modulation-selected-envelope-preview-decay;
                                             selected-envelope-preview-release: root.modulation-selected-envelope-preview-release;
@@ -3178,30 +3117,11 @@ export component MainWindow inherits Window {
                                             assignment-toggled => { root.modulation-assignment-toggled(); }
                                             lfo-added => { root.modulation-lfo-added(); }
                                             envelope-added => { root.modulation-envelope-added(); }
-                                            lfo-wave-changed(slot, value) => { root.modulation-lfo-wave-changed(slot, value); }
-                                            lfo-rate-changed(slot, value) => { root.modulation-lfo-rate-changed(slot, value); }
-                                            lfo-rate-sync-changed(slot, value) => { root.modulation-lfo-rate-sync-changed(slot, value); }
-                                            lfo-rate-division-changed(slot, value) => { root.modulation-lfo-rate-division-changed(slot, value); }
-                                            lfo-depth-changed(slot, value) => { root.modulation-lfo-depth-changed(slot, value); }
-                                            lfo-phase-changed(slot, value) => { root.modulation-lfo-phase-changed(slot, value); }
-                                            lfo-retrigger-changed(slot, value) => { root.modulation-lfo-retrigger-changed(slot, value); }
-                                            lfo-fade-in-changed(slot, value) => { root.modulation-lfo-fade-in-changed(slot, value); }
-                                            lfo-fade-sync-changed(slot, value) => { root.modulation-lfo-fade-sync-changed(slot, value); }
-                                            lfo-fade-division-changed(slot, value) => { root.modulation-lfo-fade-division-changed(slot, value); }
-                                            lfo-smoothing-changed(slot, value) => { root.modulation-lfo-smoothing-changed(slot, value); }
-                                            lfo-pulse-width-changed(slot, value) => { root.modulation-lfo-pulse-width-changed(slot, value); }
+                                            param-changed(slot, id, value) => { root.modulation-param-changed(slot, id, value); }
+                                            param-edit-started => { root.modulation-param-edit-started(); }
+                                            param-edit-finished => { root.modulation-param-edit-finished(); }
+                                            source-removed(slot) => { root.modulation-source-removed(slot); }
                                             envelope-input-channel-changed(slot, value) => { root.modulation-envelope-input-channel-changed(slot, value); }
-                                            envelope-attack-changed(slot, value) => { root.modulation-envelope-attack-changed(slot, value); }
-                                            envelope-attack-sync-changed(slot, value) => { root.modulation-envelope-attack-sync-changed(slot, value); }
-                                            envelope-attack-division-changed(slot, value) => { root.modulation-envelope-attack-division-changed(slot, value); }
-                                            envelope-decay-changed(slot, value) => { root.modulation-envelope-decay-changed(slot, value); }
-                                            envelope-decay-sync-changed(slot, value) => { root.modulation-envelope-decay-sync-changed(slot, value); }
-                                            envelope-decay-division-changed(slot, value) => { root.modulation-envelope-decay-division-changed(slot, value); }
-                                            envelope-sustain-changed(slot, value) => { root.modulation-envelope-sustain-changed(slot, value); }
-                                            envelope-release-changed(slot, value) => { root.modulation-envelope-release-changed(slot, value); }
-                                            envelope-release-sync-changed(slot, value) => { root.modulation-envelope-release-sync-changed(slot, value); }
-                                            envelope-release-division-changed(slot, value) => { root.modulation-envelope-release-division-changed(slot, value); }
-                                            envelope-amount-changed(slot, value) => { root.modulation-envelope-amount-changed(slot, value); }
                                             route-polarity-changed(index, polarity) => {
                                                 root.modulation-route-polarity-changed(index, polarity);
                                             }

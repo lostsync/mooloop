@@ -1079,6 +1079,11 @@ export component MiniKnob inherits Rectangle {
     callback modulation-depth-changed(float);
     callback modulation-edit-started();
     callback modulation-edit-finished();
+    // Base-value gesture boundaries, so a caller can coalesce one drag into
+    // one undo step. Fired only when the knob edits its own value, never in
+    // assign mode; a gesture that changes nothing is the caller's to ignore.
+    callback edit-started();
+    callback edit-finished();
 
     private property <float> pressed-normalized;
     private property <float> pressed-modulation-depth;
@@ -1160,6 +1165,7 @@ export component MiniKnob inherits Rectangle {
                     root.modulation-edited = false;
                     root.fine-drag = e.modifiers.control || e.modifiers.shift;
                     if (root.modulation-active) { root.modulation-edit-started(); }
+                    else { root.edit-started(); }
                 } else if (e.kind == PointerEventKind.move && self.pressed) {
                     if (root.modulation-active) {
                         root.set-modulation-depth(root.pressed-modulation-depth
@@ -1168,8 +1174,12 @@ export component MiniKnob inherits Rectangle {
                         root.set-normalized(root.pressed-normalized
                             + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
                     }
-                } else if (e.kind == PointerEventKind.up && root.modulation-active && root.modulation-edited) {
-                    root.modulation-edit-finished();
+                } else if (e.kind == PointerEventKind.up) {
+                    if (root.modulation-active) {
+                        if (root.modulation-edited) { root.modulation-edit-finished(); }
+                    } else {
+                        root.edit-finished();
+                    }
                 }
             }
             double-clicked => {
@@ -1179,15 +1189,22 @@ export component MiniKnob inherits Rectangle {
                     root.set-modulation-depth(0);
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {
+                    root.edit-started();
                     root.value = clamp(root.default-value, root.minimum, root.maximum);
                     root.changed(root.value);
+                    root.edit-finished();
                 }
             }
             scroll-event(e) => {
                 if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
+                else { root.edit-started(); }
                 root.set-normalized(root.normalized
                     - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
-                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+                if (root.modulation-active) {
+                    if (root.modulation-edited) { root.modulation-edit-finished(); }
+                } else {
+                    root.edit-finished();
+                }
                 accept
             }
         }
@@ -1199,15 +1216,25 @@ export component MiniKnob inherits Rectangle {
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
                 if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
+                else { root.edit-started(); }
                 root.set-normalized(root.normalized
                     + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
-                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+                if (root.modulation-active) {
+                    if (root.modulation-edited) { root.modulation-edit-finished(); }
+                } else {
+                    root.edit-finished();
+                }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
                 if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
+                else { root.edit-started(); }
                 root.set-normalized(root.normalized
                     - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
-                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+                if (root.modulation-active) {
+                    if (root.modulation-edited) { root.modulation-edit-finished(); }
+                } else {
+                    root.edit-finished();
+                }
                 accept
             } else { reject }
         }

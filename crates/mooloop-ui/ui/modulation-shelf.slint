@@ -47,6 +47,39 @@ export global ModulationShelfMetrics {
     out property <length> open-height: 120px;
 }
 
+// Descriptor ids, mirroring mooloop-core's `LFO_PARAM_*` and `ENV_PARAM_*`
+// tables. Each editor control reads `selected-values[id]` and reports edits
+// as `param-changed(slot, id, value)`; these numbers are the wire contract
+// and are never renumbered.
+global LfoParam {
+    out property <int> rate: 0;
+    out property <int> depth: 1;
+    out property <int> waveform: 2;
+    out property <int> phase: 3;
+    out property <int> tempo-sync: 4;
+    out property <int> rate-division: 5;
+    out property <int> retrigger: 6;
+    out property <int> fade-in: 7;
+    out property <int> fade-sync: 8;
+    out property <int> fade-division: 9;
+    out property <int> smoothing: 10;
+    out property <int> pulse-width: 11;
+}
+
+global EnvParam {
+    out property <int> attack: 0;
+    out property <int> attack-sync: 1;
+    out property <int> attack-division: 2;
+    out property <int> decay: 3;
+    out property <int> decay-sync: 4;
+    out property <int> decay-division: 5;
+    out property <int> sustain: 6;
+    out property <int> release: 7;
+    out property <int> release-sync: 8;
+    out property <int> release-division: 9;
+    out property <int> amount: 10;
+}
+
 // A small source-shape view gives every collapsed source a recognizable face.
 // It is parameter-derived, not telemetry, and therefore makes no promise that
 // the line is phase-synchronized with the audio thread.
@@ -266,6 +299,8 @@ component SyncMiniKnob inherits Rectangle {
     callback free-changed(float);
     callback sync-changed(bool);
     callback division-changed(int);
+    callback edit-started();
+    callback edit-finished();
 
     width: 46px;
     height: 51px;
@@ -309,6 +344,8 @@ component SyncMiniKnob inherits Rectangle {
                 root.free-changed(value);
             }
         }
+        edit-started => { root.edit-started(); }
+        edit-finished => { root.edit-finished(); }
     }
     sync-light := Rectangle {
         x: 33px;
@@ -354,33 +391,14 @@ export component ModulationShelf inherits Rectangle {
     in property <int> selected-slot: -1;
     in property <int> selected-kind: -1;
     in property <int> armed-slot: -1;
-    in property <int> selected-waveform;
-    in property <float> selected-rate;
-    in property <bool> selected-rate-tempo-sync;
-    in property <int> selected-rate-division: 7;
-    in property <float> selected-depth;
-    in property <float> selected-phase;
-    in property <bool> selected-retrigger;
-    in property <float> selected-fade-in;
-    in property <bool> selected-fade-tempo-sync;
-    in property <int> selected-fade-division: 7;
-    in property <float> selected-smoothing;
-    in property <float> selected-pulse-width: 0.5;
+    // The selected source's parameters, indexed by descriptor id (`LfoParam`
+    // / `EnvParam` per `selected-kind`). Enums and divisions travel as
+    // indices, booleans as 0/1; ids the kind lacks read 0.
+    in property <[float]> selected-values;
     in property <float> selected-preview-fade-cycles;
     in property <float> selected-preview-smoothing-cycles;
     in property <[string]> input-channels;
     in property <int> selected-envelope-input-channel;
-    in property <float> selected-envelope-attack;
-    in property <bool> selected-envelope-attack-sync;
-    in property <int> selected-envelope-attack-division: 13;
-    in property <float> selected-envelope-decay;
-    in property <bool> selected-envelope-decay-sync;
-    in property <int> selected-envelope-decay-division: 10;
-    in property <float> selected-envelope-sustain: 0.7;
-    in property <float> selected-envelope-release;
-    in property <bool> selected-envelope-release-sync;
-    in property <int> selected-envelope-release-division: 7;
-    in property <float> selected-envelope-amount: 1;
     in property <float> selected-envelope-preview-attack;
     in property <float> selected-envelope-preview-decay;
     in property <float> selected-envelope-preview-release;
@@ -392,30 +410,16 @@ export component ModulationShelf inherits Rectangle {
     callback assignment-toggled();
     callback lfo-added();
     callback envelope-added();
-    callback lfo-wave-changed(int, int);
-    callback lfo-rate-changed(int, float);
-    callback lfo-rate-sync-changed(int, bool);
-    callback lfo-rate-division-changed(int, int);
-    callback lfo-depth-changed(int, float);
-    callback lfo-phase-changed(int, float);
-    callback lfo-retrigger-changed(int, bool);
-    callback lfo-fade-in-changed(int, float);
-    callback lfo-fade-sync-changed(int, bool);
-    callback lfo-fade-division-changed(int, int);
-    callback lfo-smoothing-changed(int, float);
-    callback lfo-pulse-width-changed(int, float);
+    // One descriptor-addressed edit path: (slot, id, value). The edit-started
+    // / edit-finished pair brackets knob drags so a gesture lands as one undo
+    // step; discrete edits arrive bare and record individually.
+    callback param-changed(int, int, float);
+    callback param-edit-started();
+    callback param-edit-finished();
+    callback source-removed(int);
+    // The envelope's gate input is an input jack bound to a dynamic channel
+    // list, not a descriptor id; it keeps its dedicated verb.
     callback envelope-input-channel-changed(int, int);
-    callback envelope-attack-changed(int, float);
-    callback envelope-attack-sync-changed(int, bool);
-    callback envelope-attack-division-changed(int, int);
-    callback envelope-decay-changed(int, float);
-    callback envelope-decay-sync-changed(int, bool);
-    callback envelope-decay-division-changed(int, int);
-    callback envelope-sustain-changed(int, float);
-    callback envelope-release-changed(int, float);
-    callback envelope-release-sync-changed(int, bool);
-    callback envelope-release-division-changed(int, int);
-    callback envelope-amount-changed(int, float);
     callback route-polarity-changed(int, int);
     callback route-removed(int);
 
@@ -624,17 +628,27 @@ export component ModulationShelf inherits Rectangle {
                                 max-height: 14px;
                                 toggled(value) => { root.assignment-toggled(); }
                             }
+                            ToolButton {
+                                text: "×";
+                                tooltip: "Remove this source and its routes";
+                                min-width: 22px;
+                                max-width: 22px;
+                                min-height: 14px;
+                                max-height: 14px;
+                                text-color: Theme.text-muted;
+                                clicked => { root.source-removed(root.selected-slot); }
+                            }
                         }
                         HorizontalLayout {
                             spacing: 4px;
                             ModulatorShape {
                                 width: 68px;
                                 height: 40px;
-                                waveform: root.selected-waveform;
+                                waveform: round(root.selected-values[LfoParam.waveform]);
                                 kind: 0;
-                                amount: root.selected-depth;
-                                phase: root.selected-phase;
-                                pulse-width: root.selected-pulse-width;
+                                amount: root.selected-values[LfoParam.depth];
+                                phase: root.selected-values[LfoParam.phase];
+                                pulse-width: root.selected-values[LfoParam.pulse-width];
                                 fade-cycles: root.selected-preview-fade-cycles;
                                 smoothing-cycles: root.selected-preview-smoothing-cycles;
                                 line-color: root.assigning ? Theme.focus : Theme.accent;
@@ -648,12 +662,12 @@ export component ModulationShelf inherits Rectangle {
                                     Text { width: 30px; text: "SHAPE"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
                                     SelectorBank {
                                         options: ["SIN", "TRI", "SAW", "SQR", "RND"];
-                                        selected-index: root.selected-waveform;
+                                        selected-index: round(root.selected-values[LfoParam.waveform]);
                                         segment-width: 24px;
                                         min-height: 18px;
                                         max-height: 18px;
                                         tooltip: "LFO waveform";
-                                        selected(index) => { root.lfo-wave-changed(root.selected-slot, index); }
+                                        selected(index) => { root.param-changed(root.selected-slot, LfoParam.waveform, index); }
                                     }
                                 }
                                 HorizontalLayout {
@@ -662,43 +676,47 @@ export component ModulationShelf inherits Rectangle {
                                     Text { width: 30px; text: "RESET"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
                                     SelectorBank {
                                         options: ["FREE", "NOTE ON"];
-                                        selected-index: root.selected-retrigger ? 1 : 0;
+                                        selected-index: root.selected-values[LfoParam.retrigger] > 0.5 ? 1 : 0;
                                         segment-width: 59px;
                                         min-height: 18px;
                                         max-height: 18px;
                                         tooltip: "Input signal that restarts this LFO";
-                                        selected(index) => { root.lfo-retrigger-changed(root.selected-slot, index == 1); }
+                                        selected(index) => { root.param-changed(root.selected-slot, LfoParam.retrigger, index); }
                                     }
                                 }
                             }
                             SyncMiniKnob {
                                 label: "RATE";
-                                free-value: root.selected-rate;
+                                free-value: root.selected-values[LfoParam.rate];
                                 free-minimum: 0.05;
                                 free-maximum: 20;
                                 free-default: 1;
                                 free-scale: ValueScale.logarithmic;
-                                free-value-text: round(root.selected-rate * 10) / 10 + " Hz";
-                                synced: root.selected-rate-tempo-sync;
-                                division: root.selected-rate-division;
-                                free-changed(value) => { root.lfo-rate-changed(root.selected-slot, value); }
-                                sync-changed(value) => { root.lfo-rate-sync-changed(root.selected-slot, value); }
-                                division-changed(value) => { root.lfo-rate-division-changed(root.selected-slot, value); }
+                                free-value-text: round(root.selected-values[LfoParam.rate] * 10) / 10 + " Hz";
+                                synced: root.selected-values[LfoParam.tempo-sync] > 0.5;
+                                division: round(root.selected-values[LfoParam.rate-division]);
+                                free-changed(value) => { root.param-changed(root.selected-slot, LfoParam.rate, value); }
+                                sync-changed(value) => { root.param-changed(root.selected-slot, LfoParam.tempo-sync, value ? 1 : 0); }
+                                division-changed(value) => { root.param-changed(root.selected-slot, LfoParam.rate-division, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
                             }
                             SyncMiniKnob {
                                 label: "FADE";
-                                free-value: root.selected-fade-in;
+                                free-value: root.selected-values[LfoParam.fade-in];
                                 free-minimum: 0;
                                 free-maximum: 16;
                                 free-default: 0;
-                                free-value-text: root.selected-fade-in < 1
-                                    ? round(root.selected-fade-in * 1000) + " ms"
-                                    : round(root.selected-fade-in * 10) / 10 + " s";
-                                synced: root.selected-fade-tempo-sync;
-                                division: root.selected-fade-division;
-                                free-changed(value) => { root.lfo-fade-in-changed(root.selected-slot, value); }
-                                sync-changed(value) => { root.lfo-fade-sync-changed(root.selected-slot, value); }
-                                division-changed(value) => { root.lfo-fade-division-changed(root.selected-slot, value); }
+                                free-value-text: root.selected-values[LfoParam.fade-in] < 1
+                                    ? round(root.selected-values[LfoParam.fade-in] * 1000) + " ms"
+                                    : round(root.selected-values[LfoParam.fade-in] * 10) / 10 + " s";
+                                synced: root.selected-values[LfoParam.fade-sync] > 0.5;
+                                division: round(root.selected-values[LfoParam.fade-division]);
+                                free-changed(value) => { root.param-changed(root.selected-slot, LfoParam.fade-in, value); }
+                                sync-changed(value) => { root.param-changed(root.selected-slot, LfoParam.fade-sync, value ? 1 : 0); }
+                                division-changed(value) => { root.param-changed(root.selected-slot, LfoParam.fade-division, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
                             }
                             VerticalLayout {
                                 width: 40px;
@@ -708,13 +726,15 @@ export component ModulationShelf inherits Rectangle {
                                 Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
                                 MiniKnob {
                                     label: "LFO source amount";
-                                    value: root.selected-depth;
+                                    value: root.selected-values[LfoParam.depth];
                                     default-value: 1;
-                                    value-text: round(root.selected-depth * 100) + "%";
+                                    value-text: round(root.selected-values[LfoParam.depth] * 100) + "%";
                                     diameter: 20px;
-                                    changed(value) => { root.lfo-depth-changed(root.selected-slot, value); }
+                                    changed(value) => { root.param-changed(root.selected-slot, LfoParam.depth, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
                                 }
-                                Text { height: 8px; text: round(root.selected-depth * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                                Text { height: 8px; text: round(root.selected-values[LfoParam.depth] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                             }
                             VerticalLayout {
                                 width: 40px;
@@ -724,13 +744,15 @@ export component ModulationShelf inherits Rectangle {
                                 Text { height: 8px; text: "PHASE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
                                 MiniKnob {
                                     label: "LFO reset phase";
-                                    value: root.selected-phase;
+                                    value: root.selected-values[LfoParam.phase];
                                     default-value: 0;
-                                    value-text: round(root.selected-phase * 360) + "\u{b0}";
+                                    value-text: round(root.selected-values[LfoParam.phase] * 360) + "\u{b0}";
                                     diameter: 20px;
-                                    changed(value) => { root.lfo-phase-changed(root.selected-slot, value); }
+                                    changed(value) => { root.param-changed(root.selected-slot, LfoParam.phase, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
                                 }
-                                Text { height: 8px; text: round(root.selected-phase * 360) + "\u{b0}"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                                Text { height: 8px; text: round(root.selected-values[LfoParam.phase] * 360) + "\u{b0}"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                             }
                             VerticalLayout {
                                 width: 40px;
@@ -740,35 +762,39 @@ export component ModulationShelf inherits Rectangle {
                                 Text { height: 8px; text: "SMOOTH"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
                                 MiniKnob {
                                     label: "LFO smoothing";
-                                    value: root.selected-smoothing;
+                                    value: root.selected-values[LfoParam.smoothing];
                                     minimum: 0;
                                     maximum: 2;
                                     default-value: 0;
-                                    value-text: root.selected-smoothing <= 0.0001 ? "OFF"
-                                        : round(root.selected-smoothing * 1000) + " ms";
+                                    value-text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF"
+                                        : round(root.selected-values[LfoParam.smoothing] * 1000) + " ms";
                                     diameter: 20px;
-                                    changed(value) => { root.lfo-smoothing-changed(root.selected-slot, value); }
+                                    changed(value) => { root.param-changed(root.selected-slot, LfoParam.smoothing, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
                                 }
-                                Text { height: 8px; text: root.selected-smoothing <= 0.0001 ? "OFF" : round(root.selected-smoothing * 1000) + "ms"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                                Text { height: 8px; text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF" : round(root.selected-values[LfoParam.smoothing] * 1000) + "ms"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                             }
                             VerticalLayout {
                                 width: 40px;
                                 height: 51px;
                                 spacing: 1px;
                                 alignment: center;
-                                Text { height: 8px; text: "P WIDTH"; color: root.selected-waveform == 3 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                                Text { height: 8px; text: "P WIDTH"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
                                 MiniKnob {
                                     label: "Square pulse width";
-                                    value: root.selected-pulse-width;
+                                    value: root.selected-values[LfoParam.pulse-width];
                                     minimum: 0.01;
                                     maximum: 0.99;
                                     default-value: 0.5;
-                                    enabled: root.selected-waveform == 3;
-                                    value-text: round(root.selected-pulse-width * 100) + "%";
+                                    enabled: round(root.selected-values[LfoParam.waveform]) == 3;
+                                    value-text: round(root.selected-values[LfoParam.pulse-width] * 100) + "%";
                                     diameter: 20px;
-                                    changed(value) => { root.lfo-pulse-width-changed(root.selected-slot, value); }
+                                    changed(value) => { root.param-changed(root.selected-slot, LfoParam.pulse-width, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
                                 }
-                                Text { height: 8px; text: round(root.selected-pulse-width * 100) + "%"; color: root.selected-waveform == 3 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                                Text { height: 8px; text: round(root.selected-values[LfoParam.pulse-width] * 100) + "%"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
                             }
                             Rectangle { horizontal-stretch: 1; }
                         }
@@ -788,6 +814,16 @@ export component ModulationShelf inherits Rectangle {
                                 min-width: 76px; max-width: 76px; min-height: 14px; max-height: 14px;
                                 toggled(value) => { root.assignment-toggled(); }
                             }
+                            ToolButton {
+                                text: "×";
+                                tooltip: "Remove this source and its routes";
+                                min-width: 22px;
+                                max-width: 22px;
+                                min-height: 14px;
+                                max-height: 14px;
+                                text-color: Theme.text-muted;
+                                clicked => { root.source-removed(root.selected-slot); }
+                            }
                         }
                         HorizontalLayout {
                             spacing: 4px;
@@ -796,10 +832,10 @@ export component ModulationShelf inherits Rectangle {
                                 height: 40px;
                                 kind: 1;
                                 waveform: 0;
-                                amount: root.selected-envelope-amount;
+                                amount: root.selected-values[EnvParam.amount];
                                 attack: root.selected-envelope-preview-attack;
                                 decay: root.selected-envelope-preview-decay;
-                                sustain: root.selected-envelope-sustain;
+                                sustain: root.selected-values[EnvParam.sustain];
                                 release: root.selected-envelope-preview-release;
                                 line-color: root.assigning ? Theme.focus : Theme.accent;
                             }
@@ -816,40 +852,67 @@ export component ModulationShelf inherits Rectangle {
                                 Text { height: 9px; text: "CHANNEL NOTE GATE"; color: Theme.text-faint; font-size: 6px; }
                             }
                             SyncMiniKnob {
-                                label: "ATTACK"; free-value: root.selected-envelope-attack; free-minimum: 0; free-maximum: 16; free-default: 0.01;
-                                free-value-text: root.selected-envelope-attack < 1 ? round(root.selected-envelope-attack * 1000) + " ms" : round(root.selected-envelope-attack * 10) / 10 + " s";
-                                synced: root.selected-envelope-attack-sync; division: root.selected-envelope-attack-division;
-                                free-changed(value) => { root.envelope-attack-changed(root.selected-slot, value); }
-                                sync-changed(value) => { root.envelope-attack-sync-changed(root.selected-slot, value); }
-                                division-changed(value) => { root.envelope-attack-division-changed(root.selected-slot, value); }
+                                label: "ATTACK"; free-value: root.selected-values[EnvParam.attack]; free-minimum: 0; free-maximum: 16; free-default: 0.01;
+                                free-value-text: root.selected-values[EnvParam.attack] < 1 ? round(root.selected-values[EnvParam.attack] * 1000) + " ms" : round(root.selected-values[EnvParam.attack] * 10) / 10 + " s";
+                                synced: root.selected-values[EnvParam.attack-sync] > 0.5;
+                                division: round(root.selected-values[EnvParam.attack-division]);
+                                free-changed(value) => { root.param-changed(root.selected-slot, EnvParam.attack, value); }
+                                sync-changed(value) => { root.param-changed(root.selected-slot, EnvParam.attack-sync, value ? 1 : 0); }
+                                division-changed(value) => { root.param-changed(root.selected-slot, EnvParam.attack-division, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
                             }
                             SyncMiniKnob {
-                                label: "DECAY"; free-value: root.selected-envelope-decay; free-minimum: 0; free-maximum: 16; free-default: 0.2;
-                                free-value-text: root.selected-envelope-decay < 1 ? round(root.selected-envelope-decay * 1000) + " ms" : round(root.selected-envelope-decay * 10) / 10 + " s";
-                                synced: root.selected-envelope-decay-sync; division: root.selected-envelope-decay-division;
-                                free-changed(value) => { root.envelope-decay-changed(root.selected-slot, value); }
-                                sync-changed(value) => { root.envelope-decay-sync-changed(root.selected-slot, value); }
-                                division-changed(value) => { root.envelope-decay-division-changed(root.selected-slot, value); }
+                                label: "DECAY"; free-value: root.selected-values[EnvParam.decay]; free-minimum: 0; free-maximum: 16; free-default: 0.2;
+                                free-value-text: root.selected-values[EnvParam.decay] < 1 ? round(root.selected-values[EnvParam.decay] * 1000) + " ms" : round(root.selected-values[EnvParam.decay] * 10) / 10 + " s";
+                                synced: root.selected-values[EnvParam.decay-sync] > 0.5;
+                                division: round(root.selected-values[EnvParam.decay-division]);
+                                free-changed(value) => { root.param-changed(root.selected-slot, EnvParam.decay, value); }
+                                sync-changed(value) => { root.param-changed(root.selected-slot, EnvParam.decay-sync, value ? 1 : 0); }
+                                division-changed(value) => { root.param-changed(root.selected-slot, EnvParam.decay-division, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
                             }
                             VerticalLayout {
                                 width: 40px; height: 51px; spacing: 1px; alignment: center;
                                 Text { height: 8px; text: "SUSTAIN"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob { label: "Envelope sustain"; value: root.selected-envelope-sustain; default-value: 0.7; value-text: round(root.selected-envelope-sustain * 100) + "%"; diameter: 20px; changed(value) => { root.envelope-sustain-changed(root.selected-slot, value); } }
-                                Text { height: 8px; text: round(root.selected-envelope-sustain * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Envelope sustain";
+                                    value: root.selected-values[EnvParam.sustain];
+                                    default-value: 0.7;
+                                    value-text: round(root.selected-values[EnvParam.sustain] * 100) + "%";
+                                    diameter: 20px;
+                                    changed(value) => { root.param-changed(root.selected-slot, EnvParam.sustain, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: round(root.selected-values[EnvParam.sustain] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                             }
                             SyncMiniKnob {
-                                label: "RELEASE"; free-value: root.selected-envelope-release; free-minimum: 0; free-maximum: 16; free-default: 0.4;
-                                free-value-text: root.selected-envelope-release < 1 ? round(root.selected-envelope-release * 1000) + " ms" : round(root.selected-envelope-release * 10) / 10 + " s";
-                                synced: root.selected-envelope-release-sync; division: root.selected-envelope-release-division;
-                                free-changed(value) => { root.envelope-release-changed(root.selected-slot, value); }
-                                sync-changed(value) => { root.envelope-release-sync-changed(root.selected-slot, value); }
-                                division-changed(value) => { root.envelope-release-division-changed(root.selected-slot, value); }
+                                label: "RELEASE"; free-value: root.selected-values[EnvParam.release]; free-minimum: 0; free-maximum: 16; free-default: 0.4;
+                                free-value-text: root.selected-values[EnvParam.release] < 1 ? round(root.selected-values[EnvParam.release] * 1000) + " ms" : round(root.selected-values[EnvParam.release] * 10) / 10 + " s";
+                                synced: root.selected-values[EnvParam.release-sync] > 0.5;
+                                division: round(root.selected-values[EnvParam.release-division]);
+                                free-changed(value) => { root.param-changed(root.selected-slot, EnvParam.release, value); }
+                                sync-changed(value) => { root.param-changed(root.selected-slot, EnvParam.release-sync, value ? 1 : 0); }
+                                division-changed(value) => { root.param-changed(root.selected-slot, EnvParam.release-division, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
                             }
                             VerticalLayout {
                                 width: 40px; height: 51px; spacing: 1px; alignment: center;
                                 Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
-                                MiniKnob { label: "Envelope amount"; value: root.selected-envelope-amount; default-value: 1; value-text: round(root.selected-envelope-amount * 100) + "%"; diameter: 20px; changed(value) => { root.envelope-amount-changed(root.selected-slot, value); } }
-                                Text { height: 8px; text: round(root.selected-envelope-amount * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Envelope amount";
+                                    value: root.selected-values[EnvParam.amount];
+                                    default-value: 1;
+                                    value-text: round(root.selected-values[EnvParam.amount] * 100) + "%";
+                                    diameter: 20px;
+                                    changed(value) => { root.param-changed(root.selected-slot, EnvParam.amount, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: round(root.selected-values[EnvParam.amount] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                             }
                             Rectangle { horizontal-stretch: 1; }
                         }

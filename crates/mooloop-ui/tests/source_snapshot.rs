@@ -318,24 +318,19 @@ fn render_sampler_source_editor() {
             .into(),
     );
     ui.set_modulation_selected_envelope_input_channel(0);
-    ui.set_modulation_selected_envelope_attack(0.015);
-    ui.set_modulation_selected_envelope_decay(0.18);
-    ui.set_modulation_selected_envelope_decay_sync(true);
-    ui.set_modulation_selected_envelope_decay_division(10);
-    ui.set_modulation_selected_envelope_sustain(0.62);
-    ui.set_modulation_selected_envelope_release(0.38);
-    ui.set_modulation_selected_envelope_amount(1.0);
+    // Descriptor-id indexed (ENV_PARAM_*): attack, attack sync, attack
+    // division, decay, decay sync, decay division, sustain, release, release
+    // sync, release division, amount.
+    ui.set_modulation_selected_values(
+        vec![
+            0.015f32, 0.0, 13.0, 0.18, 1.0, 10.0, 0.62, 0.38, 0.0, 7.0, 1.0,
+        ]
+        .as_slice()
+        .into(),
+    );
     ui.set_modulation_selected_envelope_preview_attack(0.015);
     ui.set_modulation_selected_envelope_preview_decay(0.25);
     ui.set_modulation_selected_envelope_preview_release(0.38);
-    ui.set_modulation_selected_waveform(3);
-    ui.set_modulation_selected_rate(2.0);
-    ui.set_modulation_selected_rate_tempo_sync(true);
-    ui.set_modulation_selected_rate_division(13);
-    ui.set_modulation_selected_depth(1.0);
-    ui.set_modulation_selected_fade_in(0.75);
-    ui.set_modulation_selected_smoothing(0.08);
-    ui.set_modulation_selected_pulse_width(0.3);
     ui.set_modulation_selected_preview_fade_cycles(0.5);
     ui.set_modulation_selected_preview_smoothing_cycles(0.16);
     // Descriptor-id indexed, so the sampler's cutoff overlay sits at 12.
@@ -369,16 +364,26 @@ fn render_sampler_source_editor() {
     // and pulse width instead of retaining the last generic oscillator glyph.
     ui.set_modulation_selected_slot(0);
     ui.set_modulation_selected_kind(0);
-    ui.set_modulation_selected_waveform(2);
-    ui.set_modulation_selected_phase(0.0);
-    ui.set_modulation_selected_depth(1.0);
+    // Descriptor-id indexed (LFO_PARAM_*): rate, depth, waveform, phase,
+    // tempo sync, rate division, retrigger, fade in, fade sync, fade
+    // division, smoothing, pulse width.
+    ui.set_modulation_selected_values(
+        vec![
+            2.0f32, 1.0, 2.0, 0.0, 1.0, 13.0, 0.0, 0.75, 0.0, 7.0, 0.08, 0.3,
+        ]
+        .as_slice()
+        .into(),
+    );
     ui.set_modulation_selected_preview_fade_cycles(0.0);
     ui.set_modulation_selected_preview_smoothing_cycles(0.0);
     let saw_face = ui.window().take_snapshot().unwrap();
-    ui.set_modulation_selected_waveform(3);
-    ui.set_modulation_selected_phase(0.2);
-    ui.set_modulation_selected_depth(0.55);
-    ui.set_modulation_selected_pulse_width(0.2);
+    ui.set_modulation_selected_values(
+        vec![
+            2.0f32, 0.55, 3.0, 0.2, 1.0, 13.0, 0.0, 0.75, 0.0, 7.0, 0.08, 0.2,
+        ]
+        .as_slice()
+        .into(),
+    );
     ui.set_modulation_selected_preview_fade_cycles(0.75);
     ui.set_modulation_selected_preview_smoothing_cycles(0.2);
     let shaped_lfo = ui.window().take_snapshot().unwrap();
@@ -387,6 +392,13 @@ fn render_sampler_source_editor() {
 
     ui.set_modulation_selected_slot(1);
     ui.set_modulation_selected_kind(1);
+    ui.set_modulation_selected_values(
+        vec![
+            0.015f32, 0.0, 13.0, 0.18, 1.0, 10.0, 0.62, 0.38, 0.0, 7.0, 1.0,
+        ]
+        .as_slice()
+        .into(),
+    );
     ui.set_modulation_selected_envelope_preview_attack(0.015);
 
     // Out of assign mode the same knobs must read differently: the value arc
