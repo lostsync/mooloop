@@ -114,6 +114,30 @@ pub enum ModLfoWaveform {
     Random,
 }
 
+impl ModLfoWaveform {
+    pub const ALL: [Self; 5] = [
+        Self::Sine,
+        Self::Triangle,
+        Self::Saw,
+        Self::Square,
+        Self::Random,
+    ];
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|waveform| *waveform == self)
+            .unwrap_or_default() as i32
+    }
+}
+
 /// A transport-relative duration, ordered from the slowest useful LFO cycle
 /// to a 64th-note triplet. The same vocabulary drives both synced rate and
 /// synced fade-in, so their knobs never invent subtly different timing grids.
@@ -220,11 +244,189 @@ impl ModTimeDivision {
 }
 
 /// A modulator's own parameters. Modulators are addressable like any other
-/// device, so these have descriptor ids too.
+/// device: each kind publishes a `ParamDescriptor` table under these ids and
+/// answers `ModulatorParams::get`/`set`, exactly as effects do. The first
+/// four ids shipped before the table existed and must keep their numbers.
 pub const LFO_PARAM_RATE_HZ: u32 = 0;
 pub const LFO_PARAM_DEPTH: u32 = 1;
 pub const LFO_PARAM_WAVEFORM: u32 = 2;
 pub const LFO_PARAM_PHASE: u32 = 3;
+pub const LFO_PARAM_TEMPO_SYNC: u32 = 4;
+pub const LFO_PARAM_RATE_DIVISION: u32 = 5;
+pub const LFO_PARAM_RETRIGGER: u32 = 6;
+pub const LFO_PARAM_FADE_IN_S: u32 = 7;
+pub const LFO_PARAM_FADE_IN_SYNC: u32 = 8;
+pub const LFO_PARAM_FADE_IN_DIVISION: u32 = 9;
+pub const LFO_PARAM_SMOOTHING_S: u32 = 10;
+pub const LFO_PARAM_PULSE_WIDTH: u32 = 11;
+
+/// The envelope's gate input channel is deliberately absent: it is an input
+/// jack bound through a dynamic channel list, not a knob over a static
+/// range, and it keeps its dedicated verb.
+pub const ENV_PARAM_ATTACK_S: u32 = 0;
+pub const ENV_PARAM_ATTACK_SYNC: u32 = 1;
+pub const ENV_PARAM_ATTACK_DIVISION: u32 = 2;
+pub const ENV_PARAM_DECAY_S: u32 = 3;
+pub const ENV_PARAM_DECAY_SYNC: u32 = 4;
+pub const ENV_PARAM_DECAY_DIVISION: u32 = 5;
+pub const ENV_PARAM_SUSTAIN: u32 = 6;
+pub const ENV_PARAM_RELEASE_S: u32 = 7;
+pub const ENV_PARAM_RELEASE_SYNC: u32 = 8;
+pub const ENV_PARAM_RELEASE_DIVISION: u32 = 9;
+pub const ENV_PARAM_AMOUNT: u32 = 10;
+
+/// A boolean as a descriptor: two positions, off by default.
+const fn toggle(id: u32, name: &'static str) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Stepped(2),
+        default: 0.0,
+    }
+}
+
+/// A `ModTimeDivision` as a descriptor: the shared 21-entry musical grid,
+/// carried as its `ALL` index.
+const fn division(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "",
+        min: 0.0,
+        max: (ModTimeDivision::ALL.len() - 1) as f32,
+        curve: ParamCurve::Stepped(ModTimeDivision::ALL.len() as u8),
+        default,
+    }
+}
+
+/// Ranges mirror the shipped shelf knobs; the table is now where they live.
+pub const LFO_DESCRIPTORS: [ParamDescriptor; 12] = [
+    ParamDescriptor {
+        id: LFO_PARAM_RATE_HZ,
+        name: "Rate",
+        unit: "Hz",
+        min: 0.05,
+        max: 20.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: LFO_PARAM_DEPTH,
+        name: "Amount",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: LFO_PARAM_WAVEFORM,
+        name: "Waveform",
+        unit: "",
+        min: 0.0,
+        max: (ModLfoWaveform::ALL.len() - 1) as f32,
+        curve: ParamCurve::Stepped(ModLfoWaveform::ALL.len() as u8),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: LFO_PARAM_PHASE,
+        name: "Phase",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    toggle(LFO_PARAM_TEMPO_SYNC, "Rate sync"),
+    division(LFO_PARAM_RATE_DIVISION, "Rate division", 7.0),
+    toggle(LFO_PARAM_RETRIGGER, "Retrigger"),
+    ParamDescriptor {
+        id: LFO_PARAM_FADE_IN_S,
+        name: "Fade in",
+        unit: "s",
+        min: 0.0,
+        max: 16.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    toggle(LFO_PARAM_FADE_IN_SYNC, "Fade sync"),
+    division(LFO_PARAM_FADE_IN_DIVISION, "Fade division", 7.0),
+    ParamDescriptor {
+        id: LFO_PARAM_SMOOTHING_S,
+        name: "Smooth",
+        unit: "s",
+        min: 0.0,
+        max: 2.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: LFO_PARAM_PULSE_WIDTH,
+        name: "Pulse width",
+        unit: "",
+        min: 0.01,
+        max: 0.99,
+        curve: ParamCurve::Linear,
+        default: 0.5,
+    },
+];
+
+pub const ENVELOPE_DESCRIPTORS: [ParamDescriptor; 11] = [
+    ParamDescriptor {
+        id: ENV_PARAM_ATTACK_S,
+        name: "Attack",
+        unit: "s",
+        min: 0.0,
+        max: 16.0,
+        curve: ParamCurve::Linear,
+        default: 0.01,
+    },
+    toggle(ENV_PARAM_ATTACK_SYNC, "Attack sync"),
+    division(ENV_PARAM_ATTACK_DIVISION, "Attack division", 13.0),
+    ParamDescriptor {
+        id: ENV_PARAM_DECAY_S,
+        name: "Decay",
+        unit: "s",
+        min: 0.0,
+        max: 16.0,
+        curve: ParamCurve::Linear,
+        default: 0.2,
+    },
+    toggle(ENV_PARAM_DECAY_SYNC, "Decay sync"),
+    division(ENV_PARAM_DECAY_DIVISION, "Decay division", 10.0),
+    ParamDescriptor {
+        id: ENV_PARAM_SUSTAIN,
+        name: "Sustain",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.7,
+    },
+    ParamDescriptor {
+        id: ENV_PARAM_RELEASE_S,
+        name: "Release",
+        unit: "s",
+        min: 0.0,
+        max: 16.0,
+        curve: ParamCurve::Linear,
+        default: 0.4,
+    },
+    toggle(ENV_PARAM_RELEASE_SYNC, "Release sync"),
+    division(ENV_PARAM_RELEASE_DIVISION, "Release division", 7.0),
+    ParamDescriptor {
+        id: ENV_PARAM_AMOUNT,
+        name: "Amount",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -328,6 +530,88 @@ impl ModulatorParams {
             Self::Envelope(_) => ModulatorKind::Envelope,
         }
     }
+
+    /// One parameter as its wire value: enums as their index, booleans as
+    /// 0/1, everything else natural. Mirrors `EffectParams::get`.
+    pub fn get(&self, id: u32) -> Option<f32> {
+        match self {
+            Self::Lfo(p) => Some(match id {
+                LFO_PARAM_RATE_HZ => p.rate_hz,
+                LFO_PARAM_DEPTH => p.depth,
+                LFO_PARAM_WAVEFORM => p.waveform.to_index() as f32,
+                LFO_PARAM_PHASE => p.phase,
+                LFO_PARAM_TEMPO_SYNC => f32::from(p.tempo_sync),
+                LFO_PARAM_RATE_DIVISION => p.rate_division.to_index() as f32,
+                LFO_PARAM_RETRIGGER => f32::from(p.retrigger),
+                LFO_PARAM_FADE_IN_S => p.fade_in_seconds,
+                LFO_PARAM_FADE_IN_SYNC => f32::from(p.fade_in_tempo_sync),
+                LFO_PARAM_FADE_IN_DIVISION => p.fade_in_division.to_index() as f32,
+                LFO_PARAM_SMOOTHING_S => p.smoothing_seconds,
+                LFO_PARAM_PULSE_WIDTH => p.pulse_width,
+                _ => return None,
+            }),
+            Self::Envelope(p) => Some(match id {
+                ENV_PARAM_ATTACK_S => p.attack_seconds,
+                ENV_PARAM_ATTACK_SYNC => f32::from(p.attack_tempo_sync),
+                ENV_PARAM_ATTACK_DIVISION => p.attack_division.to_index() as f32,
+                ENV_PARAM_DECAY_S => p.decay_seconds,
+                ENV_PARAM_DECAY_SYNC => f32::from(p.decay_tempo_sync),
+                ENV_PARAM_DECAY_DIVISION => p.decay_division.to_index() as f32,
+                ENV_PARAM_SUSTAIN => p.sustain,
+                ENV_PARAM_RELEASE_S => p.release_seconds,
+                ENV_PARAM_RELEASE_SYNC => f32::from(p.release_tempo_sync),
+                ENV_PARAM_RELEASE_DIVISION => p.release_division.to_index() as f32,
+                ENV_PARAM_AMOUNT => p.amount,
+                _ => return None,
+            }),
+        }
+    }
+
+    /// Write one parameter by wire id, clamped through its descriptor.
+    /// Unknown ids are ignored, matching the effects' tolerance for stale
+    /// automation. The gate input channel is a jack, not an id here.
+    pub fn set(&mut self, id: u32, value: f32) {
+        let Some(descriptor) = self.kind().descriptor(id) else {
+            return;
+        };
+        let value = descriptor.clamp_natural(value);
+        let index = value.round() as i32;
+        match self {
+            Self::Lfo(p) => match id {
+                LFO_PARAM_RATE_HZ => p.rate_hz = value,
+                LFO_PARAM_DEPTH => p.depth = value,
+                LFO_PARAM_WAVEFORM => p.waveform = ModLfoWaveform::from_index(index),
+                LFO_PARAM_PHASE => p.phase = value,
+                LFO_PARAM_TEMPO_SYNC => p.tempo_sync = index != 0,
+                LFO_PARAM_RATE_DIVISION => p.rate_division = ModTimeDivision::from_index(index),
+                LFO_PARAM_RETRIGGER => p.retrigger = index != 0,
+                LFO_PARAM_FADE_IN_S => p.fade_in_seconds = value,
+                LFO_PARAM_FADE_IN_SYNC => p.fade_in_tempo_sync = index != 0,
+                LFO_PARAM_FADE_IN_DIVISION => {
+                    p.fade_in_division = ModTimeDivision::from_index(index)
+                }
+                LFO_PARAM_SMOOTHING_S => p.smoothing_seconds = value,
+                LFO_PARAM_PULSE_WIDTH => p.pulse_width = value,
+                _ => {}
+            },
+            Self::Envelope(p) => match id {
+                ENV_PARAM_ATTACK_S => p.attack_seconds = value,
+                ENV_PARAM_ATTACK_SYNC => p.attack_tempo_sync = index != 0,
+                ENV_PARAM_ATTACK_DIVISION => p.attack_division = ModTimeDivision::from_index(index),
+                ENV_PARAM_DECAY_S => p.decay_seconds = value,
+                ENV_PARAM_DECAY_SYNC => p.decay_tempo_sync = index != 0,
+                ENV_PARAM_DECAY_DIVISION => p.decay_division = ModTimeDivision::from_index(index),
+                ENV_PARAM_SUSTAIN => p.sustain = value,
+                ENV_PARAM_RELEASE_S => p.release_seconds = value,
+                ENV_PARAM_RELEASE_SYNC => p.release_tempo_sync = index != 0,
+                ENV_PARAM_RELEASE_DIVISION => {
+                    p.release_division = ModTimeDivision::from_index(index)
+                }
+                ENV_PARAM_AMOUNT => p.amount = value,
+                _ => {}
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -352,6 +636,19 @@ impl ModulatorKind {
             Self::Lfo => ModulatorParams::Lfo(ModLfoParams::default()),
             Self::Envelope => ModulatorParams::Envelope(ModEnvelopeParams::default()),
         }
+    }
+
+    /// The kind's full parameter table, mirroring `EffectKind::descriptors`.
+    pub fn descriptors(self) -> &'static [ParamDescriptor] {
+        match self {
+            Self::Lfo => &LFO_DESCRIPTORS,
+            Self::Envelope => &ENVELOPE_DESCRIPTORS,
+        }
+    }
+
+    /// Look one parameter up by its wire id.
+    pub fn descriptor(self, id: u32) -> Option<&'static ParamDescriptor> {
+        self.descriptors().iter().find(|d| d.id == id)
     }
 }
 
@@ -779,5 +1076,84 @@ retrigger = true
         assert!(text.contains("slot = 2"));
         assert!(!text.contains("null"));
         assert_eq!(toml::from_str::<ModRack>(&text).unwrap(), rack);
+    }
+
+    /// Every modulator kind's table has unique ids, and a default params
+    /// struct reads back exactly the descriptor defaults — the two sources
+    /// of "default" can never drift apart unnoticed.
+    #[test]
+    fn modulator_descriptor_defaults_match_default_params() {
+        for kind in ModulatorKind::ALL {
+            let params = kind.default_params();
+            let descriptors = kind.descriptors();
+            for (index, descriptor) in descriptors.iter().enumerate() {
+                assert!(
+                    descriptors[..index].iter().all(|d| d.id != descriptor.id),
+                    "{kind:?} repeats id {}",
+                    descriptor.id
+                );
+                assert_eq!(
+                    params.get(descriptor.id),
+                    Some(descriptor.default),
+                    "{kind:?} id {} default",
+                    descriptor.id
+                );
+            }
+        }
+    }
+
+    /// `set(id, get(id))` is identity across every table, and a written
+    /// value survives the wire round trip. This is the contract the whole
+    /// generic editor stands on.
+    #[test]
+    fn modulator_params_round_trip_by_id() {
+        for kind in ModulatorKind::ALL {
+            let mut params = kind.default_params();
+            for descriptor in kind.descriptors() {
+                let before = params;
+                params.set(descriptor.id, params.get(descriptor.id).unwrap());
+                assert_eq!(params, before, "{kind:?} id {} identity", descriptor.id);
+
+                // A mid-range write reads back as written (snapped when
+                // stepped, which get/set both express in index space).
+                let target = descriptor.clamp_natural(descriptor.min * 0.25 + descriptor.max * 0.75);
+                params.set(descriptor.id, target);
+                assert_eq!(
+                    params.get(descriptor.id),
+                    Some(target),
+                    "{kind:?} id {} write",
+                    descriptor.id
+                );
+            }
+        }
+    }
+
+    /// Wire values decode into the typed fields: enum indices land on the
+    /// enum, booleans on the flag, and out-of-range writes clamp through
+    /// the descriptor instead of poisoning the struct.
+    #[test]
+    fn modulator_set_decodes_enums_and_clamps() {
+        let mut params = ModulatorParams::Lfo(ModLfoParams::default());
+        params.set(LFO_PARAM_WAVEFORM, 3.0);
+        params.set(LFO_PARAM_TEMPO_SYNC, 1.0);
+        params.set(LFO_PARAM_RATE_DIVISION, ModTimeDivision::Eighth.to_index() as f32);
+        params.set(LFO_PARAM_RATE_HZ, 999.0);
+        params.set(LFO_PARAM_PULSE_WIDTH, -4.0);
+        let ModulatorParams::Lfo(lfo) = params else {
+            unreachable!()
+        };
+        assert_eq!(lfo.waveform, ModLfoWaveform::Square);
+        assert!(lfo.tempo_sync);
+        assert_eq!(lfo.rate_division, ModTimeDivision::Eighth);
+        assert_eq!(lfo.rate_hz, 20.0);
+        assert_eq!(lfo.pulse_width, 0.01);
+
+        // Unknown ids are ignored, and one kind's ids do not bleed into
+        // another kind's fields.
+        let mut envelope = ModulatorParams::Envelope(ModEnvelopeParams::default());
+        let before = envelope;
+        envelope.set(9_999, 1.0);
+        assert_eq!(envelope, before);
+        assert_eq!(envelope.get(9_999), None);
     }
 }
