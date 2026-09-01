@@ -1,6 +1,15 @@
 # Modulator modules plan status
 
-Not started. Adam pulled this in explicitly on 2026-08-31: the modulation
+Step 01 landed on `refactor/modulator-modules` (2026-08-31): descriptor
+tables and `get`/`set` by wire id for both modulator kinds, the shelf
+collapsed onto one `param-changed` verb (net −351 lines), param edits
+undo, and sources can be removed. The envelope's gate input stayed a
+dedicated jack verb by design. The mono/poly device-LFO surface is a
+separate legacy surface that would benefit from the same collapse later;
+it is not part of this plan. Steps 02 and 03 are not started, and each
+starts from a fresh worktree off `main` once the previous step merges.
+
+Adam pulled this in explicitly on 2026-08-31: the modulation
 rack becomes the power plant of the app — a grid of small modules, each a
 discrete control-signal device, pluggable across the app the way the mod rack
 already gestures at. `NODE_MODEL.md` records the wider conversation; this
