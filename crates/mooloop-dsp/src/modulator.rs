@@ -6,8 +6,9 @@
 //! buys nothing at these rates (`docs/MODULATION_PLAN.md`).
 
 use mooloop_core::{
-    ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModulatorParams, MAX_CHANNELS,
-    MAX_MODULATORS_PER_CHANNEL,
+    ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModRandomParams,
+    ModRandomTrigger, ModStepParams, ModStepTrigger, ModulatorParams, MAX_CHANNELS,
+    MAX_MODULATORS_PER_CHANNEL, MOD_STEP_MAX_STEPS,
 };
 
 /// Frames between modulation updates. The plan allows 32 or 64; 32 keeps a
@@ -270,10 +271,287 @@ impl Envelope {
     }
 }
 
+/// A clocked pattern of control values. The step array is always sixteen
+/// wide and `length` decides how much of it plays, so shortening a pattern
+/// while it runs never loses the tail.
+#[derive(Debug, Clone, Copy)]
+struct StepSequencer {
+    params: ModStepParams,
+    step: usize,
+    /// Seconds into the current step. Glide reads it even in note-advance
+    /// mode, where nothing else does.
+    elapsed: f32,
+    /// Output at the moment the current step began, so a glide slides from
+    /// wherever the last one actually got to.
+    from: f32,
+    output: f32,
+}
+
+impl StepSequencer {
+    fn new(params: ModStepParams) -> Self {
+        let mut sequencer = Self {
+            params,
+            step: 0,
+            elapsed: 0.0,
+            from: 0.0,
+            output: 0.0,
+        };
+        sequencer.output = sequencer.target();
+        sequencer.from = sequencer.output;
+        sequencer
+    }
+
+    fn length(&self) -> usize {
+        (self.params.length as usize).clamp(1, MOD_STEP_MAX_STEPS)
+    }
+
+    fn target(&self) -> f32 {
+        self.params
+            .steps
+            .get(self.step)
+            .copied()
+            .unwrap_or(0.0)
+            .clamp(-1.0, 1.0)
+    }
+
+    fn step_seconds(&self, bpm: f64) -> f32 {
+        self.params.division.seconds(bpm).max(f32::EPSILON)
+    }
+
+    fn value(&mut self, bpm: f64) -> f32 {
+        let target = self.target();
+        let glide_seconds = self.params.glide.clamp(0.0, 1.0) * self.step_seconds(bpm);
+        self.output = if glide_seconds <= f32::EPSILON {
+            target
+        } else {
+            let travelled = (self.elapsed / glide_seconds).clamp(0.0, 1.0);
+            self.from + (target - self.from) * travelled
+        };
+        self.output
+    }
+
+    /// Move to the next step, sliding from wherever the output currently is
+    /// rather than from the step that just ended.
+    fn advance_step(&mut self) {
+        self.from = self.output;
+        self.elapsed = 0.0;
+        let length = self.length();
+        self.step = if self.step + 1 >= length {
+            0
+        } else {
+            self.step + 1
+        };
+    }
+
+    fn advance(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
+        self.elapsed += frames as f32 / sample_rate.max(1) as f32;
+        if self.params.trigger != ModStepTrigger::Clock {
+            return;
+        }
+        let step_seconds = self.step_seconds(bpm);
+        // A bounded catch-up: a long block or a very fast division must not
+        // spin here, and a pattern that has lapped itself is in the same
+        // place either way.
+        let mut guard = 0;
+        while self.elapsed >= step_seconds && guard < MOD_STEP_MAX_STEPS {
+            self.elapsed -= step_seconds;
+            self.advance_step();
+            guard += 1;
+        }
+        if self.elapsed >= step_seconds {
+            self.elapsed = 0.0;
+        }
+    }
+
+    fn note_advance(&mut self) {
+        if self.params.trigger == ModStepTrigger::NoteAdvance {
+            self.advance_step();
+        }
+    }
+}
+
+/// Sample-and-hold with room to be musical: a due draw can be skipped by
+/// chance, snapped to a grid, or made to walk from the held value.
+#[derive(Debug, Clone, Copy)]
+struct RandomSource {
+    params: ModRandomParams,
+    /// The held value in the source's own range: `-1..1` when bipolar,
+    /// `0..1` when not.
+    held: f32,
+    phase: f32,
+    rng: u32,
+}
+
+impl RandomSource {
+    fn new(params: ModRandomParams) -> Self {
+        let mut source = Self {
+            params,
+            held: 0.0,
+            // Deterministic per slot install, same as the LFO's S&H, so an
+            // offline render matches a realtime one.
+            phase: 0.0,
+            rng: 0x9E37_79B9,
+        };
+        source.held = source.fresh();
+        source
+    }
+
+    /// Uniform `0..1`. xorshift32, allocation-free and reproducible.
+    fn next_unit(&mut self) -> f32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 17;
+        self.rng ^= self.rng << 5;
+        const SCALE: f32 = (1u32 << 24) as f32;
+        (self.rng >> 8) as f32 / SCALE
+    }
+
+    /// Low end of the source's own range; the high end is always 1.
+    fn floor(&self) -> f32 {
+        if self.params.bipolar {
+            -1.0
+        } else {
+            0.0
+        }
+    }
+
+    fn quantize(&self, value: f32) -> f32 {
+        let levels = self.params.quantize;
+        if levels < 2 {
+            return value;
+        }
+        let floor = self.floor();
+        let span = 1.0 - floor;
+        let last = f32::from(levels - 1);
+        floor + span * ((value - floor) / span * last).round() / last
+    }
+
+    fn fresh(&mut self) -> f32 {
+        let unit = self.next_unit();
+        let floor = self.floor();
+        self.quantize(floor + (1.0 - floor) * unit)
+    }
+
+    /// One drunk step: a bounded walk from the held value, reflected off the
+    /// ends of the range so a long walk cannot park against a rail.
+    fn walked(&mut self) -> f32 {
+        let unit = self.next_unit();
+        let floor = self.floor();
+        let span = 1.0 - floor;
+        let distance = (unit * 2.0 - 1.0) * self.params.walk.clamp(0.0, 1.0) * span * 0.5;
+        let mut next = self.held + distance;
+        if next > 1.0 {
+            next = 2.0 - next;
+        }
+        if next < floor {
+            next = 2.0 * floor - next;
+        }
+        self.quantize(next.clamp(floor, 1.0))
+    }
+
+    /// Redraw, unless chance says to keep what is held. Probability at zero
+    /// freezes the source; at one it draws on every clock.
+    fn draw(&mut self) {
+        if self.next_unit() >= self.params.probability.clamp(0.0, 1.0) {
+            return;
+        }
+        self.held = if self.params.drunk {
+            self.walked()
+        } else {
+            self.fresh()
+        };
+    }
+
+    fn rate_hz(&self, bpm: f64) -> f32 {
+        if self.params.tempo_sync {
+            self.params.rate_division.rate_hz(bpm)
+        } else {
+            self.params.rate_hz
+        }
+    }
+
+    /// The wire value. Unipolar lifts to the signed convention exactly as
+    /// the envelope does, so a unipolar route folds it back to `0..1`.
+    fn value(&self) -> f32 {
+        if self.params.bipolar {
+            self.held
+        } else {
+            self.held * 2.0 - 1.0
+        }
+    }
+
+    fn advance(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
+        if self.params.trigger != ModRandomTrigger::Clock {
+            return;
+        }
+        let elapsed = frames as f32 / sample_rate.max(1) as f32;
+        let advanced = self.phase + self.rate_hz(bpm).max(0.0) * elapsed;
+        self.phase = advanced.fract();
+        if advanced >= 1.0 {
+            self.draw();
+        }
+    }
+
+    fn note_trigger(&mut self) {
+        if self.params.trigger == ModRandomTrigger::NoteTrigger {
+            self.draw();
+        }
+    }
+}
+
+/// The smallest divisor a math module will use. Division clamps its operand
+/// away from zero rather than emitting an infinity a route would then
+/// multiply into a destination.
+const MATH_MIN_DIVISOR: f32 = 1.0e-3;
+
+/// Arithmetic over another slot's output. Stateless: the whole module is its
+/// params, and the slot-order rule lives in `ModulatorRack::tick`.
+#[derive(Debug, Clone, Copy)]
+struct MathSource {
+    params: ModMathParams,
+}
+
+impl MathSource {
+    fn value(&self, input: f32) -> f32 {
+        let operand = self.params.operand;
+        let raw = match self.params.op {
+            ModMathOp::Add => input + operand,
+            ModMathOp::Subtract => input - operand,
+            ModMathOp::Multiply => input * operand,
+            ModMathOp::Divide => {
+                let divisor = if operand.abs() < MATH_MIN_DIVISOR {
+                    MATH_MIN_DIVISOR.copysign(operand)
+                } else {
+                    operand
+                };
+                input / divisor
+            }
+            ModMathOp::Min => input.min(operand),
+            ModMathOp::Max => input.max(operand),
+            ModMathOp::Clamp => {
+                // Dragging the low bound past the high one must reorder,
+                // not panic: `f32::clamp` refuses an inverted range.
+                let low = self.params.clamp_low.min(self.params.clamp_high);
+                let high = self.params.clamp_low.max(self.params.clamp_high);
+                input.clamp(low, high)
+            }
+        };
+        // Everything clamps at the module edge, so a route never sees a
+        // value outside the rack's convention.
+        if raw.is_finite() {
+            raw.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Source {
     Lfo(Lfo),
     Envelope(Envelope),
+    Step(StepSequencer),
+    Random(RandomSource),
+    Math(MathSource),
 }
 
 /// One channel's modulator slots and their current outputs.
@@ -329,6 +607,29 @@ impl ModulatorRack {
             (Some(ModulatorParams::Envelope(next)), _) => {
                 *existing = Some(Source::Envelope(Envelope::new(next)))
             }
+            // Retuning a running pattern keeps its position; a shortened
+            // length folds the cursor back inside rather than stalling it
+            // on a step that no longer plays.
+            (Some(ModulatorParams::Step(next)), Some(Source::Step(sequencer))) => {
+                sequencer.params = next;
+                let length = sequencer.length();
+                if sequencer.step >= length {
+                    sequencer.step %= length;
+                }
+            }
+            (Some(ModulatorParams::Step(next)), _) => {
+                *existing = Some(Source::Step(StepSequencer::new(next)))
+            }
+            (Some(ModulatorParams::Random(next)), Some(Source::Random(random))) => {
+                random.params = next;
+            }
+            (Some(ModulatorParams::Random(next)), _) => {
+                *existing = Some(Source::Random(RandomSource::new(next)))
+            }
+            (Some(ModulatorParams::Math(next)), Some(Source::Math(math))) => math.params = next,
+            (Some(ModulatorParams::Math(next)), _) => {
+                *existing = Some(Source::Math(MathSource { params: next }))
+            }
             (None, _) => {
                 *existing = None;
                 self.outputs[slot] = 0.0;
@@ -347,6 +648,13 @@ impl ModulatorRack {
     }
 
     /// Evaluate every slot for the coming `frames` and advance its phase.
+    ///
+    /// Modules evaluate in slot order within a control tick, so a module
+    /// reading a lower slot sees this tick's value and one reading itself or
+    /// a higher slot sees the previous tick's. That single rule is what makes
+    /// a chain of modules deterministic, identical realtime and offline, and
+    /// bounded without any cycle machinery: `outputs` simply still holds last
+    /// tick's value everywhere this pass has not reached yet.
     pub fn tick(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
         for (slot, source) in self.slots.iter_mut().enumerate() {
             let Some(source) = source else { continue };
@@ -358,6 +666,22 @@ impl ModulatorRack {
                 Source::Envelope(envelope) => {
                     self.outputs[slot] = envelope.value();
                     envelope.advance(sample_rate, frames, bpm);
+                }
+                Source::Step(sequencer) => {
+                    self.outputs[slot] = sequencer.value(bpm);
+                    sequencer.advance(sample_rate, frames, bpm);
+                }
+                Source::Random(random) => {
+                    self.outputs[slot] = random.value();
+                    random.advance(sample_rate, frames, bpm);
+                }
+                Source::Math(math) => {
+                    let input = self
+                        .outputs
+                        .get(math.params.input_slot as usize)
+                        .copied()
+                        .unwrap_or(0.0);
+                    self.outputs[slot] = math.value(input);
                 }
             };
         }
@@ -374,13 +698,13 @@ impl ModulatorRack {
         owning_channel: usize,
         gates: &[NoteGateEvents; MAX_CHANNELS],
     ) {
+        let owning_notes = gates
+            .get(owning_channel)
+            .map_or(0, |events| events.note_ons);
         for source in self.slots.iter_mut().flatten() {
             match source {
                 Source::Lfo(lfo) => {
-                    if gates
-                        .get(owning_channel)
-                        .is_some_and(|events| events.note_ons > 0)
-                    {
+                    if owning_notes > 0 {
                         lfo.retrigger();
                     }
                 }
@@ -390,16 +714,34 @@ impl ModulatorRack {
                         envelope.note_events(events);
                     }
                 }
+                // Step and random modules take the owning channel's notes,
+                // the same legacy input the LFO's retrigger uses. Their own
+                // input jack arrives with the grid's explicit jacks.
+                Source::Step(sequencer) => {
+                    if owning_notes > 0 {
+                        sequencer.note_advance();
+                    }
+                }
+                Source::Random(random) => {
+                    if owning_notes > 0 {
+                        random.note_trigger();
+                    }
+                }
+                Source::Math(_) => {}
             }
         }
         self.tick(sample_rate, frames, bpm);
     }
 
-    /// Restart phase on every slot configured to follow notes.
+    /// Move every slot that follows notes: an LFO restarts its phase, a step
+    /// pattern takes one step, a note-triggered random draws.
     pub fn retrigger(&mut self) {
         for source in self.slots.iter_mut().flatten() {
-            if let Source::Lfo(lfo) = source {
-                lfo.retrigger();
+            match source {
+                Source::Lfo(lfo) => lfo.retrigger(),
+                Source::Step(sequencer) => sequencer.note_advance(),
+                Source::Random(random) => random.note_trigger(),
+                Source::Envelope(_) | Source::Math(_) => {}
             }
         }
     }
@@ -671,5 +1013,291 @@ mod tests {
         rack.tick_with_note_gates(48_000, 32, 120.0, 0, &gates);
         rack.tick(48_000, 0, 120.0);
         assert_eq!(rack.outputs()[0], -1.0);
+    }
+
+    fn rack_with(slots: &[(usize, ModulatorParams)]) -> ModulatorRack {
+        let mut rack = ModulatorRack::new();
+        for (slot, params) in slots {
+            rack.set_slot(*slot, Some(*params));
+        }
+        rack
+    }
+
+    /// A pattern whose every step is the same value, for wiring a
+    /// deterministic constant into a math module's input.
+    fn constant_step(value: f32) -> ModulatorParams {
+        ModulatorParams::Step(ModStepParams {
+            steps: [value; MOD_STEP_MAX_STEPS],
+            length: 1,
+            ..ModStepParams::default()
+        })
+    }
+
+    /// One sixteenth at 120 BPM, in frames at 48 kHz.
+    const STEP_FRAMES: usize = 6_000;
+
+    #[test]
+    fn a_step_pattern_walks_its_length_and_wraps() {
+        let mut steps = [0.0; MOD_STEP_MAX_STEPS];
+        steps[0] = 1.0;
+        steps[1] = -1.0;
+        steps[2] = 0.5;
+        // The tail is inside the array but outside `length`, so it must not
+        // play: shortening a pattern hides steps rather than deleting them.
+        steps[3] = 0.25;
+        let mut rack = rack_with(&[(
+            0,
+            ModulatorParams::Step(ModStepParams {
+                steps,
+                length: 3,
+                division: mooloop_core::ModTimeDivision::Sixteenth,
+                ..ModStepParams::default()
+            }),
+        )]);
+        for expected in [1.0, -1.0, 0.5, 1.0, -1.0] {
+            rack.tick(48_000, STEP_FRAMES, 120.0);
+            assert_eq!(rack.outputs()[0], expected);
+        }
+    }
+
+    /// Glide spends its fraction of the step sliding from wherever the last
+    /// step actually left the output, and zero glide is the hard staircase a
+    /// stepped source is expected to make.
+    #[test]
+    fn glide_slides_across_its_share_of_the_step() {
+        let mut steps = [0.0; MOD_STEP_MAX_STEPS];
+        steps[0] = 1.0;
+        steps[1] = -1.0;
+        let params = ModStepParams {
+            steps,
+            length: 2,
+            division: mooloop_core::ModTimeDivision::Sixteenth,
+            glide: 1.0,
+            ..ModStepParams::default()
+        };
+        let mut rack = rack_with(&[(0, ModulatorParams::Step(params))]);
+        rack.tick(48_000, STEP_FRAMES, 120.0);
+        assert_eq!(rack.outputs()[0], 1.0, "the first step starts at its value");
+        rack.tick(48_000, STEP_FRAMES / 2, 120.0);
+        assert_eq!(rack.outputs()[0], 1.0, "a full glide leaves from the old value");
+        rack.tick(48_000, 0, 120.0);
+        assert!(
+            rack.outputs()[0].abs() < 1e-6,
+            "half a glide should be halfway: {}",
+            rack.outputs()[0]
+        );
+
+        let mut hard = rack_with(&[(
+            0,
+            ModulatorParams::Step(ModStepParams {
+                glide: 0.0,
+                ..params
+            }),
+        )]);
+        hard.tick(48_000, STEP_FRAMES, 120.0);
+        hard.tick(48_000, STEP_FRAMES / 2, 120.0);
+        assert_eq!(hard.outputs()[0], -1.0, "no glide must step, not slide");
+    }
+
+    #[test]
+    fn a_note_advance_pattern_ignores_the_clock_and_moves_on_notes() {
+        let mut steps = [0.0; MOD_STEP_MAX_STEPS];
+        steps[0] = 1.0;
+        steps[1] = -1.0;
+        let mut rack = rack_with(&[(
+            0,
+            ModulatorParams::Step(ModStepParams {
+                steps,
+                length: 2,
+                trigger: ModStepTrigger::NoteAdvance,
+                ..ModStepParams::default()
+            }),
+        )]);
+        for _ in 0..8 {
+            rack.tick(48_000, STEP_FRAMES, 120.0);
+            assert_eq!(rack.outputs()[0], 1.0, "the clock must not advance it");
+        }
+        let mut gates = [NoteGateEvents::default(); MAX_CHANNELS];
+        gates[1].note_ons = 1;
+        rack.tick_with_note_gates(48_000, 0, 120.0, 1, &gates);
+        assert_eq!(rack.outputs()[0], -1.0);
+    }
+
+    /// Probability is the whole musical point of the random module: at zero
+    /// it freezes what it holds, at one it draws on every clock.
+    #[test]
+    fn probability_gates_whether_a_due_draw_lands() {
+        let mut frozen = rack_with(&[(
+            0,
+            ModulatorParams::Random(ModRandomParams {
+                probability: 0.0,
+                ..ModRandomParams::default()
+            }),
+        )]);
+        frozen.tick(48_000, 0, 120.0);
+        let held = frozen.outputs()[0];
+        for _ in 0..32 {
+            frozen.tick(48_000, 48_000, 120.0);
+            assert_eq!(frozen.outputs()[0], held, "chance zero must freeze");
+        }
+
+        let mut always = rack_with(&[(
+            0,
+            ModulatorParams::Random(ModRandomParams::default()),
+        )]);
+        let mut seen = Vec::new();
+        for _ in 0..32 {
+            always.tick(48_000, 48_000, 120.0);
+            let value = always.outputs()[0];
+            assert!((-1.0..=1.0).contains(&value), "out of range: {value}");
+            if !seen.contains(&value) {
+                seen.push(value);
+            }
+        }
+        assert!(seen.len() > 4, "chance one should keep drawing: {seen:?}");
+    }
+
+    /// A drunk walk stays inside the range and never jumps further than its
+    /// declared step, which is the only thing that distinguishes it from
+    /// plain sample-and-hold.
+    #[test]
+    fn a_drunk_walk_stays_bounded_and_takes_small_steps() {
+        let walk = 0.1;
+        let mut rack = rack_with(&[(
+            0,
+            ModulatorParams::Random(ModRandomParams {
+                drunk: true,
+                walk,
+                ..ModRandomParams::default()
+            }),
+        )]);
+        rack.tick(48_000, 0, 120.0);
+        let mut previous = rack.outputs()[0];
+        for _ in 0..256 {
+            rack.tick(48_000, 48_000, 120.0);
+            let value = rack.outputs()[0];
+            assert!((-1.0..=1.0).contains(&value), "escaped the range: {value}");
+            assert!(
+                (value - previous).abs() <= walk + 1e-5,
+                "jumped {} from {previous} to {value}",
+                (value - previous).abs()
+            );
+            previous = value;
+        }
+    }
+
+    #[test]
+    fn quantized_draws_land_on_the_grid_and_unipolar_lifts_to_the_wire() {
+        let mut rack = rack_with(&[(
+            0,
+            ModulatorParams::Random(ModRandomParams {
+                bipolar: false,
+                quantize: 3,
+                ..ModRandomParams::default()
+            }),
+        )]);
+        // Three levels across 0..1 are 0, 0.5 and 1, carried on the signed
+        // wire as -1, 0 and 1 exactly as the envelope carries its unipolar
+        // contour.
+        for _ in 0..32 {
+            rack.tick(48_000, 48_000, 120.0);
+            let value = rack.outputs()[0];
+            assert!(
+                [-1.0, 0.0, 1.0].iter().any(|level| (value - level).abs() < 1e-5),
+                "off the grid: {value}"
+            );
+        }
+    }
+
+    /// The slot-order rule, stated in both directions: a module reading a
+    /// lower slot sees this tick's value, and one reading a higher slot sees
+    /// the previous tick's.
+    #[test]
+    fn math_reads_lower_slots_now_and_higher_slots_one_tick_late() {
+        let doubler = ModulatorParams::Math(ModMathParams {
+            input_slot: 0,
+            op: ModMathOp::Multiply,
+            operand: 2.0,
+            ..ModMathParams::default()
+        });
+        let mut forward = rack_with(&[(0, constant_step(0.25)), (1, doubler)]);
+        forward.tick(48_000, 0, 120.0);
+        assert_eq!(forward.outputs()[0], 0.25);
+        assert_eq!(forward.outputs()[1], 0.5, "a lower slot resolves this tick");
+
+        let mut backward = rack_with(&[
+            (
+                0,
+                ModulatorParams::Math(ModMathParams {
+                    input_slot: 2,
+                    op: ModMathOp::Multiply,
+                    operand: 2.0,
+                    ..ModMathParams::default()
+                }),
+            ),
+            (2, constant_step(0.25)),
+        ]);
+        backward.tick(48_000, 0, 120.0);
+        assert_eq!(
+            backward.outputs()[0],
+            0.0,
+            "a higher slot must still read last tick"
+        );
+        backward.tick(48_000, 0, 120.0);
+        assert_eq!(backward.outputs()[0], 0.5);
+    }
+
+    /// Self-reference needs no cycle machinery: it simply reads last tick,
+    /// and the module's own output clamp keeps the feedback bounded.
+    #[test]
+    fn a_math_module_reading_itself_is_bounded_by_its_output_clamp() {
+        let mut rack = rack_with(&[(
+            0,
+            ModulatorParams::Math(ModMathParams {
+                input_slot: 0,
+                op: ModMathOp::Add,
+                operand: 0.25,
+                ..ModMathParams::default()
+            }),
+        )]);
+        for expected in [0.25, 0.5, 0.75, 1.0, 1.0, 1.0] {
+            rack.tick(48_000, 0, 120.0);
+            assert_eq!(rack.outputs()[0], expected);
+        }
+    }
+
+    #[test]
+    fn math_refuses_to_divide_by_zero_or_to_invert_a_clamp() {
+        let mut divide = rack_with(&[
+            (0, constant_step(0.5)),
+            (
+                1,
+                ModulatorParams::Math(ModMathParams {
+                    input_slot: 0,
+                    op: ModMathOp::Divide,
+                    operand: 0.0,
+                    ..ModMathParams::default()
+                }),
+            ),
+        ]);
+        divide.tick(48_000, 0, 120.0);
+        assert!(divide.outputs()[1].is_finite());
+        assert_eq!(divide.outputs()[1], 1.0, "a tiny divisor still clamps");
+
+        let mut inverted = rack_with(&[
+            (0, constant_step(0.5)),
+            (
+                1,
+                ModulatorParams::Math(ModMathParams {
+                    input_slot: 0,
+                    op: ModMathOp::Clamp,
+                    clamp_low: 1.0,
+                    clamp_high: -1.0,
+                    ..ModMathParams::default()
+                }),
+            ),
+        ]);
+        inverted.tick(48_000, 0, 120.0);
+        assert_eq!(inverted.outputs()[1], 0.5);
     }
 }

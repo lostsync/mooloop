@@ -27,14 +27,16 @@ use mooloop_core::{
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
-    ModLfoParams, ModPolarity, ModRack, ModRoute,
-    ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State, NoteEvent,
+    ModPolarity, ModRack, ModRandomTrigger, ModRoute, ModStepTrigger,
+    ModulatorKind, ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State,
+    NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
     SamplerParams, SamplerState, SnareCharacter, VoiceMode, DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
+    MOD_STEP_MAX_STEPS,
     MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
     MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, STRIP_DESCRIPTORS,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -3014,7 +3016,7 @@ impl UiState {
             .as_mut()?;
         match params {
             ModulatorParams::Envelope(envelope) => Some(envelope),
-            ModulatorParams::Lfo(_) => None,
+            _ => None,
         }
     }
 
@@ -3137,40 +3139,21 @@ impl UiState {
             .enumerate()
             .filter_map(|(slot, params)| {
                 let params = (*params)?;
-                let common = |name: String,
-                              kind,
-                              waveform,
-                              rate,
-                              depth,
-                              phase,
-                              pulse_width,
-                              preview_fade_cycles,
-                              preview_smoothing_cycles,
-                              preview_attack,
-                              preview_decay,
-                              preview_sustain,
-                              preview_release,
-                              retrigger| {
-                    ModulationSourceRow {
-                        slot: slot as i32,
-                        name: name.into(),
-                        kind,
-                        waveform,
-                        rate,
-                        depth,
-                        phase,
-                        pulse_width,
-                        preview_fade_cycles,
-                        preview_smoothing_cycles,
-                        preview_attack,
-                        preview_decay,
-                        preview_sustain,
-                        preview_release,
-                        retrigger,
-                        selected: selected == Some(slot as u8),
-                    }
+                // One row shape for every kind: the tile's face is whichever
+                // fields the kind actually fills, and the rest keep the
+                // shape component's own resting values.
+                let mut row = ModulationSourceRow {
+                    slot: slot as i32,
+                    name: format!("{} {}", params.kind().badge(), slot + 1).into(),
+                    kind: params.kind().to_index(),
+                    depth: 1.0,
+                    pulse_width: 0.5,
+                    preview_sustain: 0.7,
+                    step_length: MOD_STEP_MAX_STEPS as i32,
+                    selected: selected == Some(slot as u8),
+                    ..Default::default()
                 };
-                Some(match params {
+                match params {
                     ModulatorParams::Lfo(lfo) => {
                         let cycle_seconds = if lfo.tempo_sync {
                             lfo.rate_division.seconds(bpm)
@@ -3182,52 +3165,50 @@ impl UiState {
                         } else {
                             lfo.fade_in_seconds
                         };
-                        common(
-                            format!("LFO {}", slot + 1),
-                            0,
-                            lfo.waveform.to_index(),
-                            lfo.rate_hz,
-                            lfo.depth,
-                            lfo.phase,
-                            lfo.pulse_width,
-                            fade_seconds / cycle_seconds,
-                            lfo.smoothing_seconds / cycle_seconds,
-                            0.0,
-                            0.0,
-                            0.0,
-                            0.0,
-                            lfo.retrigger,
-                        )
+                        row.waveform = lfo.waveform.to_index();
+                        row.rate = lfo.rate_hz;
+                        row.depth = lfo.depth;
+                        row.phase = lfo.phase;
+                        row.pulse_width = lfo.pulse_width;
+                        row.preview_fade_cycles = fade_seconds / cycle_seconds;
+                        row.preview_smoothing_cycles = lfo.smoothing_seconds / cycle_seconds;
+                        row.retrigger = lfo.retrigger;
                     }
-                    ModulatorParams::Envelope(envelope) => common(
-                        format!("ENV {}", slot + 1),
-                        1,
-                        0,
-                        0.0,
-                        envelope.amount,
-                        0.0,
-                        0.5,
-                        0.0,
-                        0.0,
-                        if envelope.attack_tempo_sync {
+                    ModulatorParams::Envelope(envelope) => {
+                        row.depth = envelope.amount;
+                        row.preview_attack = if envelope.attack_tempo_sync {
                             envelope.attack_division.seconds(bpm)
                         } else {
                             envelope.attack_seconds
-                        },
-                        if envelope.decay_tempo_sync {
+                        };
+                        row.preview_decay = if envelope.decay_tempo_sync {
                             envelope.decay_division.seconds(bpm)
                         } else {
                             envelope.decay_seconds
-                        },
-                        envelope.sustain,
-                        if envelope.release_tempo_sync {
+                        };
+                        row.preview_sustain = envelope.sustain;
+                        row.preview_release = if envelope.release_tempo_sync {
                             envelope.release_division.seconds(bpm)
                         } else {
                             envelope.release_seconds
-                        },
-                        true,
-                    ),
-                })
+                        };
+                        row.retrigger = true;
+                    }
+                    ModulatorParams::Step(step) => {
+                        row.steps = step.steps.as_slice().into();
+                        row.step_length = i32::from(step.length);
+                        row.retrigger = step.trigger == ModStepTrigger::NoteAdvance;
+                    }
+                    ModulatorParams::Random(random) => {
+                        row.rate = random.rate_hz;
+                        row.phase = slot as f32 * 0.25;
+                        row.retrigger = random.trigger == ModRandomTrigger::NoteTrigger;
+                    }
+                    ModulatorParams::Math(math) => {
+                        row.math_op = math.op.to_index();
+                    }
+                }
+                Some(row)
             })
             .collect();
         let routes: Vec<ModulationRouteRow> = channel
@@ -3237,17 +3218,18 @@ impl UiState {
             .enumerate()
             .filter_map(|(index, route)| {
                 let route = route.as_ref()?;
-                let source_name = match channel
+                let source_name = channel
                     .modulation
                     .slots
                     .get(route.source_slot as usize)
                     .copied()
                     .flatten()
-                {
-                    Some(ModulatorParams::Envelope(_)) => format!("ENV {}", route.source_slot + 1),
-                    Some(ModulatorParams::Lfo(_)) => format!("LFO {}", route.source_slot + 1),
-                    None => "SOURCE ?".into(),
-                };
+                    .map_or_else(
+                        || "SOURCE ?".to_string(),
+                        |params| {
+                            format!("{} {}", params.kind().badge(), route.source_slot + 1)
+                        },
+                    );
                 let (destination, allowed) = self
                     .channel_modulation_destination(route.destination)
                     .map(|(device, descriptor)| {
@@ -3298,17 +3280,15 @@ impl UiState {
         });
         let selected_lfo = selected_params.and_then(|params| match params {
             ModulatorParams::Lfo(lfo) => Some(lfo),
-            ModulatorParams::Envelope(_) => None,
+            _ => None,
         });
         let selected_envelope = selected_params.and_then(|params| match params {
             ModulatorParams::Envelope(envelope) => Some(envelope),
-            ModulatorParams::Lfo(_) => None,
+            _ => None,
         });
-        window.set_modulation_selected_kind(match selected_params {
-            Some(ModulatorParams::Lfo(_)) => 0,
-            Some(ModulatorParams::Envelope(_)) => 1,
-            None => -1,
-        });
+        window.set_modulation_selected_kind(
+            selected_params.map_or(-1, |params| params.kind().to_index()),
+        );
         // The one visible editor reads its values by descriptor id, exactly
         // as the destination overlays already do; the kind decides which id
         // table the array answers for.
@@ -3494,7 +3474,10 @@ impl UiState {
             .copied()
             .flatten()
         {
+            // Sources that only ever swing one way default to a unipolar
+            // route, so their resting value is the destination's base.
             Some(ModulatorParams::Envelope(_)) => ModPolarity::Unipolar,
+            Some(ModulatorParams::Random(random)) if !random.bipolar => ModPolarity::Unipolar,
             _ => policy.default_polarity,
         };
         let current = channel
@@ -7689,10 +7672,7 @@ impl AppUi {
                         .and_then(|channel| channel.modulation.slots.get(slot as usize))
                         .copied()
                         .flatten()
-                        .map(|params| match params {
-                            ModulatorParams::Lfo(_) => format!("LFO {}", slot + 1),
-                            ModulatorParams::Envelope(_) => format!("ENV {}", slot + 1),
-                        })
+                        .map(|params| format!("{} {}", params.kind().badge(), slot + 1))
                 });
                 state.refresh_modulation(&window);
                 window.set_status_message(if let Some(source_name) = source_name {
@@ -7705,13 +7685,20 @@ impl AppUi {
                 });
             });
         }
+        // One add verb for every kind: the menu chooses a `ModulatorKind`
+        // and the slot is filled from that kind's own defaults, so a new
+        // module family costs a menu entry rather than a callback.
         {
             let st = state.clone();
             let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
-            window.on_modulation_lfo_added(move || {
-                let Some(window) = weak.upgrade() else { return };
+            window.on_modulation_source_added(move |kind| {
+                let (Some(window), Some(kind)) =
+                    (weak.upgrade(), ModulatorKind::from_index(kind))
+                else {
+                    return;
+                };
                 let before = {
                     let state = st.borrow();
                     project_snapshot(&state, &window)
@@ -7726,8 +7713,13 @@ impl AppUi {
                     else {
                         return;
                     };
-                    channel.modulation.slots[slot] =
-                        Some(ModulatorParams::Lfo(ModLfoParams::default()));
+                    let mut params = kind.default_params();
+                    // The envelope's gate is a jack rather than a descriptor
+                    // id, so its only sensible default is set here.
+                    if let ModulatorParams::Envelope(envelope) = &mut params {
+                        envelope.input_channel = selected as u8;
+                    }
+                    channel.modulation.slots[slot] = Some(params);
                     state.modulation_selected_slot.set(Some(slot as u8));
                     state.modulation_armed_slot.set(None);
                     state.modulation_shelf_open = true;
@@ -7735,50 +7727,32 @@ impl AppUi {
                     true
                 };
                 if added {
-                    record_project_history(&commands, before, &st, &window, "LFO added");
-                    window.set_status_message(
-                        "LFO added \u{2014} choose Assign when you are ready to route it".into(),
-                    );
-                }
-            });
-        }
-        {
-            let st = state.clone();
-            let commands = command_state.clone();
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            window.on_modulation_envelope_added(move || {
-                let Some(window) = weak.upgrade() else { return };
-                let before = {
-                    let state = st.borrow();
-                    project_snapshot(&state, &window)
-                };
-                let added = {
-                    let mut state = st.borrow_mut();
-                    let selected = state.selected;
-                    let Some(channel) = state.channels.get_mut(selected) else {
-                        return;
+                    // History labels are `&'static str`, so the per-kind
+                    // wording is a match rather than a format.
+                    let (history, status) = match kind {
+                        ModulatorKind::Lfo => (
+                            "LFO added",
+                            "LFO added \u{2014} choose Assign when you are ready to route it",
+                        ),
+                        ModulatorKind::Envelope => (
+                            "Envelope added",
+                            "Envelope added \u{2014} choose its gate input, then Assign a destination",
+                        ),
+                        ModulatorKind::Step => (
+                            "Step sequencer added",
+                            "Step sequencer added \u{2014} drag the columns to draw a pattern",
+                        ),
+                        ModulatorKind::Random => (
+                            "Random source added",
+                            "Random source added \u{2014} choose Assign when you are ready to route it",
+                        ),
+                        ModulatorKind::Math => (
+                            "Math module added",
+                            "Math module added \u{2014} choose the slot it reads, then Assign it",
+                        ),
                     };
-                    let Some(slot) = channel.modulation.slots.iter().position(Option::is_none)
-                    else {
-                        return;
-                    };
-                    channel.modulation.slots[slot] =
-                        Some(ModulatorParams::Envelope(ModEnvelopeParams {
-                            input_channel: selected as u8,
-                            ..ModEnvelopeParams::default()
-                        }));
-                    state.modulation_selected_slot.set(Some(slot as u8));
-                    state.modulation_armed_slot.set(None);
-                    state.modulation_shelf_open = true;
-                    state.send_channel_modulation(&window, &tx);
-                    true
-                };
-                if added {
-                    record_project_history(&commands, before, &st, &window, "Envelope added");
-                    window.set_status_message(
-                        "Envelope added — choose its gate input, then Assign a destination".into(),
-                    );
+                    record_project_history(&commands, before, &st, &window, history);
+                    window.set_status_message(status.into());
                 }
             });
         }

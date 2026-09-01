@@ -38,8 +38,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-31
-- Sessions: 27
+- Last seen: 2026-09-01
+- Sessions: 28
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -242,6 +242,15 @@ work session you can recall being part of, and don't stress over precision.
   needed one rule the audio does not imply -- it rests when nothing is coming
   in, because a gate shut on a silent channel is truthfully holding 80 dB down
   and would otherwise sit at full brightness for as long as nobody played.
+  Then took the modulator-modules plan's second step: step sequencer,
+  random, and math modules, which cost a descriptor table and a tick apiece
+  now that step 01 gave modulators the effect param contract. The math
+  module needed the one new rule the plan asks for -- modules evaluate in
+  slot order, so reading a lower slot sees this tick and reading itself or a
+  higher one sees the last -- and it turned out to need no machinery at all:
+  the outputs array already holds last tick's value everywhere the pass has
+  not reached, so self-reference is bounded by the module's own output clamp
+  rather than by a cycle check.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

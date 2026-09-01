@@ -276,6 +276,9 @@ fn render_sampler_source_editor() {
             preview_decay: 0.0,
             preview_sustain: 0.0,
             preview_release: 0.0,
+            steps: Vec::<f32>::new().as_slice().into(),
+            step_length: 16,
+            math_op: 0,
             retrigger: false,
             selected: false,
         },
@@ -294,8 +297,41 @@ fn render_sampler_source_editor() {
             preview_decay: 0.25,
             preview_sustain: 0.62,
             preview_release: 0.38,
+            steps: Vec::<f32>::new().as_slice().into(),
+            step_length: 16,
+            math_op: 0,
             retrigger: true,
             selected: true,
+        },
+        // A step tile draws its own pattern and a math tile its operator, so
+        // both faces are in the shot alongside the curve-drawing kinds.
+        ModulationSourceRow {
+            slot: 2,
+            name: SharedString::from("STEP 3"),
+            kind: 2,
+            steps: vec![
+                0.0f32, 0.4, 0.8, 0.35, -0.2, -0.75, 0.15, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0,
+            ]
+            .as_slice()
+            .into(),
+            step_length: 8,
+            depth: 1.0,
+            pulse_width: 0.5,
+            preview_sustain: 0.7,
+            ..Default::default()
+        },
+        ModulationSourceRow {
+            slot: 3,
+            name: SharedString::from("MATH 4"),
+            kind: 4,
+            math_op: 2,
+            steps: Vec::<f32>::new().as_slice().into(),
+            step_length: 16,
+            depth: 1.0,
+            pulse_width: 0.5,
+            preview_sustain: 0.7,
+            ..Default::default()
         },
     ]))));
     ui.set_modulation_routes(ModelRc::from(Rc::new(VecModel::from(vec![
@@ -400,6 +436,59 @@ fn render_sampler_source_editor() {
         .into(),
     );
     ui.set_modulation_selected_envelope_preview_attack(0.015);
+
+    // The three module kinds added in step 02 each render their own editor
+    // through the same descriptor-indexed surface: a step bank, a random
+    // panel with its lamps, and a math module's operator and formula.
+    ui.set_modulation_selected_slot(2);
+    ui.set_modulation_selected_kind(2);
+    // Descriptor-id indexed (STEP_PARAM_*): length, division, glide,
+    // trigger, then the sixteen contiguous step values.
+    ui.set_modulation_selected_values(
+        vec![
+            8.0f32, 13.0, 0.25, 0.0, 0.0, 0.4, 0.8, 0.35, -0.2, -0.75, 0.15, 0.6, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0,
+        ]
+        .as_slice()
+        .into(),
+    );
+    let step_editor = ui.window().take_snapshot().unwrap();
+    assert_ne!(modulation.as_bytes(), step_editor.as_bytes());
+    write_snapshot(&step_editor, "MOOLOOP_STEP_MODULE_SNAPSHOT");
+
+    ui.set_modulation_selected_kind(3);
+    // Descriptor-id indexed (RANDOM_PARAM_*): rate, sync, division, trigger,
+    // bipolar, chance, quantize, drunk, walk.
+    ui.set_modulation_selected_values(
+        vec![4.0f32, 0.0, 13.0, 0.0, 1.0, 0.65, 5.0, 1.0, 0.3]
+            .as_slice()
+            .into(),
+    );
+    let random_editor = ui.window().take_snapshot().unwrap();
+    assert_ne!(step_editor.as_bytes(), random_editor.as_bytes());
+    write_snapshot(&random_editor, "MOOLOOP_RANDOM_MODULE_SNAPSHOT");
+
+    ui.set_modulation_selected_slot(3);
+    ui.set_modulation_selected_kind(4);
+    // Descriptor-id indexed (MATH_PARAM_*): input slot, operator, operand,
+    // clamp low, clamp high. Reading slot 1 from slot 4 is a same-tick read.
+    ui.set_modulation_selected_values(
+        vec![0.0f32, 2.0, 1.75, -1.0, 1.0].as_slice().into(),
+    );
+    let math_editor = ui.window().take_snapshot().unwrap();
+    assert_ne!(random_editor.as_bytes(), math_editor.as_bytes());
+    write_snapshot(&math_editor, "MOOLOOP_MATH_MODULE_SNAPSHOT");
+
+    // Back to the envelope, which is what the remaining shots are about.
+    ui.set_modulation_selected_slot(1);
+    ui.set_modulation_selected_kind(1);
+    ui.set_modulation_selected_values(
+        vec![
+            0.015f32, 0.0, 13.0, 0.18, 1.0, 10.0, 0.62, 0.38, 0.0, 7.0, 1.0,
+        ]
+        .as_slice()
+        .into(),
+    );
 
     // Out of assign mode the same knobs must read differently: the value arc
     // returns, the dots appear, and a live offset displaces the arc's end.

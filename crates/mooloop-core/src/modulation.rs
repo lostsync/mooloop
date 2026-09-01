@@ -243,6 +243,116 @@ impl ModTimeDivision {
     }
 }
 
+/// When a step sequencer advances. Free-running follows the transport clock;
+/// note-advance steps once per note-on, which is what makes a pattern feel
+/// played rather than merely running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModStepTrigger {
+    #[default]
+    Clock,
+    NoteAdvance,
+}
+
+impl ModStepTrigger {
+    pub const ALL: [Self; 2] = [Self::Clock, Self::NoteAdvance];
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|trigger| *trigger == self)
+            .unwrap_or_default() as i32
+    }
+}
+
+/// When a random source draws. The clock is the same musical grid every
+/// other timed source uses; note-triggered draws once per note-on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModRandomTrigger {
+    #[default]
+    Clock,
+    NoteTrigger,
+}
+
+impl ModRandomTrigger {
+    pub const ALL: [Self; 2] = [Self::Clock, Self::NoteTrigger];
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|trigger| *trigger == self)
+            .unwrap_or_default() as i32
+    }
+}
+
+/// What a math module does to its input. Arithmetic ops take the constant
+/// operand; `Clamp` takes the low/high pair instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModMathOp {
+    Add,
+    Subtract,
+    #[default]
+    Multiply,
+    Divide,
+    Min,
+    Max,
+    Clamp,
+}
+
+impl ModMathOp {
+    pub const ALL: [Self; 7] = [
+        Self::Add,
+        Self::Subtract,
+        Self::Multiply,
+        Self::Divide,
+        Self::Min,
+        Self::Max,
+        Self::Clamp,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Subtract => "−",
+            Self::Multiply => "×",
+            Self::Divide => "÷",
+            Self::Min => "MIN",
+            Self::Max => "MAX",
+            Self::Clamp => "CLAMP",
+        }
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|op| *op == self)
+            .unwrap_or_default() as i32
+    }
+}
+
 /// A modulator's own parameters. Modulators are addressable like any other
 /// device: each kind publishes a `ParamDescriptor` table under these ids and
 /// answers `ModulatorParams::get`/`set`, exactly as effects do. The first
@@ -274,6 +384,49 @@ pub const ENV_PARAM_RELEASE_S: u32 = 7;
 pub const ENV_PARAM_RELEASE_SYNC: u32 = 8;
 pub const ENV_PARAM_RELEASE_DIVISION: u32 = 9;
 pub const ENV_PARAM_AMOUNT: u32 = 10;
+
+/// Steps a pattern can hold. Sixteen is the Matrix gesture at modulator
+/// scale, and it keeps `ModStepParams` small enough to stay `Copy` on the
+/// command ring.
+pub const MOD_STEP_MAX_STEPS: usize = 16;
+
+/// The scalars keep the low ids and the sixteen per-step values follow in
+/// one contiguous block, so the editor walks them as a bank rather than
+/// naming each one.
+pub const STEP_PARAM_LENGTH: u32 = 0;
+pub const STEP_PARAM_DIVISION: u32 = 1;
+pub const STEP_PARAM_GLIDE: u32 = 2;
+pub const STEP_PARAM_TRIGGER: u32 = 3;
+pub const STEP_PARAM_VALUE_BASE: u32 = 4;
+
+/// The step-value block as an index into [`ModStepParams::steps`].
+pub const fn step_value_index(id: u32) -> Option<usize> {
+    match id.checked_sub(STEP_PARAM_VALUE_BASE) {
+        Some(offset) if (offset as usize) < MOD_STEP_MAX_STEPS => Some(offset as usize),
+        _ => None,
+    }
+}
+
+/// The random source keeps the LFO's three-id tempo-syncable rate, because
+/// it is the promotion of that LFO's hidden sample-and-hold and must not
+/// lose its free rate on the way.
+pub const RANDOM_PARAM_RATE_HZ: u32 = 0;
+pub const RANDOM_PARAM_TEMPO_SYNC: u32 = 1;
+pub const RANDOM_PARAM_RATE_DIVISION: u32 = 2;
+pub const RANDOM_PARAM_TRIGGER: u32 = 3;
+pub const RANDOM_PARAM_BIPOLAR: u32 = 4;
+pub const RANDOM_PARAM_PROBABILITY: u32 = 5;
+pub const RANDOM_PARAM_QUANTIZE: u32 = 6;
+pub const RANDOM_PARAM_DRUNK: u32 = 7;
+pub const RANDOM_PARAM_WALK: u32 = 8;
+
+/// The math module's input is a slot reference rather than a channel list,
+/// so unlike the envelope's gate it is an ordinary stepped descriptor.
+pub const MATH_PARAM_INPUT_SLOT: u32 = 0;
+pub const MATH_PARAM_OP: u32 = 1;
+pub const MATH_PARAM_OPERAND: u32 = 2;
+pub const MATH_PARAM_CLAMP_LOW: u32 = 3;
+pub const MATH_PARAM_CLAMP_HIGH: u32 = 4;
 
 /// A boolean as a descriptor: two positions, off by default.
 const fn toggle(id: u32, name: &'static str) -> ParamDescriptor {
@@ -428,6 +581,162 @@ pub const ENVELOPE_DESCRIPTORS: [ParamDescriptor; 11] = [
     },
 ];
 
+/// An enum as a descriptor: `positions` discrete slots carried as the
+/// enum's `ALL` index, the same projection `division` makes for time.
+const fn selector(
+    id: u32,
+    name: &'static str,
+    positions: u8,
+    default: f32,
+) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "",
+        min: 0.0,
+        max: (positions - 1) as f32,
+        curve: ParamCurve::Stepped(positions),
+        default,
+    }
+}
+
+const STEP_VALUE_NAMES: [&str; MOD_STEP_MAX_STEPS] = [
+    "Step 1", "Step 2", "Step 3", "Step 4", "Step 5", "Step 6", "Step 7", "Step 8", "Step 9",
+    "Step 10", "Step 11", "Step 12", "Step 13", "Step 14", "Step 15", "Step 16",
+];
+
+/// A fresh pattern is flat: every step rests at zero, so adding a sequencer
+/// changes nothing until it is drawn. Descriptor defaults and
+/// `ModStepParams::default` are the same statement, pinned by a test.
+pub const STEP_DESCRIPTORS: [ParamDescriptor; 4 + MOD_STEP_MAX_STEPS] = {
+    let mut table = [ParamDescriptor {
+        id: 0,
+        name: "",
+        unit: "",
+        min: -1.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    }; 4 + MOD_STEP_MAX_STEPS];
+    table[0] = ParamDescriptor {
+        id: STEP_PARAM_LENGTH,
+        name: "Length",
+        unit: "",
+        min: 1.0,
+        max: MOD_STEP_MAX_STEPS as f32,
+        curve: ParamCurve::Stepped(MOD_STEP_MAX_STEPS as u8),
+        default: 8.0,
+    };
+    table[1] = division(STEP_PARAM_DIVISION, "Rate", 13.0);
+    table[2] = ParamDescriptor {
+        id: STEP_PARAM_GLIDE,
+        name: "Glide",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    };
+    table[3] = selector(STEP_PARAM_TRIGGER, "Trigger", ModStepTrigger::ALL.len() as u8, 0.0);
+    let mut index = 0;
+    while index < MOD_STEP_MAX_STEPS {
+        table[4 + index] = ParamDescriptor {
+            id: STEP_PARAM_VALUE_BASE + index as u32,
+            name: STEP_VALUE_NAMES[index],
+            unit: "",
+            min: -1.0,
+            max: 1.0,
+            curve: ParamCurve::Linear,
+            default: 0.0,
+        };
+        index += 1;
+    }
+    table
+};
+
+pub const RANDOM_DESCRIPTORS: [ParamDescriptor; 9] = [
+    ParamDescriptor {
+        id: RANDOM_PARAM_RATE_HZ,
+        name: "Rate",
+        unit: "Hz",
+        min: 0.05,
+        max: 20.0,
+        curve: ParamCurve::Linear,
+        default: 2.0,
+    },
+    toggle(RANDOM_PARAM_TEMPO_SYNC, "Rate sync"),
+    division(RANDOM_PARAM_RATE_DIVISION, "Rate division", 13.0),
+    selector(
+        RANDOM_PARAM_TRIGGER,
+        "Trigger",
+        ModRandomTrigger::ALL.len() as u8,
+        0.0,
+    ),
+    // Bipolar is the rack's resting convention, so this toggle starts on.
+    selector(RANDOM_PARAM_BIPOLAR, "Bipolar", 2, 1.0),
+    ParamDescriptor {
+        id: RANDOM_PARAM_PROBABILITY,
+        name: "Chance",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+    // Zero is off; anything higher is that many levels across the range.
+    selector(RANDOM_PARAM_QUANTIZE, "Quantize", 17, 0.0),
+    toggle(RANDOM_PARAM_DRUNK, "Drunk"),
+    ParamDescriptor {
+        id: RANDOM_PARAM_WALK,
+        name: "Walk",
+        unit: "",
+        min: 0.01,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.25,
+    },
+];
+
+/// The operand spans four times the rack's range so a multiply can actually
+/// gain a quiet source up; the module clamps its own output back to `-1..1`
+/// regardless, at the module edge, so a route never sees a stray value.
+pub const MATH_DESCRIPTORS: [ParamDescriptor; 5] = [
+    selector(
+        MATH_PARAM_INPUT_SLOT,
+        "Input",
+        MAX_MODULATORS_PER_CHANNEL as u8,
+        0.0,
+    ),
+    selector(MATH_PARAM_OP, "Operator", ModMathOp::ALL.len() as u8, 2.0),
+    ParamDescriptor {
+        id: MATH_PARAM_OPERAND,
+        name: "Operand",
+        unit: "",
+        min: -4.0,
+        max: 4.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: MATH_PARAM_CLAMP_LOW,
+        name: "Low",
+        unit: "",
+        min: -1.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: -1.0,
+    },
+    ParamDescriptor {
+        id: MATH_PARAM_CLAMP_HIGH,
+        name: "High",
+        unit: "",
+        min: -1.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ModLfoParams {
@@ -515,12 +824,120 @@ impl Default for ModEnvelopeParams {
     }
 }
 
+
+/// A clocked pattern of control values — the Reason Matrix gesture at
+/// modulator scale, and the rack's first genuinely stepped source. The step
+/// array is fixed at its maximum and `length` decides how much of it plays,
+/// so editing the length never destroys the tail of a pattern.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModStepParams {
+    pub steps: [f32; MOD_STEP_MAX_STEPS],
+    /// Steps actually played, `1..=16`.
+    pub length: u8,
+    /// Duration of one step on the shared musical grid.
+    pub division: ModTimeDivision,
+    /// Portion of a step spent sliding into its value, `0..1`. Zero is the
+    /// hard staircase a stepped source is expected to make.
+    pub glide: f32,
+    pub trigger: ModStepTrigger,
+}
+
+impl Default for ModStepParams {
+    fn default() -> Self {
+        Self {
+            steps: [0.0; MOD_STEP_MAX_STEPS],
+            length: 8,
+            division: ModTimeDivision::Sixteenth,
+            glide: 0.0,
+            trigger: ModStepTrigger::Clock,
+        }
+    }
+}
+
+/// Sample-and-hold promoted from a hidden LFO waveform to a source with room
+/// to be musical: a draw can be skipped by chance, snapped to a grid, or
+/// made to walk from the held value instead of jumping to a new one.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModRandomParams {
+    pub rate_hz: f32,
+    pub tempo_sync: bool,
+    pub rate_division: ModTimeDivision,
+    pub trigger: ModRandomTrigger,
+    /// `-1..1` when set, `0..1` when clear.
+    pub bipolar: bool,
+    /// Chance in `0..1` that a due draw actually replaces the held value.
+    /// At zero the source freezes; at one it draws on every clock.
+    pub probability: f32,
+    /// Levels the output snaps to, or zero for continuous.
+    pub quantize: u8,
+    /// Walk from the held value instead of jumping to an independent one.
+    pub drunk: bool,
+    /// Largest distance a drunk step may travel, as a fraction of the range.
+    pub walk: f32,
+}
+
+impl Default for ModRandomParams {
+    fn default() -> Self {
+        Self {
+            rate_hz: 2.0,
+            tempo_sync: false,
+            rate_division: ModTimeDivision::Sixteenth,
+            trigger: ModRandomTrigger::Clock,
+            bipolar: true,
+            probability: 1.0,
+            quantize: 0,
+            drunk: false,
+            walk: 0.25,
+        }
+    }
+}
+
+/// The first patch cord between modules: a source whose input is another
+/// slot's output. Ordinary arithmetic against a constant, or a clamp into a
+/// range; the result leaves as an ordinary source with no new routing
+/// vocabulary behind it.
+///
+/// Modules evaluate in slot order within a control tick, so a module reading
+/// a lower slot sees this tick's value and one reading itself or a higher
+/// slot sees the previous tick's. That one rule is what makes feedback
+/// bounded and identical between realtime and offline renders, with no cycle
+/// machinery anywhere.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModMathParams {
+    /// Slot whose output is read. A slot reference today; when durable
+    /// `ModSourceId` lands it resolves the same way a route's source does.
+    pub input_slot: u8,
+    pub op: ModMathOp,
+    /// Constant right-hand side for the arithmetic and min/max operators.
+    pub operand: f32,
+    pub clamp_low: f32,
+    pub clamp_high: f32,
+}
+
+impl Default for ModMathParams {
+    fn default() -> Self {
+        Self {
+            input_slot: 0,
+            op: ModMathOp::Multiply,
+            operand: 1.0,
+            clamp_low: -1.0,
+            clamp_high: 1.0,
+        }
+    }
+}
+
 /// One modulator slot's configuration.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ModulatorParams {
     Lfo(ModLfoParams),
     Envelope(ModEnvelopeParams),
+    Step(ModStepParams),
+    Random(ModRandomParams),
+    Math(ModMathParams),
 }
 
 impl ModulatorParams {
@@ -528,6 +945,9 @@ impl ModulatorParams {
         match self {
             Self::Lfo(_) => ModulatorKind::Lfo,
             Self::Envelope(_) => ModulatorKind::Envelope,
+            Self::Step(_) => ModulatorKind::Step,
+            Self::Random(_) => ModulatorKind::Random,
+            Self::Math(_) => ModulatorKind::Math,
         }
     }
 
@@ -562,6 +982,33 @@ impl ModulatorParams {
                 ENV_PARAM_RELEASE_SYNC => f32::from(p.release_tempo_sync),
                 ENV_PARAM_RELEASE_DIVISION => p.release_division.to_index() as f32,
                 ENV_PARAM_AMOUNT => p.amount,
+                _ => return None,
+            }),
+            Self::Step(p) => Some(match id {
+                STEP_PARAM_LENGTH => f32::from(p.length),
+                STEP_PARAM_DIVISION => p.division.to_index() as f32,
+                STEP_PARAM_GLIDE => p.glide,
+                STEP_PARAM_TRIGGER => p.trigger.to_index() as f32,
+                _ => p.steps[step_value_index(id)?],
+            }),
+            Self::Random(p) => Some(match id {
+                RANDOM_PARAM_RATE_HZ => p.rate_hz,
+                RANDOM_PARAM_TEMPO_SYNC => f32::from(p.tempo_sync),
+                RANDOM_PARAM_RATE_DIVISION => p.rate_division.to_index() as f32,
+                RANDOM_PARAM_TRIGGER => p.trigger.to_index() as f32,
+                RANDOM_PARAM_BIPOLAR => f32::from(p.bipolar),
+                RANDOM_PARAM_PROBABILITY => p.probability,
+                RANDOM_PARAM_QUANTIZE => f32::from(p.quantize),
+                RANDOM_PARAM_DRUNK => f32::from(p.drunk),
+                RANDOM_PARAM_WALK => p.walk,
+                _ => return None,
+            }),
+            Self::Math(p) => Some(match id {
+                MATH_PARAM_INPUT_SLOT => f32::from(p.input_slot),
+                MATH_PARAM_OP => p.op.to_index() as f32,
+                MATH_PARAM_OPERAND => p.operand,
+                MATH_PARAM_CLAMP_LOW => p.clamp_low,
+                MATH_PARAM_CLAMP_HIGH => p.clamp_high,
                 _ => return None,
             }),
         }
@@ -610,6 +1057,39 @@ impl ModulatorParams {
                 ENV_PARAM_AMOUNT => p.amount = value,
                 _ => {}
             },
+            Self::Step(p) => match id {
+                STEP_PARAM_LENGTH => p.length = index.clamp(1, MOD_STEP_MAX_STEPS as i32) as u8,
+                STEP_PARAM_DIVISION => p.division = ModTimeDivision::from_index(index),
+                STEP_PARAM_GLIDE => p.glide = value,
+                STEP_PARAM_TRIGGER => p.trigger = ModStepTrigger::from_index(index),
+                _ => {
+                    if let Some(step) = step_value_index(id) {
+                        p.steps[step] = value;
+                    }
+                }
+            },
+            Self::Random(p) => match id {
+                RANDOM_PARAM_RATE_HZ => p.rate_hz = value,
+                RANDOM_PARAM_TEMPO_SYNC => p.tempo_sync = index != 0,
+                RANDOM_PARAM_RATE_DIVISION => p.rate_division = ModTimeDivision::from_index(index),
+                RANDOM_PARAM_TRIGGER => p.trigger = ModRandomTrigger::from_index(index),
+                RANDOM_PARAM_BIPOLAR => p.bipolar = index != 0,
+                RANDOM_PARAM_PROBABILITY => p.probability = value,
+                RANDOM_PARAM_QUANTIZE => p.quantize = index.clamp(0, 16) as u8,
+                RANDOM_PARAM_DRUNK => p.drunk = index != 0,
+                RANDOM_PARAM_WALK => p.walk = value,
+                _ => {}
+            },
+            Self::Math(p) => match id {
+                MATH_PARAM_INPUT_SLOT => {
+                    p.input_slot = index.clamp(0, MAX_MODULATORS_PER_CHANNEL as i32 - 1) as u8
+                }
+                MATH_PARAM_OP => p.op = ModMathOp::from_index(index),
+                MATH_PARAM_OPERAND => p.operand = value,
+                MATH_PARAM_CLAMP_LOW => p.clamp_low = value,
+                MATH_PARAM_CLAMP_HIGH => p.clamp_high = value,
+                _ => {}
+            },
         }
     }
 }
@@ -619,22 +1099,63 @@ impl ModulatorParams {
 pub enum ModulatorKind {
     Lfo,
     Envelope,
+    Step,
+    Random,
+    Math,
 }
 
 impl ModulatorKind {
-    pub const ALL: [ModulatorKind; 2] = [ModulatorKind::Lfo, ModulatorKind::Envelope];
+    pub const ALL: [ModulatorKind; 5] = [
+        ModulatorKind::Lfo,
+        ModulatorKind::Envelope,
+        ModulatorKind::Step,
+        ModulatorKind::Random,
+        ModulatorKind::Math,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Lfo => "LFO",
             Self::Envelope => "Envelope",
+            Self::Step => "Step",
+            Self::Random => "Random",
+            Self::Math => "Math",
         }
+    }
+
+    /// The badge a source chip and a route label wear. Short enough to sit
+    /// in a 46px tile, and the one place these abbreviations are spelled.
+    pub fn badge(self) -> &'static str {
+        match self {
+            Self::Lfo => "LFO",
+            Self::Envelope => "ENV",
+            Self::Step => "STEP",
+            Self::Random => "RND",
+            Self::Math => "MATH",
+        }
+    }
+
+    /// `ALL` position, which is the wire index the shelf's kind token uses.
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|kind| *kind == self)
+            .unwrap_or_default() as i32
+    }
+
+    /// The inverse, for the add menu. Out-of-range indices fail closed
+    /// rather than silently adding an LFO.
+    pub fn from_index(index: i32) -> Option<Self> {
+        usize::try_from(index).ok().and_then(|index| Self::ALL.get(index).copied())
     }
 
     pub fn default_params(self) -> ModulatorParams {
         match self {
             Self::Lfo => ModulatorParams::Lfo(ModLfoParams::default()),
             Self::Envelope => ModulatorParams::Envelope(ModEnvelopeParams::default()),
+            Self::Step => ModulatorParams::Step(ModStepParams::default()),
+            Self::Random => ModulatorParams::Random(ModRandomParams::default()),
+            Self::Math => ModulatorParams::Math(ModMathParams::default()),
         }
     }
 
@@ -643,6 +1164,9 @@ impl ModulatorKind {
         match self {
             Self::Lfo => &LFO_DESCRIPTORS,
             Self::Envelope => &ENVELOPE_DESCRIPTORS,
+            Self::Step => &STEP_DESCRIPTORS,
+            Self::Random => &RANDOM_DESCRIPTORS,
+            Self::Math => &MATH_DESCRIPTORS,
         }
     }
 
@@ -1155,5 +1679,115 @@ retrigger = true
         envelope.set(9_999, 1.0);
         assert_eq!(envelope, before);
         assert_eq!(envelope.get(9_999), None);
+    }
+
+    /// The sixteen step values are one contiguous id block and nothing
+    /// outside it, so the editor can walk the bank by offset and a stale
+    /// automation id past the end is ignored rather than aliasing step 1.
+    #[test]
+    fn the_step_value_block_is_contiguous_and_bounded() {
+        assert_eq!(step_value_index(STEP_PARAM_VALUE_BASE), Some(0));
+        assert_eq!(
+            step_value_index(STEP_PARAM_VALUE_BASE + MOD_STEP_MAX_STEPS as u32 - 1),
+            Some(MOD_STEP_MAX_STEPS - 1)
+        );
+        assert_eq!(
+            step_value_index(STEP_PARAM_VALUE_BASE + MOD_STEP_MAX_STEPS as u32),
+            None
+        );
+        for scalar in [
+            STEP_PARAM_LENGTH,
+            STEP_PARAM_DIVISION,
+            STEP_PARAM_GLIDE,
+            STEP_PARAM_TRIGGER,
+        ] {
+            assert_eq!(step_value_index(scalar), None, "scalar {scalar} aliased");
+        }
+
+        let mut params = ModulatorParams::Step(ModStepParams::default());
+        params.set(STEP_PARAM_VALUE_BASE + 5, -0.75);
+        params.set(STEP_PARAM_VALUE_BASE + MOD_STEP_MAX_STEPS as u32, 1.0);
+        let ModulatorParams::Step(step) = params else {
+            unreachable!()
+        };
+        assert_eq!(step.steps[5], -0.75);
+        assert!(step.steps.iter().filter(|value| **value != 0.0).count() == 1);
+    }
+
+    /// Every new kind decodes its enums and clamps out-of-range writes, and
+    /// none of them accepts a neighbouring kind's structural id by accident.
+    #[test]
+    fn the_new_kinds_decode_their_enums_and_clamp() {
+        let mut random = ModulatorParams::Random(ModRandomParams::default());
+        random.set(RANDOM_PARAM_TRIGGER, 1.0);
+        random.set(RANDOM_PARAM_BIPOLAR, 0.0);
+        random.set(RANDOM_PARAM_PROBABILITY, 4.0);
+        random.set(RANDOM_PARAM_QUANTIZE, 99.0);
+        random.set(RANDOM_PARAM_WALK, -3.0);
+        let ModulatorParams::Random(p) = random else {
+            unreachable!()
+        };
+        assert_eq!(p.trigger, ModRandomTrigger::NoteTrigger);
+        assert!(!p.bipolar);
+        assert_eq!(p.probability, 1.0);
+        assert_eq!(p.quantize, 16);
+        assert_eq!(p.walk, 0.01);
+
+        let mut math = ModulatorParams::Math(ModMathParams::default());
+        math.set(MATH_PARAM_OP, 6.0);
+        math.set(MATH_PARAM_INPUT_SLOT, 99.0);
+        math.set(MATH_PARAM_OPERAND, 40.0);
+        let ModulatorParams::Math(p) = math else {
+            unreachable!()
+        };
+        assert_eq!(p.op, ModMathOp::Clamp);
+        assert_eq!(p.input_slot, MAX_MODULATORS_PER_CHANNEL as u8 - 1);
+        assert_eq!(p.operand, 4.0);
+    }
+
+    /// A rack of new kinds persists sparse and reloads identically, and the
+    /// tagged format leaves an LFO-only project byte-identical to what a
+    /// build without these kinds wrote.
+    #[test]
+    fn new_kinds_round_trip_through_toml() {
+        let mut rack = ModRack::default();
+        let mut steps = [0.0; MOD_STEP_MAX_STEPS];
+        steps[0] = 1.0;
+        steps[3] = -0.5;
+        rack.slots[0] = Some(ModulatorParams::Step(ModStepParams {
+            steps,
+            length: 4,
+            division: ModTimeDivision::Eighth,
+            glide: 0.3,
+            trigger: ModStepTrigger::NoteAdvance,
+        }));
+        rack.slots[1] = Some(ModulatorParams::Random(ModRandomParams {
+            drunk: true,
+            quantize: 5,
+            ..ModRandomParams::default()
+        }));
+        rack.slots[3] = Some(ModulatorParams::Math(ModMathParams {
+            input_slot: 1,
+            op: ModMathOp::Clamp,
+            ..ModMathParams::default()
+        }));
+
+        let text = toml::to_string(&rack).unwrap();
+        assert!(text.contains("slot = 3"));
+        assert_eq!(toml::from_str::<ModRack>(&text).unwrap(), rack);
+
+        // A project written before these kinds existed still decodes: the
+        // variant tag is the only thing that grew.
+        let legacy = r#"
+[[slots]]
+slot = 0
+
+[slots.params]
+kind = "lfo"
+rate_hz = 2.0
+"#;
+        let decoded = toml::from_str::<ModRack>(legacy).unwrap();
+        assert_eq!(decoded.slots[0].unwrap().kind(), ModulatorKind::Lfo);
+        assert_eq!(decoded.slots[0].unwrap().get(LFO_PARAM_RATE_HZ), Some(2.0));
     }
 }

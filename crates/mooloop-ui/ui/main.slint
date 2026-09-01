@@ -603,8 +603,7 @@ export component MainWindow inherits Window {
     callback modulation-shelf-toggled();
     callback modulation-source-selected(int);
     callback modulation-assignment-toggled();
-    callback modulation-lfo-added();
-    callback modulation-envelope-added();
+    callback modulation-source-added(int);
     callback modulation-param-changed(int, int, float);
     callback modulation-param-edit-started();
     callback modulation-param-edit-finished();
@@ -3115,8 +3114,7 @@ export component MainWindow inherits Window {
                                             toggled => { root.modulation-shelf-toggled(); }
                                             source-selected(slot) => { root.modulation-source-selected(slot); }
                                             assignment-toggled => { root.modulation-assignment-toggled(); }
-                                            lfo-added => { root.modulation-lfo-added(); }
-                                            envelope-added => { root.modulation-envelope-added(); }
+                                            source-added(kind) => { root.modulation-source-added(kind); }
                                             param-changed(slot, id, value) => { root.modulation-param-changed(slot, id, value); }
                                             param-edit-started => { root.modulation-param-edit-started(); }
                                             param-edit-finished => { root.modulation-param-edit-finished(); }

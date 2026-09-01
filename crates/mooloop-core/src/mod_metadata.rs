@@ -41,6 +41,8 @@ pub enum ModSourceKind {
     Macro,
     /// Velocity, gate, key track, pressure — note-derived values.
     NoteValue,
+    /// Assemblable arithmetic over another source's output.
+    Math,
     /// A named control signal published by a generator or effect.
     DeviceOutlet,
 }
@@ -54,6 +56,7 @@ impl ModSourceKind {
             Self::Random => "Random",
             Self::Macro => "Macro",
             Self::NoteValue => "Note",
+            Self::Math => "Math",
             Self::DeviceOutlet => "Outlet",
         }
     }
@@ -161,6 +164,54 @@ impl ModSourceDescriptor {
             update: ControlRate::Subdivision32,
             latency: ControlLatency::IMMEDIATE,
             trigger: TriggerPolicy::NoteReset,
+        }
+    }
+
+    /// A step pattern: the first source to actually claim `Stepped`, which
+    /// is the metadata this module carried unconsumed until now.
+    pub fn local_step(id: ModSourceId, name: impl Into<String>, note_advance: bool) -> Self {
+        Self {
+            id,
+            kind: ModSourceKind::Step,
+            name: name.into(),
+            signal: SignalShape::Stepped,
+            update: ControlRate::Subdivision32,
+            latency: ControlLatency::IMMEDIATE,
+            trigger: if note_advance {
+                TriggerPolicy::NoteAdvance
+            } else {
+                TriggerPolicy::Free
+            },
+        }
+    }
+
+    pub fn local_random(id: ModSourceId, name: impl Into<String>, note_trigger: bool) -> Self {
+        Self {
+            id,
+            kind: ModSourceKind::Random,
+            name: name.into(),
+            signal: SignalShape::Stepped,
+            update: ControlRate::Subdivision32,
+            latency: ControlLatency::IMMEDIATE,
+            trigger: if note_trigger {
+                TriggerPolicy::NoteAdvance
+            } else {
+                TriggerPolicy::Free
+            },
+        }
+    }
+
+    /// Math reads another slot rather than a clock or a gate, so nothing
+    /// triggers it: it recomputes on every control tick, in slot order.
+    pub fn local_math(id: ModSourceId, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            kind: ModSourceKind::Math,
+            name: name.into(),
+            signal: SignalShape::Bipolar,
+            update: ControlRate::Subdivision32,
+            latency: ControlLatency::IMMEDIATE,
+            trigger: TriggerPolicy::Free,
         }
     }
 }
@@ -272,17 +323,25 @@ pub fn local_slot_sources(rack: &ModRack) -> Vec<(u8, ModSourceDescriptor)> {
         .iter()
         .enumerate()
         .filter_map(|(slot, params)| {
+            let params = (*params)?;
+            let id = ModSourceId(slot as u32);
+            let name = format!("{} {}", params.kind().badge(), slot + 1);
             let descriptor = match params {
-                Some(ModulatorParams::Lfo(lfo)) => ModSourceDescriptor::local_lfo(
-                    ModSourceId(slot as u32),
-                    format!("LFO {}", slot + 1),
-                    lfo.retrigger,
+                ModulatorParams::Lfo(lfo) => {
+                    ModSourceDescriptor::local_lfo(id, name, lfo.retrigger)
+                }
+                ModulatorParams::Envelope(_) => ModSourceDescriptor::local_envelope(id, name),
+                ModulatorParams::Step(step) => ModSourceDescriptor::local_step(
+                    id,
+                    name,
+                    step.trigger == crate::modulation::ModStepTrigger::NoteAdvance,
                 ),
-                Some(ModulatorParams::Envelope(_)) => ModSourceDescriptor::local_envelope(
-                    ModSourceId(slot as u32),
-                    format!("ENV {}", slot + 1),
+                ModulatorParams::Random(random) => ModSourceDescriptor::local_random(
+                    id,
+                    name,
+                    random.trigger == crate::modulation::ModRandomTrigger::NoteTrigger,
                 ),
-                None => return None,
+                ModulatorParams::Math(_) => ModSourceDescriptor::local_math(id, name),
             };
             Some((slot as u8, descriptor))
         })

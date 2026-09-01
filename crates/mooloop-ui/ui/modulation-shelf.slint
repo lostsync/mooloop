@@ -8,8 +8,15 @@ import { LedIndicator, MiniKnob, SelectorBank, ToggleButton, ToolButton, ValueSc
 export struct ModulationSourceRow {
     slot: int,
     name: string,
-    kind: int, // 0 = LFO, 1 = envelope
+    // `ModulatorKind::to_index`: 0 LFO, 1 envelope, 2 step, 3 random, 4 math.
+    kind: int,
     waveform: int,
+    // Step-only: the sixteen values and how many of them play. The tile
+    // draws the pattern itself rather than a generic staircase glyph.
+    steps: [float],
+    step-length: int,
+    // Math-only: the operator, which is the whole face a math tile has.
+    math-op: int,
     rate: float,
     depth: float,
     phase: float,
@@ -80,6 +87,57 @@ global EnvParam {
     out property <int> amount: 10;
 }
 
+global StepParam {
+    out property <int> length: 0;
+    out property <int> division: 1;
+    out property <int> glide: 2;
+    out property <int> trigger: 3;
+    // The sixteen step values are one contiguous block from here, so the
+    // editor addresses step `n` as `value-base + n` rather than naming it.
+    out property <int> value-base: 4;
+}
+
+global RandomParam {
+    out property <int> rate: 0;
+    out property <int> tempo-sync: 1;
+    out property <int> rate-division: 2;
+    out property <int> trigger: 3;
+    out property <int> bipolar: 4;
+    out property <int> probability: 5;
+    out property <int> quantize: 6;
+    out property <int> drunk: 7;
+    out property <int> walk: 8;
+}
+
+global MathParam {
+    out property <int> input-slot: 0;
+    out property <int> op: 1;
+    out property <int> operand: 2;
+    out property <int> clamp-low: 3;
+    out property <int> clamp-high: 4;
+}
+
+// The shared musical grid, spelled once. Both the sync knob and the step
+// sequencer's rate knob carry `ModTimeDivision` indices, so neither gets to
+// invent its own names for them.
+global Divisions {
+    public pure function label(index: int) -> string {
+        return index == 0 ? "4/1" : index == 1 ? "2/1" : index == 2 ? "1/1"
+            : index == 3 ? "1/2D" : index == 4 ? "1/2" : index == 5 ? "1/2T"
+            : index == 6 ? "1/4D" : index == 7 ? "1/4" : index == 8 ? "1/4T"
+            : index == 9 ? "1/8D" : index == 10 ? "1/8" : index == 11 ? "1/8T"
+            : index == 12 ? "1/16D" : index == 13 ? "1/16" : index == 14 ? "1/16T"
+            : index == 15 ? "1/32D" : index == 16 ? "1/32" : index == 17 ? "1/32T"
+            : index == 18 ? "1/64D" : index == 19 ? "1/64" : "1/64T";
+    }
+}
+
+// The math operators, in `ModMathOp::ALL` order.
+global MathOps {
+    out property <[string]> labels: ["+", "\u{2212}", "\u{d7}", "\u{f7}", "MIN", "MAX", "CLMP"];
+    out property <int> clamp-index: 6;
+}
+
 // A small source-shape view gives every collapsed source a recognizable face.
 // It is parameter-derived, not telemetry, and therefore makes no promise that
 // the line is phase-synchronized with the audio thread.
@@ -99,7 +157,13 @@ component ModulatorShape inherits Rectangle {
     in property <float> decay;
     in property <float> sustain: 0.7;
     in property <float> release;
+    // Step-only: the pattern itself, and how much of it plays.
+    in property <[float]> steps;
+    in property <int> step-length: 16;
+    // Math-only: the operator index, which is this kind's whole face.
+    in property <int> math-op;
     in property <color> line-color: Theme.accent;
+    private property <bool> curve-kind: root.kind == 0 || root.kind == 1 || root.kind == 3;
     private property <float> attack-weight: root.attack <= 0 ? 0 : root.attack / (root.attack + 0.35);
     private property <float> decay-weight: root.decay <= 0 ? 0 : root.decay / (root.decay + 0.35);
     private property <float> release-weight: root.release <= 0 ? 0 : root.release / (root.release + 0.35);
@@ -113,7 +177,7 @@ component ModulatorShape inherits Rectangle {
     border-color: Theme.border;
     clip: true;
 
-    Rectangle {
+    if root.curve-kind : Rectangle {
         x: 3px;
         y: root.kind == 1 ? parent.height - 4px : parent.height / 2;
         width: parent.width - 6px;
@@ -127,10 +191,20 @@ component ModulatorShape inherits Rectangle {
         height: min(1, root.amount) * (parent.height - 8px);
         background: root.line-color;
     }
+    // A random module wears the same stepped face the LFO's hidden
+    // sample-and-hold wore, which is what it was promoted from.
+    if root.curve-kind : Rectangle {
+        width: parent.width;
+        height: parent.height;
     for point in 40 : Rectangle {
         private property <float> unit: point * 1.0 / 39.0;
         private property <float> cycle: mod(self.unit + root.phase, 1);
-        private property <float> raw-lfo: root.waveform == 0
+        private property <float> held: mod(point + round(root.phase * 40), 13) < 3 ? 0.65
+            : mod(point + round(root.phase * 40), 13) < 7 ? -0.35
+            : mod(point + round(root.phase * 40), 13) < 10 ? 0.2 : -0.72;
+        private property <float> raw-lfo: root.kind == 3
+            ? self.held
+            : root.waveform == 0
             ? sin(self.cycle * 360deg)
             : root.waveform == 1
                 ? 1 - 4 * abs(mod(self.cycle + 0.25, 1) - 0.5)
@@ -138,9 +212,7 @@ component ModulatorShape inherits Rectangle {
                     ? 2 * mod(self.cycle + 0.5, 1) - 1
                     : root.waveform == 3
                         ? (self.cycle < root.pulse-width ? 1 : -1)
-                        : (mod(point + round(root.phase * 40), 13) < 3 ? 0.65
-                            : mod(point + round(root.phase * 40), 13) < 7 ? -0.35
-                            : mod(point + round(root.phase * 40), 13) < 10 ? 0.2 : -0.72);
+                        : self.held;
         private property <float> soft-lfo: root.waveform == 3
             ? sin((self.cycle - root.pulse-width / 2) * 360deg)
             : sin(self.cycle * 360deg);
@@ -167,6 +239,112 @@ component ModulatorShape inherits Rectangle {
         height: 2px;
         background: root.line-color;
     }
+    }
+    // A step pattern draws itself: sixteen columns, the ones past `length`
+    // dimmed rather than hidden, so shortening a pattern reads as hiding
+    // steps rather than deleting them.
+    if root.kind == 2 : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        Rectangle {
+            x: 3px;
+            y: parent.height / 2;
+            width: parent.width - 6px;
+            height: 1px;
+            background: Theme.border;
+        }
+        for column in 16 : Rectangle {
+            private property <float> level: clamp(root.steps[column], -1, 1);
+            private property <bool> playing: column < root.step-length;
+            x: 3px + column * (parent.width - 6px) / 16;
+            y: 0px;
+            width: max(1px, (parent.width - 6px) / 16 - 1px);
+            height: parent.height;
+            Rectangle {
+                x: 0px;
+                y: parent.height / 2 - max(0, parent.level) * (parent.height / 2 - 3px);
+                width: parent.width;
+                height: max(1px, abs(parent.level) * (parent.height / 2 - 3px));
+                background: parent.playing ? root.line-color : Theme.text-faint;
+            }
+        }
+    }
+    // A math module has no waveform to show; the operator is the face.
+    if root.kind == 4 : Text {
+        width: parent.width;
+        height: parent.height;
+        text: MathOps.labels[root.math-op];
+        color: root.line-color;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Sixteen draggable columns. One touch area rather than sixteen, so a drag
+// paints across the pattern the way a step sequencer is expected to behave.
+component StepBank inherits Rectangle {
+    // The shelf's descriptor-indexed value array, read from `offset`: the
+    // step block is contiguous, so no second model has to be built for it.
+    in property <[float]> values;
+    in property <int> offset;
+    in property <int> length: 16;
+    in property <color> line-color: Theme.accent;
+    callback changed(int, float);
+    callback edit-started();
+    callback edit-finished();
+
+    private property <length> gap: 2px;
+    private property <length> column-width: (self.width - root.gap * 15) / 16;
+
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: Theme.radius-sm;
+
+    function paint(px: length, py: length) {
+        let column = clamp(floor(px / (root.column-width + root.gap)), 0, 15);
+        let level = clamp(1 - 2 * (py / max(1px, root.height)), -1, 1);
+        root.changed(column, level);
+    }
+
+    Rectangle {
+        x: 2px;
+        y: parent.height / 2;
+        width: parent.width - 4px;
+        height: 1px;
+        background: Theme.border;
+    }
+    for column in 16 : Rectangle {
+        private property <float> level: clamp(root.values[root.offset + column], -1, 1);
+        private property <bool> playing: column < root.length;
+        x: 2px + column * (root.column-width + root.gap);
+        y: 2px;
+        width: root.column-width;
+        height: parent.height - 4px;
+        background: self.playing ? Theme.surface-raised : Theme.surface;
+        border-radius: 1px;
+        Rectangle {
+            x: 0px;
+            y: parent.height / 2 - max(0, parent.level) * parent.height / 2;
+            width: parent.width;
+            height: max(1px, abs(parent.level) * parent.height / 2);
+            background: parent.playing ? root.line-color : Theme.text-faint;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: ns-resize;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.edit-started();
+                root.paint(touch.mouse-x - 2px, touch.mouse-y);
+            } else if (event.kind == PointerEventKind.move && touch.pressed) {
+                root.paint(touch.mouse-x - 2px, touch.mouse-y);
+            } else if (event.kind == PointerEventKind.up) {
+                root.edit-finished();
+            }
+        }
+    }
 }
 
 component SourceTile inherits Rectangle {
@@ -182,6 +360,9 @@ component SourceTile inherits Rectangle {
     in property <float> decay;
     in property <float> sustain: 0.7;
     in property <float> release;
+    in property <[float]> steps;
+    in property <int> step-length: 16;
+    in property <int> math-op;
     in property <bool> selected;
     in property <bool> armed;
     callback clicked();
@@ -210,6 +391,9 @@ component SourceTile inherits Rectangle {
             decay: root.decay;
             sustain: root.sustain;
             release: root.release;
+            steps: root.steps;
+            step-length: root.step-length;
+            math-op: root.math-op;
             line-color: root.armed ? Theme.focus : Theme.accent;
         }
         Text {
@@ -305,15 +489,6 @@ component SyncMiniKnob inherits Rectangle {
     width: 46px;
     height: 51px;
 
-    pure function division-label(index: int) -> string {
-        return index == 0 ? "4/1" : index == 1 ? "2/1" : index == 2 ? "1/1"
-            : index == 3 ? "1/2D" : index == 4 ? "1/2" : index == 5 ? "1/2T"
-            : index == 6 ? "1/4D" : index == 7 ? "1/4" : index == 8 ? "1/4T"
-            : index == 9 ? "1/8D" : index == 10 ? "1/8" : index == 11 ? "1/8T"
-            : index == 12 ? "1/16D" : index == 13 ? "1/16" : index == 14 ? "1/16T"
-            : index == 15 ? "1/32D" : index == 16 ? "1/32" : index == 17 ? "1/32T"
-            : index == 18 ? "1/64D" : index == 19 ? "1/64" : "1/64T";
-    }
 
     Text {
         x: 0px;
@@ -336,7 +511,7 @@ component SyncMiniKnob inherits Rectangle {
         default-value: root.synced ? 7 : root.free-default;
         step: root.synced ? 1 : 0;
         scale: root.synced ? ValueScale.linear : root.free-scale;
-        value-text: root.synced ? root.division-label(root.division) : root.free-value-text;
+        value-text: root.synced ? Divisions.label(root.division) : root.free-value-text;
         changed(value) => {
             if (root.synced) {
                 root.division-changed(round(value));
@@ -371,11 +546,46 @@ component SyncMiniKnob inherits Rectangle {
         y: 35px;
         width: parent.width;
         height: 12px;
-        text: root.synced ? root.division-label(root.division) : root.free-value-text;
+        text: root.synced ? Divisions.label(root.division) : root.free-value-text;
         color: root.synced ? Theme.focus : Theme.accent;
         font-size: 7px;
         horizontal-alignment: center;
         overflow: elide;
+    }
+}
+
+// A labelled lamp: the same tiny clickable "O." gesture SyncMiniKnob spends
+// on tempo sync, for flags that do not deserve a selector row of their own.
+component LedToggle inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <string> tooltip;
+    callback toggled(bool);
+
+    height: 12px;
+    accessible-role: button;
+    accessible-label: root.label;
+
+    LedIndicator {
+        x: 0px;
+        y: 2px;
+        diameter: 8px;
+        on: root.on;
+        tooltip: root.tooltip;
+    }
+    Text {
+        x: 12px;
+        y: 0px;
+        width: parent.width - 12px;
+        height: 12px;
+        text: root.label;
+        color: root.on ? Theme.accent : Theme.text-muted;
+        font-size: 7px;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.on); }
     }
 }
 
@@ -408,8 +618,9 @@ export component ModulationShelf inherits Rectangle {
     callback toggled();
     callback source-selected(int);
     callback assignment-toggled();
-    callback lfo-added();
-    callback envelope-added();
+    // One add verb for every kind, carrying `ModulatorKind::to_index`. The
+    // menu grew from two entries to five without growing the contract.
+    callback source-added(int);
     // One descriptor-addressed edit path: (slot, id, value). The edit-started
     // / edit-finished pair brackets knob drags so a gesture lands as one undo
     // step; discrete edits arrive bare and record individually.
@@ -425,6 +636,18 @@ export component ModulationShelf inherits Rectangle {
 
     private property <bool> add-source-menu-open: false;
     private property <bool> assigning: root.armed-slot >= 0;
+
+    pure function kind-badge(kind: int) -> string {
+        return kind == 0 ? "LFO" : kind == 1 ? "ENV" : kind == 2 ? "STEP"
+            : kind == 3 ? "RND" : "MATH";
+    }
+    pure function kind-tooltip(kind: int) -> string {
+        return kind == 0 ? "Add a low-frequency oscillator"
+            : kind == 1 ? "Add a gate-driven ADSR envelope"
+            : kind == 2 ? "Add a clocked step pattern"
+            : kind == 3 ? "Add a sample-and-hold random source"
+            : "Add a math module that reads another slot";
+    }
 
     height: root.open ? ModulationShelfMetrics.open-height : ModulationShelfMetrics.closed-height;
     border-width: 1px;
@@ -464,7 +687,7 @@ export component ModulationShelf inherits Rectangle {
                     border-radius: Theme.radius-sm;
                     background: Theme.accent-active;
                     Text {
-                        text: "ASSIGN · " + (root.selected-kind == 1 ? "ENV " : "LFO ") + (root.armed-slot + 1);
+                        text: "ASSIGN · " + root.kind-badge(root.selected-kind) + " " + (root.armed-slot + 1);
                         color: Theme.focus;
                         font-size: 8px;
                         horizontal-alignment: center;
@@ -523,6 +746,9 @@ export component ModulationShelf inherits Rectangle {
                                 decay: source.preview-decay;
                                 sustain: source.preview-sustain;
                                 release: source.preview-release;
+                                steps: source.steps;
+                                step-length: source.step-length;
+                                math-op: source.math-op;
                                 selected: source.selected;
                                 armed: root.armed-slot == source.slot;
                                 clicked => {
@@ -542,35 +768,43 @@ export component ModulationShelf inherits Rectangle {
                             }
                             if root.add-source-menu-open : Rectangle {
                                 width: 82px;
-                                height: 66px;
+                                height: 68px;
                                 border-width: 1px;
                                 border-color: Theme.accent;
                                 background: Theme.surface-raised;
                                 VerticalLayout {
-                                    padding: 4px;
+                                    padding: 3px;
                                     spacing: 2px;
                                     Text { height: 8px; text: "ADD SOURCE"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-                                    ToolButton {
-                                        text: "LFO";
-                                        tooltip: "Add a low-frequency oscillator";
-                                        min-height: 22px;
-                                        max-height: 22px;
-                                        clicked => {
-                                            root.add-source-menu-open = false;
-                                            root.lfo-added();
+                                    for row in [
+                                        { left: 0, right: 1 },
+                                        { left: 2, right: 3 },
+                                        { left: 4, right: -1 },
+                                    ] : HorizontalLayout {
+                                        height: 16px;
+                                        spacing: 2px;
+                                        ToolButton {
+                                            text: root.kind-badge(row.left);
+                                            tooltip: root.kind-tooltip(row.left);
+                                            min-height: 16px;
+                                            max-height: 16px;
+                                            clicked => {
+                                                root.add-source-menu-open = false;
+                                                root.source-added(row.left);
+                                            }
                                         }
-                                    }
-                                    ToolButton {
-                                        text: "ENV";
-                                        tooltip: "Add a gate-driven ADSR envelope";
-                                        min-height: 22px;
-                                        max-height: 22px;
-                                        clicked => {
-                                            root.add-source-menu-open = false;
-                                            root.envelope-added();
+                                        if row.right >= 0 : ToolButton {
+                                            text: root.kind-badge(row.right);
+                                            tooltip: root.kind-tooltip(row.right);
+                                            min-height: 16px;
+                                            max-height: 16px;
+                                            clicked => {
+                                                root.add-source-menu-open = false;
+                                                root.source-added(row.right);
+                                            }
                                         }
+                                        if row.right < 0 : Rectangle { }
                                     }
-                                    Rectangle { vertical-stretch: 1; }
                                 }
                             }
                             Rectangle { horizontal-stretch: 1; }
@@ -913,6 +1147,380 @@ export component ModulationShelf inherits Rectangle {
                                     edit-finished => { root.param-edit-finished(); }
                                 }
                                 Text { height: 8px; text: round(root.selected-values[EnvParam.amount] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
+                    if root.selected-slot >= 0 && root.selected-kind == 2 : VerticalLayout {
+                        padding: 3px;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            height: 14px;
+                            spacing: 5px;
+                            Text { text: "STEP " + (root.selected-slot + 1); color: Theme.text; font-size: 9px; vertical-alignment: center; }
+                            Text { text: "STEPPED  ·  32 FRAME"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            ToggleButton {
+                                text: root.assigning ? "ASSIGNING" : "ASSIGN";
+                                checked: root.assigning;
+                                min-width: 76px; max-width: 76px; min-height: 14px; max-height: 14px;
+                                toggled(value) => { root.assignment-toggled(); }
+                            }
+                            ToolButton {
+                                text: "×";
+                                tooltip: "Remove this source and its routes";
+                                min-width: 22px; max-width: 22px; min-height: 14px; max-height: 14px;
+                                text-color: Theme.text-muted;
+                                clicked => { root.source-removed(root.selected-slot); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            StepBank {
+                                horizontal-stretch: 1;
+                                height: 51px;
+                                values: root.selected-values;
+                                offset: StepParam.value-base;
+                                length: round(root.selected-values[StepParam.length]);
+                                line-color: root.assigning ? Theme.focus : Theme.accent;
+                                changed(column, level) => {
+                                    root.param-changed(root.selected-slot, StepParam.value-base + column, level);
+                                }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            VerticalLayout {
+                                width: 44px; height: 51px; spacing: 1px; alignment: center;
+                                Text { height: 8px; text: "RATE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Step rate";
+                                    value: root.selected-values[StepParam.division];
+                                    minimum: 0;
+                                    maximum: 20;
+                                    default-value: 13;
+                                    step: 1;
+                                    diameter: 22px;
+                                    value-text: Divisions.label(round(root.selected-values[StepParam.division]));
+                                    changed(value) => { root.param-changed(root.selected-slot, StepParam.division, round(value)); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: Divisions.label(round(root.selected-values[StepParam.division])); color: Theme.focus; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 40px; height: 51px; spacing: 1px; alignment: center;
+                                Text { height: 8px; text: "LENGTH"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Steps played";
+                                    value: root.selected-values[StepParam.length];
+                                    minimum: 1;
+                                    maximum: 16;
+                                    default-value: 8;
+                                    step: 1;
+                                    diameter: 20px;
+                                    value-text: round(root.selected-values[StepParam.length]) + "";
+                                    changed(value) => { root.param-changed(root.selected-slot, StepParam.length, round(value)); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: round(root.selected-values[StepParam.length]) + " STEPS"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 40px; height: 51px; spacing: 1px; alignment: center;
+                                Text { height: 8px; text: "GLIDE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Step glide";
+                                    value: root.selected-values[StepParam.glide];
+                                    default-value: 0;
+                                    diameter: 20px;
+                                    value-text: root.selected-values[StepParam.glide] <= 0.0001 ? "OFF"
+                                        : round(root.selected-values[StepParam.glide] * 100) + "%";
+                                    changed(value) => { root.param-changed(root.selected-slot, StepParam.glide, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: root.selected-values[StepParam.glide] <= 0.0001 ? "OFF" : round(root.selected-values[StepParam.glide] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 64px; height: 51px; spacing: 2px; alignment: center;
+                                Text { height: 8px; text: "TRIGGER"; color: Theme.text-muted; font-size: 7px; }
+                                SelectorBank {
+                                    height: 20px;
+                                    options: ["CLK", "NOTE"];
+                                    selected-index: round(root.selected-values[StepParam.trigger]);
+                                    segment-width: 30px;
+                                    tooltip: "Advance from the transport clock, or one step per note";
+                                    selected(index) => { root.param-changed(root.selected-slot, StepParam.trigger, index); }
+                                }
+                                Rectangle { vertical-stretch: 1; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
+                    if root.selected-slot >= 0 && root.selected-kind == 3 : VerticalLayout {
+                        padding: 3px;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            height: 14px;
+                            spacing: 5px;
+                            Text { text: "RANDOM " + (root.selected-slot + 1); color: Theme.text; font-size: 9px; vertical-alignment: center; }
+                            Text {
+                                text: (root.selected-values[RandomParam.bipolar] > 0.5 ? "BIPOLAR" : "UNIPOLAR") + "  ·  32 FRAME";
+                                color: Theme.text-faint; font-size: 7px; vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            ToggleButton {
+                                text: root.assigning ? "ASSIGNING" : "ASSIGN";
+                                checked: root.assigning;
+                                min-width: 76px; max-width: 76px; min-height: 14px; max-height: 14px;
+                                toggled(value) => { root.assignment-toggled(); }
+                            }
+                            ToolButton {
+                                text: "×";
+                                tooltip: "Remove this source and its routes";
+                                min-width: 22px; max-width: 22px; min-height: 14px; max-height: 14px;
+                                text-color: Theme.text-muted;
+                                clicked => { root.source-removed(root.selected-slot); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            ModulatorShape {
+                                width: 68px;
+                                height: 46px;
+                                kind: 3;
+                                line-color: root.assigning ? Theme.focus : Theme.accent;
+                            }
+                            SyncMiniKnob {
+                                label: "RATE";
+                                free-value: root.selected-values[RandomParam.rate];
+                                free-minimum: 0.05;
+                                free-maximum: 20;
+                                free-default: 2;
+                                free-scale: ValueScale.logarithmic;
+                                free-value-text: round(root.selected-values[RandomParam.rate] * 100) / 100 + " Hz";
+                                synced: root.selected-values[RandomParam.tempo-sync] > 0.5;
+                                division: round(root.selected-values[RandomParam.rate-division]);
+                                free-changed(value) => { root.param-changed(root.selected-slot, RandomParam.rate, value); }
+                                sync-changed(value) => { root.param-changed(root.selected-slot, RandomParam.tempo-sync, value ? 1 : 0); }
+                                division-changed(value) => { root.param-changed(root.selected-slot, RandomParam.rate-division, value); }
+                                edit-started => { root.param-edit-started(); }
+                                edit-finished => { root.param-edit-finished(); }
+                            }
+                            VerticalLayout {
+                                width: 42px; height: 51px; spacing: 1px; alignment: center;
+                                Text { height: 8px; text: "CHANCE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Chance a due draw lands";
+                                    value: root.selected-values[RandomParam.probability];
+                                    default-value: 1;
+                                    diameter: 20px;
+                                    value-text: round(root.selected-values[RandomParam.probability] * 100) + "%";
+                                    changed(value) => { root.param-changed(root.selected-slot, RandomParam.probability, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: round(root.selected-values[RandomParam.probability] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 42px; height: 51px; spacing: 1px; alignment: center;
+                                Text { height: 8px; text: "QUANT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Levels a draw snaps to";
+                                    value: root.selected-values[RandomParam.quantize];
+                                    minimum: 0;
+                                    maximum: 16;
+                                    default-value: 0;
+                                    step: 1;
+                                    diameter: 20px;
+                                    value-text: round(root.selected-values[RandomParam.quantize]) < 2 ? "OFF"
+                                        : round(root.selected-values[RandomParam.quantize]) + "";
+                                    changed(value) => { root.param-changed(root.selected-slot, RandomParam.quantize, round(value)); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: round(root.selected-values[RandomParam.quantize]) < 2 ? "OFF" : round(root.selected-values[RandomParam.quantize]) + " LVL"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 42px; height: 51px; spacing: 1px; alignment: center;
+                                Text { height: 8px; text: "WALK"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Largest drunk step";
+                                    value: root.selected-values[RandomParam.walk];
+                                    minimum: 0.01;
+                                    maximum: 1;
+                                    default-value: 0.25;
+                                    enabled: root.selected-values[RandomParam.drunk] > 0.5;
+                                    diameter: 20px;
+                                    value-text: round(root.selected-values[RandomParam.walk] * 100) + "%";
+                                    changed(value) => { root.param-changed(root.selected-slot, RandomParam.walk, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: round(root.selected-values[RandomParam.walk] * 100) + "%"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 132px; height: 51px; spacing: 1px;
+                                Text { height: 8px; text: "TRIGGER"; color: Theme.text-muted; font-size: 7px; }
+                                SelectorBank {
+                                    height: 18px;
+                                    options: ["CLK", "NOTE"];
+                                    selected-index: round(root.selected-values[RandomParam.trigger]);
+                                    segment-width: 32px;
+                                    tooltip: "Draw on the clock, or once per note";
+                                    selected(index) => { root.param-changed(root.selected-slot, RandomParam.trigger, index); }
+                                }
+                                // Two lamps on one row: the panel has 51px to
+                                // spend and a clipped flag is worse than a
+                                // tighter one.
+                                HorizontalLayout {
+                                    height: 12px;
+                                    spacing: 4px;
+                                LedToggle {
+                                    width: 60px;
+                                    label: "BIPOLAR";
+                                    on: root.selected-values[RandomParam.bipolar] > 0.5;
+                                    tooltip: "Draw across −1..1 rather than 0..1";
+                                    toggled(value) => { root.param-changed(root.selected-slot, RandomParam.bipolar, value ? 1 : 0); }
+                                }
+                                LedToggle {
+                                    width: 56px;
+                                    label: "DRUNK";
+                                    on: root.selected-values[RandomParam.drunk] > 0.5;
+                                    tooltip: "Walk from the held value instead of jumping";
+                                    toggled(value) => { root.param-changed(root.selected-slot, RandomParam.drunk, value ? 1 : 0); }
+                                }
+                                }
+                                Rectangle { vertical-stretch: 1; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
+                    if root.selected-slot >= 0 && root.selected-kind == 4 : VerticalLayout {
+                        padding: 3px;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            height: 14px;
+                            spacing: 5px;
+                            Text { text: "MATH " + (root.selected-slot + 1); color: Theme.text; font-size: 9px; vertical-alignment: center; }
+                            Text { text: "BIPOLAR  ·  32 FRAME"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            ToggleButton {
+                                text: root.assigning ? "ASSIGNING" : "ASSIGN";
+                                checked: root.assigning;
+                                min-width: 76px; max-width: 76px; min-height: 14px; max-height: 14px;
+                                toggled(value) => { root.assignment-toggled(); }
+                            }
+                            ToolButton {
+                                text: "×";
+                                tooltip: "Remove this source and its routes";
+                                min-width: 22px; max-width: 22px; min-height: 14px; max-height: 14px;
+                                text-color: Theme.text-muted;
+                                clicked => { root.source-removed(root.selected-slot); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            VerticalLayout {
+                                width: 100px; height: 51px; spacing: 2px;
+                                Text { height: 8px; text: "INPUT SLOT"; color: Theme.text-muted; font-size: 7px; }
+                                SelectorBank {
+                                    height: 20px;
+                                    options: ["1", "2", "3", "4"];
+                                    selected-index: round(root.selected-values[MathParam.input-slot]);
+                                    segment-width: 23px;
+                                    tooltip: "Slot this module reads. A lower slot resolves this tick; itself or a higher one reads the previous tick";
+                                    selected(index) => { root.param-changed(root.selected-slot, MathParam.input-slot, index); }
+                                }
+                                Text {
+                                    height: 10px;
+                                    text: round(root.selected-values[MathParam.input-slot]) < root.selected-slot
+                                        ? "SAME TICK" : "PREVIOUS TICK";
+                                    color: Theme.text-faint;
+                                    font-size: 6px;
+                                }
+                            }
+                            VerticalLayout {
+                                width: 218px; height: 51px; spacing: 2px;
+                                Text { height: 8px; text: "OPERATOR"; color: Theme.text-muted; font-size: 7px; }
+                                SelectorBank {
+                                    height: 20px;
+                                    options: MathOps.labels;
+                                    selected-index: round(root.selected-values[MathParam.op]);
+                                    segment-width: 30px;
+                                    tooltip: "What this module does to its input";
+                                    selected(index) => { root.param-changed(root.selected-slot, MathParam.op, index); }
+                                }
+                                Text {
+                                    height: 10px;
+                                    text: round(root.selected-values[MathParam.op]) == MathOps.clamp-index
+                                        ? "SLOT " + (round(root.selected-values[MathParam.input-slot]) + 1)
+                                            + " → " + round(root.selected-values[MathParam.clamp-low] * 100) / 100
+                                            + "…" + round(root.selected-values[MathParam.clamp-high] * 100) / 100
+                                        : "SLOT " + (round(root.selected-values[MathParam.input-slot]) + 1)
+                                            + " " + MathOps.labels[round(root.selected-values[MathParam.op])]
+                                            + " " + round(root.selected-values[MathParam.operand] * 100) / 100;
+                                    color: Theme.accent;
+                                    font-size: 7px;
+                                    overflow: elide;
+                                }
+                            }
+                            VerticalLayout {
+                                width: 44px; height: 51px; spacing: 1px; alignment: center;
+                                Text { height: 8px; text: "OPERAND"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Constant operand";
+                                    value: root.selected-values[MathParam.operand];
+                                    minimum: -4;
+                                    maximum: 4;
+                                    default-value: 1;
+                                    bipolar: true;
+                                    enabled: round(root.selected-values[MathParam.op]) != MathOps.clamp-index;
+                                    diameter: 22px;
+                                    value-text: round(root.selected-values[MathParam.operand] * 100) / 100 + "";
+                                    changed(value) => { root.param-changed(root.selected-slot, MathParam.operand, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: round(root.selected-values[MathParam.operand] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 42px; height: 51px; spacing: 1px; alignment: center;
+                                Text { height: 8px; text: "LOW"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Clamp floor";
+                                    value: root.selected-values[MathParam.clamp-low];
+                                    minimum: -1;
+                                    maximum: 1;
+                                    default-value: -1;
+                                    bipolar: true;
+                                    enabled: round(root.selected-values[MathParam.op]) == MathOps.clamp-index;
+                                    diameter: 20px;
+                                    value-text: round(root.selected-values[MathParam.clamp-low] * 100) / 100 + "";
+                                    changed(value) => { root.param-changed(root.selected-slot, MathParam.clamp-low, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: round(root.selected-values[MathParam.clamp-low] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            }
+                            VerticalLayout {
+                                width: 42px; height: 51px; spacing: 1px; alignment: center;
+                                Text { height: 8px; text: "HIGH"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                                MiniKnob {
+                                    label: "Clamp ceiling";
+                                    value: root.selected-values[MathParam.clamp-high];
+                                    minimum: -1;
+                                    maximum: 1;
+                                    default-value: 1;
+                                    bipolar: true;
+                                    enabled: round(root.selected-values[MathParam.op]) == MathOps.clamp-index;
+                                    diameter: 20px;
+                                    value-text: round(root.selected-values[MathParam.clamp-high] * 100) / 100 + "";
+                                    changed(value) => { root.param-changed(root.selected-slot, MathParam.clamp-high, value); }
+                                    edit-started => { root.param-edit-started(); }
+                                    edit-finished => { root.param-edit-finished(); }
+                                }
+                                Text { height: 8px; text: round(root.selected-values[MathParam.clamp-high] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
                             }
                             Rectangle { horizontal-stretch: 1; }
                         }
