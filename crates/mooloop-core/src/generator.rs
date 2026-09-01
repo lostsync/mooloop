@@ -16,8 +16,8 @@ use crate::{
     DeviceKind, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode, MonoSynthParams, MlM1Params,
     NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PolySynthParams, RetriggerMode,
     SamplerParams, StretchMode, VoiceMode, MAX_LINEAR_GAIN, MAX_POLY_VOICES,
-    MAX_SAMPLER_VOICES, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_GRAIN,
-    MIN_STRETCH_RATIO,
+    MAX_SAMPLER_VOICES, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
+    MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
 };
 
 // --- Sampler ---------------------------------------------------------------
@@ -53,6 +53,8 @@ pub const SAMPLER_PARAM_STRETCH_ENABLED: u32 = 27;
 pub const SAMPLER_PARAM_STRETCH_MODE: u32 = 28;
 pub const SAMPLER_PARAM_STRETCH_RATIO: u32 = 29;
 pub const SAMPLER_PARAM_STRETCH_GRAIN: u32 = 30;
+pub const SAMPLER_PARAM_STRETCH_SYNC: u32 = 31;
+pub const SAMPLER_PARAM_STRETCH_BARS: u32 = 32;
 
 /// Envelope stages share this range across every generator. Exponential, so
 /// the fast end where percussion lives gets most of the travel.
@@ -95,7 +97,7 @@ const fn stepped(id: u32, name: &'static str, steps: u8, default: f32) -> ParamD
     }
 }
 
-static SAMPLER_DESCRIPTORS: [ParamDescriptor; 31] = [
+static SAMPLER_DESCRIPTORS: [ParamDescriptor; 33] = [
     unit(SAMPLER_PARAM_START, "Start", 0.0),
     unit(SAMPLER_PARAM_END, "End", 1.0),
     stepped(SAMPLER_PARAM_REVERSE, "Reverse", 2, 0.0),
@@ -210,6 +212,19 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 31] = [
         // should feel like equal musical intervals.
         curve: ParamCurve::Exponential,
         default: 1024.0,
+    },
+    stepped(SAMPLER_PARAM_STRETCH_SYNC, "Fit to tempo", 2, 0.0),
+    ParamDescriptor {
+        id: SAMPLER_PARAM_STRETCH_BARS,
+        name: "Bars",
+        unit: "bar",
+        min: MIN_STRETCH_BARS,
+        max: MAX_STRETCH_BARS,
+        // Exponential so the powers of two a loop actually lands on are
+        // evenly spaced round the control, rather than everything below four
+        // bars crowding into the first sixteenth of it.
+        curve: ParamCurve::Exponential,
+        default: 1.0,
     },
 ];
 
@@ -655,6 +670,8 @@ impl GeneratorParams {
                 },
                 SAMPLER_PARAM_STRETCH_RATIO => p.stretch_ratio,
                 SAMPLER_PARAM_STRETCH_GRAIN => f32::from(p.stretch_grain),
+                SAMPLER_PARAM_STRETCH_SYNC => f32::from(u8::from(p.stretch_sync)),
+                SAMPLER_PARAM_STRETCH_BARS => p.stretch_bars,
                 _ => return None,
             }),
             Self::MonoSynth(p) => {
@@ -788,6 +805,10 @@ impl GeneratorParams {
                     p.stretch_grain = (value.round() as i32)
                         .clamp(i32::from(MIN_STRETCH_GRAIN), i32::from(MAX_STRETCH_GRAIN))
                         as u16
+                }
+                SAMPLER_PARAM_STRETCH_SYNC => p.stretch_sync = value >= 0.5,
+                SAMPLER_PARAM_STRETCH_BARS => {
+                    p.stretch_bars = value.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS)
                 }
                 _ => return None,
             },

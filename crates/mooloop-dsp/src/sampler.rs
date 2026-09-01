@@ -286,6 +286,18 @@ impl Voice {
     }
 }
 
+/// Everything a voice render needs that is fixed for the whole segment.
+///
+/// Grouped rather than passed loose because they always travel together: the
+/// block is already split at every event, so parameters and transport cannot
+/// change inside one segment by construction.
+#[derive(Clone, Copy)]
+struct VoiceContext {
+    params: SamplerParams,
+    sample_rate: u32,
+    bpm: f64,
+}
+
 /// The sampler node.
 pub struct Sampler {
     sample_slot: Arc<ArcSwapOption<SampleData>>,
@@ -303,6 +315,11 @@ pub struct Sampler {
     /// Installed and reclaimed structurally, never allocated on the audio
     /// thread -- `set_params` runs on the realtime command drain.
     stretch: Option<Box<StretchPool>>,
+    /// Last tempo the transport reported. Only read when `stretch_sync` is
+    /// on, where the bar length is what the ratio is derived from. Held here
+    /// because `render_range` splits a block at event offsets and would
+    /// otherwise have to carry it through every split.
+    bpm: f64,
     /// The device's patch-level output trim, lagged so it cannot click.
     ///
     /// One gain for the whole sampler, not one per voice: every voice copies
@@ -339,6 +356,7 @@ impl Sampler {
             voices,
             next_age: 1,
             stretch: None,
+            bpm: 120.0,
             output_gain: Smoothed::new(
                 clamp_output_gain(params.output_gain),
                 OUTPUT_GAIN_SMOOTHING_S,
@@ -435,8 +453,60 @@ impl Sampler {
         params.stretch_enabled
             && !params.reverse
             && params.loop_mode != LoopMode::Pingpong
-            && (params.stretch_mode == mooloop_core::StretchMode::Grain
+            && (params.stretch_sync
+                || params.stretch_mode == mooloop_core::StretchMode::Grain
                 || (params.stretch_ratio - 1.0).abs() > 1.0e-4)
+    }
+
+    /// The ratio the stretcher should actually run.
+    ///
+    /// With `stretch_sync` off this is just the knob. With it on the ratio is
+    /// *derived* so the region lasts `stretch_bars` bars, and the derivation
+    /// is the reason pitch and duration stop fighting:
+    ///
+    /// ```text
+    /// output_frames * rate = stretched_frames
+    /// stretched_frames / ratio = source_frames
+    /// ```
+    ///
+    /// so holding `output_frames` at a musical length while `source_frames`
+    /// is fixed at the region means `ratio = target * rate / region`. The
+    /// playback rate is in the numerator, which is the whole trick: transpose
+    /// a voice up an octave and the ratio doubles to match, so the loop still
+    /// lands on the bar. Pitch becomes a tuning control rather than a speed
+    /// control, and modulating either one leaves the other alone.
+    ///
+    /// The loop is what gets fitted when there is one, since the loop is the
+    /// thing that repeats against the grid; otherwise the playback region is.
+    fn effective_ratio(
+        params: SamplerParams,
+        len: usize,
+        sample_rate: u32,
+        bpm: f64,
+        playback_rate: f64,
+    ) -> f64 {
+        if !params.stretch_sync {
+            return f64::from(params.stretch_ratio);
+        }
+        let (region_start, region_end) = if params.loop_mode == LoopMode::Off {
+            Self::resolve_playback_bounds(params, len)
+        } else {
+            Self::resolve_loop_bounds(params, len)
+        };
+        let region = region_end - region_start;
+        if region <= 0.0 {
+            return 1.0;
+        }
+        let bars = f64::from(
+            params
+                .stretch_bars
+                .clamp(mooloop_core::MIN_STRETCH_BARS, mooloop_core::MAX_STRETCH_BARS),
+        );
+        let target = bars * mooloop_core::frames_per_bar(sample_rate, bpm);
+        (target * playback_rate / region).clamp(
+            f64::from(mooloop_core::MIN_STRETCH_RATIO),
+            f64::from(mooloop_core::MAX_STRETCH_RATIO),
+        )
     }
 
     pub fn choke_group(&self) -> u8 {
@@ -686,8 +756,7 @@ impl Sampler {
     /// Render the voice into `bus[start..end]`, adding into the buffers.
     /// Handles looping, envelope advancement, and voice termination.
     fn render_voice_range(
-        params: SamplerParams,
-        sample_rate: u32,
+        cx: VoiceContext,
         voice: &mut Voice,
         stretch: Option<&mut StretchReader>,
         output_gain: &mut Smoothed,
@@ -696,6 +765,11 @@ impl Sampler {
         // segment the block was split into, never independent.
         range: core::ops::Range<usize>,
     ) {
+        let VoiceContext {
+            params,
+            sample_rate,
+            bpm,
+        } = cx;
         let (start, end) = (range.start, range.end);
         if !voice.active {
             return;
@@ -724,10 +798,12 @@ impl Sampler {
         // every event.
         let mut stretch = stretch.filter(|_| Self::stretch_is_active(params));
         if let Some(reader) = stretch.as_mut() {
+            let ratio =
+                Self::effective_ratio(params, len, sample_rate, bpm, voice.playback_rate);
             let stretcher = reader.stretcher_mut();
             stretcher.set_mode(params.stretch_mode);
             stretcher.set_grain_frames(u32::from(params.stretch_grain));
-            stretcher.set_ratio(f64::from(params.stretch_ratio));
+            stretcher.set_ratio(ratio);
         }
 
         for i in start..end {
@@ -830,7 +906,11 @@ impl Sampler {
 
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let params = self.params;
-        let sample_rate = self.sample_rate;
+        let cx = VoiceContext {
+            params,
+            sample_rate: self.sample_rate,
+            bpm: self.bpm,
+        };
         self.output_gain
             .set_target(clamp_output_gain(params.output_gain));
         let entry = self.output_gain;
@@ -841,15 +921,7 @@ impl Sampler {
             // Advanced in lockstep with the voices, so voice `n` always gets
             // reader `n` whether or not it is sounding.
             let reader = readers.as_mut().and_then(Iterator::next);
-            Self::render_voice_range(
-                params,
-                sample_rate,
-                voice,
-                reader,
-                &mut gain,
-                bus,
-                start..end,
-            );
+            Self::render_voice_range(cx, voice, reader, &mut gain, bus, start..end);
         }
         // A voice that ends mid-segment stops walking its copy, and a silent
         // sampler renders no voices at all, so the trim advances here rather
@@ -877,6 +949,7 @@ impl AudioNode for Sampler {
         _events_out: Option<&mut EventList>,
     ) {
         let frames = ctx.frames.min(bus.capacity());
+        self.bpm = ctx.bpm;
 
         if !ctx.playing {
             self.release_all();
@@ -925,6 +998,136 @@ mod tests {
         });
         let slot = Arc::new(ArcSwapOption::from(Some(sample)));
         Sampler::new(slot, params, sr)
+    }
+
+    /// Fit-to-tempo derives the ratio so the region lasts the requested
+    /// number of bars. One bar at 120 BPM is 96,000 frames, so a 48,000-frame
+    /// sample has to be stretched 2x to fill it.
+    #[test]
+    fn fit_to_tempo_derives_the_ratio_from_the_bar_length() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            ..SamplerParams::default()
+        };
+        let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 1.0);
+        assert!((ratio - 2.0).abs() < 1.0e-6, "expected 2x, got {ratio}");
+
+        // Half the tempo, twice the bar, twice the stretch.
+        let slower = Sampler::effective_ratio(params, 48_000, 48_000, 60.0, 1.0);
+        assert!((slower - 4.0).abs() < 1.0e-6, "expected 4x, got {slower}");
+
+        // Two bars of the same sample needs twice as much again.
+        let two_bars = Sampler::effective_ratio(
+            SamplerParams {
+                stretch_bars: 2.0,
+                ..params
+            },
+            48_000,
+            48_000,
+            120.0,
+            1.0,
+        );
+        assert!((two_bars - 4.0).abs() < 1.0e-6, "expected 4x, got {two_bars}");
+    }
+
+    /// The reason fit-to-tempo exists: transposing a voice must not change how
+    /// long it lasts. The playback rate enters the derivation, so pitching up
+    /// an octave doubles the ratio to compensate and the loop still lands on
+    /// the bar.
+    #[test]
+    fn fit_to_tempo_makes_pitch_and_duration_independent() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            ..SamplerParams::default()
+        };
+        let unity = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 1.0);
+        for rate in [0.5, 1.0, 2.0, 3.0] {
+            let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, rate);
+            // Output length is `region * ratio / rate`; holding that constant
+            // is exactly what keeps the loop on the grid.
+            let output = 48_000.0 * ratio / rate;
+            let reference = 48_000.0 * unity / 1.0;
+            assert!(
+                (output - reference).abs() < 1.0,
+                "rate {rate} changed the duration: {output} vs {reference}"
+            );
+        }
+    }
+
+    /// With sync off the knob is the ratio, untouched.
+    #[test]
+    fn without_sync_the_ratio_is_the_knob() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: false,
+            stretch_ratio: 3.25,
+            ..SamplerParams::default()
+        };
+        let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 2.0);
+        assert!((ratio - 3.25).abs() < 1.0e-6, "the rate leaked in: {ratio}");
+    }
+
+    /// The loop is what gets fitted when there is one, since the loop is the
+    /// part that repeats against the grid.
+    #[test]
+    fn fit_to_tempo_measures_the_loop_when_there_is_one() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.0,
+            loop_end: 0.5,
+            ..SamplerParams::default()
+        };
+        // Half of a 48,000-frame sample is 24,000 frames, so filling a
+        // 96,000-frame bar takes 4x rather than 2x.
+        let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 1.0);
+        assert!((ratio - 4.0).abs() < 1.0e-6, "expected 4x, got {ratio}");
+    }
+
+    /// A derived ratio still has to land inside what the stretcher accepts:
+    /// an absurd tempo or a one-frame loop must not produce a ratio the DSP
+    /// would have to clamp silently later.
+    #[test]
+    fn a_derived_ratio_stays_inside_the_supported_range() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: mooloop_core::MAX_STRETCH_BARS,
+            ..SamplerParams::default()
+        };
+        let ratio = Sampler::effective_ratio(params, 64, 48_000, 20.0, 4.0);
+        assert!(ratio <= f64::from(mooloop_core::MAX_STRETCH_RATIO));
+
+        let tiny = Sampler::effective_ratio(
+            SamplerParams {
+                stretch_bars: mooloop_core::MIN_STRETCH_BARS,
+                ..params
+            },
+            48_000_000,
+            48_000,
+            300.0,
+            0.25,
+        );
+        assert!(tiny >= f64::from(mooloop_core::MIN_STRETCH_RATIO));
+    }
+
+    /// Sync on is enough to make stretching active even at a knob ratio of
+    /// exactly 1.0, because the knob is not what is being used.
+    #[test]
+    fn sync_activates_stretching_regardless_of_the_knob() {
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_ratio: 1.0,
+            ..SamplerParams::default()
+        };
+        assert!(Sampler::stretch_is_active(params));
     }
 
     /// Play one note and report how far through the sample the head reached.

@@ -1200,6 +1200,12 @@ fn check_sampler(doctor: &mut Doctor, who: &str, params: &mut SamplerParams) {
             mooloop_core::MIN_STRETCH_RATIO,
             mooloop_core::MAX_STRETCH_RATIO,
         ),
+        (
+            "the stretch length in bars",
+            &mut params.stretch_bars,
+            mooloop_core::MIN_STRETCH_BARS,
+            mooloop_core::MAX_STRETCH_BARS,
+        ),
     ] {
         doctor.fit("channel.sampler.range", who, field, value, min, max);
     }

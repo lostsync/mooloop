@@ -80,6 +80,42 @@ impl StretchMode {
     }
 }
 
+/// Bar-count bounds for tempo-synced stretching.
+pub const MIN_STRETCH_BARS: f32 = 0.0625;
+pub const MAX_STRETCH_BARS: f32 = 64.0;
+
+/// Snap a length in bars to the nearer power of two.
+///
+/// The rule, in Adam's words: find the power-of-two bracket the length falls
+/// in and take whichever end it is closer to -- one bar or two, two or four,
+/// four or eight. The split is the *arithmetic* midpoint, so 1.5 bars rounds
+/// up to 2 and 2.9 rounds down to 2, and it generalizes below a bar so a
+/// half-bar chop lands on 1/2 rather than being dragged up to 1.
+///
+/// This is what a freshly enabled fit-to-tempo guesses. A loop is nearly
+/// always some power of two of bars, and the length it was recorded at is
+/// nearly always slightly off that, so guessing well is the difference
+/// between the feature working on the first click and needing a knob turn
+/// every time.
+pub fn snap_bars_to_power_of_two(bars: f32) -> f32 {
+    if !bars.is_finite() || bars <= 0.0 {
+        return 1.0;
+    }
+    let bars = bars.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS);
+    let low = bars.log2().floor().exp2();
+    let high = low * 2.0;
+    let snapped = if bars >= (low + high) * 0.5 { high } else { low };
+    snapped.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS)
+}
+
+/// Frames in one bar at a tempo. Four beats to the bar, matching the
+/// convention the buffer device already uses -- `beats_per_bar` is project
+/// metadata the audio thread is not given, and inventing a second answer here
+/// would put two devices on different grids.
+pub fn frames_per_bar(sample_rate: u32, bpm: f64) -> f64 {
+    f64::from(sample_rate) * 240.0 / bpm.max(1.0)
+}
+
 /// Stretch ratio bounds. Output frames per input frame, so above 1.0 is
 /// slower. The ceiling is far past the range that stays clean, on purpose --
 /// extreme slow-down is a destination, and the cost does not grow with the
@@ -260,6 +296,22 @@ pub struct SamplerParams {
     /// continuous because it is a timbre, not a quality setting.
     #[serde(default = "default_stretch_grain")]
     pub stretch_grain: u16,
+    /// Fit the loop to the project tempo instead of using `stretch_ratio`
+    /// directly.
+    ///
+    /// When this is on the ratio is *derived*, not set: the region is made to
+    /// last `stretch_bars` bars whatever the tempo and whatever the voice is
+    /// transposed to. That last part is the point -- the playback rate enters
+    /// the derivation, so pitching a voice up shortens nothing. Pitch and
+    /// duration become genuinely independent controls, which is the whole
+    /// reason to have a stretcher at all.
+    #[serde(default)]
+    pub stretch_sync: bool,
+    /// How many bars the region should last when `stretch_sync` is on.
+    /// Seeded by [`snap_bars_to_power_of_two`] when the feature is switched
+    /// on, then free to edit.
+    #[serde(default = "default_stretch_bars")]
+    pub stretch_bars: f32,
     /// The filter envelope's own stages, or `None` to follow the amplitude
     /// envelope.
     ///
@@ -281,6 +333,10 @@ fn unity_stretch_ratio() -> f32 {
 
 fn default_stretch_grain() -> u16 {
     1024
+}
+
+fn default_stretch_bars() -> f32 {
+    1.0
 }
 
 /// The trim a project saved before the field existed plays at. Those mixes
@@ -321,6 +377,8 @@ impl Default for SamplerParams {
             stretch_mode: StretchMode::Music,
             stretch_ratio: 1.0,
             stretch_grain: 1024,
+            stretch_sync: false,
+            stretch_bars: 1.0,
             filter_env: None,
         }
     }
@@ -431,5 +489,67 @@ rate_reduction = 0.0
         assert_eq!(loaded.amp_env().decay, 1.5);
         assert_eq!(loaded.resolved_filter_env().decay, 0.01);
         assert_eq!(loaded.resolved_filter_env().attack, 0.3, "seeded from amp");
+    }
+}
+
+#[cfg(test)]
+mod stretch_tests {
+    use super::*;
+
+    /// The snapping rule, spelled out from the examples it was specified
+    /// with: whichever end of the power-of-two bracket the length is nearer,
+    /// split at the arithmetic midpoint.
+    #[test]
+    fn a_loop_length_snaps_to_the_nearer_power_of_two_bars() {
+        // The boundary cases the rule was described by.
+        assert_eq!(snap_bars_to_power_of_two(1.49), 1.0);
+        assert_eq!(snap_bars_to_power_of_two(1.5), 2.0);
+        assert_eq!(snap_bars_to_power_of_two(2.99), 2.0);
+        assert_eq!(snap_bars_to_power_of_two(3.0), 4.0);
+        assert_eq!(snap_bars_to_power_of_two(5.99), 4.0);
+        assert_eq!(snap_bars_to_power_of_two(6.0), 8.0);
+
+        // Exact lengths stay put rather than drifting to a neighbour.
+        for bars in [0.25f32, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0] {
+            assert_eq!(snap_bars_to_power_of_two(bars), bars, "{bars} moved");
+        }
+
+        // A slightly long or short recording lands on the intended length,
+        // which is the case the whole rule exists for.
+        assert_eq!(snap_bars_to_power_of_two(2.02), 2.0);
+        assert_eq!(snap_bars_to_power_of_two(3.97), 4.0);
+    }
+
+    /// It generalizes below a bar, so a half-bar chop is not dragged up to a
+    /// whole one.
+    #[test]
+    fn the_rule_holds_below_a_single_bar() {
+        assert_eq!(snap_bars_to_power_of_two(0.6), 0.5);
+        assert_eq!(snap_bars_to_power_of_two(0.8), 1.0);
+        assert_eq!(snap_bars_to_power_of_two(0.3), 0.25);
+        assert_eq!(snap_bars_to_power_of_two(0.4), 0.5);
+    }
+
+    /// Nonsense in, something usable out. This runs off a measured sample
+    /// length, and an empty or unloaded sample measures zero.
+    #[test]
+    fn a_meaningless_length_snaps_to_one_bar() {
+        assert_eq!(snap_bars_to_power_of_two(0.0), 1.0);
+        assert_eq!(snap_bars_to_power_of_two(-3.0), 1.0);
+        assert_eq!(snap_bars_to_power_of_two(f32::NAN), 1.0);
+        // Infinity falls in with the other nonsense rather than clamping to
+        // the ceiling: a 64-bar guess from a broken measurement would be a
+        // worse answer than one bar, not a better one.
+        assert_eq!(snap_bars_to_power_of_two(f32::INFINITY), 1.0);
+    }
+
+    /// Four beats to the bar, matching the buffer device, and inversely
+    /// proportional to tempo.
+    #[test]
+    fn a_bar_is_four_beats_at_the_project_tempo() {
+        assert_eq!(frames_per_bar(48_000, 120.0), 96_000.0);
+        assert_eq!(frames_per_bar(48_000, 60.0), 192_000.0);
+        // A zero or negative tempo must not divide by zero.
+        assert!(frames_per_bar(48_000, 0.0).is_finite());
     }
 }
