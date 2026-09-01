@@ -47,6 +47,7 @@ pub mod sampler;
 pub mod scale;
 pub mod shaper;
 pub mod smooth;
+pub mod stretch;
 mod synth_voice;
 
 pub use align::DryAlign;

@@ -101,7 +101,7 @@ impl Region {
     /// widened by [`MAX_STRETCH`] can overhang a short loop several times
     /// over. Folding in a loop keeps that correct instead of reading whatever
     /// happened to be adjacent in the sample.
-    fn resolve(&self, index: i64, len: usize) -> Option<usize> {
+    pub(crate) fn resolve(&self, index: i64, len: usize) -> Option<usize> {
         if len == 0 {
             return None;
         }
