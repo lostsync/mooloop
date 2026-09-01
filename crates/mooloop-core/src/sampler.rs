@@ -243,6 +243,18 @@ pub struct SamplerParams {
     pub tune_semitones: f32,
     /// Fine tuning offset in cents.
     pub tune_cents: f32,
+    /// Whether a change to `tune_semitones`/`tune_cents` (by hand or by
+    /// modulation) is heard on every currently sounding voice, or only on the
+    /// next one triggered.
+    ///
+    /// On is the musically ordinary choice -- it is what makes a tune knob
+    /// behave like a tune knob while a note is held, and what a pitch
+    /// modulation route needs to be audible at all rather than silently doing
+    /// nothing until the next note-on. Off reproduces the sampler's original
+    /// behavior, for anyone who was relying on a held note's pitch staying
+    /// put under an unrelated tune edit.
+    #[serde(default = "default_retune_live")]
+    pub retune_live: bool,
     /// Loop start point as a fraction.
     pub loop_start: f32,
     /// Loop end point as a fraction.
@@ -327,6 +339,10 @@ pub struct SamplerParams {
     pub filter_env: Option<EnvTimes>,
 }
 
+fn default_retune_live() -> bool {
+    true
+}
+
 fn unity_stretch_ratio() -> f32 {
     1.0
 }
@@ -359,6 +375,7 @@ impl Default for SamplerParams {
             root_note: 60,
             tune_semitones: 0.0,
             tune_cents: 0.0,
+            retune_live: true,
             loop_start: 0.0,
             loop_end: 1.0,
             loop_mode: LoopMode::Off,

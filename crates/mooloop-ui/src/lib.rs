@@ -3960,6 +3960,7 @@ impl UiState {
         window.set_tune_semitones(p.tune_semitones);
         window.set_tune_cents(p.tune_cents);
         window.set_tune_label(tune_label(*p).into());
+        window.set_retune_live(p.retune_live);
         window.set_loop_mode(match p.loop_mode {
             LoopMode::Off => 0,
             LoopMode::Forward => 1,
@@ -9149,6 +9150,23 @@ impl AppUi {
                 if let Some(window) = weak.upgrade() {
                     window.set_tune_label(tune_label(channel.params).into());
                 }
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: ch as u8,
+                    params: channel.params,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_retune_live_changed(move |on| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                channel.params.retune_live = on;
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                     channel: ch as u8,
                     params: channel.params,

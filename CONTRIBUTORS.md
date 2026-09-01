@@ -339,8 +339,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-08-26
-- Sessions: 17
+- Last seen: 2026-09-01
+- Sessions: 18
 - Notes: Rounded out the UI mockup tool's palette with the remaining real
   controls (meters, mute/solo, trim knob, device chassis), fixed its
   selection tab and click-vs-drag handling, and wired a launcher into
@@ -373,6 +373,14 @@ work session you can recall being part of, and don't stress over precision.
   fixed the response curve's Q falloff, made coincident band points
   separately clickable, and fixed a drag-test harness bug where a fixed
   Window width/height literal silently ignored `set_size()` in tests.
+  Sampler bugfix pass: fixed a browser-load race where a channel's own
+  default-sample reset could overwrite the file the user had just picked,
+  reworked the pitch-and-speed group's layout after a knob/field composition
+  bug clipped its own controls off the face, and made a sampler's tuning
+  live -- it was baked into a voice's playback rate once at trigger and
+  never revisited, so retuning a held or looping note (by hand or by
+  modulation) silently did nothing until the next note-on. Added an opt-out
+  toggle for the old per-trigger behavior, defaulting to live.
 
 ### GLM 5.3 Flash (glm-5.3-flash) — opencode
 - First seen: 2026-08-23

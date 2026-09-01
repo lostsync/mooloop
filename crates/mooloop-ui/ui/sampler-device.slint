@@ -130,6 +130,7 @@ export component SamplerDeviceFace inherits Rectangle {
     in-out property <float> tune-semitones;
     in-out property <float> tune-cents;
     in-out property <string> tune-label;
+    in-out property <bool> retune-live;
     in-out property <float> filter-cutoff;
     in-out property <float> filter-resonance;
     in-out property <float> filter-env;
@@ -202,6 +203,7 @@ export component SamplerDeviceFace inherits Rectangle {
     callback root-note-changed(int);
     callback tune-semitones-changed(float);
     callback tune-cents-changed(float);
+    callback retune-live-changed(bool);
     callback loop-mode-changed(int);
     callback voice-mode-changed(int);
     callback polyphony-changed(int);
@@ -524,7 +526,7 @@ export component SamplerDeviceFace inherits Rectangle {
             Rectangle {
                 width: 204px; background: Theme.panel; border-radius: Theme.radius-sm;
                 VerticalLayout {
-                    padding: 6px; spacing: 5px;
+                    padding: 6px; spacing: 4px;
                     HorizontalLayout {
                         spacing: 4px;
                         // Pitch and speed live together because fit-to-tempo
@@ -574,8 +576,28 @@ export component SamplerDeviceFace inherits Rectangle {
                             }
                         }
                     }
-
-                    Rectangle { height: 1px; background: Theme.border; }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "RETUNE";
+                            color: Theme.text-faint;
+                            font-size: 8px;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        ToggleButton {
+                            text: "LIVE";
+                            // Off reproduces the sampler's original behavior:
+                            // a held or looping voice keeps the pitch it was
+                            // triggered with until it is triggered again.
+                            tooltip: root.retune-live
+                                ? "A tune edit is heard on sounding voices immediately"
+                                : "A tune edit only reaches the next triggered voice";
+                            min-width: 40px; max-width: 40px; max-height: 16px;
+                            checked <=> root.retune-live;
+                            toggled(on) => { root.retune-live-changed(on); }
+                        }
+                    }
 
                     HorizontalLayout {
                         spacing: 4px;

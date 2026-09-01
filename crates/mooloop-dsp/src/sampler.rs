@@ -40,6 +40,16 @@ const MIN_STAGE_S: f32 = 1.0e-4;
 /// by hand, by automation, or by modulation -- ramps instead of clicking.
 const OUTPUT_GAIN_SMOOTHING_S: f32 = 0.01;
 
+/// The tune knobs' combined contribution to playback rate, as a multiplier.
+/// Deliberately wider than the descriptor's `[-24, 24]` / `[-100, 100]`
+/// ranges, so a modulation route can still push tuning past what the base
+/// knob alone reaches.
+fn tuning_ratio(params: SamplerParams) -> f64 {
+    let semitones = f64::from(params.tune_semitones.clamp(-48.0, 48.0))
+        + f64::from(params.tune_cents.clamp(-100.0, 100.0)) / 100.0;
+    2.0_f64.powf(semitones / 12.0)
+}
+
 /// Keep the trim inside the shared +12 dB ceiling, and treat a non-finite
 /// value as silence rather than letting it reach the bus.
 fn clamp_output_gain(gain: f32) -> f32 {
@@ -221,6 +231,13 @@ struct Voice {
     sample: Option<Arc<SampleData>>,
     play_pos: f64,
     playback_rate: f64,
+    /// `playback_rate` with the tuning knobs' contribution divided back out:
+    /// the sample-rate conversion ratio times the note's own transposition
+    /// from the root key. Fixed for the voice's life, because which note was
+    /// struck does not change; `playback_rate` itself is re-derived from this
+    /// every segment so a tune edit reaches an already-sounding voice. See
+    /// `SamplerParams::retune_live`.
+    key_pitch_ratio: f64,
     direction: f64,
     env: AdsrEnv,
     /// The filter's own envelope, advanced beside the amplitude one.
@@ -249,6 +266,7 @@ impl Voice {
             sample: None,
             play_pos: 0.0,
             playback_rate: 1.0,
+            key_pitch_ratio: 1.0,
             direction: 1.0,
             env: AdsrEnv::new(sample_rate),
             filter_env: AdsrEnv::new(sample_rate),
@@ -271,6 +289,7 @@ impl Voice {
         self.age = 0;
         self.play_pos = 0.0;
         self.playback_rate = 1.0;
+        self.key_pitch_ratio = 1.0;
         self.direction = 1.0;
         self.env = AdsrEnv::new(sample_rate);
         self.env.configure(params.amp_env());
@@ -578,9 +597,9 @@ impl Sampler {
         let (start, end) = Self::resolve_playback_bounds(self.params, len);
         let root_note = self.params.root_note.min(127);
         let key_semitones = i16::from(note.min(127)) - i16::from(root_note);
-        let tuning = f64::from(self.params.tune_semitones.clamp(-48.0, 48.0))
-            + f64::from(self.params.tune_cents.clamp(-100.0, 100.0)) / 100.0;
-        let pitch_ratio = 2.0_f64.powf((f64::from(key_semitones) + tuning) / 12.0);
+        let key_pitch_ratio =
+            sample.sample_rate as f64 / self.sample_rate as f64
+                * 2.0_f64.powf(f64::from(key_semitones) / 12.0);
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1).max(1);
 
@@ -598,7 +617,8 @@ impl Sampler {
         } else {
             start
         };
-        voice.playback_rate = sample.sample_rate as f64 / self.sample_rate as f64 * pitch_ratio;
+        voice.key_pitch_ratio = key_pitch_ratio;
+        voice.playback_rate = key_pitch_ratio * tuning_ratio(self.params);
         voice.direction = if self.params.reverse { -1.0 } else { 1.0 };
         voice.velocity_amp = f32::from(velocity) / 127.0;
         voice.filter_low = [0.0, 0.0];
@@ -792,6 +812,18 @@ impl Sampler {
             LoopMode::Off
         };
         let table = SincTable::shared();
+
+        // Re-derive the rate from the voice's fixed key/sample-rate ratio and
+        // the tune knobs' *current* value, so a retune while this voice is
+        // sounding is heard this segment rather than only on the next
+        // trigger. Skipped when the toggle is off, which reproduces the
+        // original behavior: `playback_rate` stays whatever `trigger` last
+        // set it to. Has to run before the stretch block below, since
+        // fit-to-tempo derives its ratio from `playback_rate` precisely so
+        // that retuning does not change the region's duration.
+        if params.retune_live {
+            voice.playback_rate = voice.key_pitch_ratio * tuning_ratio(params);
+        }
 
         // Resolved once for the segment, like the bounds above: parameters do
         // not move inside a segment, because the block is already split at
@@ -1529,6 +1561,99 @@ mod tests {
 
         assert!((render_with(12.0, 0.0) - 200.0).abs() < 0.001);
         assert!((render_with(0.0, 100.0) - 105.946).abs() < 0.01);
+    }
+
+    /// A tune edit while a voice is sounding -- the ordinary case for a
+    /// looping or held note -- has to be heard this segment, not on the
+    /// voice's next trigger. Regression test for the bug where `playback_rate`
+    /// was computed once in `trigger` and never revisited.
+    #[test]
+    fn retuning_a_sounding_voice_changes_its_rate_without_a_new_trigger() {
+        let sr = 48_000;
+        let params = SamplerParams {
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.0,
+            loop_end: 1.0,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(sr, 4096, params);
+        let mut bus = StereoBus::with_capacity(100);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 0,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(100, sr), &mut bus, &events, None);
+        let before = sampler.voices[0].play_pos;
+
+        let mut retuned = sampler.params();
+        retuned.tune_semitones = 12.0;
+        sampler.set_params(retuned);
+        sampler.process(&ctx(100, sr), &mut bus, &EventList::empty(), None);
+        let after = sampler.voices[0].play_pos;
+
+        // 100 frames at the doubled rate, not the original one: a frozen
+        // `playback_rate` would advance by 100 here, not 200.
+        assert!(
+            (after - before - 200.0).abs() < 0.001,
+            "expected the octave-up rate to apply immediately: before {before}, after {after}"
+        );
+    }
+
+    /// The opt-out: with `retune_live` off, a sounding voice keeps the rate it
+    /// was triggered with, exactly as the sampler behaved before the toggle
+    /// existed.
+    #[test]
+    fn retune_live_off_freezes_a_sounding_voice_rate_until_its_next_trigger() {
+        let sr = 48_000;
+        let params = SamplerParams {
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.0,
+            loop_end: 1.0,
+            retune_live: false,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(sr, 4096, params);
+        let mut bus = StereoBus::with_capacity(100);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 0,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(100, sr), &mut bus, &events, None);
+        let before = sampler.voices[0].play_pos;
+
+        let mut retuned = sampler.params();
+        retuned.tune_semitones = 12.0;
+        sampler.set_params(retuned);
+        sampler.process(&ctx(100, sr), &mut bus, &EventList::empty(), None);
+        let after = sampler.voices[0].play_pos;
+
+        assert!(
+            (after - before - 100.0).abs() < 0.001,
+            "expected the original rate to persist: before {before}, after {after}"
+        );
+
+        // The next trigger picks up the new tuning, same as it always did.
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(100, sr), &mut bus, &events, None);
+        assert!((sampler.voices[0].play_pos - 200.0).abs() < 0.001);
     }
 
     #[test]
