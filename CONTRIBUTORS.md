@@ -243,6 +243,13 @@ work session you can recall being part of, and don't stress over precision.
   in, because a gate shut on a silent channel is truthfully holding 80 dB down
   and would otherwise sit at full brightness for as long as nobody played.
 
+### Claude Fable 5 — Claude Code
+- First seen: 2026-08-31
+- Last seen: 2026-08-31
+- Sessions: 1
+- Notes: Wrote `docs/plans/modulator-modules/` — the modulator-grid plan —
+  and started step 01: modulator params join the descriptor system.
+
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-08-26
