@@ -271,6 +271,17 @@ work session you can recall being part of, and don't stress over precision.
   `ModSourceRef` adapter `mod_metadata.rs` had been shipping unconsumed since
   the spec landed, taking each slot number as its own id so an old route
   keeps pointing at what it always did.
+  Then measured what modulator capacity actually costs before planning to
+  grow it, and the answer moved the plan: the command ring that `bridge.rs`
+  warns about is not the big line -- control outputs are, at twice the ring,
+  because every per-channel array is preallocated for `MAX_CHANNELS = 256`
+  whether or not those channels exist. So capacity is cheap and dimensioning
+  by the ceiling is expensive, which is now `docs/plans/modulator-capacity/`.
+  Built its first step: the three places that still quietly capped the number
+  after step 03 claimed they did not -- a literal row count, a shelf that
+  could not scroll, and a per-slot segment bank -- with a test that renders
+  the same shelf at eight and sixteen so a regression is visible rather than
+  theoretical.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

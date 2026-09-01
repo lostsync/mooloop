@@ -351,20 +351,7 @@ fn render_sampler_source_editor() {
         },
     ]))));
     ui.set_modulation_max_sources(8);
-    ui.set_modulation_slot_names(
-        vec![
-            SharedString::from("1"),
-            SharedString::from("2"),
-            SharedString::from("3"),
-            SharedString::from("4"),
-            SharedString::from("5"),
-            SharedString::from("6"),
-            SharedString::from("7"),
-            SharedString::from("8"),
-        ]
-        .as_slice()
-        .into(),
-    );
+    ui.set_modulation_slot_names(slot_names(8));
     ui.set_modulation_selected_kind(1);
     ui.set_modulation_input_channels(
         vec![SharedString::from("1 · Kick"), SharedString::from("2 · Snare")]
@@ -536,6 +523,23 @@ fn render_sampler_source_editor() {
     let crushed = ui.window().take_snapshot().unwrap();
     assert_ne!(tone.as_bytes(), crushed.as_bytes());
     write_snapshot(&crushed, "MOOLOOP_SAMPLER_CRUSHED_SOURCE_SNAPSHOT");
+}
+
+/// One entry per slot, named by what occupies it, as the shelf builds them.
+fn slot_names(count: usize) -> ModelRc<SharedString> {
+    (0..count)
+        .map(|slot| {
+            SharedString::from(match slot {
+                0 => "1 · LFO 1".to_string(),
+                1 => "2 · ENV 2".to_string(),
+                2 => "3 · STEP 3".to_string(),
+                3 => "4 · MATH 4".to_string(),
+                other => format!("{} · empty", other + 1),
+            })
+        })
+        .collect::<Vec<_>>()
+        .as_slice()
+        .into()
 }
 
 fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
@@ -761,4 +765,64 @@ fn render_sampler_zoomed_markers() {
     assert_eq!((snapshot.width(), snapshot.height()), (960, 760));
     assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&snapshot, "MOOLOOP_SAMPLER_ZOOMED_MARKERS_SNAPSHOT");
+}
+
+/// Capacity is a constant, not a layout decision. The same shelf, told it
+/// has sixteen slots instead of eight, must still show every module cell and
+/// still pick an input by name — with no edit anywhere in the UI. This is the
+/// test that fails if a literal row count or a per-slot segment creeps back
+/// in (`docs/plans/modulator-capacity/01-capacity-is-a-constant.md`).
+#[test]
+fn the_module_grid_scales_with_capacity_alone() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .expect("initialize headless renderer");
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(1440.0, 900.0));
+    ui.set_channels(rack_rows());
+    ui.set_editor_page(0);
+    ui.set_modulation_shelf_open(true);
+    ui.set_modulation_selected_slot(3);
+    ui.set_modulation_selected_kind(4);
+    ui.set_modulation_selected_values(vec![0.0f32, 2.0, 1.75, -1.0, 1.0].as_slice().into());
+    // Sixteen modules, so the grid needs four rows where two fit.
+    let sources: Vec<ModulationSourceRow> = (0..16)
+        .map(|slot| ModulationSourceRow {
+            slot,
+            name: SharedString::from(format!("LFO {}", slot + 1)),
+            kind: 0,
+            waveform: slot % 5,
+            depth: 1.0,
+            pulse_width: 0.5,
+            preview_sustain: 0.7,
+            output: (slot as f32 / 8.0) - 1.0,
+            steps: Vec::<f32>::new().as_slice().into(),
+            step_length: 16,
+            selected: slot == 3,
+            ..Default::default()
+        })
+        .collect();
+    ui.set_modulation_sources(ModelRc::from(Rc::new(VecModel::from(sources))));
+
+    for capacity in [8usize, 16] {
+        ui.set_modulation_max_sources(capacity as i32);
+        ui.set_modulation_slot_names(slot_names(capacity));
+        let shot = ui.window().take_snapshot().unwrap();
+        assert_eq!((shot.width(), shot.height()), (1440, 900));
+        assert!(shot.as_bytes().iter().any(|byte| *byte != 0));
+        write_snapshot(
+            &shot,
+            if capacity == 8 {
+                "MOOLOOP_CAPACITY_EIGHT_SNAPSHOT"
+            } else {
+                "MOOLOOP_CAPACITY_SIXTEEN_SNAPSHOT"
+            },
+        );
+    }
 }

@@ -3287,10 +3287,18 @@ impl UiState {
         window.set_modulation_selected_slot(selected.map_or(-1, i32::from));
         window.set_modulation_armed_slot(armed.map_or(-1, i32::from));
         window.set_modulation_max_sources(MAX_MODULATORS_PER_CHANNEL as i32);
-        // The grid's slot names come from the protocol constant, so raising
-        // the rack's capacity never needs a matching UI edit.
-        let slot_names: Vec<slint::SharedString> = (1..=MAX_MODULATORS_PER_CHANNEL)
-            .map(|slot| slot.to_string().into())
+        // One entry per slot, named by whatever occupies it. The math
+        // module's input jack picks from this, so it reads "3 · STEP 3"
+        // rather than "3"; the length comes from the protocol constant, so
+        // raising capacity never needs a matching UI edit.
+        let slot_names: Vec<slint::SharedString> = (0..MAX_MODULATORS_PER_CHANNEL)
+            .map(|slot| match channel.modulation.params(slot) {
+                Some(params) => {
+                    format!("{} · {} {}", slot + 1, params.kind().badge(), slot + 1)
+                }
+                None => format!("{} · empty", slot + 1),
+            })
+            .map(slint::SharedString::from)
             .collect();
         window.set_modulation_slot_names(slot_names.as_slice().into());
 

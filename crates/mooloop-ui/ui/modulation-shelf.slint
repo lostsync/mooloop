@@ -68,11 +68,22 @@ global ModuleGrid {
     out property <length> tile-width: 58px;
     out property <length> tile-height: 70px;
     out property <length> gap: 4px;
-    out property <int> rows: 2;
+    // Rows the pane shows before it scrolls. Capacity is free to exceed
+    // this; it decides how tall the shelf is, not how many modules exist.
+    out property <int> visible-rows: 2;
     // Stated rather than measured from the children: an overlay sized off a
     // container that is itself sized by its children is a binding loop.
     out property <length> row-width: root.columns * root.tile-width + (root.columns - 1) * root.gap;
-    out property <length> column-height: root.rows * root.tile-height + (root.rows - 1) * root.gap;
+    out property <length> column-height: root.visible-rows * root.tile-height + (root.visible-rows - 1) * root.gap;
+
+    /// Rows needed to show `count` cells, which is what capacity decides.
+    public pure function rows-for(count: int) -> int {
+        return ceil(count / root.columns);
+    }
+    public pure function height-for(count: int) -> length {
+        return max(root.column-height,
+            root.rows-for(count) * root.tile-height + (root.rows-for(count) - 1) * root.gap);
+    }
 }
 
 // Descriptor ids, mirroring mooloop-core's `LFO_PARAM_*` and `ENV_PARAM_*`
@@ -817,9 +828,21 @@ export component ModulationShelf inherits Rectangle {
                             Rectangle { horizontal-stretch: 1; }
                             Text { text: root.sources.length + "/" + root.max-sources; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
                         }
-                        Rectangle {
+                        // A grid taller than the shelf scrolls inside it.
+                        // Capacity therefore never argues with the rack's
+                        // height, which is what makes it a constant edit.
+                        ScrollView {
                             vertical-stretch: 1;
+                            width: ModuleGrid.row-width + 2px;
+                            viewport-width: ModuleGrid.row-width;
+                            // Whichever is taller: the capacity the grid can
+                            // hold, or what it is actually being shown. A
+                            // viewport sized from capacity alone would put
+                            // over-capacity content out of reach.
+                            viewport-height: ModuleGrid.height-for(max(root.max-sources, root.sources.length));
+                            Rectangle {
                             width: ModuleGrid.row-width;
+                            height: ModuleGrid.height-for(max(root.max-sources, root.sources.length));
                             for source[index] in root.sources : ModuleTile {
                                 x: mod(index, ModuleGrid.columns) * (ModuleGrid.tile-width + ModuleGrid.gap);
                                 y: floor(index / ModuleGrid.columns) * (ModuleGrid.tile-height + ModuleGrid.gap);
@@ -869,6 +892,7 @@ export component ModulationShelf inherits Rectangle {
                                 y: 0px;
                                 width: ModuleGrid.row-width;
                                 height: ModuleGrid.column-height;
+                                z: 20;
                                 background: Theme.surface;
                                 border-width: 1px;
                                 border-color: Theme.accent;
@@ -909,6 +933,7 @@ export component ModulationShelf inherits Rectangle {
                                         if row.right < 0 : Rectangle { }
                                     }
                                 }
+                            }
                             }
                         }
                     }
@@ -1020,13 +1045,16 @@ export component ModulationShelf inherits Rectangle {
                                         tooltip: "Draw on the clock, or once per note";
                                         selected(index) => { root.param-changed(root.selected-slot, RandomParam.trigger, index); }
                                     }
-                                    if root.selected-kind == 4 : SelectorBank {
-                                        height: 16px;
-                                        options: root.slot-names;
-                                        selected-index: round(root.selected-values[MathParam.input-slot]);
-                                        segment-width: 26px;
-                                        tooltip: "Module this one reads. A lower slot resolves this tick; itself or a higher one reads the previous tick";
-                                        selected(index) => { root.param-changed(root.selected-slot, MathParam.input-slot, index); }
+                                    // A picker, not a bank of segments: it has
+                                    // to stay legible at any capacity, and a
+                                    // numbered choice into a grid of named
+                                    // modules was a puzzle even at eight.
+                                    if root.selected-kind == 4 : math-input := ComboBox {
+                                        width: 170px;
+                                        height: 18px;
+                                        model: root.slot-names;
+                                        current-index: round(root.selected-values[MathParam.input-slot]);
+                                        selected(value) => { root.param-changed(root.selected-slot, MathParam.input-slot, math-input.current-index); }
                                     }
                                     Text {
                                         text: root.jack-note(root.selected-kind);
