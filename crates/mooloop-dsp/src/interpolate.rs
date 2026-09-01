@@ -43,6 +43,14 @@ const DENSITY: usize = 256;
 /// read on the audio thread.
 const MAX_STRETCH: f64 = 4.0;
 
+/// Widest the kernel reaches on either side of its centre, in frames, at any
+/// rate it will accept. Published because anything feeding the reader from a
+/// windowed view of a longer stream -- the time stretcher's scratch, for one
+/// -- has to keep this much valid material on both sides of the read
+/// position, or the kernel silently folds against the window's edge instead
+/// of the region's.
+pub const MAX_HALF_TAPS: usize = HALF_TAPS * MAX_STRETCH as usize;
+
 /// Prototype table length, plus one so the linear read always has a right
 /// neighbour to reach for.
 const TABLE_LEN: usize = HALF_TAPS * DENSITY + 2;

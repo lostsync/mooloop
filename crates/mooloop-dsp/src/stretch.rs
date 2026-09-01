@@ -60,7 +60,7 @@
 //! with a trustworthy onset table and destructive with a bad one — up to 255
 //! cents on a held bass note — so it waits for the detector in #33.
 
-use crate::interpolate::Region;
+use crate::interpolate::{Region, SincTable, MAX_HALF_TAPS};
 
 /// Window length the default mode aims for, in milliseconds.
 ///
@@ -584,6 +584,151 @@ fn hann_table() -> Vec<f32> {
         .collect()
 }
 
+/// Frames of stretched output held at once. Only ever a sliding window on a
+/// stream that is produced and consumed strictly forwards, so it is small --
+/// it exists to give the resampling kernel material on both sides of its read
+/// position, not to buffer anything.
+const SCRATCH: usize = 256;
+
+/// Valid stretched material kept on each side of the read position.
+///
+/// Derived from [`MAX_HALF_TAPS`] rather than written as a number, because
+/// the number is only correct as long as the kernel's reach does not change.
+/// Double it, so the window still slides in useful strides instead of
+/// re-shifting on nearly every frame.
+const MARGIN: i64 = MAX_HALF_TAPS as i64 * 2;
+
+/// How far the window slides when the read position runs out of room. One
+/// `copy_within` per `SHIFT` output frames at unity, so about one frame
+/// copied per frame rendered.
+const SHIFT: usize = MARGIN as usize;
+
+/// Time stretching and transposition composed: [`Stretcher`] produces at the
+/// source's own pitch, and the band-limited reader from [`crate::interpolate`]
+/// transposes its output.
+///
+/// The two stages are deliberately separate. Stretch ratio and playback rate
+/// are different musical ideas -- #20's product rules keep pitch shifting,
+/// time stretching, tempo fit and slicing distinct -- and fusing them would
+/// have run the similarity search on untransposed material while the output
+/// was transposed, which is not something the spike measured. Kept separate,
+/// each is exactly what it was measured as.
+///
+/// Composing them is also how pitch shift falls out for free: set the ratio
+/// and the rate to the same number and duration returns to the original while
+/// the pitch moves. The spike listed that as plausible but never measured it;
+/// here it is a test.
+///
+/// **Latency is still zero.** Read position 0 is stretched frame 0, which is
+/// input frame `start`. The kernel reaches backwards into frames that predate
+/// the start and finds silence there, exactly as a one-shot's opening does
+/// today. Nothing has to fill before output begins.
+pub struct StretchReader {
+    stretcher: Stretcher,
+    /// A window on the stretched stream. `scratch[0]` is stretched frame
+    /// `base`.
+    scratch: Vec<[f32; 2]>,
+    base: i64,
+    /// Next stretched frame the stretcher has yet to hand over.
+    produced: i64,
+    /// Fractional read position in the stretched stream.
+    pos: f64,
+}
+
+impl StretchReader {
+    pub fn new(mode: StretchMode, sample_rate: u32) -> Self {
+        let mut reader = Self {
+            stretcher: Stretcher::new(mode, sample_rate),
+            scratch: vec![[0.0; 2]; SCRATCH],
+            base: 0,
+            produced: 0,
+            pos: 0.0,
+        };
+        reader.reset(0.0);
+        reader
+    }
+
+    pub fn stretcher(&self) -> &Stretcher {
+        &self.stretcher
+    }
+
+    pub fn stretcher_mut(&mut self) -> &mut Stretcher {
+        &mut self.stretcher
+    }
+
+    /// Zero, and for the same reason the stretcher's is. See the type docs.
+    pub fn latency_frames(&self) -> usize {
+        0
+    }
+
+    pub fn state_bytes(&self) -> usize {
+        self.stretcher.state_bytes() + self.scratch.capacity() * 8
+    }
+
+    /// Where in the *source* the output is currently speaking from, for a
+    /// playhead display.
+    pub fn analysis_pos(&self) -> f64 {
+        self.stretcher.analysis_pos()
+    }
+
+    /// Restart at an absolute input frame. Allocation- and drop-free.
+    ///
+    /// The window is placed so the read position starts `MARGIN` frames into
+    /// it, leaving the kernel room to reach backwards into the zeroed frames
+    /// that precede the start.
+    pub fn reset(&mut self, start_frame: f64) {
+        self.stretcher.reset(start_frame);
+        for frame in self.scratch.iter_mut() {
+            *frame = [0.0, 0.0];
+        }
+        self.base = -MARGIN;
+        self.produced = 0;
+        self.pos = 0.0;
+    }
+
+    /// Produce one output frame at `rate`, where 1.0 is the source's own
+    /// pitch and 2.0 is an octave up.
+    pub fn read(&mut self, frames: &[[f32; 2]], region: Region, rate: f64) -> [f32; 2] {
+        if frames.is_empty() || !rate.is_finite() || rate <= 0.0 {
+            // Reverse under stretch is not supported and the UI disables it;
+            // producing silence is better than letting a negative rate walk
+            // the window backwards past material already discarded.
+            return [0.0, 0.0];
+        }
+        self.ensure(self.pos.ceil() as i64 + MARGIN, frames, region);
+        let local = self.pos - self.base as f64;
+        let frame = SincTable::shared().read(
+            &self.scratch,
+            local,
+            rate,
+            Region::whole(SCRATCH),
+        );
+        self.pos += rate;
+        frame
+    }
+
+    /// Slide and refill the window so stretched frames up to `upto` are valid.
+    fn ensure(&mut self, upto: i64, frames: &[[f32; 2]], region: Region) {
+        while upto >= self.base + SCRATCH as i64 {
+            self.scratch.copy_within(SHIFT.., 0);
+            for slot in self.scratch[SCRATCH - SHIFT..].iter_mut() {
+                *slot = [0.0, 0.0];
+            }
+            self.base += SHIFT as i64;
+        }
+        while self.produced < self.base + SCRATCH as i64 {
+            let frame = self.stretcher.next_frame(frames, region);
+            let slot = self.produced - self.base;
+            // Frames that fell behind the window as it slid are simply
+            // dropped: the read position never goes backwards.
+            if (0..SCRATCH as i64).contains(&slot) {
+                self.scratch[slot as usize] = frame;
+            }
+            self.produced += 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1030,6 +1175,201 @@ mod tests {
         let stretcher = Stretcher::new(StretchMode::Music, SR);
         assert_eq!(stretcher.latency_frames(), 0);
         assert_eq!(stretcher.lookahead_frames(), 1_536);
+    }
+
+    /// Pitch of a rendered buffer, by zero crossings. Crude, and entirely
+    /// sufficient for claims measured in semitones rather than cents.
+    fn measured_hz(out: &[[f32; 2]]) -> f64 {
+        let crossings = out
+            .windows(2)
+            .filter(|pair| pair[0][0] <= 0.0 && pair[1][0] > 0.0)
+            .count();
+        crossings as f64 * SR as f64 / out.len() as f64
+    }
+
+    fn read_all(
+        reader: &mut StretchReader,
+        frames: &[[f32; 2]],
+        region: Region,
+        rate: f64,
+        count: usize,
+    ) -> Vec<[f32; 2]> {
+        (0..count).map(|_| reader.read(frames, region, rate)).collect()
+    }
+
+    /// With both stages at unity the composition must be transparent -- if it
+    /// is not, everything measured about either stage separately is moot.
+    #[test]
+    fn the_composed_reader_is_transparent_at_unity() {
+        let source = tone(40_000, 220.0);
+        let region = Region::whole(source.len());
+
+        let mut reader = StretchReader::new(StretchMode::Music, SR);
+        reader.reset(0.0);
+        let out = read_all(&mut reader, &source, region, 1.0, 20_000);
+
+        let error: f32 = out[2_048..]
+            .iter()
+            .zip(source[2_048..].iter())
+            .map(|(played, expected)| (played[0] - expected[0]).abs())
+            .sum::<f32>()
+            / (out.len() - 2_048) as f32;
+        assert!(error < 0.08, "mean absolute error at unity was {error}");
+    }
+
+    /// Stretching alone changes duration and leaves pitch where it was.
+    #[test]
+    fn stretching_without_transposing_holds_the_pitch() {
+        let hz = 220.0;
+        let source = tone(200_000, hz);
+        let region = Region::whole(source.len());
+
+        let mut reader = StretchReader::new(StretchMode::Music, SR);
+        reader.stretcher_mut().set_ratio(1.5);
+        reader.reset(0.0);
+        let out = read_all(&mut reader, &source, region, 1.0, 48_000);
+
+        let cents = 1200.0 * (measured_hz(&out[4_096..]) / hz).log2();
+        assert!(cents.abs() < 25.0, "stretch moved the pitch by {cents:.1} cents");
+    }
+
+    /// Transposing alone moves the pitch and leaves the stretcher at unity.
+    #[test]
+    fn transposing_without_stretching_moves_the_pitch() {
+        let hz = 220.0;
+        let source = tone(200_000, hz);
+        let region = Region::whole(source.len());
+
+        let mut reader = StretchReader::new(StretchMode::Music, SR);
+        reader.reset(0.0);
+        let out = read_all(&mut reader, &source, region, 2.0, 40_000);
+
+        let cents = 1200.0 * (measured_hz(&out[4_096..]) / (hz * 2.0)).log2();
+        assert!(
+            cents.abs() < 25.0,
+            "an octave up landed {cents:.1} cents off"
+        );
+    }
+
+    /// The composition's payoff, and the thing the spike called plausible but
+    /// never measured: equal ratio and rate is a pitch shift at the original
+    /// duration. The stretcher makes the stream `n` times longer, the reader
+    /// consumes it `n` times faster, and what is left is the transposition.
+    #[test]
+    fn equal_ratio_and_rate_is_a_pitch_shift_at_the_original_duration() {
+        let hz = 220.0;
+        let source = tone(200_000, hz);
+        let region = Region::whole(source.len());
+
+        for shift in [1.5, 2.0] {
+            let mut reader = StretchReader::new(StretchMode::Music, SR);
+            reader.stretcher_mut().set_ratio(shift);
+            reader.reset(0.0);
+            let produced = 40_000;
+            let out = read_all(&mut reader, &source, region, shift, produced);
+
+            let cents = 1200.0 * (measured_hz(&out[4_096..]) / (hz * shift)).log2();
+            assert!(
+                cents.abs() < 30.0,
+                "shift {shift} landed {cents:.1} cents off"
+            );
+
+            // Duration: the source is consumed at its own rate, so `produced`
+            // output frames should have eaten about `produced` input frames.
+            let consumed = reader.analysis_pos();
+            let drift = (consumed - produced as f64).abs() / produced as f64;
+            assert!(
+                drift < 0.05,
+                "shift {shift} consumed {consumed} input for {produced} output"
+            );
+        }
+    }
+
+    /// The window slides under the read position as it advances. At a high
+    /// rate it slides several times per frame, and the kernel must never see
+    /// the seam.
+    #[test]
+    fn the_scratch_window_slides_without_seams_at_any_rate() {
+        let source = tone(400_000, 110.0);
+        let region = Region::whole(source.len());
+
+        for rate in [0.25, 1.0, 2.0, 4.0, 11.7] {
+            let mut reader = StretchReader::new(StretchMode::Music, SR);
+            reader.reset(0.0);
+            let out = read_all(&mut reader, &source, region, rate, 20_000);
+            assert!(
+                out.iter().all(|f| f[0].is_finite() && f[1].is_finite()),
+                "rate {rate} produced a non-finite frame"
+            );
+            let rms =
+                (out.iter().map(|f| f[0] * f[0]).sum::<f32>() / out.len() as f32).sqrt();
+            assert!(rms > 0.2, "rate {rate} went quiet: rms {rms}");
+        }
+    }
+
+    /// Same determinism requirement as the stretcher, now through both
+    /// stages: an offline render and the realtime path must agree bit for
+    /// bit whatever block size the executor picked.
+    #[test]
+    fn the_composed_output_is_identical_however_it_is_grouped() {
+        let source = tone(60_000, 220.0);
+        let region = Region::whole(source.len());
+        let count = 8_000;
+
+        let mut one_shot = StretchReader::new(StretchMode::Music, SR);
+        one_shot.stretcher_mut().set_ratio(1.37);
+        one_shot.reset(0.0);
+        let reference = read_all(&mut one_shot, &source, region, 1.19, count);
+
+        for block in [1usize, 32, 128, 480, 1024] {
+            let mut blocked = StretchReader::new(StretchMode::Music, SR);
+            blocked.stretcher_mut().set_ratio(1.37);
+            blocked.reset(0.0);
+            let mut produced = Vec::with_capacity(count);
+            while produced.len() < count {
+                let take = block.min(count - produced.len());
+                produced.extend(read_all(&mut blocked, &source, region, 1.19, take));
+            }
+            assert_eq!(produced, reference, "block {block} diverged");
+        }
+    }
+
+    /// Reverse under stretch is out of scope and the UI disables it. If a
+    /// negative rate arrives anyway it must produce silence rather than walk
+    /// the window backwards past material already discarded.
+    #[test]
+    fn a_reverse_or_nonfinite_rate_produces_silence_rather_than_nonsense() {
+        let source = tone(40_000, 220.0);
+        let region = Region::whole(source.len());
+
+        let mut reader = StretchReader::new(StretchMode::Music, SR);
+        reader.reset(0.0);
+        for rate in [-1.0, 0.0, f64::NAN] {
+            let out = read_all(&mut reader, &source, region, rate, 128);
+            assert!(
+                out.iter().all(|frame| frame == &[0.0, 0.0]),
+                "rate {rate} produced sound"
+            );
+        }
+    }
+
+    /// The grain mode has to survive the composition too -- it is the one
+    /// people will run at extreme settings.
+    #[test]
+    fn grain_survives_extreme_slow_down_with_transposition() {
+        let source = tone(200_000, 110.0);
+        let region = Region::whole(source.len());
+
+        let mut reader = StretchReader::new(StretchMode::Grain, SR);
+        reader.stretcher_mut().set_ratio(12.0);
+        reader.stretcher_mut().set_grain_frames(180);
+        reader.reset(0.0);
+        let out = read_all(&mut reader, &source, region, 3.0, 48_000);
+
+        assert!(out.iter().all(|f| f[0].is_finite() && f[1].is_finite()));
+        let rms =
+            (out.iter().map(|f| f[0] * f[0]).sum::<f32>() / out.len() as f32).sqrt();
+        assert!(rms > 0.05, "extreme grain settings went silent: rms {rms}");
     }
 
     /// An empty sample must not panic or read out of bounds -- a voice can be
