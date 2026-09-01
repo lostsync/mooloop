@@ -13,7 +13,8 @@
 //! adding an oscillator parameter later does not disturb the others.
 
 use crate::{
-    DeviceKind, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode, MonoSynthParams, MlM1Params,
+    DeviceKind, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode, MlP8Params,
+    MonoSynthParams, MlM1Params,
     NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PolySynthParams, RetriggerMode,
     SamplerParams, VoiceMode, MAX_LINEAR_GAIN, MAX_POLY_VOICES, MAX_SAMPLER_VOICES,
 };
@@ -50,10 +51,14 @@ pub const SAMPLER_PARAM_FILTER_RELEASE: u32 = 26;
 
 /// Envelope stages share this range across every generator. Exponential, so
 /// the fast end where percussion lives gets most of the travel.
+///
+/// The three constructors below are `pub(crate)` because [`crate::mlp8`]
+/// builds its own table from them: ML-P8 owns its ids, but a second copy of
+/// "an envelope stage runs 1 ms to 8 s" would be a range written twice.
 const ENV_MIN_S: f32 = 0.001;
 const ENV_MAX_S: f32 = 8.0;
 
-const fn unit(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
+pub(crate) const fn unit(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
     ParamDescriptor {
         id,
         name,
@@ -65,7 +70,7 @@ const fn unit(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
     }
 }
 
-const fn seconds(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
+pub(crate) const fn seconds(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
     ParamDescriptor {
         id,
         name,
@@ -77,7 +82,7 @@ const fn seconds(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
     }
 }
 
-const fn stepped(id: u32, name: &'static str, steps: u8, default: f32) -> ParamDescriptor {
+pub(crate) const fn stepped(id: u32, name: &'static str, steps: u8, default: f32) -> ParamDescriptor {
     ParamDescriptor {
         id,
         name,
@@ -486,6 +491,11 @@ impl DeviceKind {
             Self::MonoSynth => &MONO_DESCRIPTORS,
             Self::PolySynth => &POLY_DESCRIPTORS,
             Self::MlM1 => &MLM1_DESCRIPTORS,
+            // ML-P8's table lives beside its parameters in `mlp8.rs`. It is
+            // the one generator whose ids are not the shared synth ids, so
+            // keeping it here would put two unrelated numbering schemes in one
+            // file and invite a collision that neither one can see.
+            Self::MlP8 => &crate::mlp8::DESCRIPTORS,
             Self::DrumSynth => &[],
         }
     }
@@ -563,6 +573,7 @@ pub enum GeneratorParams {
     MonoSynth(MonoSynthParams),
     PolySynth(PolySynthParams),
     MlM1(MlM1Params),
+    MlP8(MlP8Params),
     /// Not addressable yet; every `get`/`set` misses.
     DrumSynth,
 }
@@ -574,6 +585,7 @@ impl GeneratorParams {
             Self::MonoSynth(_) => DeviceKind::MonoSynth,
             Self::PolySynth(_) => DeviceKind::PolySynth,
             Self::MlM1(_) => DeviceKind::MlM1,
+            Self::MlP8(_) => DeviceKind::MlP8,
             Self::DrumSynth => DeviceKind::DrumSynth,
         }
     }
@@ -683,6 +695,7 @@ impl GeneratorParams {
                     _ => return None,
                 })
             }
+            Self::MlP8(p) => crate::mlp8::get(p, id),
             Self::DrumSynth => None,
         }
     }
@@ -809,6 +822,11 @@ impl GeneratorParams {
                     }
                 }
             }
+            Self::MlP8(p) => {
+                if !crate::mlp8::set(p, id, value) {
+                    return None;
+                }
+            }
             Self::DrumSynth => return None,
         }
         Some(value)
@@ -820,12 +838,13 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn all() -> [GeneratorParams; 4] {
+    fn all() -> [GeneratorParams; 5] {
         [
             GeneratorParams::Sampler(SamplerParams::default()),
             GeneratorParams::MonoSynth(MonoSynthParams::default()),
             GeneratorParams::PolySynth(PolySynthParams::default()),
             GeneratorParams::MlM1(MlM1Params::default()),
+            GeneratorParams::MlP8(crate::MlP8Params::default()),
         ]
     }
 
@@ -879,6 +898,7 @@ mod tests {
             GeneratorParams::MonoSynth(MonoSynthParams::default()),
             GeneratorParams::PolySynth(PolySynthParams::default()),
             GeneratorParams::MlM1(MlM1Params::default()),
+            GeneratorParams::MlP8(crate::MlP8Params::default()),
         ] {
             let kind = params.kind();
             for descriptor in kind.descriptors() {

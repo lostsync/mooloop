@@ -42,6 +42,10 @@ pub enum DeviceKind {
     /// only.
     #[serde(rename = "ml1")]
     MlM1,
+    /// The ML-P8: eight voices around a three-oscillator network. A new kind
+    /// rather than a reinterpretation of [`Self::PolySynth`], which stays as
+    /// its own simpler device with its own saved projects.
+    MlP8,
 }
 
 /// One mixer channel.

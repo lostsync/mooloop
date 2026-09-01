@@ -11,7 +11,8 @@
 
 use crate::{
     AutomationPoint, BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
-    ModRoute, ModSourceId, ModulatorParams, MonoSynthParams, MlM1Params, NoteEvent, NoteId,
+    ModRoute, ModSourceId, ModulatorParams, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent,
+    NoteId,
     ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams,
 };
 
@@ -158,6 +159,11 @@ pub enum EngineCommand {
     SetChannelMlM1Params {
         channel: u8,
         params: MlM1Params,
+    },
+    /// Replace a channel's ML-P8 parameter set.
+    SetChannelMlP8Params {
+        channel: u8,
+        params: MlP8Params,
     },
     /// Replace a channel's poly synth parameter set.
     SetChannelPolySynthParams {

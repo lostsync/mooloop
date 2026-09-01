@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use crate::{
     default_buses, BusSetup, Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter,
-    AutomationLane, ModRack, MonoSynthParams, MlM1Params, NoteEvent, NoteId, PatternPlacement,
+    AutomationLane, ModRack, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
+    PatternPlacement,
     PlaybackMode, PolySynthParams,
     SamplerParams, SnareCharacter, DEFAULT_STEPS,
 };
@@ -51,6 +52,11 @@ pub struct MlM1State {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MlP8State {
+    pub params: MlP8Params,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PolySynthState {
     pub params: PolySynthParams,
 }
@@ -69,6 +75,7 @@ pub enum ChannelSource {
     /// [`crate::DeviceKind::MlM1`], which is frozen for the same reason.
     #[serde(rename = "ml1")]
     MlM1(MlM1State),
+    MlP8(MlP8State),
 }
 
 impl Default for ChannelSource {
@@ -85,6 +92,7 @@ impl ChannelSource {
             Self::MonoSynth(_) => DeviceKind::MonoSynth,
             Self::PolySynth(_) => DeviceKind::PolySynth,
             Self::MlM1(_) => DeviceKind::MlM1,
+            Self::MlP8(_) => DeviceKind::MlP8,
         }
     }
 
@@ -140,6 +148,20 @@ impl ChannelSource {
     pub fn mlm1_state_mut(&mut self) -> Option<&mut MlM1State> {
         match self {
             Self::MlM1(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn mlp8_state(&self) -> Option<&MlP8State> {
+        match self {
+            Self::MlP8(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn mlp8_state_mut(&mut self) -> Option<&mut MlP8State> {
+        match self {
+            Self::MlP8(state) => Some(state),
             _ => None,
         }
     }
@@ -223,6 +245,19 @@ impl ChannelSetup {
         }
     }
 
+    pub fn mlp8(name: impl Into<String>) -> Self {
+        Self::mlp8_with_params(name, MlP8Params::default())
+    }
+
+    pub fn mlp8_with_params(name: impl Into<String>, params: MlP8Params) -> Self {
+        Self {
+            channel: Channel::new(name, DeviceKind::MlP8),
+            source: ChannelSource::MlP8(MlP8State { params }),
+            effects: Vec::new(),
+            modulation: ModRack::default(),
+        }
+    }
+
     pub fn poly_synth(name: impl Into<String>) -> Self {
         Self::poly_synth_with_params(name, PolySynthParams::default())
     }
@@ -270,6 +305,14 @@ impl ChannelSetup {
 
     pub fn mlm1_state_mut(&mut self) -> Option<&mut MlM1State> {
         self.source.mlm1_state_mut()
+    }
+
+    pub fn mlp8_state(&self) -> Option<&MlP8State> {
+        self.source.mlp8_state()
+    }
+
+    pub fn mlp8_state_mut(&mut self) -> Option<&mut MlP8State> {
+        self.source.mlp8_state_mut()
     }
 
     pub fn poly_synth_state(&self) -> Option<&PolySynthState> {
@@ -354,6 +397,19 @@ impl ProjectChannel {
     ) -> Self {
         Self {
             setup: ChannelSetup::mlm1_with_params(format!("ML-M1 {}", index + 1), params),
+            notes: vec![Vec::new(); pattern_count.max(1)],
+            automation: vec![Vec::new(); pattern_count.max(1)],
+            next_note_id: 1,
+        }
+    }
+
+    pub fn mlp8(index: usize, pattern_count: usize) -> Self {
+        Self::mlp8_with_params(index, pattern_count, MlP8Params::default())
+    }
+
+    pub fn mlp8_with_params(index: usize, pattern_count: usize, params: MlP8Params) -> Self {
+        Self {
+            setup: ChannelSetup::mlp8_with_params(format!("ML-P8 {}", index + 1), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,

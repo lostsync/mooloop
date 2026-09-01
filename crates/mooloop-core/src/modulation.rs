@@ -2072,11 +2072,14 @@ retrigger = true
         // The rack no longer travels. `InstallModulator` is the widest
         // modulation command and it carries one module — a step pattern's
         // sixteen values, a durable id, two indices — which is not wide
-        // enough to set the ring's floor any more: `SetChannelSource`'s
-        // synth parameter block is. 136 bytes an entry, so the engine's
-        // 1024-entry queue costs 136 KiB rather than the 936 KiB the rack
-        // used to make it.
-        assert_eq!(size_of::<crate::EngineCommand>(), 136);
+        // enough to set the ring's floor any more: a synth parameter block
+        // is. The widest is the ML-P8's, whose oscillator network adds twelve
+        // modulation amounts and three sync selectors to the three
+        // oscillators every synth carries. 152 bytes an entry, so the
+        // engine's 1024-entry queue costs 152 KiB rather than the 936 KiB the
+        // rack used to make it.
+        assert_eq!(size_of::<crate::MlP8Params>(), 148);
+        assert_eq!(size_of::<crate::EngineCommand>(), 152);
 
         // The property this step bought, stated so it fails if it is lost: a
         // module fits inside an entry that something else already sized, so

@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-01
-- Sessions: 28
+- Sessions: 29
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -328,7 +328,13 @@ work session you can recall being part of, and don't stress over precision.
   -- and a dead wide variant would have held the ring at 936 bytes, which is
   the whole thing the step was for. And reordering the grid needed its own
   narrow verb, or it would have been the one gesture still sending
-  everything.
+  everything. Started the ML-P8 as a fourth device: its own params struct and
+  its own parameter id space starting at zero, since it is the one generator
+  that is not the shared three-oscillator voice with a different count. Its
+  block is the widest a command carries now, so the modulation ring's cost
+  test moved from 136 to 152 bytes an entry -- recorded rather than worked
+  around, because twelve network amounts and three sync selectors are what
+  the instrument is.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

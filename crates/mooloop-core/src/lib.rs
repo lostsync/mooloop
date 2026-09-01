@@ -17,6 +17,7 @@ pub mod mixer;
 pub mod mod_metadata;
 pub mod mlm1;
 pub mod mlm1_factory;
+pub mod mlp8;
 pub mod pattern;
 pub mod playlist;
 pub mod project;
@@ -32,6 +33,7 @@ pub use bridge::{EngineCommand, EngineEvent};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
 pub use mlm1::{EnvTrigger, FilterModel, GlideMode, MlM1Params, NotePriority};
+pub use mlp8::{MlP8Params, SubOctave, SubSource, SubWave, SyncSource, MLP8_VOICES};
 pub use mlm1_factory::FactoryPatch;
 pub use modulation::{
     step_value_index, strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform,
@@ -119,7 +121,7 @@ pub use playlist::{
 };
 pub use project::{
     ChannelPreset, ChannelSetup, ChannelSource, DrumSynthState, Kit, MonoSynthState,
-    MlM1State, PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
+    MlM1State, MlP8State, PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
     DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };
 pub use sampler::{
