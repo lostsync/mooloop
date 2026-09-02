@@ -797,6 +797,136 @@ impl StretchPool {
     }
 }
 
+/// One output frame in every this many is recorded in a
+/// [`StretchRender::trace`].
+///
+/// 256 keeps an 8-second loop's trace to about 1,500 entries while holding
+/// the interpolation error far below anything audible: the analysis pointer
+/// is fractional and advances at a fixed rate within a span, so a
+/// piecewise-linear read inside 256 frames is a fraction of a frame out.
+pub const TRACE_INTERVAL: usize = 256;
+
+/// A stretched region, frozen. What "commit the stretch to the buffer" means.
+pub struct StretchRender {
+    pub frames: Vec<[f32; 2]>,
+    /// A coarse, monotonic map from source frame to output frame, sampled
+    /// every [`TRACE_INTERVAL`] output frames, with a final entry at the end
+    /// of the render so the whole range is interpolable.
+    ///
+    /// This is what carries slice markers and region fractions across the
+    /// commit. Mapping them by the nominal ratio instead would be out by up
+    /// to one search window -- about 10.7 ms, an audible flam on a break.
+    /// The trace is used at commit time and thrown away; a project stores the
+    /// render *spec*, never the trace and never the audio.
+    pub trace: Vec<(u32, u32)>,
+}
+
+impl StretchRender {
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    /// Where a source frame ended up in the render, in output frames.
+    ///
+    /// Linear inside a trace span, and clamped to the render at both ends: a
+    /// marker outside the region that was rendered has no position inside it,
+    /// and the nearest edge is the only honest answer.
+    pub fn output_frame_of(&self, source_frame: f64) -> f64 {
+        let Some(first) = self.trace.first() else {
+            return 0.0;
+        };
+        if source_frame <= f64::from(first.0) {
+            return f64::from(first.1);
+        }
+        let last = self.trace.last().copied().unwrap_or(*first);
+        if source_frame >= f64::from(last.0) {
+            return f64::from(last.1);
+        }
+        let at = self
+            .trace
+            .partition_point(|(source, _)| f64::from(*source) <= source_frame);
+        let (low_source, low_output) = self.trace[at - 1];
+        let (high_source, high_output) = self.trace[at];
+        let span = f64::from(high_source) - f64::from(low_source);
+        if span <= 0.0 {
+            return f64::from(low_output);
+        }
+        let fraction = (source_frame - f64::from(low_source)) / span;
+        f64::from(low_output) + fraction * (f64::from(high_output) - f64::from(low_output))
+    }
+}
+
+/// Render a region of `source` through the stretcher, once, off the realtime
+/// thread.
+///
+/// This is a render, not a new engine: it drives the same
+/// [`Stretcher::next_frame`] a sounding voice drives, from a plain loop. That
+/// is the whole reason committing a stretch is cheap to build and cheap to
+/// trust -- there is no second stretching implementation to keep in agreement
+/// with the first.
+///
+/// The length is decided by the output count, `round(region_len * ratio)`,
+/// rather than by watching the analysis pointer reach the region end. That
+/// makes the result reproducible from the spec alone, which is what lets a
+/// project store six numbers instead of the audio.
+pub fn render_stretched(
+    source: &[[f32; 2]],
+    region: Region,
+    mode: StretchMode,
+    grain: u32,
+    ratio: f64,
+    sample_rate: u32,
+) -> StretchRender {
+    let region_len = region.end - region.start;
+    let ratio = if ratio.is_finite() {
+        ratio.clamp(MIN_RATIO, MAX_RATIO)
+    } else {
+        1.0
+    };
+    if source.is_empty() || !region_len.is_finite() || region_len <= 0.0 {
+        return StretchRender {
+            frames: Vec::new(),
+            trace: Vec::new(),
+        };
+    }
+    let out_len = (region_len * ratio).round().max(1.0) as usize;
+
+    // Driven through a `StretchReader` at unity rate rather than through the
+    // bare `Stretcher`, for the trace's sake: the reader reports where the
+    // frame it just handed out *came from*, while the stretcher only exposes
+    // its production frontier, which runs ahead by up to a hop. Tracing the
+    // frontier put every marker several milliseconds early. This way the
+    // commit maps markers through the same playhead a sounding voice
+    // reports, so the two cannot disagree.
+    let mut reader = StretchReader::new(mode, sample_rate);
+    {
+        let stretcher = reader.stretcher_mut();
+        stretcher.set_mode(mode);
+        stretcher.set_grain_frames(grain);
+        stretcher.set_ratio(ratio);
+    }
+    reader.reset(region.start);
+
+    let mut frames = Vec::with_capacity(out_len);
+    let mut trace = Vec::with_capacity(out_len / TRACE_INTERVAL + 2);
+    for index in 0..out_len {
+        if index % TRACE_INTERVAL == 0 {
+            trace.push((reader.source_pos().max(0.0) as u32, index as u32));
+        }
+        frames.push(reader.read(source, region, 1.0));
+    }
+    // A closing entry so the last partial span is interpolable rather than
+    // clamped: without it every marker past the final sampled point would
+    // collapse onto it.
+    trace.push((reader.source_pos().max(0.0) as u32, out_len as u32));
+
+    StretchRender { frames, trace }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1483,5 +1613,132 @@ mod tests {
         stretcher.reset(0.0);
         let out = render(&mut stretcher, &[], Region::whole(0), 512);
         assert!(out.iter().all(|frame| frame == &[0.0, 0.0]));
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use crate::interpolate::RegionEdge;
+
+    const SR: u32 = 48_000;
+
+    fn tone(len: usize, hz: f64) -> Vec<[f32; 2]> {
+        (0..len)
+            .map(|index| {
+                let phase = core::f64::consts::TAU * hz * index as f64 / SR as f64;
+                let value = phase.sin() as f32;
+                [value, value]
+            })
+            .collect()
+    }
+
+    fn whole(len: usize) -> Region {
+        Region {
+            start: 0.0,
+            end: len as f64,
+            edge: RegionEdge::Silent,
+        }
+    }
+
+    /// Committing at unity has to be a no-op on the audio, or "commit" would
+    /// be a destructive edit disguised as a bookkeeping one. WSOLA is only
+    /// *nearly* sample-exact at unity -- the search picks offset zero and the
+    /// Hann pair is COLA at 50%, so the interior reproduces the source to
+    /// well under a bit of 16-bit resolution.
+    #[test]
+    fn rendering_at_unity_reproduces_the_source_region() {
+        let source = tone(20_000, 220.0);
+        let render = render_stretched(&source, whole(source.len()), StretchMode::Music, 1024, 1.0, SR);
+
+        assert_eq!(render.len(), source.len());
+        // The first window has nothing to overlap with, exactly as a
+        // one-shot's opening does today; measure past it.
+        let worst = source[2_048..18_000]
+            .iter()
+            .zip(&render.frames[2_048..18_000])
+            .map(|(want, got)| (want[0] - got[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1.0e-3, "unity render drifted from the source by {worst}");
+    }
+
+    /// The length is decided by the spec, not by watching the analysis
+    /// pointer, so a project can store six numbers instead of the audio.
+    #[test]
+    fn a_render_has_exactly_the_output_length_the_ratio_asks_for() {
+        let source = tone(10_000, 220.0);
+        for ratio in [0.5, 1.0, 1.5, 2.0, 4.0] {
+            let render =
+                render_stretched(&source, whole(source.len()), StretchMode::Music, 1024, ratio, SR);
+            let expected = (10_000.0 * ratio).round() as usize;
+            assert_eq!(render.len(), expected, "ratio {ratio}");
+        }
+
+        // A sub-region is measured by the region, not by the sample.
+        let region = Region {
+            start: 2_000.0,
+            end: 6_000.0,
+            edge: RegionEdge::Silent,
+        };
+        let render = render_stretched(&source, region, StretchMode::Music, 1024, 2.0, SR);
+        assert_eq!(render.len(), 8_000);
+    }
+
+    /// Reproducibility is the property that lets a project persist the spec
+    /// rather than the rendered audio, so it is pinned rather than assumed.
+    #[test]
+    fn two_renders_from_the_same_spec_are_identical() {
+        let source = tone(8_000, 180.0);
+        let spec = |()| {
+            render_stretched(&source, whole(source.len()), StretchMode::Drums, 512, 2.5, SR)
+        };
+        let first = spec(());
+        let second = spec(());
+        assert_eq!(first.frames, second.frames);
+        assert_eq!(first.trace, second.trace);
+    }
+
+    /// What the trace is for: carrying a slice marker across the commit. A
+    /// marker three quarters of the way through a region has to land three
+    /// quarters of the way through the render, to well inside a millisecond
+    /// -- a break's slices are what would flam otherwise.
+    #[test]
+    fn the_trace_maps_a_marker_back_to_within_a_millisecond() {
+        let source = tone(40_000, 220.0);
+        let ratio = 2.5;
+        let render =
+            render_stretched(&source, whole(source.len()), StretchMode::Music, 1024, ratio, SR);
+
+        let millisecond = SR as f64 / 1_000.0;
+        for fraction in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
+            let source_frame = 40_000.0 * fraction;
+            let expected = source_frame * ratio;
+            let mapped = render.output_frame_of(source_frame);
+            assert!(
+                (mapped - expected).abs() < millisecond,
+                "a marker at {fraction} mapped to {mapped}, expected {expected}"
+            );
+        }
+
+        // The trace is monotonic, which is what makes the interpolation above
+        // meaningful at all.
+        assert!(render
+            .trace
+            .windows(2)
+            .all(|pair| pair[0].0 <= pair[1].0 && pair[0].1 < pair[1].1));
+    }
+
+    /// Nothing to render is not an error. An empty sample or an inverted
+    /// region hands back an empty render rather than panicking or looping.
+    #[test]
+    fn a_degenerate_region_renders_nothing() {
+        let source = tone(1_000, 220.0);
+        assert!(render_stretched(&[], whole(0), StretchMode::Music, 1024, 2.0, SR).is_empty());
+        let inverted = Region {
+            start: 500.0,
+            end: 100.0,
+            edge: RegionEdge::Silent,
+        };
+        assert!(render_stretched(&source, inverted, StretchMode::Music, 1024, 2.0, SR).is_empty());
     }
 }

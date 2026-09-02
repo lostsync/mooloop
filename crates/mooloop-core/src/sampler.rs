@@ -148,7 +148,7 @@ impl SliceMap {
     fn mint(&mut self) -> u64 {
         // Ids start at 1 so a zero read out of an uninitialized field is
         // never mistaken for a live slice.
-        self.next_id = self.next_id.max(0).wrapping_add(1).max(1);
+        self.next_id = self.next_id.wrapping_add(1).max(1);
         self.next_id
     }
 
