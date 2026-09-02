@@ -83,8 +83,14 @@ instrument. Hence DS-01.
 | `05-the-burst.md` | Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | Drive characters, the output stage, the gain contract |
 | `07-internal-modulation-and-outlets.md` | DS-01's own matrix and its published outlets |
-| `08-the-face.md` | The device face |
+| `08-the-face.md` | The device face, with rendered concepts in `mockups/` |
 | `09-the-kit.md` | Factory patches, range tuning, and the listening pass |
+
+`mockups/` holds two rendered face concepts at the real face size, against the
+real widgets. They are checked in because they are the argument for a layout
+decision rather than notes from making one: the adopted layout is there, and so
+is the one that was built, found illegible, and rejected. `08-the-face.md`
+records why.
 
 Descriptor addressing lands in **step 02**, not at the end. It is the reason
 this instrument exists; it does not get to be the last thing anyone gets to.

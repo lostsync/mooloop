@@ -483,6 +483,19 @@ work session you can recall being part of, and don't stress over precision.
   lands on the next one unless parameter events precede note-ons at the same
   offset, which is a renderer contract no descriptor-addressed generator has
   needed before.
+  Then mocked the face up in `slint-sketch` before anyone builds it, which
+  cost 0.2s a look instead of the four-minute build, and the second concept
+  falsified the step I had just written: three source columns over one display
+  carrying every envelope overlaid is soup at ninety pixels tall, needs a
+  legend to say which curve is which, and arrives at twenty-six near-identical
+  knobs in a grid -- the same "pages of knob rows" that was rejected on
+  ML-P8's first face, from a different direction. Rewrote it as lanes, where
+  each layer's controls and its contour share a row on one time axis, so the
+  noise envelope being shorter than the tone envelope is visible rather than
+  two numbers to compare. Both concepts are checked in under
+  `mockups/`, against `AGENT_OPERATIONS.md`'s rule that sketches stay in
+  `$TMPDIR`, because these are the argument for a decision rather than notes
+  from making one.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
