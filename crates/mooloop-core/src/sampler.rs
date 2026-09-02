@@ -92,7 +92,12 @@ impl PlayMode {
 /// also the most a chromatic keyboard could ever address at once.
 pub const MAX_SLICES: usize = 128;
 
-/// The lowest note that plays a slice: C1, the Ableton and MPC convention.
+/// The lowest note that plays a slice.
+///
+/// MIDI 36, which is where Ableton's Simpler and the MPC family put the first
+/// slice. Named C2 rather than C1 everywhere in this app, because the UI
+/// names middle C as C4 -- the number is the convention, the spelling is
+/// ours.
 pub const DEFAULT_SLICE_BASE_NOTE: u8 = 36;
 
 /// One slice boundary: a source frame with a stable identity.

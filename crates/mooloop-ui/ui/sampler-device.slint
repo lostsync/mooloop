@@ -48,6 +48,59 @@ component SampleMarker inherits Rectangle {
     }
 }
 
+// One slice boundary drawn over the waveform.
+//
+// Modelled on `SampleMarker` deliberately -- same press-latch drag through
+// `pointer-event`, same hiding when the zoom window moves off it -- rather
+// than reaching for `gestures.rs`, which is a piano-roll modifier registry
+// and has nothing to say about this. What it adds is an ordinal label,
+// because ordinal position is what a note selects, and two gestures the trim
+// markers have no use for: pressing one auditions the slice it opens, and
+// right-clicking removes the boundary.
+component SliceHandle inherits Rectangle {
+    in property <int> index;
+    in property <length> editor-width;
+    callback moved(float);
+    callback auditioned();
+    callback removed();
+    callback drag-started();
+    callback drag-finished();
+
+    width: 1px;
+    // Its own colour rather than the trim markers' accent or the loop
+    // markers' warning: with sixteen of these across the view, finding S
+    // among them has to stay possible.
+    background: Theme.focus;
+    Text {
+        x: 2px;
+        y: parent.height / 2 - 5px;
+        text: root.index + 1;
+        color: Theme.focus;
+        font-size: 8px;
+    }
+    TouchArea {
+        x: -4px;
+        width: 9px;
+        mouse-cursor: ew-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                if (e.button == PointerEventButton.right) {
+                    root.removed();
+                } else {
+                    // Hearing the slice you just grabbed is the point of
+                    // grabbing it.
+                    root.auditioned();
+                    root.drag-started();
+                }
+            } else if (e.kind == PointerEventKind.up) {
+                root.drag-finished();
+            } else if (e.kind == PointerEventKind.move && self.pressed) {
+                root.moved(clamp((root.x + self.x + self.mouse-x) / max(1px, root.editor-width), 0, 1));
+            }
+        }
+    }
+}
+
 // Sample-frame-accurate numeric entry, for placing trim/loop points more
 // precisely than dragging a `SampleMarker` allows. No prev/next arrows
 // (a sample can be hundreds of thousands of frames long, so +/-1 buttons
@@ -158,6 +211,24 @@ export component SamplerDeviceFace inherits Rectangle {
     // the two that exist.
     in-out property <int> filter-view;
     in-out property <int> loop-mode;
+    // Whether a note transposes the region or picks a slice out of it.
+    in-out property <int> play-mode;
+    // The note that plays slice 0; each semitone above steps one slice on.
+    in-out property <int> slice-base-note: 36;
+    // Slice boundaries as fractions of the published buffer, ascending.
+    // Fractions rather than frames so they survive the same `to-view` the
+    // waveform and every other marker already go through.
+    in-out property <[float]> slice-markers;
+    // How many slices DIVIDE should lay down. Pure view state: the request,
+    // not the result.
+    in-out property <int> slice-count: 8;
+    // Whether the published buffer is a committed render, what it was baked
+    // at, and whether the project has since moved off the tempo it was fitted
+    // to. Stale is shown, never acted on: re-baking a loop underneath someone
+    // is not a thing to do without being asked.
+    in-out property <bool> committed;
+    in-out property <string> commit-label;
+    in-out property <bool> commit-stale;
     in-out property <int> voice-mode;
     in-out property <int> polyphony: 1;
     in-out property <int> retrigger-mode;
@@ -241,6 +312,20 @@ export component SamplerDeviceFace inherits Rectangle {
     callback waveform-view-changed(float, float);
     callback snap-to-zero-changed(bool);
     callback snap-markers-clicked();
+    callback play-mode-changed(int);
+    callback slice-base-note-changed(int);
+    callback slice-added(float);
+    callback slice-moved(int, float);
+    callback slice-removed(int);
+    callback slice-auditioned(int);
+    callback slices-divided(int);
+    callback slices-cleared();
+    // Bracket a marker drag so the history collapses its frames into one
+    // undo entry, the way the piano roll's gestures already do.
+    callback slice-drag-started();
+    callback slice-drag-finished();
+    callback commit-clicked();
+    callback revert-clicked();
 
     // Maps a position normalized against the whole sample (0..1) to a
     // position normalized against the currently visible zoom window, for
@@ -329,10 +414,19 @@ export component SamplerDeviceFace inherits Rectangle {
                     clicked => { root.reverse-playback = !root.reverse-playback; root.reverse-playback-changed(root.reverse-playback); }
                 }
                 SelectorBank {
+                    options: ["Pitch", "Slice"];
+                    selected-index <=> root.play-mode;
+                    segment-width: 40px;
+                    tooltip: "Pitched plays the region transposed; Slice plays one slice per note at its own pitch";
+                    selected(i) => { root.play-mode-changed(i); }
+                }
+                SelectorBank {
                     options: ["Off", "Loop", "Pong"];
                     selected-index <=> root.loop-mode;
                     segment-width: 42px;
-                    tooltip: "Loop mode";
+                    tooltip: root.play-mode == 1
+                        ? "Loop mode; in Slice mode the loop is the slice itself"
+                        : "Loop mode";
                     selected(i) => { root.loop-mode-changed(i); }
                 }
             }
@@ -357,13 +451,27 @@ export component SamplerDeviceFace inherits Rectangle {
                     width: parent.width - self.x;
                     height: parent.height; background: Theme.background; opacity: 0.66;
                 }
-                if root.loop-mode != 0 : Rectangle {
+                // Hidden in Slice mode along with the greyed L/R markers:
+                // there the loop is the slice, so a band drawn between the
+                // global loop points describes nothing that happens.
+                if root.loop-mode != 0 && root.play-mode == 0 : Rectangle {
                     x: clamp(root.to-view(clamp(root.loop-start, root.start-pos, root.end-pos)), 0, 1) * parent.width;
                     width: max(1px, (clamp(root.to-view(clamp(root.loop-end, root.start-pos, root.end-pos)), 0, 1)
                         - clamp(root.to-view(clamp(root.loop-start, root.start-pos, root.end-pos)), 0, 1)) * parent.width);
                     height: parent.height; background: Theme.accent-active; opacity: 0.32;
                 }
                 Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border; }
+                // Declared before the handles and the trim markers so they
+                // sit on top of it: this is the empty waveform, not the
+                // markers already on it. Double-click rather than click,
+                // because a stray single click while reaching for a handle
+                // should not add a boundary.
+                if root.play-mode == 1 : TouchArea {
+                    double-clicked => {
+                        root.slice-added(clamp(root.waveform-view-offset
+                            + (self.mouse-x / max(1px, parent.width)) * root.waveform-view-visible-fraction, 0, 1));
+                    }
+                }
                 for amplitude[index] in root.waveform : Rectangle {
                     x: index * parent.width / max(1, root.waveform.length);
                     y: (parent.height - self.height) / 2;
@@ -403,7 +511,7 @@ export component SamplerDeviceFace inherits Rectangle {
                 SampleMarker {
                     x: clamp(root.to-view(root.loop-start), 0, 1) * (parent.width - 1px); height: parent.height;
                     opacity: root.to-view(root.loop-start) >= 0 && root.to-view(root.loop-start) <= 1 ? 1.0 : 0.0;
-                    editor-width: parent.width; marker-label: "L"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning; label-at-bottom: true;
+                    editor-width: parent.width; marker-label: "L"; marker-color: root.loop-mode == 0 || root.play-mode == 1 ? Theme.text-faint : Theme.warning; label-at-bottom: true;
                     moved(v) => {
                         let abs = root.waveform-view-offset + v * root.waveform-view-visible-fraction;
                         root.loop-start = clamp(abs, root.start-pos, root.loop-end - 0.001); root.loop-start-changed(root.loop-start);
@@ -412,10 +520,30 @@ export component SamplerDeviceFace inherits Rectangle {
                 SampleMarker {
                     x: clamp(root.to-view(root.loop-end), 0, 1) * (parent.width - 1px); height: parent.height;
                     opacity: root.to-view(root.loop-end) >= 0 && root.to-view(root.loop-end) <= 1 ? 1.0 : 0.0;
-                    editor-width: parent.width; marker-label: "R"; marker-color: root.loop-mode == 0 ? Theme.text-faint : Theme.warning;
+                    editor-width: parent.width; marker-label: "R"; marker-color: root.loop-mode == 0 || root.play-mode == 1 ? Theme.text-faint : Theme.warning;
                     moved(v) => {
                         let abs = root.waveform-view-offset + v * root.waveform-view-visible-fraction;
                         root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
+                    }
+                }
+                // Last, so a handle sitting under a trim marker is the one
+                // the pointer finds: the trim markers are two fixed points a
+                // user rarely moves, and the slices are what this mode is for.
+                if root.play-mode == 1 : Rectangle {
+                    for position[index] in root.slice-markers : SliceHandle {
+                        x: clamp(root.to-view(position), 0, 1) * (parent.width - 1px);
+                        height: parent.height;
+                        opacity: root.to-view(position) >= 0 && root.to-view(position) <= 1 ? 1.0 : 0.0;
+                        index: index;
+                        editor-width: parent.width;
+                        moved(v) => {
+                            root.slice-moved(index, clamp(root.waveform-view-offset
+                                + v * root.waveform-view-visible-fraction, 0, 1));
+                        }
+                        auditioned => { root.slice-auditioned(index); }
+                        removed => { root.slice-removed(index); }
+                        drag-started => { root.slice-drag-started(); }
+                        drag-finished => { root.slice-drag-finished(); }
                     }
                 }
             }
@@ -463,7 +591,11 @@ export component SamplerDeviceFace inherits Rectangle {
                             }
                         }
                     }
-                    HorizontalLayout {
+                    // The slice row takes the loop row's place rather than
+                    // adding one: the face is a fixed 3U, a third row falls
+                    // off the bottom of it, and in Slice mode the global loop
+                    // points are not what loops anyway -- the slice is.
+                    if root.play-mode == 0 : HorizontalLayout {
                         spacing: 4px;
                         SampleField {
                             label: "L"; tooltip: "Loop start frame";
@@ -482,6 +614,31 @@ export component SamplerDeviceFace inherits Rectangle {
                                 let abs = root.sample-frames > 0 ? v / root.sample-frames : 1;
                                 root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
                             }
+                        }
+                    }
+                    if root.play-mode == 1 : HorizontalLayout {
+                        spacing: 4px;
+                        StepperField {
+                            label: "BASE"; value <=> root.slice-base-note;
+                            minimum: 0; maximum: 127; step: 1; value-width: 26px;
+                            display-text: NoteFormat.midi-name(root.slice-base-note);
+                            tooltip: "The note that plays the first slice";
+                            changed(v) => { root.slice-base-note-changed(v); }
+                        }
+                        StepperField {
+                            label: "N"; value <=> root.slice-count;
+                            minimum: 1; maximum: 128; step: 1; value-width: 20px;
+                            tooltip: "How many slices DIVIDE lays down";
+                        }
+                        ToolButton {
+                            text: "DIVIDE"; min-width: 46px; max-width: 46px; min-height: 20px;
+                            tooltip: "Replace the slices with equal divisions of the playback region";
+                            clicked => { root.slices-divided(root.slice-count); }
+                        }
+                        ToolButton {
+                            text: "CLEAR"; min-width: 42px; max-width: 42px; min-height: 20px;
+                            tooltip: "Remove every slice";
+                            clicked => { root.slices-cleared(); }
                         }
                     }
                 }
@@ -695,6 +852,37 @@ export component SamplerDeviceFace inherits Rectangle {
                         height: 10px;
                     }
                     Rectangle { vertical-stretch: 1; }
+                    // Committing bakes the stretch into the buffer, after
+                    // which it is ordinary audio: reverse and Slice mode work
+                    // on it, which they cannot do on a live stretch because
+                    // WSOLA only runs forwards.
+                    HorizontalLayout {
+                        spacing: 4px;
+                        if !root.committed : ToolButton {
+                            text: "COMMIT";
+                            enabled: root.stretch-enabled;
+                            min-width: 56px; max-width: 56px; min-height: 18px;
+                            tooltip: root.stretch-enabled
+                                ? "Bake the stretch into the buffer, so reverse and Slice mode can use it"
+                                : "Switch stretching on to commit it";
+                            clicked => { root.commit-clicked(); }
+                        }
+                        if root.committed : Text {
+                            text: root.commit-stale ? root.commit-label + " · stale" : root.commit-label;
+                            color: root.commit-stale ? Theme.warning : Theme.text-faint;
+                            font-size: 8px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        if root.committed : ToolButton {
+                            text: "REVERT";
+                            min-width: 52px; max-width: 52px; min-height: 18px;
+                            tooltip: "Put the source buffer and its markers back";
+                            clicked => { root.revert-clicked(); }
+                        }
+                        if !root.committed : Rectangle { horizontal-stretch: 1; }
+                    }
                 }
             }
             Rectangle {

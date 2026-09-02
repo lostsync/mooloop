@@ -767,6 +767,102 @@ fn render_sampler_zoomed_markers() {
     write_snapshot(&snapshot, "MOOLOOP_SAMPLER_ZOOMED_MARKERS_SNAPSHOT");
 }
 
+/// Slice mode's whole surface at once: the play-mode selector, the numbered
+/// boundaries over the waveform, the base-note/count/DIVIDE/CLEAR row that
+/// takes the loop fields' place, and the greyed loop markers.
+///
+/// Zoomed for the same reason `render_sampler_zoomed_markers` is: a boundary
+/// moves by frames, which is sub-pixel at full zoom, and the numbered labels
+/// only separate once the view is windowed.
+#[test]
+fn render_sampler_slice_markers() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .expect("initialize headless renderer");
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_selected_channel_name(SharedString::from("Break"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(0);
+    ui.set_sampler_device_page(0);
+    ui.set_sample_name(SharedString::from("amen_break.wav"));
+    ui.set_sample_description(SharedString::from("48kHz / 16-bit / stereo"));
+    ui.set_sample_frames(480_000);
+    ui.set_tune_label(SharedString::from("C4 · 261.6 Hz"));
+    ui.set_waveform(ModelRc::from(Rc::new(VecModel::from(vec![
+        0.1, 0.8, 0.3, 0.2, 0.9, 0.4, 0.15, 0.6, 0.35, 0.75, 0.2, 0.5,
+    ]))));
+
+    ui.set_play_mode(1);
+    ui.set_slice_base_note(36);
+    ui.set_slice_count(8);
+    // Eight even boundaries, of which the middle ones fall inside the window
+    // below -- so the shot shows both the drawn handles and the hiding that
+    // keeps the ones outside it from smearing against the edge.
+    ui.set_slice_markers(ModelRc::from(Rc::new(VecModel::from(
+        (0..8).map(|index| index as f32 / 8.0).collect::<Vec<f32>>(),
+    ))));
+    ui.set_waveform_view_offset(0.25);
+    ui.set_waveform_view_visible_fraction(0.5);
+    ui.set_start_pos(0.30);
+    ui.set_end_pos(0.70);
+    ui.set_loop_start(0.40);
+    ui.set_loop_end(0.60);
+    // Loop mode on, so the greying is the play mode's doing and not the loop
+    // mode's -- otherwise the shot cannot tell the two rules apart.
+    ui.set_loop_mode(1);
+    ui.set_snap_to_zero(true);
+
+    let snapshot = ui.window().take_snapshot().unwrap();
+    assert_eq!((snapshot.width(), snapshot.height()), (960, 760));
+    assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&snapshot, "MOOLOOP_SAMPLER_SLICE_MARKERS_SNAPSHOT");
+}
+
+/// The committed badge and REVERT take the COMMIT button's place, and a
+/// bar-synced commit the project has since moved off is marked stale rather
+/// than silently re-baked.
+#[test]
+fn render_sampler_committed_stretch() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .expect("initialize headless renderer");
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_selected_channel_name(SharedString::from("Break"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(0);
+    // The stretch group lives on the sampler's second page.
+    ui.set_sampler_device_page(1);
+    ui.set_sample_name(SharedString::from("amen_break.wav"));
+    ui.set_tune_label(SharedString::from("C4 · 261.6 Hz"));
+    ui.set_stretch_enabled(true);
+    ui.set_stretch_sync(true);
+    ui.set_stretch_bars_label(SharedString::from("2 bars"));
+    ui.set_sample_committed(true);
+    ui.set_commit_label(SharedString::from("baked 1.87x"));
+    ui.set_commit_stale(true);
+
+    let snapshot = ui.window().take_snapshot().unwrap();
+    assert_eq!((snapshot.width(), snapshot.height()), (960, 760));
+    assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&snapshot, "MOOLOOP_SAMPLER_COMMITTED_SNAPSHOT");
+}
+
 /// Capacity is a constant, not a layout decision. The same shelf, told it
 /// has sixteen slots instead of eight, must still show every module cell and
 /// still pick an input by name — with no edit anywhere in the UI. This is the

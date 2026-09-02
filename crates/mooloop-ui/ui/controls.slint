@@ -34,16 +34,24 @@ export component DraggablePoint inherits TouchArea {
 // Frequency controls use the same nearest-note convention as the sampler's
 // tuned-root readout: A4 is MIDI 69 at 440 Hz.
 export global NoteFormat {
-    public pure function name(hz: float) -> string {
-        let midi = clamp(round(69 + 12 * ln(max(hz, 0.001) / 440) / ln(2)), 0, 127);
-        let pitch-class = mod(midi, 12);
+    // Split out from `name` because a MIDI note number is what the sampler's
+    // root and slice-base fields already hold: going through Hz to get a
+    // note name back would be a round trip through the one representation
+    // neither end uses.
+    public pure function midi-name(midi: int) -> string {
+        let clamped = clamp(midi, 0, 127);
+        let pitch-class = mod(clamped, 12);
         let note = pitch-class == 0 ? "C" : pitch-class == 1 ? "C#"
             : pitch-class == 2 ? "D" : pitch-class == 3 ? "D#"
             : pitch-class == 4 ? "E" : pitch-class == 5 ? "F"
             : pitch-class == 6 ? "F#" : pitch-class == 7 ? "G"
             : pitch-class == 8 ? "G#" : pitch-class == 9 ? "A"
             : pitch-class == 10 ? "A#" : "B";
-        return note + (floor(midi / 12) - 1);
+        return note + (floor(clamped / 12) - 1);
+    }
+
+    public pure function name(hz: float) -> string {
+        return root.midi-name(round(69 + 12 * ln(max(hz, 0.001) / 440) / ln(2)));
     }
 
     public pure function frequency-value(hz: float) -> string {

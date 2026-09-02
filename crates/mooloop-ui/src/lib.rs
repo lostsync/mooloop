@@ -34,7 +34,8 @@ use mooloop_core::{
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
-    SampleCommit, SamplerParams, SamplerState, SliceMap, SnareCharacter, StretchMode, VoiceMode,
+    PlayMode, SampleCommit, SamplerParams, SamplerState, SliceMap, SnareCharacter, StretchMode,
+    VoiceMode, MAX_SLICES,
     DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
@@ -1419,6 +1420,137 @@ impl SampleMarker {
 ///
 /// Runs entirely on the UI thread against decoded frames the control side
 /// already owns. Nothing here is reachable from `process()`.
+/// Resolve a proposed slice boundary onto a zero crossing.
+///
+/// Slice boundaries need this more than the trim markers do, not less: a
+/// slice cut out of the middle of a break can end at full amplitude, and the
+/// voice is deactivated outright when it reaches its end rather than faded.
+/// A boundary on a crossing is what keeps that from clicking on every note.
+///
+/// Penned in by the playback region rather than by neighbouring markers: two
+/// slices may sit as close together as the user likes, and the map refuses a
+/// collision itself.
+fn snap_slice_frame(params: &SamplerParams, sample: &SampleData, frame: usize) -> usize {
+    let len = sample.frames.len();
+    if len < 2 {
+        return frame;
+    }
+    let last = len - 1;
+    let bounds = frame_from_fraction(params.start, len).min(last)
+        ..=frame_from_fraction(params.end, len).min(last);
+    let window = snap_window_frames(DEFAULT_SNAP_WINDOW_MS, sample.sample_rate);
+    snap_to_zero_crossing(&sample.frames, frame.min(last), window, bounds).resolved
+}
+
+/// Re-derive everything the editor shows about a channel's audio.
+///
+/// Committing and reverting swap the published buffer underneath the view,
+/// and the waveform, the readout, and the duration all describe that buffer
+/// rather than the source. Kept in one place so a commit cannot update two of
+/// the three.
+fn refresh_sample_view(channel: &mut ChannelState) {
+    let Some(sample) = channel.published_sample().cloned() else {
+        channel.waveform.clear();
+        channel.sample_description.clear();
+        channel.sample_duration = 0.0;
+        return;
+    };
+    channel.waveform = waveform_peaks(&sample, WAVEFORM_BINS);
+    channel.sample_description = sample_description(&sample);
+    channel.sample_duration = sample_duration(&sample);
+}
+
+/// A channel's audio, on its way to the pump.
+///
+/// Neither half can ride the command ring: `EngineCommand` is `Copy` and
+/// unboxed by design, and both of these live in `ArcSwap` slots the pump
+/// exclusively owns. Same route the built-in sample reset already takes.
+///
+/// Both are always sent together because they are one fact: after a commit
+/// the published buffer and the map that indexes it change at the same
+/// instant, and delivering one without the other would leave the voice
+/// reading markers that name frames in a buffer it no longer holds.
+struct ChannelAudio {
+    channel: usize,
+    sample: Option<Arc<SampleData>>,
+    slices: Option<Arc<SliceMap>>,
+}
+
+#[derive(Clone)]
+struct ChannelAudioSender(std::sync::mpsc::Sender<ChannelAudio>);
+
+fn publish_channel_audio_to(tx: &ChannelAudioSender, channel: usize, state: &ChannelState) {
+    let _ = tx.0.send(ChannelAudio {
+        channel,
+        sample: state.published_sample().cloned(),
+        slices: (!state.slices.is_empty()).then(|| Arc::new(state.slices.clone())),
+    });
+}
+
+/// Turn a normalized position from the face into a frame of the published
+/// buffer, snapped to a zero crossing when AUTO is on.
+fn resolve_slice_frame(channel: &ChannelState, position: f32, snap: bool) -> Option<u32> {
+    let sample = channel.published_sample()?;
+    let len = sample.frames.len();
+    if len == 0 {
+        return None;
+    }
+    let frame = frame_from_fraction(position.clamp(0.0, 1.0), len);
+    let frame = if snap {
+        snap_slice_frame(&channel.params, sample, frame)
+    } else {
+        frame
+    };
+    Some(frame as u32)
+}
+
+/// Whether a bar-synced commit no longer matches the project tempo.
+///
+/// Only bar-synced commits can go stale: a commit made from an explicit
+/// speed knob was never fitted to anything, so a tempo change does not
+/// invalidate it. Re-deriving through the sampler's own `effective_ratio`
+/// rather than storing the tempo, so this asks the same question the commit
+/// answered rather than a similar one.
+fn commit_is_stale(channel: &ChannelState, commit: &SampleCommit, bpm: f64) -> bool {
+    if !channel.params.stretch_sync {
+        return false;
+    }
+    let Some(source) = channel.sample_data.as_ref() else {
+        return false;
+    };
+    let params = SamplerParams {
+        start: commit.source_start,
+        end: commit.source_end,
+        loop_start: commit.source_loop_start,
+        loop_end: commit.source_loop_end,
+        ..channel.params
+    };
+    let now = mooloop_dsp::Sampler::effective_ratio(
+        params,
+        source.frames.len(),
+        source.sample_rate,
+        bpm,
+        1.0,
+    );
+    (now - f64::from(commit.ratio)).abs() > 1.0e-3
+}
+
+/// The slice boundaries of the selected channel, as fractions for the face.
+fn slice_fractions(channel: &ChannelState) -> Vec<f32> {
+    let len = channel
+        .published_sample()
+        .map_or(0, |sample| sample.frames.len());
+    if len == 0 {
+        return Vec::new();
+    }
+    channel
+        .slices
+        .markers()
+        .iter()
+        .map(|marker| fraction_from_frame(marker.frame as usize, len))
+        .collect()
+}
+
 fn snap_marker(
     params: &SamplerParams,
     sample: &SampleData,
@@ -2033,6 +2165,10 @@ struct UiState {
     automation_selected_point: Cell<Option<PointId>>,
     playlist_model: Rc<VecModel<PlaylistClip>>,
     waveform_model: Rc<VecModel<f32>>,
+    /// Slice boundaries of the selected channel, normalized against the
+    /// published buffer so they ride the same `to-view` zoom the waveform and
+    /// every other marker already go through.
+    slice_model: Rc<VecModel<f32>>,
     /// Normalized position of every currently active sampler voice on the
     /// selected channel, refreshed each pump tick. Empty when idle, when a
     /// different device kind is selected, or while editing a bus.
@@ -4049,6 +4185,25 @@ impl UiState {
                 .unwrap_or(0),
         );
         self.waveform_model.set_vec(ch.waveform.clone());
+        self.slice_model.set_vec(slice_fractions(ch));
+        window.set_play_mode(p.play_mode.to_index());
+        window.set_slice_base_note(i32::from(p.slice_base_note));
+        window.set_sample_committed(ch.commit.is_some());
+        window.set_commit_label(
+            ch.commit
+                .as_ref()
+                .map(|commit| format!("baked {:.2}x", commit.ratio))
+                .unwrap_or_default()
+                .into(),
+        );
+        // Stale is a bar-synced commit whose project has since changed tempo.
+        // Reported, never acted on: re-baking a loop under someone without
+        // being asked is worse than telling them it no longer fits.
+        window.set_commit_stale(
+            ch.commit
+                .as_ref()
+                .is_some_and(|commit| commit_is_stale(ch, commit, window.get_bpm() as f64)),
+        );
         // A newly selected channel's waveform view starts fully zoomed out;
         // a stale zoom window from the previous channel would otherwise
         // misalign against this one's sample length.
@@ -4203,6 +4358,7 @@ impl AppUi {
         };
         let rows_model = Rc::new(VecModel::from(vec![row]));
         let waveform_model = Rc::new(VecModel::from(first.waveform.clone()));
+        let slice_model = Rc::new(VecModel::from(Vec::<f32>::new()));
         let playhead_model = Rc::new(VecModel::from(Vec::<f32>::new()));
         let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
         let modulation_source_model = Rc::new(VecModel::from(Vec::<ModulationSourceRow>::new()));
@@ -4215,6 +4371,7 @@ impl AppUi {
         window.set_automation_targets(ModelRc::from(automation_target_model.clone()));
         window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
         window.set_waveform(ModelRc::from(waveform_model.clone()));
+        window.set_slice_markers(ModelRc::from(slice_model.clone()));
         window.set_playhead_positions(ModelRc::from(playhead_model.clone()));
         window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
         window.set_modulation_sources(ModelRc::from(modulation_source_model.clone()));
@@ -4230,6 +4387,7 @@ impl AppUi {
             note_model,
             playlist_model,
             waveform_model,
+            slice_model,
             playhead_model,
             effect_slot_model,
             modulation_source_model,
@@ -4829,6 +4987,11 @@ impl AppUi {
         // Sample slots are published out-of-band, so source replacement asks
         // the pump (which owns the EngineHandle) to restore the built-in sample.
         let (sample_reset_tx, sample_reset_rx) = std::sync::mpsc::channel::<usize>();
+        // Slice edits and stretch commits publish through the same route, for
+        // the same reason: both change what sits in a channel's `ArcSwap`
+        // slots rather than what its parameters say.
+        let (channel_audio_tx, channel_audio_rx) = std::sync::mpsc::channel::<ChannelAudio>();
+        let channel_audio_tx = ChannelAudioSender(channel_audio_tx);
 
         // --- Preferences: appearance applies live from here; audio reaches
         //     the engine through the pump below, the only place that owns
@@ -9318,6 +9481,393 @@ impl AppUi {
             });
         }
 
+        // --- Slice mode -------------------------------------------------
+        //
+        // Marker edits are the first undoable sampler edits -- there were
+        // none before this. They follow the modulator-param precedent:
+        // snapshot, mutate, publish, record. Drags collapse through the
+        // gesture token the way the piano roll's already do.
+        {
+            let commands = command_state.clone();
+            window.on_slice_drag_started(move || {
+                let mut commands = commands.borrow_mut();
+                commands.next_gesture = commands.next_gesture.wrapping_add(1);
+                commands.gesture = Some(commands.next_gesture);
+            });
+        }
+        {
+            let commands = command_state.clone();
+            window.on_slice_drag_finished(move || {
+                commands.borrow_mut().gesture = None;
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_play_mode_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                channel.params.play_mode = PlayMode::from_index(value);
+                let p = channel.params;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: ch as u8,
+                    params: p,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_slice_base_note_changed(move |note| {
+                let mut st = st.borrow_mut();
+                let ch = st.selected;
+                let Some(channel) = st.channels.get_mut(ch) else {
+                    return;
+                };
+                channel.params.slice_base_note = note.clamp(0, 127) as u8;
+                let p = channel.params;
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: ch as u8,
+                    params: p,
+                });
+            });
+        }
+        {
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
+            window.on_slice_added(move |position| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    let Some(frame) = resolve_slice_frame(channel, position, window.get_snap_to_zero())
+                    else {
+                        return;
+                    };
+                    if channel.slices.add(frame).is_none() {
+                        window.set_status_message(
+                            format!("No slice added: {MAX_SLICES} is the limit, or one is already there")
+                                .into(),
+                        );
+                        return;
+                    }
+                    publish_channel_audio_to(&audio_out, ch, channel);
+                    let markers = slice_fractions(channel);
+                    st.slice_model.set_vec(markers);
+                    st.dirty = true;
+                }
+                record_project_history(&commands, before, &history_state, &window, "Slice added");
+            });
+        }
+        {
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
+            window.on_slice_moved(move |index, position| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    // By id, not by position: a drag past a neighbour
+                    // reorders the map, and the next move frame still means
+                    // the marker under the pointer.
+                    let Some(id) = channel
+                        .slices
+                        .get(index.max(0) as usize)
+                        .map(|marker| marker.id)
+                    else {
+                        return;
+                    };
+                    // Not snapped while dragging: a marker that jumps to a
+                    // crossing under the pointer fights the drag. The AUTO
+                    // snap lands it on release, below.
+                    let Some(frame) = resolve_slice_frame(channel, position, false) else {
+                        return;
+                    };
+                    if !channel.slices.move_to(id, frame) {
+                        return;
+                    }
+                    publish_channel_audio_to(&audio_out, ch, channel);
+                    let markers = slice_fractions(channel);
+                    st.slice_model.set_vec(markers);
+                    st.dirty = true;
+                }
+                record_project_history(&commands, before, &history_state, &window, "Slice moved");
+            });
+        }
+        {
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
+            window.on_slice_removed(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    let Some(id) = channel
+                        .slices
+                        .get(index.max(0) as usize)
+                        .map(|marker| marker.id)
+                    else {
+                        return;
+                    };
+                    channel.slices.remove(id);
+                    publish_channel_audio_to(&audio_out, ch, channel);
+                    let markers = slice_fractions(channel);
+                    st.slice_model.set_vec(markers);
+                    st.dirty = true;
+                }
+                record_project_history(&commands, before, &history_state, &window, "Slice removed");
+            });
+        }
+        {
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
+            window.on_slices_divided(move |count| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    let Some(sample) = channel.published_sample().cloned() else {
+                        window.set_status_message("No sample to slice".into());
+                        return;
+                    };
+                    let len = sample.frames.len();
+                    let start = frame_from_fraction(channel.params.start, len) as u32;
+                    let end = frame_from_fraction(channel.params.end, len) as u32;
+                    channel
+                        .slices
+                        .divide_evenly(count.max(1) as usize, start, end);
+                    // Grid divisions land wherever the arithmetic puts them,
+                    // which is as likely to be mid-waveform as a hand-placed
+                    // marker is. Snapping them is the same reason the trim
+                    // markers snap, multiplied by the slice count.
+                    if window.get_snap_to_zero() {
+                        let params = channel.params;
+                        let snapped: Vec<mooloop_core::SliceMarker> = channel
+                            .slices
+                            .markers()
+                            .iter()
+                            .map(|marker| mooloop_core::SliceMarker {
+                                id: marker.id,
+                                frame: snap_slice_frame(&params, &sample, marker.frame as usize)
+                                    as u32,
+                            })
+                            .collect();
+                        channel.slices.rebuild(snapped);
+                    }
+                    publish_channel_audio_to(&audio_out, ch, channel);
+                    let markers = slice_fractions(channel);
+                    st.slice_model.set_vec(markers);
+                    st.dirty = true;
+                    window.set_status_message(
+                        format!("Divided into {} slices", count.max(1)).into(),
+                    );
+                }
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Slices divided",
+                );
+            });
+        }
+        {
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
+            window.on_slices_cleared(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    channel.slices.clear();
+                    publish_channel_audio_to(&audio_out, ch, channel);
+                    st.slice_model.set_vec(Vec::new());
+                    st.dirty = true;
+                }
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Slices cleared",
+                );
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_slice_auditioned(move |index| {
+                let st = st.borrow();
+                let ch = st.selected;
+                let Some(channel) = st.channels.get(ch) else {
+                    return;
+                };
+                // Through the channel's own device, so what is heard is the
+                // slice as it will actually play -- envelopes, filter, drive
+                // and all. The browser's preview voice bypasses the strip
+                // entirely and could not do this.
+                let note = i32::from(channel.params.slice_base_note) + index.max(0);
+                if note > 127 {
+                    return;
+                }
+                let _ = tx.send(EngineCommand::TriggerChannelNote {
+                    channel: ch as u8,
+                    note: note as u8,
+                    velocity: 100,
+                });
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
+            window.on_commit_clicked(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    // Always from the source, never from a buffer that has
+                    // already been baked: re-committing at a new tempo has to
+                    // be a fresh render or repeated tempo changes accumulate
+                    // stretch on stretch.
+                    let Some(source) = channel.sample_data.clone() else {
+                        window.set_status_message("No sample to commit".into());
+                        return;
+                    };
+                    let (params, slices) = match channel.commit.as_ref() {
+                        Some(commit) => {
+                            let (params, slices) = mooloop_dsp::commit::revert_commit(
+                                channel.params,
+                                commit,
+                            );
+                            (params, slices)
+                        }
+                        None => (channel.params, channel.slices.clone()),
+                    };
+                    let bpm = window.get_bpm() as f64;
+                    let Some(committed) =
+                        mooloop_dsp::commit::commit_stretch(&source, params, &slices, bpm)
+                    else {
+                        window.set_status_message("Nothing to commit".into());
+                        return;
+                    };
+                    let ratio = committed.commit.ratio;
+                    channel.params = committed.params;
+                    channel.slices = committed.slices;
+                    channel.commit = Some(Box::new(committed.commit));
+                    channel.committed_sample = Some(committed.sample);
+                    refresh_sample_view(channel);
+                    publish_channel_audio_to(&audio_out, ch, channel);
+                    let p = channel.params;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: p,
+                    });
+                    st.dirty = true;
+                    window.set_status_message(
+                        format!("Committed the stretch at {ratio:.2}x").into(),
+                    );
+                }
+                st.borrow().refresh_editor(&window);
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Stretch committed",
+                );
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
+            window.on_revert_clicked(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let ch = st.selected;
+                    let Some(channel) = st.channels.get_mut(ch) else {
+                        return;
+                    };
+                    let Some(commit) = channel.commit.take() else {
+                        return;
+                    };
+                    let (params, slices) =
+                        mooloop_dsp::commit::revert_commit(channel.params, &commit);
+                    channel.params = params;
+                    channel.slices = slices;
+                    channel.committed_sample = None;
+                    refresh_sample_view(channel);
+                    publish_channel_audio_to(&audio_out, ch, channel);
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params,
+                    });
+                    st.dirty = true;
+                    window.set_status_message("Reverted to the source sample".into());
+                }
+                st.borrow().refresh_editor(&window);
+                record_project_history(
+                    &commands,
+                    before,
+                    &history_state,
+                    &window,
+                    "Stretch reverted",
+                );
+            });
+        }
+
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
@@ -10668,6 +11218,20 @@ impl AppUi {
                         handle.load_sample(channel, sample.clone());
                     } else {
                         handle.clear_sample(channel);
+                    }
+                }
+                // After the resets, and both halves together: a slice edit or
+                // a commit is the most specific statement about what a
+                // channel is playing, and its buffer and its map change at
+                // the same instant.
+                while let Ok(update) = channel_audio_rx.try_recv() {
+                    match update.sample {
+                        Some(sample) => handle.load_sample(update.channel, sample),
+                        None => handle.clear_sample(update.channel),
+                    }
+                    match update.slices {
+                        Some(slices) => handle.load_slices(update.channel, slices),
+                        None => handle.clear_slices(update.channel),
                     }
                 }
                 let mut deferred_new_channel_load = None;

@@ -387,6 +387,17 @@ work session you can recall being part of, and don't stress over precision.
   without their fix, the second measured as level rather than as playhead
   position -- a releasing voice is still an active voice and its head keeps
   advancing, so the obvious check passed straight through the bug.
+  Then the face: a play-mode selector, numbered boundaries draggable over the
+  waveform with press-to-audition and right-click-to-remove, a
+  base-note/count/DIVIDE/CLEAR row that takes the loop fields' place rather
+  than adding a row a 3U face has no room for, and a commit row that becomes a
+  baked-ratio badge and REVERT. Slice edits are the first undoable sampler
+  edits -- there were none -- so they follow the modulator-param precedent and
+  collapse a drag through the same gesture token the piano roll uses. Two
+  things the snapshot caught that reading the diff had not: the loop region
+  band was still being drawn in slice mode, where the loop is the slice and
+  the global loop points describe nothing, and only one of the two loop
+  markers had been greyed.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
