@@ -81,6 +81,40 @@ Prefer headless software rendering: it is deterministic, does not need a
 window, and works while the screen is locked. Slint's default GPU backend does
 not support `take_snapshot`.
 
+Sketch and check individual widgets with `scripts/slint-sketch`, which drives
+`slint-viewer` over the real `crates/mooloop-ui/ui` sources and never compiles
+the crate:
+
+```sh
+scripts/slint-sketch sketch.slint            # type-check, ~0.05s
+scripts/slint-sketch --shot sketch.slint     # render a PNG, ~0.2s, prints its path
+scripts/slint-sketch --shot - <<'SKETCH'     # or straight from stdin
+import { Theme } from "theme.slint";
+import { ParameterKnob } from "controls.slint";
+export component Probe inherits Window {
+    width: 200px; height: 140px;
+    background: Theme.background;
+    ParameterKnob { label: "CUTOFF"; value: 0.62; value-text: "62%"; }
+}
+SKETCH
+```
+
+`cargo build -p mooloop-ui` costs about four minutes whether the edit was a new
+device face or a 2px nudge, because rustc recompiles the whole generated module
+either way. That prices out the look-and-adjust loop visual work depends on, so
+do the adjusting here and build once at the end.
+
+Its limits are worth knowing before you trust a render. Anything driven by a
+Rust model -- the piano grid, mixer strips, the device rack's contents -- draws
+empty, because only the `.slint` side exists; a device face renders its chrome
+and controls but not its curve. It is for spacing, colour, proportion and
+typography, not for interaction or live data.
+
+Screenshots are properly headless: the viewer installs its own software backend,
+so no display, compositor or `agent` workspace is involved and it works while
+the screen is locked. Sketches and their PNGs land in `$TMPDIR`, outside the
+repo -- keep them there, they are working notes rather than artefacts.
+
 Capture the real `MainWindow` through its playlist snapshot test:
 
 ```sh

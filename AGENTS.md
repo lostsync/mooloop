@@ -56,6 +56,14 @@ or `slint-build`, consult the version-matched documentation:
 `https://releases.slint.dev/1.17.1/docs/slint/`. If the pinned version changes,
 use the matching release URL instead of relying on latest-version knowledge.
 
+Do not reach for `cargo build` to find out whether a `.slint` edit is valid or
+what it looks like. `scripts/slint-sketch` type-checks a scratch `.slint`
+against the real widgets in about 0.05s and screenshots it in about 0.2s,
+where `cargo build -p mooloop-ui` is about four minutes for any edit at all.
+Iterate there, then build once. It needs `slint-viewer` installed locally; it
+is deliberately not a workspace dependency, and the build never refers to it.
+See `docs/AGENT_OPERATIONS.md`.
+
 ## Verification and operations
 
 Choose the smallest verification that covers the change: targeted validation

@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# Check or render a scratch .slint against this repo's real widgets, without
+# compiling anything.
+#
+#   scripts/slint-sketch sketch.slint              # type-check, ~0.05s
+#   scripts/slint-sketch --shot sketch.slint       # render a PNG and print its path
+#   scripts/slint-sketch --shot --component KnobFace sketch.slint
+#   scripts/slint-sketch --shot - <<'EOF'          # sketch straight from stdin
+#   import { Theme } from "theme.slint";
+#   import { ParameterKnob } from "controls.slint";
+#   export component Probe inherits Window {
+#       width: 200px; height: 140px;
+#       background: Theme.background;
+#       ParameterKnob { label: "CUTOFF"; value: 0.62; value-text: "62%"; }
+#   }
+#   EOF
+#
+# `crates/mooloop-ui/ui` is on the include path, so a sketch imports the real
+# `theme.slint`, `controls.slint` and device faces by their plain names and
+# gets the real widgets, not lookalikes.
+#
+# Why this exists: `cargo build -p mooloop-ui` is about four minutes, almost
+# all of it rustc chewing through the ~400k lines Slint generates from
+# `ui/main.slint`. That cost is identical whether you rewrote a device face or
+# moved one knob 2px, which prices out the nudge-and-look loop that visual work
+# actually needs. `slint-viewer` interprets .slint directly and never touches
+# that build: checks land in ~0.05s and screenshots in ~0.2s, so the loop is
+# roughly a thousand times shorter.
+#
+# This is a local developer tool on purpose. It is NOT a workspace dependency,
+# nothing in `crates/` refers to it, and the build does not care whether it is
+# installed. Renders default to a scratch directory under $TMPDIR, outside the
+# repo, because sketches and their captures are thinking-out-loud and have no
+# business in a commit.
+#
+# Screenshots are genuinely headless -- the viewer installs its own software
+# backend for `--screenshot`, so there is no display, compositor or `agent`
+# workspace involved, and it works while the screen is locked. `--watch` is the
+# exception: it opens a real window and needs a viewer built with a windowing
+# backend.
+set -euo pipefail
+
+MODE="check"
+COMPONENT=""
+OUT=""
+SRC=""
+
+usage() {
+  awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
+  cat <<'USAGE'
+
+Options:
+  -s, --shot          Render a PNG instead of only type-checking.
+  -w, --watch         Open a live-reloading window (needs a windowing backend).
+  -c, --component N   Render component N rather than the file's last export.
+  -o, --output PATH   Write the PNG here instead of the scratch directory.
+  -h, --help          This text.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -s|--shot) MODE="shot"; shift ;;
+    -w|--watch) MODE="watch"; shift ;;
+    -c|--component) COMPONENT="$2"; shift 2 ;;
+    -o|--output) OUT="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    # A bare - is the stdin sketch, not a malformed flag; match it before the
+    # catch-all below.
+    -) SRC="-"; shift ;;
+    -*) echo "slint-sketch: unknown option $1" >&2; usage >&2; exit 2 ;;
+    *) SRC="$1"; shift ;;
+  esac
+done
+
+if [[ -z "$SRC" ]]; then
+  echo "slint-sketch: no .slint file given (use - to read stdin)" >&2
+  usage >&2
+  exit 2
+fi
+
+# `cargo install` puts this in ~/.cargo/bin, which is not always on PATH --
+# look there before giving up, so a working install is never reported missing.
+VIEWER="$(command -v slint-viewer || true)"
+if [[ -z "$VIEWER" && -x "$HOME/.cargo/bin/slint-viewer" ]]; then
+  VIEWER="$HOME/.cargo/bin/slint-viewer"
+fi
+if [[ -z "$VIEWER" ]]; then
+  cat >&2 <<'MISSING'
+slint-sketch: slint-viewer not found.
+
+Install it (lean build -- no skia, no zeroconf, no Android):
+
+  cargo install slint-viewer --version 1.17.1 \
+    --no-default-features --features renderer-software
+
+Match the version to the Slint the workspace pins, so the viewer parses the
+same dialect the build does. Add --features backend-winit,renderer-femtovg as
+well if you want --watch.
+MISSING
+  exit 127
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+UI="$ROOT/crates/mooloop-ui/ui"
+[[ -d "$UI" ]] || { echo "slint-sketch: no $UI -- run this inside the repo" >&2; exit 1; }
+
+SCRATCH="${TMPDIR:-/tmp}/mooloop-slint-sketch"
+mkdir -p "$SCRATCH"
+
+# A sketch read from stdin still needs to exist on disk for the viewer to
+# resolve its imports relative to something.
+if [[ "$SRC" == "-" ]]; then
+  SRC="$SCRATCH/stdin.slint"
+  cat > "$SRC"
+fi
+[[ -f "$SRC" ]] || { echo "slint-sketch: no such file: $SRC" >&2; exit 1; }
+
+ARGS=(-I "$UI")
+[[ -n "$COMPONENT" ]] && ARGS+=(--component "$COMPONENT")
+
+case "$MODE" in
+  check)
+    exec "$VIEWER" --check "${ARGS[@]}" "$SRC"
+    ;;
+  watch)
+    exec "$VIEWER" --auto-reload "${ARGS[@]}" "$SRC"
+    ;;
+  shot)
+    if [[ -z "$OUT" ]]; then
+      OUT="$SCRATCH/$(basename "${SRC%.slint}").png"
+    fi
+    "$VIEWER" --screenshot "$OUT" "${ARGS[@]}" "$SRC"
+    # Print the path on its own line: the next step is always to go look at it.
+    echo "$OUT"
+    ;;
+esac

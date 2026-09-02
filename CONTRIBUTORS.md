@@ -448,7 +448,11 @@ work session you can recall being part of, and don't stress over precision.
   dropped `widget-sheet.toml` behind it: proposing it as the gallery's
   replacement was the wrong instinct, since it was scaffolding an agent had
   left that afternoon, unread by any test and unknown to Adam. `rack-row.toml`
-  went with it, emptying `tests/fixtures/` entirely.
+  went with it, emptying `tests/fixtures/` entirely. Then added
+  `scripts/slint-sketch`, which was the real lesson from measuring that build:
+  the four minutes were pricing out the look-and-adjust loop that visual work
+  runs on, so `.slint` got written defensively from memory instead of checked.
+  `slint-viewer` interprets the real widgets in ~0.05s, which closes the loop.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
