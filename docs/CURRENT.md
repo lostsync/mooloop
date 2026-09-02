@@ -289,6 +289,36 @@ boundary.
   the oldest matching pitch, layer mode overlaps notes, and overflow steals
   the oldest voice.
 
+### Sampler Slicing And Stretch
+
+Known gaps left open by the 2026-09 slice/commit push, each small enough to
+land on its own when it starts to matter:
+
+- **Live stretch is bypassed, not refused, in Slice mode, in reverse, and in
+  Pong.** The DSP declines to run WSOLA backwards and the commit path is the
+  answer, but the face still shows the ON toggle lit while nothing stretches.
+  The sampler face has no `hover-hint` plumbing yet, so the explanation cannot
+  reach the status bar from that toggle; adding the property to
+  `SamplerDevice` and threading it through `main.slint` the way the effect
+  faces do is the fix.
+- **Auditions never fire a choke.** `inject_choke_events` is a pre-pass over
+  the block's sequenced notes and runs before auditions are dispatched, so a
+  slice auditioned from the face does not silence the rest of its choke group.
+  A sequenced note in the group does still choke the audition. Making the
+  pre-pass see auditions means queueing them before it rather than after.
+- **Markers outside the committed region collapse onto its edges.** A commit
+  renders only the playback region; a marker before it maps to frame 0 and a
+  marker past it to the render's end, and the map then drops the duplicates.
+  Revert restores every source marker exactly, so nothing is lost, but the
+  published map after a commit holds fewer slices than the source had. Either
+  the commit should refuse when markers fall outside the region, or the face
+  should say how many it dropped.
+- **A commit's spec is the whole render.** Nothing about the source file is
+  checked on reload: a project whose referenced sample was replaced on disk
+  re-renders the new audio under the old spec and lays the old markers over
+  it. Recording the source's frame count in `SampleCommit` and treating a
+  mismatch as a stale commit would catch this.
+
 ### Transport And Arrangement
 
 - Pattern mode loops the selected pattern. Song mode layers playlist placements

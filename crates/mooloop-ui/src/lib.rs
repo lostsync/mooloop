@@ -269,7 +269,11 @@ fn stretch_bars_from_norm(norm: f32) -> f32 {
 /// derives its ratio from; otherwise the playback region is.
 fn measured_loop_bars(params: SamplerParams, frames: usize, sample_rate: u32, bpm: f64) -> f32 {
     let len = frames.max(1) as f32;
-    let (start, end) = if params.loop_mode == LoopMode::Off {
+    // The same span fit-to-tempo will derive its ratio from, asked of the
+    // sampler rather than re-decided here: a guess measured against one
+    // region and a ratio derived from another is a seed that is wrong by
+    // construction.
+    let (start, end) = if mooloop_dsp::Sampler::fits_the_playback_region(params) {
         (params.start, params.end)
     } else {
         (params.loop_start, params.loop_end)
@@ -1504,16 +1508,27 @@ fn resolve_slice_frame(channel: &ChannelState, position: f32, snap: bool) -> Opt
     Some(frame as u32)
 }
 
-/// Whether a bar-synced commit no longer matches the project tempo.
+/// Whether a commit no longer describes what the stretch controls say.
 ///
-/// Only bar-synced commits can go stale: a commit made from an explicit
-/// speed knob was never fitted to anything, so a tempo change does not
-/// invalidate it. Re-deriving through the sampler's own `effective_ratio`
-/// rather than storing the tempo, so this asks the same question the commit
-/// answered rather than a similar one.
+/// Two ways to drift. A bar-synced commit goes stale when the project tempo
+/// moves, because the ratio it baked was derived from that tempo; that is
+/// re-derived through the sampler's own `effective_ratio` rather than by
+/// storing the tempo, so this asks the same question the commit answered.
+/// Any commit goes stale when the mode, the free speed, or -- in `Grain` --
+/// the grain size is edited after the bake: those knobs still read as the
+/// patch's stretch settings while the audio was rendered under other ones.
+/// Reported and offered a re-bake, never acted on by itself: re-rendering a
+/// loop under someone without being asked is worse than telling them.
 fn commit_is_stale(channel: &ChannelState, commit: &SampleCommit, bpm: f64) -> bool {
-    if !channel.params.stretch_sync {
-        return false;
+    let params = channel.params;
+    if commit.mode != params.stretch_mode {
+        return true;
+    }
+    if params.stretch_mode == StretchMode::Grain && commit.grain != params.stretch_grain {
+        return true;
+    }
+    if !params.stretch_sync {
+        return (commit.ratio - params.stretch_ratio).abs() > 1.0e-3;
     }
     let Some(source) = channel.sample_data.as_ref() else {
         return false;
@@ -2169,6 +2184,12 @@ struct UiState {
     /// published buffer so they ride the same `to-view` zoom the waveform and
     /// every other marker already go through.
     slice_model: Rc<VecModel<f32>>,
+    /// The channel and note of the slice a handle is currently holding down,
+    /// so its release goes to exactly the note that was struck. Kept rather
+    /// than re-derived from the handle's index on the way up: a drag past a
+    /// neighbour reorders the map underneath the handle, and the index it
+    /// releases with is then a different slice's.
+    slice_audition: Option<(u8, u8)>,
     /// Normalized position of every currently active sampler voice on the
     /// selected channel, refreshed each pump tick. Empty when idle, when a
     /// different device kind is selected, or while editing a bus.
@@ -4388,6 +4409,7 @@ impl AppUi {
             playlist_model,
             waveform_model,
             slice_model,
+            slice_audition: None,
             playhead_model,
             effect_slot_model,
             modulation_source_model,
@@ -5585,7 +5607,19 @@ impl AppUi {
                 }
                 let _ = tx.resize_buffers(bpm);
                 if let Some(window) = weak.upgrade() {
-                    st.borrow().update_document_title(&window);
+                    let st = st.borrow();
+                    st.update_document_title(&window);
+                    // A bar-synced bake was measured against the tempo, so
+                    // its stale badge follows the tempo rather than waiting
+                    // for the next full editor refresh.
+                    if let Some(channel) = st.channels.get(st.selected) {
+                        window.set_commit_stale(
+                            channel
+                                .commit
+                                .as_ref()
+                                .is_some_and(|commit| commit_is_stale(channel, commit, bpm)),
+                        );
+                    }
                 }
             });
         }
@@ -9735,7 +9769,7 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_slice_auditioned(move |index| {
-                let st = st.borrow();
+                let mut st = st.borrow_mut();
                 let ch = st.selected;
                 let Some(channel) = st.channels.get(ch) else {
                     return;
@@ -9748,6 +9782,7 @@ impl AppUi {
                 if note > 127 {
                     return;
                 }
+                st.slice_audition = Some((ch as u8, note as u8));
                 let _ = tx.send(EngineCommand::TriggerChannelNote {
                     channel: ch as u8,
                     note: note as u8,
@@ -9755,9 +9790,23 @@ impl AppUi {
                 });
             });
         }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_slice_audition_released(move |_index| {
+                // The note that was struck, not the note under the handle's
+                // current index: a drag that crossed a neighbour has already
+                // renumbered the handles by the time the button comes up.
+                let Some((channel, note)) = st.borrow_mut().slice_audition.take() else {
+                    return;
+                };
+                let _ = tx.send(EngineCommand::ReleaseChannelNote { channel, note });
+            });
+        }
 
         {
             let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
             let st = state.clone();
             let history_state = state.clone();
             let commands = command_state.clone();
@@ -9809,6 +9858,14 @@ impl AppUi {
                         channel: ch as u8,
                         params: p,
                     });
+                    // The stretch is in the audio now and the patch no longer
+                    // asks for it, so the pool goes back the way it came
+                    // rather than holding ~1.6 MB for a stretcher that will
+                    // not run. Same reconciliation the ON toggle does.
+                    let _ = stx.send(StructuralCommand::SetSamplerStretch {
+                        channel: ch as u8,
+                        pool: None,
+                    });
                     st.dirty = true;
                     window.set_status_message(
                         format!("Committed the stretch at {ratio:.2}x").into(),
@@ -9826,6 +9883,7 @@ impl AppUi {
         }
         {
             let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
             let st = state.clone();
             let history_state = state.clone();
             let commands = command_state.clone();
@@ -9853,6 +9911,19 @@ impl AppUi {
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
                         params,
+                    });
+                    // The patch is stretching live again, and the state to
+                    // do it cannot be assumed: a project saved committed and
+                    // reloaded never provisioned a pool, because its patch
+                    // did not ask for one. Without this, revert after a
+                    // reload put the switch on and played unstretched.
+                    let _ = stx.send(StructuralCommand::SetSamplerStretch {
+                        channel: ch as u8,
+                        pool: Some(Box::new(StretchPool::new(
+                            params.stretch_mode,
+                            sample_rate,
+                            MAX_SAMPLER_VOICES as usize,
+                        ))),
                     });
                     st.dirty = true;
                     window.set_status_message("Reverted to the source sample".into());
@@ -9948,12 +10019,17 @@ impl AppUi {
                 // recorded a little off it, so seeding this is the
                 // difference between one click and a knob turn every time.
                 if on {
-                    let frames = channel
+                    // Measured in the sample's own frames against its own
+                    // rate: the frame count is the file's, so a 44.1 kHz
+                    // break measured at the engine's 48 kHz read 8% short
+                    // and could snap a two-bar loop to one.
+                    let (frames, rate) = channel
                         .published_sample()
-                        .map_or(0, |sample| sample.frames.len());
+                        .map_or((0, sample_rate), |sample| {
+                            (sample.frames.len(), sample.sample_rate)
+                        });
                     let bpm = weak.upgrade().map_or(120.0, |w| w.get_bpm() as f64);
-                    let measured =
-                        measured_loop_bars(channel.params, frames, sample_rate, bpm);
+                    let measured = measured_loop_bars(channel.params, frames, rate, bpm);
                     channel.params.stretch_bars = snap_bars_to_power_of_two(measured);
                     channel.params.stretch_sync = true;
                 }
@@ -12890,6 +12966,9 @@ mod tests {
 
     /// With a loop set, the loop is what gets measured -- not the whole
     /// sample -- because the loop is the part that repeats against the grid.
+    /// Except in slice mode, where the loop is the slice and the global loop
+    /// points are hidden: there the whole region is what lies on the grid,
+    /// and the seed has to measure what the ratio will be derived from.
     #[test]
     fn the_seed_measures_the_loop_rather_than_the_whole_sample() {
         let params = SamplerParams {
@@ -12900,6 +12979,27 @@ mod tests {
         };
         let bars = measured_loop_bars(params, 192_000, 48_000, 120.0);
         assert!((bars - 1.0).abs() < 1.0e-3, "measured {bars}");
+
+        let sliced = SamplerParams {
+            play_mode: PlayMode::Slice,
+            ..params
+        };
+        let bars = measured_loop_bars(sliced, 192_000, 48_000, 120.0);
+        assert!((bars - 2.0).abs() < 1.0e-3, "slice mode measured {bars}");
+    }
+
+    /// The frame count is the file's, so the rate has to be the file's too.
+    /// Two bars of 44.1 kHz break measured at 48 kHz read as 1.84 bars --
+    /// still snapping to two here, but a slightly short two-bar loop would
+    /// have been dragged down to one.
+    #[test]
+    fn the_seed_measures_in_the_samples_own_rate() {
+        let params = SamplerParams::default();
+        let two_bars_at_44k = 2 * 44_100 * 2;
+        let bars = measured_loop_bars(params, two_bars_at_44k, 44_100, 120.0);
+        assert!((bars - 2.0).abs() < 1.0e-3, "measured {bars}");
+        let misread = measured_loop_bars(params, two_bars_at_44k, 48_000, 120.0);
+        assert!(misread < 1.9, "the wrong rate should visibly misread: {misread}");
     }
 
     /// Out-of-range input is clamped rather than propagated. Both ends of both

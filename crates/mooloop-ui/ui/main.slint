@@ -827,6 +827,7 @@ export component MainWindow inherits Window {
     callback slice-moved(int, float);
     callback slice-removed(int);
     callback slice-auditioned(int);
+    callback slice-audition-released(int);
     callback slices-divided(int);
     callback slices-cleared();
     callback slice-drag-started();
@@ -2616,6 +2617,7 @@ export component MainWindow inherits Window {
                                                     slice-moved(i, p) => { root.slice-moved(i, p); }
                                                     slice-removed(i) => { root.slice-removed(i); }
                                                     slice-auditioned(i) => { root.slice-auditioned(i); }
+                                                    slice-audition-released(i) => { root.slice-audition-released(i); }
                                                     slices-divided(n) => { root.slices-divided(n); }
                                                     slices-cleared() => { root.slices-cleared(); }
                                                     slice-drag-started() => { root.slice-drag-started(); }

@@ -62,9 +62,15 @@ component SliceHandle inherits Rectangle {
     in property <length> editor-width;
     callback moved(float);
     callback auditioned();
+    callback audition-released();
     callback removed();
     callback drag-started();
     callback drag-finished();
+
+    // Whether the press that is down on this handle started a note, so the
+    // matching release goes out once and only for a left button: a
+    // right-click removal never auditioned anything.
+    private property <bool> auditioning;
 
     width: 1px;
     // Its own colour rather than the trim markers' accent or the loop
@@ -89,10 +95,15 @@ component SliceHandle inherits Rectangle {
                 } else {
                     // Hearing the slice you just grabbed is the point of
                     // grabbing it.
+                    root.auditioning = true;
                     root.auditioned();
                     root.drag-started();
                 }
             } else if (e.kind == PointerEventKind.up) {
+                if (root.auditioning) {
+                    root.auditioning = false;
+                    root.audition-released();
+                }
                 root.drag-finished();
             } else if (e.kind == PointerEventKind.move && self.pressed) {
                 root.moved(clamp((root.x + self.x + self.mouse-x) / max(1px, root.editor-width), 0, 1));
@@ -318,6 +329,9 @@ export component SamplerDeviceFace inherits Rectangle {
     callback slice-moved(int, float);
     callback slice-removed(int);
     callback slice-auditioned(int);
+    // The note-off half of an audition, on release of the handle. Without it
+    // a gated or looping slice held until something else silenced it.
+    callback slice-audition-released(int);
     callback slices-divided(int);
     callback slices-cleared();
     // Bracket a marker drag so the history collapses its frames into one
@@ -541,6 +555,7 @@ export component SamplerDeviceFace inherits Rectangle {
                                 + v * root.waveform-view-visible-fraction, 0, 1));
                         }
                         auditioned => { root.slice-auditioned(index); }
+                        audition-released => { root.slice-audition-released(index); }
                         removed => { root.slice-removed(index); }
                         drag-started => { root.slice-drag-started(); }
                         drag-finished => { root.slice-drag-finished(); }
@@ -874,6 +889,18 @@ export component SamplerDeviceFace inherits Rectangle {
                             vertical-alignment: center;
                             overflow: elide;
                             horizontal-stretch: 1;
+                        }
+                        // A stale bake is re-rendered in place. The handler
+                        // already commits from the source rather than from
+                        // the baked buffer, so this is one click where it
+                        // used to take REVERT and then COMMIT -- and the
+                        // only route to a re-bake at all once the row had
+                        // hidden COMMIT behind `committed`.
+                        if root.committed && root.commit-stale : ToolButton {
+                            text: "REBAKE";
+                            min-width: 50px; max-width: 50px; min-height: 18px;
+                            tooltip: "Re-bake the stretch";
+                            clicked => { root.commit-clicked(); }
                         }
                         if root.committed : ToolButton {
                             text: "REVERT";
