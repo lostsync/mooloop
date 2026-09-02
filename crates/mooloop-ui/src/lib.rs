@@ -8,6 +8,7 @@
 
 mod actions;
 mod audio_file;
+mod commit;
 mod gestures;
 mod history;
 mod meter;
@@ -34,8 +35,7 @@ use mooloop_core::{
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
-    SamplerParams, SamplerState, SliceMap, SnareCharacter, StretchMode, VoiceMode,
-    PlayMode, DEFAULT_SLICE_BASE_NOTE, MAX_SLICES,
+    SampleCommit, SamplerParams, SamplerState, SliceMap, SnareCharacter, StretchMode, VoiceMode,
     DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
@@ -592,9 +592,18 @@ struct ChannelState {
     sample_duration: f32,
     sample_path: Option<PathBuf>,
     sample_embedded: bool,
+    /// The decoded source. Authoritative, and never what the engine plays
+    /// once a stretch has been committed.
     sample_data: Option<Arc<SampleData>>,
-    /// Slice boundaries into `sample_data`. Frames into the source, so they
-    /// move with the waveform under any zoom.
+    /// The committed render, when there is one. This is what is published,
+    /// drawn, and measured against, so the waveform, the markers, and the
+    /// start/end fractions all live in one coordinate system.
+    committed_sample: Option<Arc<SampleData>>,
+    /// What the committed render was baked from, and what the editor looked
+    /// like before it. `None` means the published buffer is the source.
+    commit: Option<SampleCommit>,
+    /// Slice boundaries into the *published* buffer, in frames, so they move
+    /// with the waveform under any zoom.
     slices: SliceMap,
     waveform: Vec<f32>,
     can_previous_sample: bool,
@@ -612,6 +621,17 @@ struct ChannelState {
 }
 
 impl ChannelState {
+    /// What this channel actually plays and the editor actually draws: the
+    /// committed render when there is one, the decoded source otherwise.
+    ///
+    /// Every measurement against the audio -- the waveform, zero-crossing
+    /// snapping, the fit-to-tempo guess, the frame count the markers are
+    /// expressed in -- goes through here, so there is one coordinate system
+    /// rather than two.
+    fn published_sample(&self) -> Option<&Arc<SampleData>> {
+        self.committed_sample.as_ref().or(self.sample_data.as_ref())
+    }
+
     /// This channel's generator parameters in their addressable form. The
     /// `ChannelState` keeps one struct per kind so switching sources does not
     /// lose the others; only the active kind is addressable.
@@ -647,6 +667,8 @@ impl ChannelState {
             sample_path: None,
             sample_embedded: false,
             sample_data: None,
+            committed_sample: None,
+            commit: None,
             slices: SliceMap::default(),
             waveform: Vec::new(),
             can_previous_sample: false,
@@ -2119,6 +2141,9 @@ impl UiState {
                 channel.sample_path = None;
                 channel.sample_embedded = false;
                 channel.sample_data = None;
+                channel.committed_sample = None;
+                channel.commit = None;
+                channel.slices.clear();
                 channel.waveform.clear();
                 channel.can_previous_sample = false;
                 channel.can_next_sample = false;
@@ -2131,6 +2156,9 @@ impl UiState {
                 channel.sample_path = None;
                 channel.sample_embedded = false;
                 channel.sample_data = None;
+                channel.committed_sample = None;
+                channel.commit = None;
+                channel.slices.clear();
                 channel.waveform.clear();
                 channel.can_previous_sample = false;
                 channel.can_next_sample = false;
@@ -2143,6 +2171,9 @@ impl UiState {
                 channel.sample_path = None;
                 channel.sample_embedded = false;
                 channel.sample_data = None;
+                channel.committed_sample = None;
+                channel.commit = None;
+                channel.slices.clear();
                 channel.waveform.clear();
                 channel.can_previous_sample = false;
                 channel.can_next_sample = false;
@@ -2155,6 +2186,9 @@ impl UiState {
                 channel.sample_path = None;
                 channel.sample_embedded = false;
                 channel.sample_data = None;
+                channel.committed_sample = None;
+                channel.commit = None;
+                channel.slices.clear();
                 channel.waveform.clear();
                 channel.can_previous_sample = false;
                 channel.can_next_sample = false;
@@ -2167,6 +2201,9 @@ impl UiState {
                 channel.sample_path = None;
                 channel.sample_embedded = false;
                 channel.sample_data = None;
+                channel.committed_sample = None;
+                channel.commit = None;
+                channel.slices.clear();
                 channel.waveform.clear();
                 channel.can_previous_sample = false;
                 channel.can_next_sample = false;
@@ -2179,6 +2216,9 @@ impl UiState {
                 channel.sample_path = None;
                 channel.sample_embedded = false;
                 channel.sample_data = None;
+                channel.committed_sample = None;
+                channel.commit = None;
+                channel.slices.clear();
                 channel.waveform.clear();
                 channel.can_previous_sample = false;
                 channel.can_next_sample = false;
@@ -2205,6 +2245,7 @@ impl UiState {
                             params: channel.params,
                             sample,
                             slices: channel.slices.clone(),
+                            commit: channel.commit.clone(),
                         })
                     }
                     DeviceKind::DrumSynth => ChannelSource::DrumSynth(DrumSynthState {
@@ -2338,8 +2379,17 @@ impl UiState {
                 } else {
                     String::new()
                 };
-                let waveform = sample
+                // A committed stretch is re-rendered rather than reloaded:
+                // the spec is length-determined, so the buffer that comes
+                // back is the one that was baked, and the project never had
+                // to carry the audio.
+                let commit = sampler.and_then(|state| state.commit.clone());
+                let committed = commit
                     .as_ref()
+                    .zip(sample.as_ref())
+                    .and_then(|(commit, source)| commit::rerender_commit(source, commit));
+                let published = committed.as_ref().or(sample.as_ref());
+                let waveform = published
                     .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))
                     .unwrap_or_else(|| {
                         if is_builtin {
@@ -2348,8 +2398,7 @@ impl UiState {
                             Vec::new()
                         }
                     });
-                let description = sample
-                    .as_ref()
+                let description = published
                     .map(|sample| sample_description(sample))
                     .unwrap_or_else(|| {
                         if missing {
@@ -2360,8 +2409,7 @@ impl UiState {
                             String::new()
                         }
                     });
-                let duration = sample
-                    .as_ref()
+                let duration = published
                     .map(|sample| sample_duration(sample))
                     .unwrap_or_else(|| {
                         if missing {
@@ -2405,6 +2453,8 @@ impl UiState {
                     sample_path,
                     sample_embedded: embedded,
                     sample_data: sample,
+                    committed_sample: committed,
+                    commit,
                     slices: sampler.map(|state| state.slices.clone()).unwrap_or_default(),
                     waveform,
                     can_previous_sample: can_previous,
@@ -3979,8 +4029,7 @@ impl UiState {
         window.set_sample_description(ch.sample_description.as_str().into());
         window.set_sample_duration(ch.sample_duration);
         window.set_sample_frames(
-            ch.sample_data
-                .as_ref()
+            ch.published_sample()
                 .map(|sample| sample.frames.len() as i32)
                 .unwrap_or(0),
         );
@@ -8910,7 +8959,7 @@ impl AppUi {
                         let mut value = v;
                         let mut status = None;
                         if window.get_snap_to_zero() {
-                            if let Some(sample) = channel.sample_data.clone() {
+                            if let Some(sample) = channel.published_sample().cloned() {
                                 if let Some((resolved, result)) =
                                     snap_marker(&channel.params, &sample, marker, v)
                                 {
@@ -9014,7 +9063,7 @@ impl AppUi {
                     let Some(channel) = st.channels.get_mut(ch) else {
                         return;
                     };
-                    let Some(sample) = channel.sample_data.clone() else {
+                    let Some(sample) = channel.published_sample().cloned() else {
                         window.set_status_message("No sample to snap".into());
                         return;
                     };
@@ -9103,7 +9152,7 @@ impl AppUi {
                 let Some(channel) = st.channels.get(st.selected) else {
                     return;
                 };
-                let Some(sample) = channel.sample_data.as_ref() else {
+                let Some(sample) = channel.published_sample() else {
                     return;
                 };
                 let total = sample.frames.len();
@@ -9335,8 +9384,7 @@ impl AppUi {
                 // difference between one click and a knob turn every time.
                 if on {
                     let frames = channel
-                        .sample_data
-                        .as_ref()
+                        .published_sample()
                         .map_or(0, |sample| sample.frames.len());
                     let bpm = weak.upgrade().map_or(120.0, |w| w.get_bpm() as f64);
                     let measured =
@@ -11521,6 +11569,17 @@ fn install_project_in_ui(
         }
     }
     state.borrow_mut().replace_project(&project, samples, window);
+    // Republish from the installed state rather than from `samples`: a
+    // channel whose stretch was committed plays the re-rendered buffer, and
+    // its slice map has to arrive with it.
+    {
+        let st = state.borrow();
+        for (index, channel) in st.channels.iter().enumerate() {
+            if channel.kind == DeviceKind::Sampler {
+                publish_channel_audio(handle, index, channel);
+            }
+        }
+    }
     sync_effect_spectrum_subscriptions(&state.borrow(), handle);
     window.set_playing(false);
     window.set_playlist_position_ticks(0);
@@ -11799,6 +11858,23 @@ fn adjacent_sample(path: &Path, direction: isize) -> Result<Option<PathBuf>, Str
         .flatten())
 }
 
+/// Hand one channel's audio and slice map to the engine.
+///
+/// The *published* buffer, not the source: after a commit the engine plays
+/// the render. Both travel out of band through `ArcSwap` slots rather than on
+/// the command ring, so this is wait-free and safe to call from the UI thread.
+fn publish_channel_audio(handle: &EngineHandle, index: usize, channel: &ChannelState) {
+    match channel.published_sample() {
+        Some(sample) => handle.load_sample(index, sample.clone()),
+        None => handle.clear_sample(index),
+    }
+    if channel.slices.is_empty() {
+        handle.clear_slices(index);
+    } else {
+        handle.load_slices(index, Arc::new(channel.slices.clone()));
+    }
+}
+
 fn load_sample_at_path(path: &Path) -> Result<LoadedSample, String> {
     let files = sample_files_in_directory(path)?;
     let index = sample_index(path, &files);
@@ -11832,6 +11908,9 @@ fn apply_loaded_sample(
     let description = sample_description(&loaded.sample);
     let duration = sample_duration(&loaded.sample);
     handle.load_sample(channel, loaded.sample.clone());
+    // The markers went with the old file; the engine must not keep playing a
+    // map that names frames in audio it no longer holds.
+    handle.clear_slices(channel);
     let mut st = st.borrow_mut();
     if let Some(ch) = st.channels.get_mut(channel) {
         ch.sample_name = name;
@@ -11840,6 +11919,11 @@ fn apply_loaded_sample(
         ch.sample_path = Some(loaded.path);
         ch.sample_embedded = false;
         ch.sample_data = Some(loaded.sample.clone());
+        // A new file retires the old commit and the old markers outright:
+        // both named frames in audio that is no longer loaded.
+        ch.committed_sample = None;
+        ch.commit = None;
+        ch.slices.clear();
         ch.waveform = waveform;
         ch.can_previous_sample = loaded.can_previous;
         ch.can_next_sample = loaded.can_next;

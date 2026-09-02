@@ -115,6 +115,13 @@ Slice mode adds `play_mode` and `slice_base_note` to the parameters, plus a
 pairs sorted by source frame. All three default, so a song written before
 slicing loads as an ordinary pitched sampler with no markers.
 
+A committed time stretch stores a `commit` table: the stretch mode, resolved
+ratio and grain that were baked, plus the start/end/loop fractions and marker
+frames the editor held before the commit. The rendered audio is deliberately
+not stored -- the render is length-determined by this spec, so loading decodes
+the source as usual and re-renders. `slices` is expressed in the *published*
+buffer's frames, so a committed song's markers come back without remapping.
+
 `swing_percent` is global sixteenth-note swing from `50` (straight) through
 `75` (strong shuffle); `66` is approximately triplet swing. Readers default
 the field to `50` for version 1 manifests written before swing was added.

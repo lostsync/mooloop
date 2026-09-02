@@ -126,7 +126,7 @@ pub use project::{
 };
 pub use sampler::{
     clamp01, frames_per_bar, snap_bars_to_power_of_two, EnvTimes, LoopMode, PlayMode,
-    RetriggerMode, SamplerParams, SliceMap, SliceMarker, StretchMode, VoiceMode,
+    RetriggerMode, SampleCommit, SamplerParams, SliceMap, SliceMarker, StretchMode, VoiceMode,
     DEFAULT_SLICE_BASE_NOTE, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES, MAX_SLICES, MAX_STRETCH_BARS,
     MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
 };

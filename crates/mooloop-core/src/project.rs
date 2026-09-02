@@ -7,7 +7,7 @@ use crate::{
     AutomationLane, ModRack, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
     PatternPlacement,
     PlaybackMode, PolySynthParams,
-    SamplerParams, SliceMap, SnareCharacter, DEFAULT_STEPS,
+    SampleCommit, SamplerParams, SliceMap, SnareCharacter, DEFAULT_STEPS,
 };
 
 pub const MIN_SWING_PERCENT: u8 = 50;
@@ -39,6 +39,14 @@ pub struct SamplerState {
     /// the defaulted `Pitched` play mode is exactly the old behaviour.
     #[serde(default)]
     pub slices: SliceMap,
+    /// The stretch render this sampler's published buffer was baked from, if
+    /// it has one. Absent means the published buffer is the source.
+    ///
+    /// The rendered audio is deliberately not persisted: a commit is
+    /// reproducible from this spec, so loading decodes the source as usual
+    /// and re-renders. An 8-second break takes roughly 200 ms off-thread.
+    #[serde(default)]
+    pub commit: Option<SampleCommit>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]

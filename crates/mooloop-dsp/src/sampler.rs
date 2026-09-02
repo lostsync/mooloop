@@ -495,6 +495,11 @@ impl Sampler {
 
     /// The ratio the stretcher should actually run.
     ///
+    /// Public because committing a stretch to a buffer has to bake *this*
+    /// number rather than re-derive it: a second copy of the fit-to-tempo
+    /// arithmetic on the control thread is exactly the thing that would drift
+    /// from what the live stretcher does.
+    ///
     /// With `stretch_sync` off this is just the knob. With it on the ratio is
     /// *derived* so the region lasts `stretch_bars` bars, and the derivation
     /// is the reason pitch and duration stop fighting:
@@ -513,7 +518,7 @@ impl Sampler {
     ///
     /// The loop is what gets fitted when there is one, since the loop is the
     /// thing that repeats against the grid; otherwise the playback region is.
-    fn effective_ratio(
+    pub fn effective_ratio(
         params: SamplerParams,
         len: usize,
         sample_rate: u32,

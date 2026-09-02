@@ -1028,11 +1028,11 @@ mod tests {
         assert_eq!(params.stretch_mode, mooloop_core::StretchMode::Music);
     }
 
-    /// Slice markers are project data, not a view: they survive a save/load
-    /// with their ids and frames intact, and a song written before slicing
-    /// existed comes back as an ordinary pitched sampler.
+    /// Slice markers and a commit spec are project data, not a view: they
+    /// survive a save/load intact, and a song written before either existed
+    /// comes back as an ordinary pitched sampler.
     #[test]
-    fn slices_round_trip_and_older_songs_load_without_them() {
+    fn an_old_project_without_slices_or_a_commit_loads_as_pitched() {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("song.mooloop");
         let mut project = Project::default();
@@ -1041,6 +1041,16 @@ mod tests {
             state.params.play_mode = mooloop_core::PlayMode::Slice;
             state.params.slice_base_note = 48;
             state.slices.divide_evenly(4, 0, 4_000);
+            state.commit = Some(mooloop_core::SampleCommit {
+                mode: mooloop_core::StretchMode::Drums,
+                ratio: 2.5,
+                grain: 512,
+                source_markers: vec![0, 1_000, 2_000, 3_000],
+                source_start: 0.0,
+                source_end: 1.0,
+                source_loop_start: 0.0,
+                source_loop_end: 1.0,
+            });
         }
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();
@@ -1054,7 +1064,7 @@ mod tests {
         let mut in_slices = false;
         for line in source.lines() {
             if line.trim_start().starts_with('[') {
-                in_slices = line.contains("slices");
+                in_slices = line.contains("slices") || line.contains("commit");
             }
             if in_slices
                 || line.trim_start().starts_with("play_mode")
@@ -1077,6 +1087,7 @@ mod tests {
             mooloop_core::DEFAULT_SLICE_BASE_NOTE
         );
         assert!(state.slices.is_empty());
+        assert_eq!(state.commit, None, "an old song's buffer is its source");
     }
 
     /// A hand-edited or corrupted document must be repaired rather than

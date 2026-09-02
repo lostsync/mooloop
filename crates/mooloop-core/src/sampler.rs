@@ -326,6 +326,34 @@ pub const MAX_STRETCH_RATIO: f32 = 16.0;
 pub const MIN_STRETCH_GRAIN: u16 = 64;
 pub const MAX_STRETCH_GRAIN: u16 = 4096;
 
+/// What a committed stretch baked, and what the editor looked like before it.
+///
+/// A commit renders the stretched region and makes the *rendered* buffer what
+/// is published, displayed, and edited, so the waveform, the markers, and the
+/// start/end fractions all live in one coordinate system rather than two. The
+/// source stays authoritative on the UI thread, which is what makes revert
+/// and re-commit exact.
+///
+/// Re-committing at a new ratio always renders from the source using
+/// `source_markers`, so repeated tempo changes cannot accumulate drift, and
+/// re-rendering on load from this spec is why the audio is never persisted.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SampleCommit {
+    // What was baked.
+    pub mode: StretchMode,
+    /// The *resolved* ratio, so a bar-synced commit reproduces at the tempo
+    /// it was baked at rather than at whatever the project is set to now.
+    pub ratio: f32,
+    pub grain: u16,
+    // Pre-commit editor state, so revert and re-commit are exact rather than
+    // round-tripped through the trace twice.
+    pub source_markers: Vec<u32>,
+    pub source_start: f32,
+    pub source_end: f32,
+    pub source_loop_start: f32,
+    pub source_loop_end: f32,
+}
+
 /// How note-off events affect sample playback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
