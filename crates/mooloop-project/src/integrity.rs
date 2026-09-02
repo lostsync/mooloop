@@ -1185,8 +1185,16 @@ impl ChainShape {
     fn problem_with(&self, address: ParamAddr) -> Option<String> {
         let id = address.param;
         match address.owner {
+            // A generator with no table at all is one that is not
+            // descriptor-addressed yet, not one whose controls are all
+            // wrong. Judging an address against an empty table would delete
+            // authored work the day that device gets its table.
+            ParamOwner::Source if self.source.descriptors().is_empty() => None,
             ParamOwner::Source => self.source.descriptor(id).is_none().then(|| {
-                format!("it drives control {id} of the {:?}, which has no such control", self.source)
+                format!(
+                    "it drives control {id} of the {:?}, which has no such control",
+                    self.source
+                )
             }),
             ParamOwner::Strip => strip_descriptor(id)
                 .is_none()
@@ -1231,10 +1239,9 @@ fn address_problem(
     match address.scope {
         EffectTarget::Channel(_) => own.problem_with(address),
         EffectTarget::Bus(bus) => {
-            let Some(buses) = buses else {
-                return None;
-            };
-            let Some(chain) = buses.get(bus as usize) else {
+            // A document that cannot see any buses takes a bus address on
+            // trust rather than judging it against a bank it does not have.
+            let Some(chain) = buses?.get(bus as usize) else {
                 return Some(format!("it drives bus {bus}, which does not exist"));
             };
             let id = address.param;

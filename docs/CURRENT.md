@@ -408,9 +408,13 @@ land on its own when it starts to matter:
   lane the editor is showing. The UI's model and the engine's mirror apply
   the same table for the same command, so a route or lane keeps meaning the
   device it was drawn on; a removed device takes its routes and lanes with
-  it. Add, move and remove are undoable edits. On load, the integrity pass
-  points a route or lane stranded on another channel's index back at its own
-  channel and drops one that names a device or control that is not there.
+  it. Add, move and remove are undoable edits. The modulator grid follows the
+  same rule one level down: a route aimed at a modulator's own parameter
+  moves with that module and is dropped when its slot is emptied. On load,
+  the integrity pass points a route or lane stranded on another channel's
+  index back at its own channel and drops one that names a device or control
+  that is not there, leaving addresses on a generator that has no descriptor
+  table yet untouched.
 - Ten effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
   oversampled, a stereo delay with damped cross-feedable feedback and

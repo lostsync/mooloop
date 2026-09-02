@@ -1497,7 +1497,13 @@ impl ModRack {
             return false;
         };
         for route in self.routes.iter_mut() {
-            if route.is_some_and(|route| route.source == removed.id) {
+            // Both directions: the routes this module drove, and any route
+            // that drove *it*. A destination left on an emptied slot would
+            // be inherited by whatever module is installed there next.
+            if route.is_some_and(|route| {
+                route.source == removed.id
+                    || route.destination.owner == ParamOwner::Modulator { slot: slot as u8 }
+            }) {
                 *route = None;
             }
         }
@@ -1582,6 +1588,22 @@ impl ModRack {
                 }
             }
         }
+        // A route's *source* resolves from its durable id below, but its
+        // destination can name a modulator slot -- the same positional
+        // reference an effect slot is, one level down. Nothing authors one
+        // yet; wiring it here means the day something does, the grid's
+        // reorder does not silently re-aim it at a different module.
+        for route in self.routes.iter_mut().flatten() {
+            let ParamOwner::Modulator { slot } = route.destination.owner else {
+                continue;
+            };
+            let Some(moved) = remap.get(slot as usize).copied() else {
+                continue;
+            };
+            if moved != UNRESOLVED_SLOT {
+                route.destination.owner = ParamOwner::Modulator { slot: moved };
+            }
+        }
         self.resolve_routes();
     }
 
@@ -1596,7 +1618,6 @@ impl ModRack {
             if let Some(route) = self.routes[index].as_mut() {
                 route.source_slot = slot;
             }
-            let _ = slot;
         }
     }
 
@@ -1639,16 +1660,6 @@ impl ModRack {
         let index = self.routes.iter().position(Option::is_none)?;
         self.routes[index] = Some(route);
         Some(index)
-    }
-
-    pub fn remove_route(&mut self, source_slot: u8, destination: ParamAddr) {
-        for route in self.routes.iter_mut() {
-            if route.is_some_and(|route| {
-                route.source_slot == source_slot && route.destination == destination
-            }) {
-                *route = None;
-            }
-        }
     }
 
     /// Install an already-stamped route, addressed by durable identity.
@@ -1951,6 +1962,33 @@ retrigger = true
         assert!(rack.modulates(addr(1), &narrowed));
     }
 
+    /// A modulator slot is a position like an effect slot is, so a route
+    /// aimed at one has to survive the grid being reordered. Nothing authors
+    /// such a route yet; this is the hole closed before something does.
+    #[test]
+    fn a_route_onto_a_modulator_follows_the_module_through_the_grid() {
+        let mut rack = rack_with_sources(3);
+        let onto_slot_2 = ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Modulator { slot: 2 },
+            param: LFO_PARAM_RATE_HZ,
+        };
+        rack.add_route(ModRoute::to_slot(0, onto_slot_2, 0.5, ModPolarity::Bipolar))
+            .unwrap();
+
+        // Move the module in slot 2 to the front: everything shifts up one.
+        assert!(rack.move_module(2, 0));
+        assert_eq!(
+            rack.routes[0].unwrap().destination.owner,
+            ParamOwner::Modulator { slot: 0 }
+        );
+
+        // And emptying the destination's slot takes the route with it rather
+        // than leaving it for the next module installed there.
+        assert!(rack.clear(0));
+        assert!(rack.routes.iter().flatten().next().is_none());
+    }
+
     /// The strip's own controls are described destinations like any device's,
     /// which is what lets a source reach a fader without the mixer growing a
     /// modulation special case.
@@ -1977,7 +2015,7 @@ retrigger = true
         for slot in 0..2u8 {
             rack.add_route(ModRoute::to_slot(slot, addr(1), 1.0, ModPolarity::Bipolar));
         }
-        rack.remove_route(0, addr(1));
+        rack.remove_route_by_source(rack.source_id(0).unwrap(), addr(1));
         let remaining: Vec<_> = rack.routes.iter().flatten().collect();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].source_slot, 1);

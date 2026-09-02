@@ -291,7 +291,10 @@ impl Sequencer {
     /// from any of them.
     pub fn retarget_lanes(&mut self, scope: EffectTarget, remap: &SlotRemap) {
         let channels = self.active_channels;
-        for pattern in &mut self.patterns {
+        // Bounded by what the song actually holds. The bank is preallocated
+        // to its ceiling, and this runs on the realtime command drain.
+        let patterns = self.active_patterns;
+        for pattern in self.patterns.iter_mut().take(patterns) {
             match scope {
                 EffectTarget::Channel(channel) => {
                     if let Some(channel) = pattern.channel_mut(channel as usize) {

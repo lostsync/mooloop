@@ -41,6 +41,7 @@ use mooloop_core::{
     DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
     MAX_CHANNELS, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
+    MAX_MOD_ROUTES_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
     MAX_SAMPLER_VOICES, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
     MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
@@ -3930,6 +3931,17 @@ impl UiState {
             depth,
             default_polarity,
         )) else {
+            // The armed slot was checked above, so the only way the rack
+            // refuses is a full matrix. Say so: an assignment gesture that
+            // does nothing at all reads as a broken knob.
+            window.set_status_message(
+                format!(
+                    "This channel already has its {MAX_MOD_ROUTES_PER_CHANNEL} modulation \
+                     assignments; remove one to add another"
+                )
+                .as_str()
+                .into(),
+            );
             return false;
         };
         // The rack stamped the durable source id on the way in; that stamped
