@@ -192,7 +192,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   `MOOLOOP_GALLERY_SNAPSHOT` and `MOOLOOP_GALLERY_SIZE` to capture it headlessly.
 - The active interface contract is `docs/UI_DESIGN.md`. A visual composition
   tool using the real controls is available with `cargo run -p mooloop-ui
-  --example mockup`; it saves and loads `mockup.toml` from the working directory.
+  --example mockup`, or from Preferences > Developer. Its palette comes from one
+  catalog (`ui/mockup-catalog.slint`), grouped by role or module and filterable;
+  items have z-order, a layers list, rack-unit sizing for device kinds, and a
+  snap grid. Named layouts save to `layouts/` under the config directory, keyed
+  by component name rather than palette index. Exported widgets with no catalog
+  row show up in the palette's UNCATALOGUED group, which is the standing list of
+  what the tool cannot yet compose with.
 - Some widgets exist ahead of the features that will use them: gain reduction and
   correlation have no audio behind them yet, and solo is a button style only.
 - There is no metronome. The toolbar deliberately does not offer a click-track

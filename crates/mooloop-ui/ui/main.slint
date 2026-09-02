@@ -47,7 +47,10 @@ import { SamplerDeviceFace } from "sampler-device.slint";
 import { SampleTrace } from "device-displays.slint";
 export { Theme }
 export { ControlGallery } from "gallery.slint";
-export { MockupCanvas, MockupItem } from "mockup.slint";
+export { MockupCanvas, MockupItem, MockupPaletteRow } from "mockup.slint";
+// The palette, the default sizes, and the drag behaviour all come off
+// this global, which Rust reads to build the palette model.
+export { MockupCatalog, MockupKind } from "mockup-catalog.slint";
 export { DeviceRackConcepts } from "device-concepts.slint";
 // Exported standalone (rather than only reachable through the rack) so the
 // drag regression tests can drive them directly with real pointer events

@@ -1,0 +1,419 @@
+import { Theme } from "theme.slint";
+import {
+    AudioOrientation, IconButton, InstrumentModule, LedIndicator, MiniKnob, MixerFader,
+    MuteButton, ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl,
+    SelectorBank, SoloButton, StereoPeakMeter, ToggleButton, ToolButton, TransportButton,
+    TrimKnob, ValueReadout, ZoomScrollBar
+} from "controls.slint";
+import { EnvelopeEditor } from "envelope.slint";
+import {
+    ChannelMeter, ClipIndicator, CorrelationMeter, GainReductionMeter, MasterMeter, MeterScale,
+    SegmentedMeter
+} from "meters.slint";
+import { BusPicker } from "mixer.slint";
+import { DeviceFrame, DeviceHeader, DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+
+// One entry in the mockup tool's palette. This is the single source of truth:
+// the palette list, the render switch below, the default sizes, and the drag
+// behaviour all read from here, so adding a widget to the tool is one row in
+// `MockupCatalog.kinds` plus one branch in `MockupSpecimen`.
+export struct MockupKind {
+    // Stable save key, and the audit key up to the first ':'. A component with
+    // more than one palette presentation (a fader is both horizontal and
+    // vertical) gets a ':variant' suffix so the two rows stay distinguishable
+    // in a saved layout while still auditing as the one exported component.
+    component: string,
+    name: string,
+    module: string,
+    // Many-to-many: a channel meter belongs under both Meters and Mixer.
+    groups: [string],
+    default-width: length,
+    default-height: length,
+    // 0 inert, 1 drag-value, 2 toggle, 3 index, 4 note. See PlacedItem in
+    // mockup.slint, which reads this instead of comparing kind integers.
+    behavior: int,
+    // Drag-value kinds that read horizontally rather than vertically.
+    drag-horizontal: bool,
+    // Sized in rack units by the properties panel rather than by the grip, so
+    // a device mockup is always something the real rack could build.
+    device-units: bool,
+}
+
+export global MockupCatalog {
+    out property <[MockupKind]> kinds: [
+        {
+            component: "InstrumentModule", name: "Module frame", module: "controls.slint",
+            groups: ["Layout"], default-width: 220px, default-height: 140px, behavior: 0,
+        },
+        {
+            component: "SectionLabel", name: "Section label", module: "controls.slint",
+            groups: ["Layout", "Annotation"], default-width: 120px, default-height: 12px, behavior: 0,
+        },
+        {
+            component: "ParameterKnob", name: "Knob", module: "controls.slint",
+            groups: ["Knobs & faders"], default-width: 56px, default-height: 80px, behavior: 1,
+        },
+        {
+            component: "MiniKnob", name: "Mini knob", module: "controls.slint",
+            groups: ["Knobs & faders"], default-width: 22px, default-height: 22px, behavior: 1,
+        },
+        {
+            component: "ParameterFader", name: "Fader (h)", module: "controls.slint",
+            groups: ["Knobs & faders"], default-width: 176px, default-height: 22px, behavior: 1,
+            drag-horizontal: true,
+        },
+        {
+            component: "ParameterFader:vertical", name: "Fader (v)", module: "controls.slint",
+            groups: ["Knobs & faders"], default-width: 32px, default-height: 112px, behavior: 1,
+        },
+        {
+            component: "MixerFader", name: "Mixer fader", module: "controls.slint",
+            groups: ["Knobs & faders", "Mixer"], default-width: 30px, default-height: 110px, behavior: 1,
+        },
+        {
+            component: "ToggleButton", name: "Toggle", module: "controls.slint",
+            groups: ["Buttons"], default-width: 60px, default-height: 24px, behavior: 2,
+        },
+        {
+            component: "ToolButton", name: "Button", module: "controls.slint",
+            groups: ["Buttons"], default-width: 60px, default-height: 24px, behavior: 2,
+        },
+        {
+            component: "IconButton", name: "Icon button", module: "controls.slint",
+            groups: ["Buttons"], default-width: 26px, default-height: 26px, behavior: 2,
+        },
+        {
+            component: "TransportButton", name: "Transport button", module: "controls.slint",
+            groups: ["Buttons", "Toolbar"], default-width: 34px, default-height: 26px, behavior: 2,
+        },
+        {
+            component: "SegmentedControl", name: "Segmented", module: "controls.slint",
+            groups: ["Buttons"], default-width: 220px, default-height: 26px, behavior: 3,
+        },
+        {
+            component: "SelectorBank", name: "Selector", module: "controls.slint",
+            groups: ["Buttons"], default-width: 160px, default-height: 26px, behavior: 3,
+        },
+        {
+            component: "LedIndicator", name: "LED", module: "controls.slint",
+            groups: ["Buttons"], default-width: 8px, default-height: 8px, behavior: 2,
+        },
+        {
+            component: "ValueReadout", name: "Value readout", module: "controls.slint",
+            groups: ["Layout"], default-width: 60px, default-height: 18px, behavior: 0,
+        },
+        {
+            component: "EnvelopeEditor", name: "Envelope", module: "envelope.slint",
+            groups: ["Scopes & displays"], default-width: 260px, default-height: 120px, behavior: 0,
+        },
+        {
+            component: "PeakMeter", name: "Peak meter", module: "controls.slint",
+            groups: ["Meters"], default-width: 120px, default-height: 10px, behavior: 0,
+        },
+        {
+            component: "StereoPeakMeter", name: "Stereo meter", module: "controls.slint",
+            groups: ["Meters"], default-width: 120px, default-height: 18px, behavior: 0,
+        },
+        {
+            component: "StickyNote", name: "Sticky note", module: "mockup-catalog.slint",
+            groups: ["Annotation"], default-width: 180px, default-height: 120px, behavior: 4,
+        },
+        {
+            component: "MuteButton", name: "Mute button", module: "controls.slint",
+            groups: ["Buttons", "Mixer"], default-width: 18px, default-height: 18px, behavior: 2,
+        },
+        {
+            component: "SoloButton", name: "Solo button", module: "controls.slint",
+            groups: ["Buttons", "Mixer"], default-width: 18px, default-height: 18px, behavior: 2,
+        },
+        {
+            component: "TrimKnob", name: "Trim knob", module: "controls.slint",
+            groups: ["Knobs & faders", "Mixer"], default-width: 22px, default-height: 22px, behavior: 1,
+        },
+        {
+            component: "ZoomScrollBar", name: "Zoom scrollbar", module: "controls.slint",
+            groups: ["Layout"], default-width: 120px, default-height: 14px, behavior: 0,
+        },
+        {
+            component: "MeterScale", name: "Meter scale", module: "meters.slint",
+            groups: ["Meters"], default-width: 22px, default-height: 120px, behavior: 0,
+        },
+        {
+            component: "SegmentedMeter", name: "Segmented meter", module: "meters.slint",
+            groups: ["Meters"], default-width: 60px, default-height: 120px, behavior: 0,
+        },
+        {
+            component: "ClipIndicator", name: "Clip indicator", module: "meters.slint",
+            groups: ["Meters"], default-width: 9px, default-height: 9px, behavior: 0,
+        },
+        {
+            component: "ChannelMeter", name: "Channel meter", module: "meters.slint",
+            groups: ["Meters", "Mixer"], default-width: 22px, default-height: 90px, behavior: 0,
+        },
+        {
+            component: "MasterMeter", name: "Master meter", module: "meters.slint",
+            groups: ["Meters", "Mixer"], default-width: 150px, default-height: 26px, behavior: 0,
+        },
+        {
+            component: "GainReductionMeter", name: "Gain reduction meter", module: "meters.slint",
+            groups: ["Meters"], default-width: 80px, default-height: 10px, behavior: 0,
+        },
+        {
+            component: "CorrelationMeter", name: "Correlation meter", module: "meters.slint",
+            groups: ["Meters"], default-width: 90px, default-height: 16px, behavior: 0,
+        },
+        {
+            component: "BusPicker", name: "Bus picker", module: "mixer.slint",
+            groups: ["Mixer"], default-width: 30px, default-height: 22px, behavior: 0,
+        },
+        {
+            component: "DeviceHeader", name: "Device header", module: "device-rack.slint",
+            groups: ["Device rack"], default-width: 220px, default-height: 28px, behavior: 0,
+        },
+        {
+            component: "EffectDeviceShell", name: "Effect shell", module: "device-rack.slint",
+            groups: ["Device rack"], default-width: 220px, default-height: 268px, behavior: 0,
+            device-units: true,
+        },
+        {
+            component: "DeviceFrame", name: "Device frame", module: "device-rack.slint",
+            groups: ["Device rack"], default-width: 220px, default-height: 268px, behavior: 0,
+            device-units: true,
+        },
+    ];
+
+    // Rack geometry for a device kind, so the tool can only ever produce a
+    // width the real rack would lay out. Half a unit is a unit split down the
+    // middle, gap included, which is how DeviceJoin divides one.
+    public pure function unit-width(units: int, half: bool) -> length {
+        half
+            ? DeviceRackMetrics.unit-width / 2 - DeviceRackMetrics.half-gap / 2
+            : DeviceRackMetrics.unit-width * units
+                + DeviceRackMetrics.half-gap * (units - 1)
+    }
+}
+
+// The mockup tool's own annotation widget: a scrap of paper for the intent
+// behind a layout. Lives here rather than in mockup.slint so the audit sees a
+// real exported component behind its catalog row.
+export component StickyNote inherits Rectangle {
+    in property <string> text;
+    callback edited(string);
+    callback background-clicked;
+
+    background: Theme.warning.with-alpha(0.16);
+    border-width: 1px;
+    border-color: Theme.warning.with-alpha(0.5);
+    border-radius: Theme.radius-md;
+
+    // Sits under the text input so a click on the note's own border still
+    // selects it - the input itself covers most of the area and needs plain
+    // clicks for caret placement.
+    TouchArea { clicked => { root.background-clicked(); } }
+    TextInput {
+        x: 4px;
+        y: 4px;
+        width: parent.width - 8px;
+        height: parent.height - 8px;
+        text: root.text;
+        color: Theme.text;
+        font-size: 10px;
+        wrap: word-wrap;
+        single-line: false;
+        edited => { root.edited(self.text); }
+    }
+}
+
+// Every palette kind's live rendering, indexed by its position in
+// `MockupCatalog.kinds`. The one if-chain in the tool.
+export component MockupSpecimen inherits Rectangle {
+    in property <int> kind;
+    in property <string> label;
+    in property <float> value;
+    in property <string> text;
+    callback note-edited(string);
+    callback note-clicked;
+
+    if root.kind == 0: InstrumentModule {
+        title: root.label == "" ? "MODULE" : root.label;
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 1: SectionLabel {
+        text: root.label == "" ? "SECTION" : root.label;
+    }
+    if root.kind == 2: ParameterKnob {
+        label: root.label == "" ? "PARAM" : root.label;
+        value: root.value;
+        value-text: round(root.value * 100) + "%";
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 3: MiniKnob {
+        label: root.label;
+        value: root.value;
+        value-text: round(root.value * 100) + "%";
+    }
+    if root.kind == 4: ParameterFader {
+        label: root.label == "" ? "LEVEL" : root.label;
+        value: root.value;
+        width: 100%;
+    }
+    if root.kind == 5: ParameterFader {
+        label: root.label == "" ? "LVL" : root.label;
+        value: root.value;
+        orientation: AudioOrientation.vertical;
+        height: 100%;
+    }
+    if root.kind == 6: MixerFader {
+        value: root.value;
+        value-text: round(root.value * 100) + "%";
+        height: 100%;
+    }
+    if root.kind == 7: ToggleButton {
+        text: root.label == "" ? "Toggle" : root.label;
+        checked: root.value > 0.5;
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 8: ToolButton {
+        text: root.label == "" ? "Button" : root.label;
+        active: root.value > 0.5;
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 9: IconButton {
+        text: root.label == "" ? "+" : root.label;
+        active: root.value > 0.5;
+    }
+    if root.kind == 10: TransportButton {
+        text: root.label == "" ? "\u{25b6}" : root.label;
+        active: root.value > 0.5;
+    }
+    if root.kind == 11: SegmentedControl {
+        options: root.label == "" ? ["Mono", "Stereo", "M/S"] : [root.label, "B", "C"];
+        selected-index: round(root.value * 2);
+        width: 100%;
+    }
+    if root.kind == 12: SelectorBank {
+        options: root.label == "" ? ["Sine", "Saw", "Square"] : [root.label, "B", "C"];
+        selected-index: round(root.value * 2);
+    }
+    if root.kind == 13: LedIndicator {
+        on: root.value > 0.5;
+        tooltip: root.label;
+    }
+    if root.kind == 14: ValueReadout {
+        value-text: root.label == "" ? "0%" : root.label;
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 15: EnvelopeEditor {
+        width: 100%;
+        height: 100%;
+        attack: 0.12;
+        decay: 0.3;
+        sustain: 0.6;
+        release: 0.25;
+    }
+    if root.kind == 16: PeakMeter {
+        level-db: root.value * 60 - 60;
+        held-db: root.value * 60 - 60;
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 17: StereoPeakMeter {
+        left-db: root.value * 60 - 60;
+        right-db: root.value * 60 - 60;
+        held-left-db: root.value * 60 - 60;
+        held-right-db: root.value * 60 - 60;
+        width: 100%;
+    }
+    if root.kind == 18: StickyNote {
+        width: 100%;
+        height: 100%;
+        text: root.text;
+        edited(t) => { root.note-edited(t); }
+        background-clicked => { root.note-clicked(); }
+    }
+    if root.kind == 19: MuteButton {
+        muted: root.value > 0.5;
+    }
+    if root.kind == 20: SoloButton {
+        soloed: root.value > 0.5;
+    }
+    if root.kind == 21: TrimKnob {
+        label: root.label == "" ? "TRIM" : root.label;
+        value: root.value * 72 - 60;
+    }
+    if root.kind == 22: ZoomScrollBar {
+        width: 100%;
+        height: 100%;
+        offset: 0.2;
+        visible-fraction: 0.4;
+    }
+    if root.kind == 23: MeterScale {
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 24: SegmentedMeter {
+        level-db: root.value * 60 - 60;
+        held-db: root.value * 60 - 60;
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 25: ClipIndicator {
+        clipping: root.value > 0.5;
+    }
+    if root.kind == 26: ChannelMeter {
+        left-db: root.value * 60 - 60;
+        right-db: root.value * 60 - 60;
+        held-left-db: root.value * 60 - 60;
+        held-right-db: root.value * 60 - 60;
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 27: MasterMeter {
+        left-db: root.value * 60 - 60;
+        right-db: root.value * 60 - 60;
+        held-left-db: root.value * 60 - 60;
+        held-right-db: root.value * 60 - 60;
+        width: 100%;
+    }
+    if root.kind == 28: GainReductionMeter {
+        reduction-db: root.value * 24;
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 29: CorrelationMeter {
+        correlation: root.value * 2 - 1;
+        width: 100%;
+    }
+    if root.kind == 30: BusPicker {
+        bus-names: ["Master", "Bus A", "Bus B"];
+        value: round(root.value * 2);
+    }
+    if root.kind == 31: DeviceHeader {
+        name: root.label == "" ? "DEVICE" : root.label;
+        kind: "Type";
+        width: 100%;
+    }
+    if root.kind == 32: EffectDeviceShell {
+        name: root.label == "" ? "DEVICE" : root.label;
+        kind: "Type";
+        slot-index: 0;
+        slot-count: 1;
+        width: 100%;
+        height: 100%;
+        Rectangle {
+            y: DeviceRackMetrics.header-height;
+            width: 100%;
+            height: parent.height - DeviceRackMetrics.header-height;
+            background: Theme.surface;
+        }
+    }
+    if root.kind == 33: DeviceFrame {
+        width: 100%;
+        height: 100%;
+    }
+}

@@ -1,23 +1,17 @@
 import { HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import {
-    AudioOrientation, IconButton, InstrumentModule, LedIndicator, MiniKnob, MixerFader,
-    MuteButton, ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl,
-    SelectorBank, SoloButton, StereoPeakMeter, ToggleButton, ToolButton, TransportButton,
-    TrimKnob, ValueReadout, ValueScale, ZoomScrollBar
-} from "controls.slint";
-import { EnvelopeEditor } from "envelope.slint";
-import {
-    ChannelMeter, ClipIndicator, CorrelationMeter, GainReductionMeter, MasterMeter, MeterScale,
-    SegmentedMeter
-} from "meters.slint";
-import { BusPicker } from "mixer.slint";
-import { DeviceFrame, DeviceHeader, DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+import { ParameterFader, SectionLabel, SegmentedControl, ToolButton } from "controls.slint";
+import { NameField, StepperField } from "toolbar.slint";
+import { DeviceRackMetrics } from "device-rack.slint";
+import { MockupCatalog, MockupKind, MockupSpecimen } from "mockup-catalog.slint";
 
 // One placed instance on the mockup canvas. Every kind reuses the same
 // struct - a design mockup does not need each control's full parameter set,
 // only enough to look and behave roughly like the real thing while it is
 // dragged, resized and captioned.
+//
+// Position in `MockupCanvas.items` is paint order, so z-order needs no field
+// of its own and survives a save/load without a second source of truth.
 export struct MockupItem {
     kind: int,
     x: length,
@@ -27,36 +21,99 @@ export struct MockupItem {
     label: string,
     value: float,
     text: string,
+    // Rack units for a `device-units` kind; 0 for everything else. Width is
+    // computed from these, never stored, so a device mockup cannot drift off
+    // the geometry the real rack lays out.
+    units: int,
+    half-unit: bool,
+    locked: bool,
 }
 
-// Palette order fixes the add callback, render switch, and PALETTE_SIZES in
-// examples/mockup.rs. Keep all three in sync when adding a kind.
-export global MockupKinds {
-    out property <[string]> names: [
-        "Module frame", "Section label", "Knob", "Mini knob", "Fader (h)",
-        "Fader (v)", "Mixer fader", "Toggle", "Button", "Icon button",
-        "Transport button", "Segmented", "Selector", "LED", "Value readout",
-        "Envelope", "Peak meter", "Stereo meter", "Sticky note",
-        "Mute button", "Solo button", "Trim knob", "Zoom scrollbar", "Meter scale",
-        "Segmented meter", "Clip indicator", "Channel meter", "Master meter",
-        "Gain reduction meter", "Correlation meter", "Bus picker", "Device header",
-        "Effect shell", "Device frame",
-    ];
+// One row of the left sidebar's palette, flattened in Rust: Slint has no
+// `contains` for arrays, and grouping a many-to-many membership into headed
+// sections is work the model side should have already done.
+export struct MockupPaletteRow {
+    header: bool,
+    label: string,
+    detail: string,
+    kind: int,
+    enabled: bool,
 }
 
 component PaletteEntry inherits Rectangle {
     in property <string> text;
+    in property <string> detail;
+    in property <bool> enabled: true;
     callback clicked;
     min-height: 26px;
     border-radius: Theme.radius-md;
-    background: touch.pressed ? Theme.surface-active : touch.has-hover ? Theme.surface-raised : transparent;
+    background: !root.enabled ? transparent
+        : touch.pressed ? Theme.surface-active
+        : touch.has-hover ? Theme.surface-raised : transparent;
 
-    Text {
-        text: root.text;
-        color: Theme.text;
-        font-size: 10px;
-        x: 6px;
-        vertical-alignment: center;
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 4px;
+        Text {
+            text: root.text;
+            color: root.enabled ? Theme.text : Theme.text-faint;
+            font-size: 10px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: root.detail;
+            color: Theme.text-faint;
+            font-size: 8px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}
+
+component LayerRow inherits Rectangle {
+    in property <string> text;
+    in property <string> detail;
+    in property <bool> selected;
+    in property <bool> locked;
+    callback clicked;
+    height: 22px;
+    border-radius: Theme.radius-md;
+    background: root.selected ? Theme.accent-active
+        : touch.has-hover ? Theme.surface-raised : transparent;
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 4px;
+        Text {
+            text: root.locked ? "\u{1f512}" : "";
+            color: Theme.text-faint;
+            font-size: 8px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-size: 10px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: root.detail;
+            color: root.selected ? Theme.text-muted : Theme.text-faint;
+            font-size: 8px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
     touch := TouchArea { clicked => { root.clicked(); } }
 }
@@ -71,15 +128,18 @@ component PlacedItem inherits Rectangle {
     in property <MockupItem> item;
     in property <bool> selected;
     callback select;
-    callback moved(length, length);
-    callback resized(length, length);
+    // Deltas plus whether the gesture asked to bypass the snap grid.
+    callback moved(length, length, bool);
+    callback resized(length, length, bool);
     callback remove;
     callback value-changed(float);
-    callback label-changed(string);
+    callback text-changed(string);
 
+    private property <MockupKind> kind: MockupCatalog.kinds[root.item.kind];
     private property <length> press-x;
     private property <length> press-y;
     private property <bool> overlay-ctrl;
+    private property <bool> overlay-alt;
     private property <float> overlay-start-value;
     private property <bool> overlay-moved;
     // Knob, mini knob, both faders, the mixer fader, and the trim knob all
@@ -87,21 +147,19 @@ component PlacedItem inherits Rectangle {
     // reach `moved` through them - the overlay below claims the gesture
     // first and decides move vs. value-adjust from the modifier at press
     // time instead.
-    private property <bool> drag-kind:
-        (root.item.kind >= 2 && root.item.kind <= 6) || root.item.kind == 21;
+    private property <bool> drag-kind: root.kind.behavior == 1;
     // Discrete on/off controls: a held-control click (not a drag) flips them
     // instead of a plain click doing it, so clicking through a layout can
     // never accidentally fire a button.
-    private property <bool> toggle-kind:
-        root.item.kind == 7 || root.item.kind == 8 || root.item.kind == 9
-        || root.item.kind == 10 || root.item.kind == 13 || root.item.kind == 19
-        || root.item.kind == 20;
+    private property <bool> toggle-kind: root.kind.behavior == 2;
     // Discrete multi-option controls: a held-control click picks the option
     // under the pointer.
-    private property <bool> index-kind: root.item.kind == 11 || root.item.kind == 12;
+    private property <bool> index-kind: root.kind.behavior == 3;
     // The sticky note's text is mockup metadata, not a widget under test, so
     // it keeps taking plain clicks to place the caret - no overlay needed.
-    private property <bool> note-kind: root.item.kind == 18;
+    private property <bool> note-kind: root.kind.behavior == 4;
+    // A device is sized by the rack-unit picker, so it has no grip at all.
+    private property <bool> resizable: !root.kind.device-units && !root.item.locked;
 
     x: item.x;
     y: item.y;
@@ -114,7 +172,7 @@ component PlacedItem inherits Rectangle {
         width: parent.width + 4px;
         height: parent.height + 4px;
         border-width: 1px;
-        border-color: Theme.focus;
+        border-color: root.item.locked ? Theme.warning : Theme.focus;
         border-radius: Theme.radius-md;
     }
 
@@ -131,7 +189,7 @@ component PlacedItem inherits Rectangle {
             padding-left: 4px;
             padding-right: 2px;
             Text {
-                text: MockupKinds.names[root.item.kind];
+                text: root.kind.name;
                 color: Theme.text-faint;
                 font-size: 7px;
                 vertical-alignment: center;
@@ -153,8 +211,10 @@ component PlacedItem inherits Rectangle {
                     root.select();
                     root.press-x = self.mouse-x;
                     root.press-y = self.mouse-y;
-                } else if (e.kind == PointerEventKind.move && self.pressed) {
-                    root.moved(self.mouse-x - root.press-x, self.mouse-y - root.press-y);
+                    root.overlay-alt = e.modifiers.alt;
+                } else if (e.kind == PointerEventKind.move && self.pressed && !root.item.locked) {
+                    root.moved(self.mouse-x - root.press-x, self.mouse-y - root.press-y,
+                        root.overlay-alt);
                 }
             }
         }
@@ -165,204 +225,15 @@ component PlacedItem inherits Rectangle {
         height: parent.height;
         clip: true;
 
-        if root.item.kind == 0: InstrumentModule {
-            title: root.item.label == "" ? "MODULE" : root.item.label;
+        MockupSpecimen {
             width: 100%;
             height: 100%;
-        }
-        if root.item.kind == 1: SectionLabel {
-            text: root.item.label == "" ? "SECTION" : root.item.label;
-        }
-        if root.item.kind == 2: ParameterKnob {
-            label: root.item.label == "" ? "PARAM" : root.item.label;
-            value: root.item.value;
-            value-text: round(root.item.value * 100) + "%";
-            width: 100%;
-            height: 100%;
-        }
-        if root.item.kind == 3: MiniKnob {
+            kind: root.item.kind;
             label: root.item.label;
             value: root.item.value;
-            value-text: round(root.item.value * 100) + "%";
-        }
-        if root.item.kind == 4: ParameterFader {
-            label: root.item.label == "" ? "LEVEL" : root.item.label;
-            value: root.item.value;
-            width: 100%;
-        }
-        if root.item.kind == 5: ParameterFader {
-            label: root.item.label == "" ? "LVL" : root.item.label;
-            value: root.item.value;
-            orientation: AudioOrientation.vertical;
-            height: 100%;
-        }
-        if root.item.kind == 6: MixerFader {
-            value: root.item.value;
-            value-text: round(root.item.value * 100) + "%";
-            height: 100%;
-        }
-        if root.item.kind == 7: ToggleButton {
-            text: root.item.label == "" ? "Toggle" : root.item.label;
-            checked: root.item.value > 0.5;
-            width: 100%;
-            height: 100%;
-        }
-        if root.item.kind == 8: ToolButton {
-            text: root.item.label == "" ? "Button" : root.item.label;
-            active: root.item.value > 0.5;
-            width: 100%;
-            height: 100%;
-        }
-        if root.item.kind == 9: IconButton {
-            text: root.item.label == "" ? "+" : root.item.label;
-            active: root.item.value > 0.5;
-        }
-        if root.item.kind == 10: TransportButton {
-            text: root.item.label == "" ? "\u{25b6}" : root.item.label;
-            active: root.item.value > 0.5;
-        }
-        if root.item.kind == 11: SegmentedControl {
-            options: root.item.label == "" ? ["Mono", "Stereo", "M/S"] : [root.item.label, "B", "C"];
-            selected-index: round(root.item.value * 2);
-            width: 100%;
-        }
-        if root.item.kind == 12: SelectorBank {
-            options: root.item.label == "" ? ["Sine", "Saw", "Square"] : [root.item.label, "B", "C"];
-            selected-index: round(root.item.value * 2);
-        }
-        if root.item.kind == 13: LedIndicator {
-            on: root.item.value > 0.5;
-            tooltip: root.item.label;
-        }
-        if root.item.kind == 14: ValueReadout {
-            value-text: root.item.label == "" ? "0%" : root.item.label;
-            width: 100%;
-            height: 100%;
-        }
-        if root.item.kind == 15: EnvelopeEditor {
-            width: 100%;
-            height: 100%;
-            attack: 0.12;
-            decay: 0.3;
-            sustain: 0.6;
-            release: 0.25;
-        }
-        if root.item.kind == 16: PeakMeter {
-            level-db: root.item.value * 60 - 60;
-            held-db: root.item.value * 60 - 60;
-            width: 100%;
-            height: 100%;
-        }
-        if root.item.kind == 17: StereoPeakMeter {
-            left-db: root.item.value * 60 - 60;
-            right-db: root.item.value * 60 - 60;
-            held-left-db: root.item.value * 60 - 60;
-            held-right-db: root.item.value * 60 - 60;
-            width: 100%;
-        }
-        if root.item.kind == 18: Rectangle {
-            width: 100%;
-            height: 100%;
-            background: Theme.warning.with-alpha(0.16);
-            border-width: 1px;
-            border-color: Theme.warning.with-alpha(0.5);
-            border-radius: Theme.radius-md;
-            // Sits under the text input so a click on the note's own border
-            // still selects it - the input itself covers most of the area
-            // and needs plain clicks for caret placement.
-            TouchArea { clicked => { root.select(); } }
-            note-input := TextInput {
-                x: 4px;
-                y: 4px;
-                width: parent.width - 8px;
-                height: parent.height - 8px;
-                text: root.item.text;
-                color: Theme.text;
-                font-size: 10px;
-                wrap: word-wrap;
-                single-line: false;
-                edited => { root.label-changed(self.text); }
-            }
-        }
-        if root.item.kind == 19: MuteButton {
-            muted: root.item.value > 0.5;
-        }
-        if root.item.kind == 20: SoloButton {
-            soloed: root.item.value > 0.5;
-        }
-        if root.item.kind == 21: TrimKnob {
-            label: root.item.label == "" ? "TRIM" : root.item.label;
-            value: root.item.value * 72 - 60;
-        }
-        if root.item.kind == 22: ZoomScrollBar {
-            width: 100%;
-            height: 100%;
-            offset: 0.2;
-            visible-fraction: 0.4;
-        }
-        if root.item.kind == 23: MeterScale {
-            width: 100%;
-            height: 100%;
-        }
-        if root.item.kind == 24: SegmentedMeter {
-            level-db: root.item.value * 60 - 60;
-            held-db: root.item.value * 60 - 60;
-            width: 100%;
-            height: 100%;
-        }
-        if root.item.kind == 25: ClipIndicator {
-            clipping: root.item.value > 0.5;
-        }
-        if root.item.kind == 26: ChannelMeter {
-            left-db: root.item.value * 60 - 60;
-            right-db: root.item.value * 60 - 60;
-            held-left-db: root.item.value * 60 - 60;
-            held-right-db: root.item.value * 60 - 60;
-            width: 100%;
-            height: 100%;
-        }
-        if root.item.kind == 27: MasterMeter {
-            left-db: root.item.value * 60 - 60;
-            right-db: root.item.value * 60 - 60;
-            held-left-db: root.item.value * 60 - 60;
-            held-right-db: root.item.value * 60 - 60;
-            width: 100%;
-        }
-        if root.item.kind == 28: GainReductionMeter {
-            reduction-db: root.item.value * 24;
-            width: 100%;
-            height: 100%;
-        }
-        if root.item.kind == 29: CorrelationMeter {
-            correlation: root.item.value * 2 - 1;
-            width: 100%;
-        }
-        if root.item.kind == 30: BusPicker {
-            bus-names: ["Master", "Bus A", "Bus B"];
-            value: round(root.item.value * 2);
-        }
-        if root.item.kind == 31: DeviceHeader {
-            name: root.item.label == "" ? "DEVICE" : root.item.label;
-            kind: "Type";
-            width: 100%;
-        }
-        if root.item.kind == 32: EffectDeviceShell {
-            name: root.item.label == "" ? "DEVICE" : root.item.label;
-            kind: "Type";
-            slot-index: 0;
-            slot-count: 1;
-            width: 100%;
-            height: 100%;
-            Rectangle {
-                y: DeviceRackMetrics.header-height;
-                width: 100%;
-                height: parent.height - DeviceRackMetrics.header-height;
-                background: Theme.surface;
-            }
-        }
-        if root.item.kind == 33: DeviceFrame {
-            width: 100%;
-            height: 100%;
+            text: root.item.text;
+            note-edited(t) => { root.text-changed(t); }
+            note-clicked => { root.select(); }
         }
 
         // Sits above the live control so a plain drag always moves the
@@ -370,7 +241,7 @@ component PlacedItem inherits Rectangle {
         // adjusting its value on a knob or fader, or firing its click on a
         // button, toggle, or LED (only once release lands without much
         // movement, so a control ctrl-dragged out of the way doesn't also
-        // fire).
+        // fire). Holding alt drags free of the snap grid.
         if !root.note-kind: TouchArea {
             mouse-cursor: move;
             pointer-event(e) => {
@@ -379,6 +250,7 @@ component PlacedItem inherits Rectangle {
                     root.press-x = self.mouse-x;
                     root.press-y = self.mouse-y;
                     root.overlay-ctrl = e.modifiers.control;
+                    root.overlay-alt = e.modifiers.alt;
                     root.overlay-start-value = root.item.value;
                     root.overlay-moved = false;
                 } else if (e.kind == PointerEventKind.move && self.pressed) {
@@ -388,11 +260,12 @@ component PlacedItem inherits Rectangle {
                     }
                     if (root.drag-kind && root.overlay-ctrl) {
                         root.value-changed(clamp(root.overlay-start-value
-                            + (root.item.kind == 4
+                            + (root.kind.drag-horizontal
                                 ? (self.mouse-x - root.press-x) / 150px
                                 : (root.press-y - self.mouse-y) / 150px), 0, 1));
-                    } else {
-                        root.moved(self.mouse-x - root.press-x, self.mouse-y - root.press-y);
+                    } else if (!root.item.locked) {
+                        root.moved(self.mouse-x - root.press-x, self.mouse-y - root.press-y,
+                            root.overlay-alt);
                     }
                 } else if (e.kind == PointerEventKind.up) {
                     if (root.overlay-ctrl && !root.overlay-moved) {
@@ -416,7 +289,7 @@ component PlacedItem inherits Rectangle {
         }
     }
 
-    grip := Rectangle {
+    if root.resizable: Rectangle {
         x: parent.width - 8px;
         y: parent.height - 8px;
         width: 8px;
@@ -430,29 +303,98 @@ component PlacedItem inherits Rectangle {
                     root.select();
                     root.press-x = self.mouse-x;
                     root.press-y = self.mouse-y;
+                    root.overlay-alt = e.modifiers.alt;
                 } else if (e.kind == PointerEventKind.move && self.pressed) {
-                    root.resized(self.mouse-x - root.press-x, self.mouse-y - root.press-y);
+                    root.resized(self.mouse-x - root.press-x, self.mouse-y - root.press-y,
+                        root.overlay-alt);
                 }
             }
         }
     }
 }
 
+// A labelled block in the properties panel. Five of these in a column is the
+// whole panel, so the caption and its spacing live in one place.
+component PropertySection inherits VerticalLayout {
+    in property <string> title;
+    spacing: 4px;
+    vertical-stretch: 0;
+    SectionLabel { text: root.title; }
+    @children
+}
+
 export component MockupCanvas inherits Window {
     title: "mooloop mockup";
-    preferred-width: 1200px;
-    preferred-height: 760px;
+    preferred-width: 1280px;
+    preferred-height: 800px;
     background: Theme.background;
+    forward-focus: canvas-keys;
 
     in-out property <[MockupItem]> items: [];
     in-out property <int> selected-index: -1;
     in-out property <string> status-text;
+    // Flattened by Rust from the catalog plus the build-time audit; see
+    // `palette-query-changed`.
+    in property <[MockupPaletteRow]> palette-rows: [];
+    in-out property <int> palette-axis: 0;
+    in-out property <string> palette-filter: "";
+    in-out property <int> sidebar-tab: 0;
+    in-out property <string> layout-name: "layout";
+    in-out property <bool> snap-enabled: true;
+    // Index into `grid-steps`, not the pixel count, so the segmented control
+    // and the drawn grid agree without a second lookup.
+    in-out property <int> grid-index: 0;
+    out property <[length]> grid-steps: [4px, 8px, 10px, 20px, 40px];
+    out property <length> grid-step: root.grid-steps[root.grid-index];
+
     callback save-requested(string);
-    callback load-requested();
-    // Adding and removing rows needs a real Vec, which only Rust can splice
-    // into the model - .slint arrays have no push/remove of their own.
+    callback load-requested(string);
+    // Adding, removing and reordering rows needs a real Vec, which only Rust
+    // can splice into the model - .slint arrays have no push/remove of their
+    // own, and array order is this tool's z-order.
     callback add-item(int);
     callback remove-item(int);
+    callback duplicate-item(int);
+    callback raise-item(int);
+    callback lower-item(int);
+    callback front-item(int);
+    callback back-item(int);
+    // Rust rebuilds `palette-rows` from `palette-axis` and `palette-filter`.
+    callback palette-query-changed();
+
+    private property <int> count: root.items.length;
+    private property <bool> has-selection:
+        root.selected-index >= 0 && root.selected-index < root.count;
+    private property <MockupKind> selected-kind:
+        MockupCatalog.kinds[root.has-selection ? root.items[root.selected-index].kind : 0];
+    // Below about 10px a line every step is a wash rather than a grid, so the
+    // fine settings draw a coarser multiple. Snapping still uses `grid-step`.
+    private property <length> grid-draw-step:
+        root.grid-step < 10px ? root.grid-step * 5 : root.grid-step;
+    private property <int> grid-columns: 1600px / root.grid-draw-step;
+    private property <int> grid-rows: 1100px / root.grid-draw-step;
+
+    public function snap(value: length, bypass: bool) -> length {
+        (!root.snap-enabled || bypass)
+            ? value
+            : round(value / root.grid-step) * root.grid-step
+    }
+
+    // Rack width is derived, never stored, so the unit picker is the only way
+    // a device changes size and it can only land on geometry the rack builds.
+    function apply-units(index: int, units: int, half: bool) {
+        root.items[index].units = units;
+        root.items[index].half-unit = half;
+        root.items[index].width = MockupCatalog.unit-width(units, half);
+        root.items[index].height = DeviceRackMetrics.face-height;
+    }
+
+    function nudge(dx: length, dy: length) {
+        if (root.has-selection && !root.items[root.selected-index].locked) {
+            root.items[root.selected-index].x = max(0px, root.items[root.selected-index].x + dx);
+            root.items[root.selected-index].y = max(0px, root.items[root.selected-index].y + dy);
+        }
+    }
 
     VerticalBox {
         spacing: 0px;
@@ -462,141 +404,418 @@ export component MockupCanvas inherits Window {
             HorizontalBox {
                 padding: 8px;
                 spacing: 8px;
-                Text { text: "MOOLOOP / MOCKUP"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
-                Rectangle { horizontal-stretch: 1; }
-                Text { text: root.status-text; color: Theme.text-faint; font-size: 10px; vertical-alignment: center; }
-                ToolButton { text: "Load"; clicked => { root.load-requested(); } }
-                ToolButton {
-                    text: "Save";
-                    clicked => { root.save-requested("mockup.toml"); }
+                Text {
+                    text: "MOOLOOP / MOCKUP";
+                    color: Theme.text;
+                    font-size: 13px;
+                    vertical-alignment: center;
                 }
+                Rectangle { width: 8px; }
+                ToolButton {
+                    text: "Snap";
+                    width: 52px;
+                    tooltip: "Snap to the grid (hold Alt while dragging to bypass)";
+                    active: root.snap-enabled;
+                    clicked => { root.snap-enabled = !root.snap-enabled; }
+                }
+                StepperField {
+                    horizontal-stretch: 0;
+                    label: "GRID";
+                    tooltip: "Grid size";
+                    value <=> root.grid-index;
+                    minimum: 0;
+                    maximum: root.grid-steps.length - 1;
+                    display-text: round(root.grid-steps[root.grid-index] / 1px) + " px";
+                    value-width: 36px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: root.status-text;
+                    color: Theme.text-faint;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                NameField {
+                    horizontal-stretch: 0;
+                    text <=> root.layout-name;
+                    placeholder: "layout";
+                    tooltip: "Layout name, saved under the UI settings directory";
+                }
+                ToolButton { text: "Load"; width: 52px; clicked => { root.load-requested(root.layout-name); } }
+                ToolButton { text: "Save"; width: 52px; clicked => { root.save-requested(root.layout-name); } }
             }
         }
 
         HorizontalLayout {
             Rectangle {
-                width: 150px;
+                width: 190px;
                 background: Theme.panel;
-                ScrollView {
-                    VerticalBox {
-                        padding: 6px;
-                        spacing: 2px;
-                        SectionLabel { text: "PALETTE"; }
-                        for name[i] in MockupKinds.names: PaletteEntry {
-                            text: name;
-                            clicked => { root.add-item(i); }
+                VerticalBox {
+                    padding: 6px;
+                    spacing: 4px;
+                    SegmentedControl {
+                        height: 26px;
+                        options: ["PALETTE", "LAYERS"];
+                        selected-index <=> root.sidebar-tab;
+                    }
+
+                    if root.sidebar-tab == 0: SegmentedControl {
+                        height: 26px;
+                        options: ["Role", "Module", "A-Z"];
+                        selected-index <=> root.palette-axis;
+                        selected(i) => { root.palette-query-changed(); }
+                    }
+                    if root.sidebar-tab == 0: NameField {
+                        width: 100%;
+                        text <=> root.palette-filter;
+                        placeholder: "Filter";
+                        tooltip: "Filter the palette by name";
+                        edited(t) => { root.palette-query-changed(); }
+                    }
+                    if root.sidebar-tab == 0: ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            padding-right: 4px;
+                            spacing: 1px;
+                            for row in root.palette-rows: Rectangle {
+                                height: row.header ? 22px : 26px;
+                                if row.header: SectionLabel {
+                                    x: 2px;
+                                    y: 8px;
+                                    text: row.label;
+                                }
+                                if !row.header: PaletteEntry {
+                                    width: 100%;
+                                    height: 100%;
+                                    text: row.label;
+                                    detail: row.detail;
+                                    enabled: row.enabled;
+                                    clicked => { root.add-item(row.kind); }
+                                }
+                            }
+                            Rectangle { min-height: 4px; vertical-stretch: 1; }
                         }
-                        Rectangle { height: 4px; }
+                    }
+
+                    // Top-most first, which is the array read backwards -
+                    // no Rust-side display model needed for this one.
+                    if root.sidebar-tab == 1: ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            padding-right: 4px;
+                            spacing: 1px;
+                            for n in root.count: LayerRow {
+                                property <int> idx: root.count - 1 - n;
+                                text: MockupCatalog.kinds[root.items[self.idx].kind].name;
+                                detail: root.items[self.idx].label;
+                                locked: root.items[self.idx].locked;
+                                selected: root.selected-index == self.idx;
+                                clicked => { root.selected-index = self.idx; }
+                            }
+                            Rectangle { min-height: 4px; vertical-stretch: 1; }
+                        }
+                    }
+                    if root.sidebar-tab == 1 && root.count == 0: Text {
+                        text: "Nothing placed yet.";
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        vertical-stretch: 1;
                     }
                 }
             }
 
-            canvas-scroll := ScrollView {
-                viewport-width: 1600px;
-                viewport-height: 1100px;
-                Rectangle {
-                    width: 1600px;
-                    height: 1100px;
-                    background: Theme.background;
-
-                    // Faint grid, purely a placement aid.
-                    for gx in 40: Rectangle {
-                        x: gx * 40px;
-                        width: 1px;
-                        height: 100%;
-                        background: Theme.panel;
-                    }
-                    for gy in 27: Rectangle {
-                        y: gy * 40px;
-                        height: 1px;
-                        width: 100%;
-                        background: Theme.panel;
-                    }
-
-                    background-touch := TouchArea {
-                        clicked => { root.selected-index = -1; }
-                    }
-
-                    for item[i] in root.items: PlacedItem {
-                        item: item;
-                        selected: root.selected-index == i;
-                        select => { root.selected-index = i; }
-                        moved(dx, dy) => {
-                            root.items[i].x = max(0px, item.x + dx);
-                            root.items[i].y = max(0px, item.y + dy);
+            canvas-keys := FocusScope {
+                key-pressed(e) => {
+                    if (e.text == Key.Delete || e.text == Key.Backspace) {
+                        if (root.has-selection) { root.remove-item(root.selected-index); }
+                        accept
+                    } else if (e.text == Key.LeftArrow) {
+                        root.nudge(e.modifiers.shift ? -root.grid-step : -1px, 0px);
+                        accept
+                    } else if (e.text == Key.RightArrow) {
+                        root.nudge(e.modifiers.shift ? root.grid-step : 1px, 0px);
+                        accept
+                    } else if (e.text == Key.UpArrow) {
+                        root.nudge(0px, e.modifiers.shift ? -root.grid-step : -1px);
+                        accept
+                    } else if (e.text == Key.DownArrow) {
+                        root.nudge(0px, e.modifiers.shift ? root.grid-step : 1px);
+                        accept
+                    } else if (e.modifiers.control && root.has-selection) {
+                        if (e.text == "]") {
+                            if (e.modifiers.shift) {
+                                root.front-item(root.selected-index);
+                            } else {
+                                root.raise-item(root.selected-index);
+                            }
+                            accept
+                        } else if (e.text == "[") {
+                            if (e.modifiers.shift) {
+                                root.back-item(root.selected-index);
+                            } else {
+                                root.lower-item(root.selected-index);
+                            }
+                            accept
+                        } else {
+                            reject
                         }
-                        resized(dx, dy) => {
-                            root.items[i].width = max(16px, item.width + dx);
-                            root.items[i].height = max(16px, item.height + dy);
+                    } else {
+                        reject
+                    }
+                }
+
+                canvas-scroll := ScrollView {
+                    viewport-width: 1600px;
+                    viewport-height: 1100px;
+                    Rectangle {
+                        width: 1600px;
+                        height: 1100px;
+                        background: Theme.background;
+
+                        // Faint grid, purely a placement aid. Follows the snap
+                        // setting so what is drawn is what a drag lands on.
+                        for gx in root.grid-columns: Rectangle {
+                            x: gx * root.grid-draw-step;
+                            width: 1px;
+                            height: 100%;
+                            background: Theme.panel;
                         }
-                        remove => { root.remove-item(i); }
-                        value-changed(v) => { root.items[i].value = v; }
-                        label-changed(t) => { root.items[i].text = t; }
+                        for gy in root.grid-rows: Rectangle {
+                            y: gy * root.grid-draw-step;
+                            height: 1px;
+                            width: 100%;
+                            background: Theme.panel;
+                        }
+
+                        background-touch := TouchArea {
+                            clicked => { root.selected-index = -1; canvas-keys.focus(); }
+                        }
+
+                        for item[i] in root.items: PlacedItem {
+                            item: item;
+                            selected: root.selected-index == i;
+                            select => { root.selected-index = i; canvas-keys.focus(); }
+                            moved(dx, dy, bypass) => {
+                                root.items[i].x = max(0px, root.snap(item.x + dx, bypass));
+                                root.items[i].y = max(0px, root.snap(item.y + dy, bypass));
+                            }
+                            resized(dx, dy, bypass) => {
+                                root.items[i].width = max(16px, root.snap(item.width + dx, bypass));
+                                root.items[i].height = max(16px, root.snap(item.height + dy, bypass));
+                            }
+                            remove => { root.remove-item(i); }
+                            value-changed(v) => { root.items[i].value = v; }
+                            text-changed(t) => { root.items[i].text = t; }
+                        }
                     }
                 }
             }
 
             Rectangle {
-                width: 220px;
+                width: 240px;
                 background: Theme.panel;
-                if root.selected-index >= 0 && root.selected-index < root.items.length: VerticalBox {
-                    padding: 8px;
-                    spacing: 8px;
-                    SectionLabel { text: MockupKinds.names[root.items[root.selected-index].kind]; }
+                if root.has-selection: ScrollView {
+                    VerticalBox {
+                        padding: 8px;
+                        spacing: 10px;
 
-                    Text { text: "Label"; color: Theme.text-faint; font-size: 9px; }
-                    Rectangle {
-                        height: 22px;
-                        background: Theme.surface;
-                        border-radius: Theme.radius-sm;
-                        TextInput {
-                            x: 4px;
-                            width: parent.width - 8px;
-                            height: parent.height;
-                            color: Theme.text;
-                            font-size: 10px;
-                            vertical-alignment: center;
-                            text: root.items[root.selected-index].label;
-                            edited => { root.items[root.selected-index].label = self.text; }
+                        PropertySection {
+                            title: "IDENTITY";
+                            Text {
+                                text: root.selected-kind.name;
+                                color: Theme.text;
+                                font-size: 11px;
+                            }
+                            Text {
+                                text: root.selected-kind.component + "  \u{2022}  "
+                                    + root.selected-kind.module;
+                                color: Theme.text-faint;
+                                font-size: 8px;
+                                overflow: elide;
+                            }
                         }
-                    }
 
-                    Text { text: "Value"; color: Theme.text-faint; font-size: 9px; }
-                    ParameterFader {
-                        value: root.items[root.selected-index].value;
-                        width: 100%;
-                        changed(v) => { root.items[root.selected-index].value = v; }
-                    }
-
-                    Text { text: "Note text"; color: Theme.text-faint; font-size: 9px; }
-                    Rectangle {
-                        height: 60px;
-                        background: Theme.surface;
-                        border-radius: Theme.radius-sm;
-                        TextInput {
-                            x: 4px;
-                            y: 4px;
-                            width: parent.width - 8px;
-                            height: parent.height - 8px;
-                            color: Theme.text;
-                            font-size: 10px;
-                            wrap: word-wrap;
-                            single-line: false;
-                            text: root.items[root.selected-index].text;
-                            edited => { root.items[root.selected-index].text = self.text; }
+                        PropertySection {
+                            title: "GEOMETRY";
+                            HorizontalLayout {
+                                spacing: 4px;
+                                StepperField {
+                                    label: "X";
+                                    value: root.items[root.selected-index].x / 1px;
+                                    minimum: 0;
+                                    maximum: 1600;
+                                    step: root.grid-step / 1px;
+                                    changed(v) => { root.items[root.selected-index].x = v * 1px; }
+                                }
+                                StepperField {
+                                    label: "Y";
+                                    value: root.items[root.selected-index].y / 1px;
+                                    minimum: 0;
+                                    maximum: 1100;
+                                    step: root.grid-step / 1px;
+                                    changed(v) => { root.items[root.selected-index].y = v * 1px; }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 4px;
+                                StepperField {
+                                    label: "W";
+                                    enabled: !root.selected-kind.device-units
+                                        && !root.items[root.selected-index].locked;
+                                    value: root.items[root.selected-index].width / 1px;
+                                    minimum: 8;
+                                    maximum: 1600;
+                                    step: root.grid-step / 1px;
+                                    changed(v) => { root.items[root.selected-index].width = v * 1px; }
+                                }
+                                StepperField {
+                                    label: "H";
+                                    enabled: !root.selected-kind.device-units
+                                        && !root.items[root.selected-index].locked;
+                                    value: root.items[root.selected-index].height / 1px;
+                                    minimum: 8;
+                                    maximum: 1100;
+                                    step: root.grid-step / 1px;
+                                    changed(v) => { root.items[root.selected-index].height = v * 1px; }
+                                }
+                            }
                         }
-                    }
 
-                    Rectangle { vertical-stretch: 1; }
-                    ToolButton {
-                        text: "Delete";
-                        clicked => { root.remove-item(root.selected-index); }
+                        if root.selected-kind.device-units: PropertySection {
+                            title: "RACK SIZE";
+                            SegmentedControl {
+                                height: 26px;
+                                options: ["\u{00bd}U", "1U", "2U", "3U"];
+                                selected-index: root.items[root.selected-index].half-unit
+                                    ? 0 : root.items[root.selected-index].units;
+                                selected(i) => {
+                                    root.apply-units(root.selected-index, i == 0 ? 1 : i, i == 0);
+                                }
+                            }
+                            Text {
+                                text: round(root.items[root.selected-index].width / 1px) + " \u{00d7} "
+                                    + round(root.items[root.selected-index].height / 1px) + " px";
+                                color: Theme.text-faint;
+                                font-size: 8px;
+                            }
+                        }
+
+                        PropertySection {
+                            title: "CONTENT";
+                            NameField {
+                                width: 100%;
+                                text: root.items[root.selected-index].label;
+                                placeholder: "Label";
+                                tooltip: "Label";
+                                edited(t) => { root.items[root.selected-index].label = t; }
+                            }
+                            if root.selected-kind.behavior >= 1 && root.selected-kind.behavior <= 3:
+                            ParameterFader {
+                                label: "VALUE";
+                                width: 100%;
+                                value: root.items[root.selected-index].value;
+                                changed(v) => { root.items[root.selected-index].value = v; }
+                            }
+                            if root.selected-kind.behavior == 4: Rectangle {
+                                height: 60px;
+                                background: Theme.surface;
+                                border-radius: Theme.radius-sm;
+                                TextInput {
+                                    x: 4px;
+                                    y: 4px;
+                                    width: parent.width - 8px;
+                                    height: parent.height - 8px;
+                                    color: Theme.text;
+                                    font-size: 10px;
+                                    wrap: word-wrap;
+                                    single-line: false;
+                                    text: root.items[root.selected-index].text;
+                                    edited => { root.items[root.selected-index].text = self.text; }
+                                }
+                            }
+                        }
+
+                        PropertySection {
+                            title: "ORDER";
+                            HorizontalLayout {
+                                spacing: 4px;
+                                ToolButton {
+                                    text: "\u{21c8}";
+                                    tooltip: "Bring to front (Ctrl+Shift+])";
+                                    clicked => { root.front-item(root.selected-index); }
+                                }
+                                ToolButton {
+                                    text: "\u{2191}";
+                                    tooltip: "Bring forward (Ctrl+])";
+                                    clicked => { root.raise-item(root.selected-index); }
+                                }
+                                ToolButton {
+                                    text: "\u{2193}";
+                                    tooltip: "Send backward (Ctrl+[)";
+                                    clicked => { root.lower-item(root.selected-index); }
+                                }
+                                ToolButton {
+                                    text: "\u{21ca}";
+                                    tooltip: "Send to back (Ctrl+Shift+[)";
+                                    clicked => { root.back-item(root.selected-index); }
+                                }
+                            }
+                            Text {
+                                text: (root.selected-index + 1) + " of " + root.count;
+                                color: Theme.text-faint;
+                                font-size: 8px;
+                            }
+                        }
+
+                        PropertySection {
+                            title: "OPERATIONS";
+                            HorizontalLayout {
+                                spacing: 4px;
+                                ToolButton {
+                                    text: "Duplicate";
+                                    clicked => { root.duplicate-item(root.selected-index); }
+                                }
+                                ToolButton {
+                                    text: root.items[root.selected-index].locked ? "Unlock" : "Lock";
+                                    tooltip: "A locked item still selects, but ignores move and resize";
+                                    active: root.items[root.selected-index].locked;
+                                    clicked => {
+                                        root.items[root.selected-index].locked
+                                            = !root.items[root.selected-index].locked;
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 4px;
+                                ToolButton {
+                                    text: "Reset size";
+                                    tooltip: "Back to the catalog's default size";
+                                    clicked => {
+                                        if (root.selected-kind.device-units) {
+                                            root.apply-units(root.selected-index, 1, false);
+                                        } else {
+                                            root.items[root.selected-index].width
+                                                = root.selected-kind.default-width;
+                                            root.items[root.selected-index].height
+                                                = root.selected-kind.default-height;
+                                        }
+                                    }
+                                }
+                                ToolButton {
+                                    text: "Delete";
+                                    text-color: Theme.destructive;
+                                    clicked => { root.remove-item(root.selected-index); }
+                                }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
                     }
                 }
-                if root.selected-index < 0: VerticalBox {
+                if !root.has-selection: VerticalBox {
                     padding: 8px;
                     Text {
-                        text: "Click a palette item to place it. Drag it to move, the corner dot to resize. Selecting it reveals a tab above with its name and a \u{2715} to delete. Hold Ctrl and drag a knob or fader to change its value, or Ctrl-click a button, toggle, or LED to fire it, instead of moving it.";
+                        text: "Click a palette item to place it. Drag it to move, the corner dot to resize; hold Alt to ignore the snap grid. Arrow keys nudge, Shift+arrow by a grid step, Delete removes. Ctrl+] and Ctrl+[ reorder, with Shift for front and back. Hold Ctrl and drag a knob or fader to change its value, or Ctrl-click a button, toggle, or LED to fire it.";
                         color: Theme.text-faint;
                         font-size: 10px;
                         wrap: word-wrap;

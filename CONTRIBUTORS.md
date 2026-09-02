@@ -38,8 +38,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-01
-- Sessions: 30
+- Last seen: 2026-09-02
+- Sessions: 31
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -398,6 +398,16 @@ work session you can recall being part of, and don't stress over precision.
   band was still being drawn in slice mode, where the loop is the slice and
   the global loop points describe nothing, and only one of the two loop
   markers had been greyed.
+  Then promoted the mockup tool from a toy to something worth reaching for.
+  The blocker was never the features, it was that adding one widget meant
+  editing five ordered lists across three files, so nobody did: one catalog in
+  `mockup-catalog.slint` now feeds the palette, the render switch, the default
+  sizes and the drag behaviour, and both copies of the Rust half collapsed
+  into `src/mockup.rs`. Saved layouts key on component name rather than
+  palette index, so reordering the catalog stops corrupting them. `build.rs`
+  scans `ui/` for exported components and the tool subtracts its own catalog
+  from that, which is the part that keeps paying: the gap shows up in the
+  palette as an UNCATALOGUED group rather than in someone's memory.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
