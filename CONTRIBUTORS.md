@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-02
-- Sessions: 31
+- Sessions: 32
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -416,6 +416,13 @@ work session you can recall being part of, and don't stress over precision.
   `DisplayPrefs.smooth-curves` reaches only 4 of the 17 hand-rolled plots, and
   the mono and poly LFO glyphs are the same hardcoded cubic sitting under a
   waveform selector neither of them reads.
+  Measured where `mooloop-ui`'s build time actually goes: `build.rs` spends
+  14s compiling Slint, and rustc then spends 336s on the 488k lines it emits.
+  A quarter of that module was developer-only surfaces `main.slint` re-exports
+  into the same root document, so `cargo run -p mooloop-app` compiled them
+  too. Dropped `gallery.slint`, the largest at 16.5%: the mockup tool's
+  catalog now covers every widget the gallery hand-listed, so it was a second
+  list to keep in step for no coverage the audit does not already give.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

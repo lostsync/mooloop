@@ -17,8 +17,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     // The properties panel and the layers list only exist once something is
-    // selected, so a snapshot of either needs to say what, the way the
-    // gallery's MOOLOOP_GALLERY_DIALOG opens its dialog.
+    // selected, so a snapshot of either needs to say what.
     if let Ok(index) = std::env::var("MOOLOOP_MOCKUP_SELECT") {
         if let Ok(index) = index.trim().parse() {
             canvas.set_selected_index(index);
@@ -33,7 +32,7 @@ fn main() -> Result<(), slint::PlatformError> {
     };
 
     // The canvas is wider than a default window, so let the capture size be
-    // overridden (MOOLOOP_MOCKUP_SIZE=1400x900) the way the gallery does.
+    // overridden (MOOLOOP_MOCKUP_SIZE=1400x900).
     let (width, height) = std::env::var("MOOLOOP_MOCKUP_SIZE")
         .ok()
         .and_then(|spec| {

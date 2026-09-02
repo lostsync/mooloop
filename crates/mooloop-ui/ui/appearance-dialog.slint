@@ -811,9 +811,8 @@ export component PreferencesDialog inherits Rectangle {
                             // binding it to the page's own preferred height is
                             // circular (the child is sized by the viewport it
                             // would define) and Slint breaks that loop by
-                            // collapsing everything below the fold. Same fixed
-                            // -viewport idiom the control gallery uses. Keep
-                            // this in step with the page's content height.
+                            // collapsing everything below the fold. Keep the
+                            // constant in step with the page's content height.
                             vertical-stretch: 1;
                             viewport-width: self.visible-width;
                             viewport-height: 684px;

@@ -31,7 +31,7 @@ Scope:
 - Add per-channel meters through the existing strip; volume and pan are exposed.
 - Replace terse implementation-style tooltips with user-facing wording, and
   consider a status bar for longer hover text.
-- Keep the UI control gallery as the interaction contract.
+- Keep the mockup tool's catalog as the interaction contract.
 
 Exit criteria:
 

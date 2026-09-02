@@ -25,7 +25,6 @@ const AUDIT_IGNORE_SUFFIXES: &[&str] = &["Dialog", "DeviceFace", "DragHarness"];
 /// and their rows, and the mockup tool's own parts.
 const AUDIT_IGNORE: &[&str] = &[
     "AppearancePage",
-    "ControlGallery",
     "DeviceRackConcepts",
     "GestureRowView",
     "JackControlSurface",

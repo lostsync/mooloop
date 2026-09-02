@@ -75,13 +75,15 @@ cargo run -p mooloop-app --bin engine-selftest -j 2
 MOOLOOP_AUTODRIVE=1 cargo run -p mooloop-app --bin mooloop -j 2
 ```
 
-The last command exercises the app's automated smoke path. For UI work, the
-software-rendered gallery is the useful visual check:
+The last command exercises the app's automated smoke path. For UI work, a
+software-rendered sheet of the real widgets is the useful visual check --
+the mockup tool, loaded with a saved layout:
 
 ```sh
-SLINT_BACKEND=winit-software MOOLOOP_GALLERY_SNAPSHOT=/tmp/gallery.ppm \
-  MOOLOOP_GALLERY_SIZE=1000x1800 cargo run -p mooloop-ui --example control-gallery
-magick /tmp/gallery.ppm /tmp/gallery.png
+SLINT_BACKEND=winit-software MOOLOOP_MOCKUP_SNAPSHOT=/tmp/widgets.ppm \
+  MOOLOOP_MOCKUP_LAYOUT=crates/mooloop-ui/tests/fixtures/widget-sheet.toml \
+  MOOLOOP_MOCKUP_SIZE=1400x900 cargo run -p mooloop-ui --example mockup
+magick /tmp/widgets.ppm /tmp/widgets.png
 ```
 
 ## Diagnostic Log

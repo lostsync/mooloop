@@ -355,8 +355,8 @@ the full workspace test suite once, not per-commit. Along the way:
 - For the UI, use the headless software-rendering path documented in
   `AGENTS.md` ("Checking the UI / taking screenshots") rather than trying to
   eyeball it live — `SLINT_BACKEND=winit-software` plus the playlist
-  snapshot test pattern, or the control-gallery example if you add the new
-  `FilterDeviceFace` to it.
+  snapshot test pattern, or the mockup tool if you add the new
+  `FilterDeviceFace` to its catalog.
 - Actually running the live app (real JACK audio, turning the filter knob
   and hearing it work) is worth doing once at the end, using the headless
   `agent` Hyprland workspace described in `AGENTS.md` — don't skip straight
