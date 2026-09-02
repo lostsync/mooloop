@@ -3248,6 +3248,7 @@ export component MainWindow inherits Window {
                                                         spread: slot.p5;
                                                         tone: slot.p6;
                                                         stages: slot.p7;
+                                                        wet-dry: slot.wet-dry;
                                                         mode-changed(i) => { root.effect-param-changed(index, 0, i * 1.0 / 4.0); }
                                                         rate-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                         depth-changed(v) => { root.effect-param-changed(index, 2, v); }
@@ -3256,6 +3257,7 @@ export component MainWindow inherits Window {
                                                         spread-changed(v) => { root.effect-param-changed(index, 5, v); }
                                                         tone-changed(v) => { root.effect-param-changed(index, 6, v); }
                                                         stages-changed(v) => { root.effect-param-changed(index, 7, v); }
+                                                        wet-dry-changed(v) => { root.effect-wet-dry-changed(index, v); }
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                     if slot.kind == 10 : PlateDeviceFace {
