@@ -30,12 +30,14 @@
 use crate::bus::{pan_gains, StereoBus};
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
+use crate::filter::{soft_ceiling, PreDrive, Svf};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{sync_blep, Noise, Osc};
+use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::{
-    mlp8::xmod_index, MlP8Params, OscWave, SubWave, MLP8_VOICES,
+    mlp8::xmod_index, MlP8FilterMode, MlP8Params, OscWave, SubWave, MLP8_VOICES,
 };
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
@@ -69,6 +71,28 @@ const PHASE_BOUND_CYCLES: f32 = 4.0;
 /// there. Well under the smallest step the level control can make and well
 /// over `f32`'s subnormal range.
 const LEVEL_EPSILON: f32 = 1.0e-6;
+
+/// Middle C (MIDI 60). Keytracking is referenced here, so a patch voiced
+/// around the middle of the keyboard keeps its cutoff where it was set.
+const KEYTRACK_REFERENCE_HZ: f32 = 261.625_58;
+
+/// Octaves the filter envelope sweeps at full depth.
+const FILTER_ENV_OCTAVES: f32 = 6.0;
+
+/// What the voice feedback control reaches at its extremes, as a fraction of
+/// the filter's own output fed back to its input.
+///
+/// Chosen so the top of the knob sustains rather than merely gets loud: below
+/// this the loop is a colour, above it the drive inside the loop is doing all
+/// the work and the control stops changing anything. The bound is the drive
+/// stage and [`soft_ceiling`], not a limiter after the voice sum -- that is
+/// the plan's rule and it is what keeps feedback a timbre rather than a
+/// volume.
+const VOICE_FEEDBACK_RANGE: f32 = 1.15;
+
+/// Cutoff below which the filter is treated as open and skipped entirely.
+/// The normalized scale is perceptual, so this is the very top of the knob.
+const FILTER_OPEN: f32 = 0.999;
 
 /// One-pole corner the dark end of Noise Color rolls down to.
 const NOISE_DARK_HZ: f32 = 700.0;
@@ -177,6 +201,82 @@ impl ColoredNoise {
     }
 }
 
+/// The voice's multimode filter: two cascaded state-variable stages, of which
+/// the second only runs for the four-pole mode.
+///
+/// A response menu, not a character menu. The ML-M1's Model switch chooses
+/// between three *different filters* with different saturation, and it needs
+/// per-model makeup gain because they are not the same circuit. These four
+/// come off one linear stage, so the only compensation they need is the one
+/// below, and it is about slope rather than about character.
+#[derive(Clone, Copy)]
+struct VoiceFilter {
+    first: Svf,
+    second: Svf,
+}
+
+impl VoiceFilter {
+    fn new() -> Self {
+        Self {
+            first: Svf::new(),
+            second: Svf::new(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.first.reset();
+        self.second.reset();
+    }
+
+    fn next_sample(
+        &mut self,
+        mode: MlP8FilterMode,
+        input: f32,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> f32 {
+        match mode {
+            MlP8FilterMode::Lp12 => self.first.next_sample(input, cutoff_hz, resonance, sample_rate),
+            MlP8FilterMode::Lp24 => {
+                // Two identical stages put the -3 dB point most of an octave
+                // below one stage's, so the Cutoff knob would mean two
+                // different frequencies depending on the slope. The corner is
+                // pushed up by the amount a cascade drops it, and the
+                // resonance is split so the pair peaks about as hard as the
+                // single stage rather than twice as hard.
+                let corrected = (cutoff_hz * LP24_CORNER_SCALE).min(sample_rate as f32 * 0.45);
+                let shared = resonance * LP24_RESONANCE_SHARE;
+                let first = self
+                    .first
+                    .next_sample(input, corrected, shared, sample_rate);
+                self.second
+                    .next_sample(first, corrected, shared, sample_rate)
+            }
+            MlP8FilterMode::Bp12 => {
+                self.first
+                    .next_sample_lp_bp_hp(input, cutoff_hz, resonance, sample_rate)
+                    .1
+            }
+            MlP8FilterMode::Hp12 => {
+                self.first
+                    .next_sample_lp_hp(input, cutoff_hz, resonance, sample_rate)
+                    .1
+            }
+        }
+    }
+}
+
+/// Cutoff multiplier that puts LP24's corner where LP12's is. Two cascaded
+/// one-pole-pair sections reach -3 dB at `sqrt(sqrt(2) - 1)` of a single
+/// section's corner; this is its reciprocal.
+const LP24_CORNER_SCALE: f32 = 1.553_774;
+
+/// How much of the Resonance knob each LP24 stage gets. Resonance compounds
+/// through a cascade, so splitting it keeps the knob meaning roughly the same
+/// amount of peak in both low-pass modes.
+const LP24_RESONANCE_SHARE: f32 = 0.62;
+
 /// One physical voice. Eight of these exist for the life of the device.
 struct Voice {
     active: bool,
@@ -188,6 +288,17 @@ struct Voice {
     /// order notes arrived in.
     slot: u32,
     env: Adsr,
+    filter_env: Adsr,
+    filter: VoiceFilter,
+    drive: PreDrive,
+    /// The filter's previous output. The explicit one sample of delay that
+    /// makes the voice's feedback loop causal, exactly as `taps` does for the
+    /// oscillator network.
+    feedback_tap: f32,
+    /// Blocks the DC a resonant filter under asymmetric drive can accumulate
+    /// in the loop; without it a feedback patch slowly walks off centre.
+    dc_x: f32,
+    dc_y: f32,
     oscs: [Osc; 3],
     /// Each oscillator's previous pre-Level sample. This is the modulation
     /// tap, and the one sample of delay that makes the cyclic graph causal.
@@ -206,6 +317,9 @@ struct Voice {
     osc_level: [Smoothed; 3],
     sub_level: Smoothed,
     noise_level: Smoothed,
+    cutoff: Smoothed,
+    drive_amount: Smoothed,
+    feedback: Smoothed,
 }
 
 impl Voice {
@@ -218,6 +332,12 @@ impl Voice {
             age: 0,
             slot,
             env: Adsr::new(sample_rate),
+            filter_env: Adsr::new(sample_rate),
+            filter: VoiceFilter::new(),
+            drive: PreDrive::new(),
+            feedback_tap: 0.0,
+            dc_x: 0.0,
+            dc_y: 0.0,
             oscs: [Osc::new(); 3],
             taps: [0.0; 3],
             sync_carry: [0.0; 3],
@@ -231,6 +351,9 @@ impl Voice {
             osc_level: [smoothed(0.0); 3],
             sub_level: smoothed(0.0),
             noise_level: smoothed(0.0),
+            cutoff: smoothed(1.0),
+            drive_amount: smoothed(0.0),
+            feedback: smoothed(0.0),
         }
     }
 
@@ -247,6 +370,23 @@ impl Voice {
         self.sub_carry = 0.0;
         self.noise.reset(noise_seed(self.slot));
         self.noise_tap = 0.0;
+        self.filter.reset();
+        self.drive = PreDrive::new();
+        self.clear_loop();
+    }
+
+    /// Forget what the feedback loop was holding.
+    ///
+    /// Separate from [`Self::restart`] because it happens in two places that
+    /// restart does not cover: when a slot falls idle, and when a *sounding*
+    /// slot is stolen. Stealing deliberately keeps the oscillator phases —
+    /// restarting them under a running envelope is a click — but keeping the
+    /// loop as well would let the new note be played by the old note's tail,
+    /// which is the one thing the plan says a reassigned slot must not do.
+    fn clear_loop(&mut self) {
+        self.feedback_tap = 0.0;
+        self.dc_x = 0.0;
+        self.dc_y = 0.0;
     }
 
     fn snap_to(&mut self, params: &MlP8Params, velocity_amp: f32) {
@@ -256,6 +396,9 @@ impl Voice {
         }
         self.sub_level.reset_to(params.sub_level.clamp(0.0, 1.0));
         self.noise_level.reset_to(params.noise_level.clamp(0.0, 1.0));
+        self.cutoff.reset_to(params.filter_cutoff.clamp(0.0, 1.0));
+        self.drive_amount.reset_to(params.drive.clamp(0.0, 1.0));
+        self.feedback.reset_to(params.voice_feedback.clamp(-1.0, 1.0));
     }
 }
 
@@ -288,6 +431,16 @@ struct Prepared {
     sub_wave: OscWave,
     sub_needed: bool,
     color: NoiseColor,
+    mode: MlP8FilterMode,
+    resonance: f32,
+    env_amount: f32,
+    filter_velocity: f32,
+    keytrack: f32,
+    amp_velocity: f32,
+    max_hz: f32,
+    /// Whether the filter can be skipped for the whole range. Only true when
+    /// it is wide open, unresonant, and nothing is moving it.
+    filter_open: bool,
 }
 
 impl Prepared {
@@ -355,6 +508,23 @@ impl Prepared {
             },
             sub_needed,
             color: NoiseColor::new(sample_rate),
+            mode: params.filter_mode,
+            resonance: params.filter_resonance.clamp(0.0, 1.0),
+            env_amount: params.filter_env_amount.clamp(-1.0, 1.0),
+            filter_velocity: params.filter_velocity.clamp(-1.0, 1.0),
+            keytrack: params.filter_keytrack.clamp(0.0, 2.0),
+            amp_velocity: params.amp_velocity.clamp(0.0, 1.0),
+            max_hz: sample_rate as f32 * 0.45,
+            // A band-pass or high-pass at the top of its range is not "no
+            // filter", so only the low-pass modes can be skipped.
+            filter_open: matches!(params.filter_mode, MlP8FilterMode::Lp12 | MlP8FilterMode::Lp24)
+                && params.filter_cutoff >= FILTER_OPEN
+                && params.filter_resonance <= f32::EPSILON
+                && params.filter_env_amount.abs() <= f32::EPSILON
+                && params.filter_velocity.abs() <= f32::EPSILON
+                && params.filter_keytrack <= f32::EPSILON
+                && params.drive <= f32::EPSILON
+                && params.voice_feedback.abs() <= f32::EPSILON,
         }
     }
 }
@@ -406,6 +576,12 @@ impl MlP8 {
                 self.params.decay,
                 self.params.sustain,
                 self.params.release,
+            );
+            voice.filter_env.configure(
+                self.params.filter_attack,
+                self.params.filter_decay,
+                self.params.filter_sustain,
+                self.params.filter_release,
             );
         }
     }
@@ -460,11 +636,15 @@ impl MlP8 {
             voice.current_freq = voice.target_freq;
             voice.restart();
             voice.snap_to(&self.params, velocity_amp);
-        } else if self.params.glide <= MIN_GLIDE_S {
-            voice.current_freq = voice.target_freq;
+        } else {
+            voice.clear_loop();
+            if self.params.glide <= MIN_GLIDE_S {
+                voice.current_freq = voice.target_freq;
+            }
         }
         voice.velocity_amp.set_target(velocity_amp);
         voice.env.note_on();
+        voice.filter_env.note_on();
     }
 
     fn note_off(&mut self, event_id: u64) {
@@ -474,6 +654,7 @@ impl MlP8 {
             .filter(|voice| voice.active && voice.event_id == event_id)
         {
             voice.env.release();
+            voice.filter_env.release();
         }
     }
 
@@ -481,6 +662,7 @@ impl MlP8 {
         for voice in &mut self.voices {
             if voice.active && !voice.env.is_releasing() {
                 voice.env.release_with(STOP_RELEASE_S);
+                voice.filter_env.release_with(STOP_RELEASE_S);
             }
         }
     }
@@ -503,6 +685,11 @@ impl MlP8 {
             voice
                 .noise_level
                 .set_target(params.noise_level.clamp(0.0, 1.0));
+            voice.cutoff.set_target(params.filter_cutoff.clamp(0.0, 1.0));
+            voice.drive_amount.set_target(params.drive.clamp(0.0, 1.0));
+            voice
+                .feedback
+                .set_target(params.voice_feedback.clamp(-1.0, 1.0));
         }
 
         for frame in start..end {
@@ -511,15 +698,22 @@ impl MlP8 {
                     continue;
                 }
                 voice.env.advance();
+                voice.filter_env.advance();
                 if voice.env.is_idle() {
                     voice.active = false;
+                    voice.clear_loop();
                     continue;
                 }
                 voice.current_freq +=
                     (voice.target_freq - voice.current_freq) * (1.0 - glide_coeff);
                 let velocity = voice.velocity_amp.advance();
                 let mix = voice.next_sample(&prepared, sr);
-                let sample = mix * voice.env.level() * velocity * VOICE_OUTPUT_REFERENCE;
+                let shaped = voice.shape(&prepared, mix, velocity, sr);
+                // Velocity at the VCA is a crossfade from "every note the
+                // same" to "every note as played", not a multiply -- at zero
+                // depth a soft note is a full-level note rather than silence.
+                let amp = 1.0 - prepared.amp_velocity * (1.0 - velocity);
+                let sample = shaped * voice.env.level() * amp * VOICE_OUTPUT_REFERENCE;
                 bus.l[frame] += sample * gain_l;
                 bus.r[frame] += sample * gain_r;
             }
@@ -644,6 +838,65 @@ impl Voice {
     }
 }
 
+impl Voice {
+    /// The nonlinear half of the voice: the feedback loop, the drive inside
+    /// it, and the filter.
+    ///
+    /// The order is the design decision. Drive sits *before* the filter and
+    /// *inside* the loop, so it is what bounds the loop's energy — which is
+    /// what makes feedback change the tone rather than only the gain. A
+    /// limiter after the voice sum would have been the easy version and would
+    /// have made the control a volume knob with a ceiling.
+    fn shape(&mut self, prep: &Prepared, mix: f32, velocity: f32, sample_rate: u32) -> f32 {
+        let cutoff = self.cutoff.advance();
+        let drive = self.drive_amount.advance();
+        let feedback = self.feedback.advance();
+        if prep.filter_open && feedback == 0.0 && drive == 0.0 {
+            return mix;
+        }
+
+        // One sample of delay, bounded before it re-enters. `soft_ceiling` is
+        // exactly transparent below its knee, so an ordinary patch is
+        // untouched and only a runaway meets it.
+        let returned = soft_ceiling(self.feedback_tap * feedback * VOICE_FEEDBACK_RANGE);
+        let driven = self.drive.next_sample(mix + returned, drive, sample_rate);
+
+        let base_hz = hz_from_normalized(cutoff, prep.max_hz);
+        // Keytracking reads the *gliding* frequency, so a slide sweeps the
+        // filter with the pitch instead of stepping at the note boundary.
+        let tracked = if prep.keytrack <= 0.0 {
+            base_hz
+        } else {
+            let octaves = (self.current_freq.max(1.0) / KEYTRACK_REFERENCE_HZ).log2();
+            base_hz * (octaves * prep.keytrack).exp2()
+        };
+        // Velocity adds to the envelope's depth rather than scaling it, so a
+        // patch with no envelope amount can still be played into the filter.
+        let depth = prep.env_amount + prep.filter_velocity * velocity;
+        let cutoff_hz =
+            (tracked * (self.filter_env.level() * depth * FILTER_ENV_OCTAVES).exp2())
+                .clamp(20.0, prep.max_hz);
+
+        let filtered =
+            self.filter
+                .next_sample(prep.mode, driven, cutoff_hz, prep.resonance, sample_rate);
+
+        // A resonant filter driven asymmetrically walks off centre, and in a
+        // loop that offset compounds. One-pole DC blocker on the tap only, so
+        // the audible path keeps whatever bias the patch actually has.
+        let blocked = filtered - self.dc_x + DC_BLOCK_COEFF * self.dc_y;
+        self.dc_x = filtered;
+        self.dc_y = blocked;
+        self.feedback_tap = blocked;
+        filtered
+    }
+}
+
+/// One-pole DC blocker coefficient: a corner around 5 Hz at any supported
+/// sample rate, which is below the lowest note and above where a drifting
+/// offset becomes a problem.
+const DC_BLOCK_COEFF: f32 = 0.999;
+
 impl AudioNode for MlP8 {
     fn process(
         &mut self,
@@ -680,7 +933,7 @@ mod tests {
     use super::*;
     use crate::event::TimedEvent;
     use mooloop_core::mlp8::xmod_index;
-    use mooloop_core::{SubOctave, SubSource, SyncSource};
+    use mooloop_core::{MlP8FilterMode, SubOctave, SubSource, SyncSource};
 
     const SR: u32 = 48_000;
 
@@ -1134,6 +1387,312 @@ mod tests {
             "the ramp never finished: {}",
             bus.l[TAIL - 1]
         );
+    }
+
+    /// Band energy around `hz`, as a share of the whole signal's. Enough to
+    /// answer "did this mode keep the lows or throw them away".
+    fn band_share(signal: &[f32], low_hz: f32, high_hz: f32) -> f32 {
+        let n = signal.len();
+        let bin_hz = SR as f32 / n as f32;
+        let (mut band, mut total) = (0.0_f64, 0.0_f64);
+        for bin in 1..n / 2 {
+            let step = -core::f64::consts::TAU * bin as f64 / n as f64;
+            let (mut re, mut im) = (0.0_f64, 0.0_f64);
+            for (index, sample) in signal.iter().enumerate() {
+                let angle = step * index as f64;
+                re += *sample as f64 * angle.cos();
+                im += *sample as f64 * angle.sin();
+            }
+            let power = re * re + im * im;
+            total += power;
+            let hz = bin as f32 * bin_hz;
+            if hz >= low_hz && hz <= high_hz {
+                band += power;
+            }
+        }
+        (band / total.max(1.0e-12)) as f32
+    }
+
+    /// A bright patch to put through the filter: a saw with plenty above and
+    /// below the corner the tests move.
+    fn filter_bed() -> MlP8Params {
+        let mut params = init_saw();
+        params.filter_cutoff = 0.5;
+        params.sustain = 1.0;
+        params
+    }
+
+    /// Each mode has to do what its name says. Low-pass keeps the lows and
+    /// loses the highs, high-pass the reverse, band-pass keeps neither end.
+    #[test]
+    fn each_filter_mode_produces_its_own_response() {
+        let note = 45_u8; // A2, ~110 Hz: harmonics either side of the corner.
+        let mut shares = Vec::new();
+        for mode in [
+            MlP8FilterMode::Lp12,
+            MlP8FilterMode::Lp24,
+            MlP8FilterMode::Bp12,
+            MlP8FilterMode::Hp12,
+        ] {
+            let mut params = filter_bed();
+            params.filter_mode = mode;
+            let out = render(params, note, 4096);
+            assert!(out.iter().all(|s| s.is_finite()), "{mode:?} went non-finite");
+            // Just above the corner, not at the top of the spectrum: two
+            // octaves up both low-pass modes have thrown everything away and
+            // the comparison is between two noise floors. Slope is only
+            // visible where the skirts still have something in them.
+            let low = band_share(&out, 60.0, 160.0);
+            let high = band_share(&out, 1300.0, 2600.0);
+            println!("{mode:?}: low {low:.4}, high {high:.4}");
+            shares.push((mode, low, high));
+        }
+        let get = |m: MlP8FilterMode| shares.iter().find(|(k, _, _)| *k == m).unwrap();
+        let (_, lp12_low, lp12_high) = *get(MlP8FilterMode::Lp12);
+        let (_, lp24_low, lp24_high) = *get(MlP8FilterMode::Lp24);
+        let (_, hp_low, hp_high) = *get(MlP8FilterMode::Hp12);
+        let (_, bp_low, bp_high) = *get(MlP8FilterMode::Bp12);
+
+        // The low-passes keep the fundamental; the high-pass throws it away.
+        assert!(lp12_low > 0.1, "LP12 lost its low end: {lp12_low}");
+        assert!(
+            hp_low < lp12_low * 0.4,
+            "HP12 kept the lows: {hp_low} against LP12's {lp12_low}"
+        );
+        assert!(
+            hp_high > lp12_high * 5.0,
+            "HP12 has no top: {hp_high} against LP12's {lp12_high}"
+        );
+        // Four poles throw away more of the same top than two do. This is the
+        // assertion the whole mode set exists for, and it only means anything
+        // because the corner test below pins the two to the same frequency.
+        assert!(
+            lp24_high < lp12_high * 0.7,
+            "LP24 ({lp24_high}) is not steeper than LP12 ({lp12_high})"
+        );
+        // ...while keeping the same bottom, which is what makes "steeper"
+        // mean a steeper skirt rather than a lower corner.
+        assert!(
+            (lp24_low - lp12_low).abs() < lp12_low * 0.15,
+            "LP24 ({lp24_low}) moved the passband against LP12 ({lp12_low})"
+        );
+        // Band-pass rejects both ends: less bottom than a low-pass, less top
+        // than a high-pass.
+        assert!(bp_low < lp12_low, "BP12 kept as much bottom as LP12");
+        assert!(bp_high < hp_high, "BP12 kept as much top as HP12");
+    }
+
+    /// The Cutoff knob has to mean about the same frequency in both low-pass
+    /// modes, or switching slope becomes a tuning change.
+    #[test]
+    fn lp12_and_lp24_share_a_corner() {
+        // Measured where the two-pole response is already well down, so the
+        // comparison is about where the corner sits rather than how steep the
+        // skirt is.
+        let mut params = filter_bed();
+        params.filter_mode = MlP8FilterMode::Lp12;
+        let lp12 = band_share(&render(params, 45, 4096), 60.0, 400.0);
+        params.filter_mode = MlP8FilterMode::Lp24;
+        let lp24 = band_share(&render(params, 45, 4096), 60.0, 400.0);
+        let ratio = lp24 / lp12;
+        println!("passband share LP12 {lp12:.4}, LP24 {lp24:.4} (ratio {ratio:.2})");
+        assert!(
+            (0.8..=1.3).contains(&ratio),
+            "the corner moved between slopes: {ratio:.2}"
+        );
+    }
+
+    /// Amp Velocity is a depth on velocity, not a switch. At zero every note
+    /// is the same level; at full it follows the note.
+    #[test]
+    fn amp_velocity_crossfades_between_fixed_and_played() {
+        let peak = |depth: f32, velocity: u8| {
+            let mut params = init_saw();
+            params.amp_velocity = depth;
+            let mut synth = MlP8::new(params, SR);
+            let mut bus = StereoBus::with_capacity(4096);
+            let mut events = EventList::empty();
+            events.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id: 1,
+                    note: 60,
+                    velocity,
+                },
+            });
+            synth.process(&ctx(4096), &mut bus, &events, None);
+            bus.l[..4096].iter().fold(0.0_f32, |a, s| a.max(s.abs()))
+        };
+
+        let (soft, loud) = (peak(0.0, 32), peak(0.0, 127));
+        assert!(
+            (soft - loud).abs() < loud * 0.02,
+            "at zero depth velocity still moved the VCA: {soft} vs {loud}"
+        );
+        let (soft, loud) = (peak(1.0, 32), peak(1.0, 127));
+        assert!(
+            soft < loud * 0.4,
+            "at full depth velocity barely moved the VCA: {soft} vs {loud}"
+        );
+    }
+
+    /// Filter Velocity moves the filter and nothing else. It is bipolar and
+    /// must not become a second amplitude control.
+    #[test]
+    fn filter_velocity_never_moves_the_vca_by_itself() {
+        let peak = |velocity: u8| {
+            let mut params = init_saw();
+            // No amp velocity, so anything that moves the peak came from the
+            // filter path.
+            params.amp_velocity = 0.0;
+            params.filter_velocity = 1.0;
+            params.filter_cutoff = 1.0;
+            let mut synth = MlP8::new(params, SR);
+            let mut bus = StereoBus::with_capacity(4096);
+            let mut events = EventList::empty();
+            events.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id: 1,
+                    note: 60,
+                    velocity,
+                },
+            });
+            synth.process(&ctx(4096), &mut bus, &events, None);
+            bus.l[..4096].iter().fold(0.0_f32, |a, s| a.max(s.abs()))
+        };
+        let (soft, loud) = (peak(1), peak(127));
+        println!("filter-velocity peaks: soft {soft:.4}, loud {loud:.4}");
+        assert!(
+            (soft - loud).abs() < loud * 0.05,
+            "filter velocity changed the VCA: {soft} vs {loud}"
+        );
+    }
+
+    /// Keytrack at 100% moves the corner one octave per played octave, so a
+    /// patch voiced in the middle is not a thud at the top.
+    #[test]
+    fn keytrack_follows_the_played_octave() {
+        let brightness = |note: u8, keytrack: f32| {
+            let mut params = filter_bed();
+            params.filter_keytrack = keytrack;
+            band_share(&render(params, note, 4096), 2000.0, 12000.0)
+        };
+        // Two octaves up. Without tracking the note loses its top; with
+        // tracking the corner climbs with it.
+        let untracked_low = brightness(48, 0.0);
+        let untracked_high = brightness(72, 0.0);
+        let tracked_high = brightness(72, 1.0);
+        println!(
+            "high band: C3 {untracked_low:.4}, C5 off {untracked_high:.4}, C5 tracked {tracked_high:.4}"
+        );
+        assert!(
+            tracked_high > untracked_high * 1.5,
+            "keytrack did not open the filter for a higher note"
+        );
+    }
+
+    /// The loop has to reach unstable territory at both polarities and stay
+    /// finite there. The bound is the drive stage and the soft ceiling, not a
+    /// limiter after the sum.
+    #[test]
+    fn voice_feedback_travels_and_stays_bounded() {
+        let mut previous = 0.0_f32;
+        for amount in [0.0_f32, 0.35, 0.7, 1.0] {
+            for sign in [1.0_f32, -1.0] {
+                let mut params = filter_bed();
+                params.filter_resonance = 0.8;
+                params.drive = 0.4;
+                params.voice_feedback = amount * sign;
+                let out = render(params, 45, 8192);
+                assert!(
+                    out.iter().all(|s| s.is_finite() && s.abs() < 4.0),
+                    "feedback {amount} at sign {sign} left the bound"
+                );
+                if sign > 0.0 {
+                    let energy: f32 = out.iter().map(|s| s * s).sum::<f32>();
+                    if amount > 0.0 {
+                        assert!(
+                            energy > previous,
+                            "feedback {amount} added nothing over the step below"
+                        );
+                    }
+                    previous = energy;
+                }
+            }
+        }
+    }
+
+    /// Eight held notes must not hear each other. The filter and the feedback
+    /// delay are per voice, not a loop around the sum.
+    #[test]
+    fn voices_do_not_leak_filter_or_feedback_into_one_another() {
+        let mut params = filter_bed();
+        params.filter_resonance = 0.7;
+        params.voice_feedback = 0.8;
+        params.drive = 0.5;
+
+        // One note alone, then the same note inside a chord. Its own
+        // contribution cannot depend on what else is sounding, so the chord
+        // must be the sum of its parts.
+        let notes = [36, 43, 48, 55, 60, 67, 72, 79];
+        let chord = render_chord(params, &notes, 8192);
+        let mut summed = vec![0.0_f32; 8192];
+        for note in notes {
+            for (acc, s) in summed.iter_mut().zip(render(params, note, 8192)) {
+                *acc += s;
+            }
+        }
+        let worst = chord
+            .iter()
+            .zip(summed.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        println!("chord vs sum of voices, worst sample: {worst:.6}");
+        assert!(worst < 1.0e-4, "voices interacted: worst {worst}");
+    }
+
+    /// A stolen slot must not emit the previous note's feedback tail.
+    #[test]
+    fn a_stolen_slot_starts_from_a_clean_loop() {
+        let mut params = filter_bed();
+        params.voice_feedback = 0.9;
+        params.filter_resonance = 0.85;
+        params.drive = 0.6;
+        params.release = 0.001;
+
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(2048);
+        let mut events = EventList::empty();
+        for index in 0..8u8 {
+            events.push(note_on(0, u64::from(index) + 1, 40 + index * 4));
+        }
+        synth.process(&ctx(2048), &mut bus, &events, None);
+        for index in 0..8u8 {
+            let mut off = EventList::empty();
+            off.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOff {
+                    id: u64::from(index) + 1,
+                    note: 40 + index * 4,
+                },
+            });
+            bus.clear(2048);
+            synth.process(&ctx(2048), &mut bus, &off, None);
+        }
+        // Everything has been released and run out; nothing may still be
+        // holding energy in a loop.
+        for _ in 0..8 {
+            bus.clear(2048);
+            synth.process(&ctx(2048), &mut bus, &EventList::empty(), None);
+        }
+        assert!(
+            synth.voices.iter().all(|v| !v.active),
+            "a voice never went idle"
+        );
+        for voice in &synth.voices {
+            assert_eq!(voice.feedback_tap, 0.0, "an idle voice kept a feedback tail");
+        }
     }
 
     /// Eight is the pool. A ninth note takes the oldest slot rather than

@@ -1,13 +1,20 @@
 # ML-P8 plan status
 
-**Step 02 is in.** The device exists and plays: a new `MlP8` generator kind
+**Steps 02 and 03 are in.** The device exists and plays: a new `MlP8` generator kind
 beside the v1 poly synth, the three-oscillator network with all six directed
 XMOD routes, self-feedback, noise into every phase input, hard sync with a
 band-limited reset, a derived sub, deterministic coloured noise, eight fixed
-voices, an amplitude envelope, and a three-page face. 03 through 07 are next,
-in order.
+voices, and — from 03 — two envelopes, four filter modes, keytracking, both
+velocity depths, and a feedback loop around the filter with the drive inside
+it. 04 through 07 are next, in order.
 
-Two things step 02 turned up that the plan could not have known:
+The face is one screen, not pages: SOURCE, NETWORK, VOICE, divided by rules
+along the signal path. Its centre is a grid of every route in the voice —
+rows are sources, columns the oscillators they reach, the diagonal is an
+oscillator on itself, and a MIX column carries the levels, because a level is
+a route to the output. The left column's five tabs are that grid's five rows.
+
+Three things the steps turned up that the plan could not have known:
 
 - **The sync BLEP made aliasing worse until two mistakes were fixed** — the
   step height has to be measured on the *naive* waveform, and the oscillator's
@@ -17,6 +24,11 @@ Two things step 02 turned up that the plan could not have known:
   periodic at its master's rate and every alias product folds back onto the
   master's own harmonic grid. The test compares harmonic magnitudes against an
   eight-times-oversampled render instead.
+- **Clearing the feedback loop on `restart()` was not enough.** That only
+  runs for a *fresh* slot, and stealing a sounding voice deliberately keeps
+  its oscillator phases — restarting them under a running envelope is a
+  click. It was keeping the loop with them, which is exactly the tail step 03
+  says a reassigned slot must not emit.
 - **"Skip an oscillator nothing reads" needed a caveat.** The skip is decided
   once per block from the *target* levels, but levels are smoothed — so a
   level knob reaching zero un-needs an oscillator while its smoother is still

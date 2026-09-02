@@ -976,20 +976,52 @@ fn render_mlp8_source_editor() {
     assert_ne!(wired.as_bytes(), synced.as_bytes());
     write_snapshot(&synced, "MOOLOOP_MLP8_SYNC_SNAPSHOT");
 
-    // The oscillator column is tabbed; switching tabs redraws it while the
-    // network beside it stays put.
-    ui.set_mlp8_osc_selected(1);
-    let second = ui.window().take_snapshot().unwrap();
-    assert_ne!(synced.as_bytes(), second.as_bytes());
-    write_snapshot(&second, "MOOLOOP_MLP8_OSC2_SNAPSHOT");
+    // The source column's five tabs are the grid's five rows. Each shows
+    // controls the others do not have, so every one has to draw differently.
+    let mut previous = synced.as_bytes().to_vec();
+    for (tab, name) in [
+        (1, "MOOLOOP_MLP8_OSC2_SNAPSHOT"),
+        (3, "MOOLOOP_MLP8_SUB_SNAPSHOT"),
+        (4, "MOOLOOP_MLP8_NOISE_SNAPSHOT"),
+    ] {
+        ui.set_mlp8_source_selected(tab);
+        let shot = ui.window().take_snapshot().unwrap();
+        assert_ne!(previous, shot.as_bytes(), "source tab {tab} drew the last one");
+        write_snapshot(&shot, name);
+        previous = shot.as_bytes().to_vec();
+    }
 
-    ui.set_mlp8_osc_selected(0);
+    ui.set_mlp8_source_selected(0);
     ui.set_mlp8_sub_level(0.7);
     ui.set_mlp8_noise_level(0.4);
     ui.set_mlp8_noise_color(-70.0);
     let sources = ui.window().take_snapshot().unwrap();
     assert_ne!(synced.as_bytes(), sources.as_bytes());
     write_snapshot(&sources, "MOOLOOP_MLP8_SOURCES_SNAPSHOT");
+
+    // The filter is the other half of the voice, and its response display has
+    // to follow both the mode and the cutoff.
+    ui.set_mlp8_filter_cutoff(0.35);
+    ui.set_mlp8_filter_resonance(0.8);
+    ui.set_mlp8_filter_env(0.6);
+    let filtered = ui.window().take_snapshot().unwrap();
+    assert_ne!(sources.as_bytes(), filtered.as_bytes());
+    write_snapshot(&filtered, "MOOLOOP_MLP8_FILTER_SNAPSHOT");
+
+    let mut last = filtered.as_bytes().to_vec();
+    for mode in [1, 2, 3] {
+        ui.set_mlp8_filter_mode(mode);
+        let shot = ui.window().take_snapshot().unwrap();
+        assert_ne!(last, shot.as_bytes(), "filter mode {mode} drew the same curve");
+        last = shot.as_bytes().to_vec();
+    }
+    ui.set_mlp8_filter_mode(0);
+
+    ui.set_mlp8_voice_feedback(0.7);
+    ui.set_mlp8_drive(0.5);
+    let driven = ui.window().take_snapshot().unwrap();
+    assert_ne!(last, driven.as_bytes());
+    write_snapshot(&driven, "MOOLOOP_MLP8_FEEDBACK_SNAPSHOT");
 
     ui.window().set_size(LogicalSize::new(720.0, 760.0));
     let narrow = ui.window().take_snapshot().unwrap();

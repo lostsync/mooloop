@@ -113,3 +113,87 @@ ineligible.
 - Reassigning a stolen slot cannot emit the previous note's feedback tail.
 - Mode, feedback, drive, velocity amount, and envelope-amount automation do
   not click.
+
+## What landed
+
+The voice around the network: two envelopes, the four filter modes, both
+velocity depths, keytracking, and the feedback loop with drive inside it.
+Parameter ids 42-54, exactly as reserved.
+
+### The filter
+
+One shared `Svf` stage, with a second one that only runs for LP24. This is a
+**response menu, not a character menu** — which is the difference from the
+ML-M1, whose three models are genuinely different filters and therefore need
+per-model makeup gain. These four come off one linear stage, so the only
+compensation they need is about slope:
+
+- **`LP24_CORNER_SCALE = 1.553774`.** Two cascaded sections reach -3 dB at
+  `sqrt(sqrt(2) - 1)` of one section's corner, so without this the Cutoff knob
+  would mean two different frequencies depending on the slope and switching
+  mode would be a tuning change. A test pins the two low-passes to the same
+  passband share within 30%.
+- **`LP24_RESONANCE_SHARE = 0.62`.** Resonance compounds through a cascade;
+  splitting it keeps the knob meaning about the same amount of peak in both.
+
+Measured at cutoff 0.5 with a saw at A2, as shares of total energy:
+
+| Mode | 60-160 Hz | 1.3-2.6 kHz |
+| --- | --- | --- |
+| LP12 | 0.727 | 0.0008 |
+| LP24 | 0.722 | 0.0004 |
+| BP12 | 0.223 | 0.042 |
+| HP12 | 0.006 | 0.272 |
+
+The two low-passes keep the same bottom and LP24 halves the band above the
+corner, which is the whole claim: same corner, steeper skirt.
+
+### The loop
+
+```text
+mix + soft_ceiling(previous filter output * feedback) -> PreDrive -> filter
+```
+
+Drive is `PreDrive`, the same level-following stage the ML-M1 uses, and it
+sits **before** the filter and **inside** the loop. That is what bounds the
+loop's energy, and it is why feedback changes the tone rather than only the
+gain. There is no limiter after the voice sum; `soft_ceiling` is exactly
+transparent below its knee, so an ordinary patch never meets it and only a
+runaway does. `VOICE_FEEDBACK_RANGE = 1.15`, provisional until step 07.
+
+A one-pole DC blocker sits on the feedback tap only, not on the audible path:
+a resonant filter under asymmetric drive walks off centre, and in a loop that
+offset compounds, but the patch's own bias is not ours to remove.
+
+### One thing the plan asked for that the first cut got wrong
+
+"Reassigning a stolen slot cannot emit the previous note's feedback tail."
+The loop state was cleared in `restart()`, which only runs for a *fresh*
+slot — stealing a sounding voice deliberately keeps its oscillator phases,
+because restarting them under a running envelope is a click, and it was
+keeping the loop with them. `clear_loop()` is now separate and runs in both
+places a slot changes hands, plus when a voice falls idle. The test that
+caught it asserts every idle voice's tap is exactly zero.
+
+### Velocity
+
+Amp Velocity is a **crossfade, not a multiply**: at zero depth a soft note is
+a full-level note rather than a silent one, so the control is a depth on
+velocity rather than a switch that turns it off. Filter Velocity *adds* to the
+envelope amount rather than scaling it, so a patch with no envelope depth can
+still be played into the filter. A test pins that filter velocity never moves
+the VCA by itself.
+
+### The face
+
+The device outgrew its row and the answer was structural rather than
+cramming: `DeviceRackMetrics.face-height` is a global constant and the "3U" in
+the header is a label, so there is no taller device to become.
+
+The left column's five tabs are now the network grid's five rows, in the same
+order and with the same names — OSC 1/2/3, SUB, NOISE. Pick a source there,
+see everything it reaches in the grid. That absorbed the sub's octave/wave/
+source and the noise's colour, which had been a leftover panel, and freed the
+whole right side for one VOICE region holding the filter and the amplifier
+with their two envelopes side by side, where the difference between them is
+the point.

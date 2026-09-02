@@ -373,7 +373,19 @@ work session you can recall being part of, and don't stress over precision.
   columns that were crowded, and let the grid state the whole truth about
   where every source goes. The three bordered cards became one surface split
   by hairlines along the signal path, since three identical rounded panels is
-  the look of a settings dialog.
+  the look of a settings dialog. Then step 03: two envelopes, four filter
+  modes off one shared SVF, keytracking read off the gliding frequency, both
+  velocity depths, and a feedback loop with the drive inside it, which is what
+  makes feedback change the tone rather than only the gain. Two findings. The
+  loop was being cleared in the fresh-slot restart, but stealing a sounding
+  voice deliberately keeps its oscillator phases and was keeping the loop with
+  them -- exactly the tail the plan says a reassigned slot must not emit; it
+  is its own method now, run wherever a slot changes hands. And the device
+  outgrew its row: `face-height` is a global constant and "3U" is a label, so
+  the answer had to be structural. Making the source column's five tabs the
+  same list as the network grid's five rows absorbed the leftover sub and
+  noise panel and freed the whole right side for the filter and the amplifier
+  as one region.
   Investigated the `spike/sampler-time-stretch` spike (#32),
   found its "build vs. buy" conclusion under-argued, and merged it to `main`
   once Adam decided to own the build regardless. Built the sampler's #13

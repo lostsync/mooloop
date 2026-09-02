@@ -2075,11 +2075,19 @@ retrigger = true
         // enough to set the ring's floor any more: a synth parameter block
         // is. The widest is the ML-P8's, whose oscillator network adds twelve
         // modulation amounts and three sync selectors to the three
-        // oscillators every synth carries. 152 bytes an entry, so the
-        // engine's 1024-entry queue costs 152 KiB rather than the 936 KiB the
-        // rack used to make it.
-        assert_eq!(size_of::<crate::MlP8Params>(), 148);
-        assert_eq!(size_of::<crate::EngineCommand>(), 152);
+        // oscillators every synth carries, and whose filter adds a second
+        // envelope, two velocity depths and a feedback loop on top. 200 bytes
+        // an entry, so the engine's 1024-entry queue costs 200 KiB rather
+        // than the 936 KiB the rack used to make it.
+        //
+        // This one struct has moved the ring twice now. It is worth saying
+        // where that ends: a whole-struct generator update is the wrong shape
+        // for a device with this many parameters, and the narrow per-parameter
+        // command the modulation rack already uses is the shape that would
+        // stop it growing. Not today's change, but the next time this number
+        // moves it should be the fix rather than a bigger number.
+        assert_eq!(size_of::<crate::MlP8Params>(), 196);
+        assert_eq!(size_of::<crate::EngineCommand>(), 200);
 
         // The property this step bought, stated so it fails if it is lost: a
         // module fits inside an entry that something else already sized, so

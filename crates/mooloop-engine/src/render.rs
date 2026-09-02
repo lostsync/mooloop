@@ -5076,9 +5076,10 @@ mod footprint {
         assert_eq!(size_of::<EffectChain>(), 20_544);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
-        // The ML-P8's eight voices are 2,016 bytes of it -- a voice carries
+        // The ML-P8's eight voices are 2,896 bytes of it -- a voice carries
         // three oscillators, their modulation taps and sync carries, a sub,
-        // and coloured noise. Sampler stretch adds another 160 bytes for its
+        // coloured noise, two envelopes, two filter stages, a drive follower
+        // and the feedback loop's delay. Sampler stretch adds another 160 bytes for its
         // pool pointer, tempo, and per-voice struck pitches; the ~1.6 MB pool
         // itself is allocated only when a sampler asks for stretching.
         // Slicing adds 392: the channel's slice-map slot pointer, plus 24
@@ -5086,8 +5087,8 @@ mod footprint {
         // with. The map itself lives in the slot, off the strip. The last 8
         // are the sampler's transport-edge flag, which is what lets a note
         // auditioned while stopped keep sounding.
-        assert_eq!(size_of::<MlP8>(), 2_016);
-        assert_eq!(size_of::<ChannelStrip>(), 30_728);
+        assert_eq!(size_of::<MlP8>(), 2_896);
+        assert_eq!(size_of::<ChannelStrip>(), 31_656);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -5098,14 +5099,14 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 49_168);
+        assert_eq!(per_live, 50_096);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
         // it by 41 KiB, which is what a device costs now: linear in the
         // channels a project has rather than in the channels it could address.
         // Slice mode moved it by 6 KiB across sixteen channels.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_207);
+        assert_eq!((fixed + per_live * 16) / 1024, 1_221);
     }
 }
 

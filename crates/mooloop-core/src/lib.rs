@@ -33,7 +33,9 @@ pub use bridge::{EngineCommand, EngineEvent};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
 pub use mlm1::{EnvTrigger, FilterModel, GlideMode, MlM1Params, NotePriority};
-pub use mlp8::{MlP8Params, SubOctave, SubSource, SubWave, SyncSource, MLP8_VOICES};
+pub use mlp8::{
+    MlP8FilterMode, MlP8Params, SubOctave, SubSource, SubWave, SyncSource, MLP8_VOICES,
+};
 pub use mlm1_factory::FactoryPatch;
 pub use modulation::{
     step_value_index, strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform,

@@ -30,7 +30,7 @@ use mooloop_core::{
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
     ModPolarity, ModRack, ModRandomTrigger, ModRoute, ModStepTrigger,
     ModulatorKind, ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State,
-    MlP8Params, MlP8State, SubOctave, SubSource, SubWave, SyncSource,
+    MlP8FilterMode, MlP8Params, MlP8State, SubOctave, SubSource, SubWave, SyncSource,
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
@@ -4130,6 +4130,19 @@ impl UiState {
         window.set_mlp8_sync1(mlp8.sync_source[0].to_index());
         window.set_mlp8_sync2(mlp8.sync_source[1].to_index());
         window.set_mlp8_sync3(mlp8.sync_source[2].to_index());
+        window.set_mlp8_filter_mode(mlp8.filter_mode.to_index());
+        window.set_mlp8_filter_cutoff(mlp8.filter_cutoff);
+        window.set_mlp8_filter_resonance(mlp8.filter_resonance);
+        window.set_mlp8_filter_env(mlp8.filter_env_amount);
+        window.set_mlp8_drive(mlp8.drive);
+        window.set_mlp8_keytrack(mlp8.filter_keytrack);
+        window.set_mlp8_amp_velocity(mlp8.amp_velocity);
+        window.set_mlp8_filter_velocity(mlp8.filter_velocity);
+        window.set_mlp8_voice_feedback(mlp8.voice_feedback);
+        window.set_mlp8_filter_attack(mlp8.filter_attack);
+        window.set_mlp8_filter_decay(mlp8.filter_decay);
+        window.set_mlp8_filter_sustain(mlp8.filter_sustain);
+        window.set_mlp8_filter_release(mlp8.filter_release);
         let mlm1 = ch.mlm1_params;
         window.set_mlm1_osc1_wave(osc_wave_to_int(mlm1.osc[0].wave));
         window.set_mlm1_osc1_semitones(mlm1.osc[0].semitones);
@@ -10561,6 +10574,19 @@ impl AppUi {
         wire_mlp8!(on_mlp8_sync1_changed, |p, v: i32| p.sync_source[0] = SyncSource::from_index(v));
         wire_mlp8!(on_mlp8_sync2_changed, |p, v: i32| p.sync_source[1] = SyncSource::from_index(v));
         wire_mlp8!(on_mlp8_sync3_changed, |p, v: i32| p.sync_source[2] = SyncSource::from_index(v));
+        wire_mlp8!(on_mlp8_filter_mode_changed, |p, v: i32| p.filter_mode = MlP8FilterMode::from_index(v));
+        wire_mlp8!(on_mlp8_filter_cutoff_changed, |p, v: f32| p.filter_cutoff = v);
+        wire_mlp8!(on_mlp8_filter_resonance_changed, |p, v: f32| p.filter_resonance = v);
+        wire_mlp8!(on_mlp8_filter_env_changed, |p, v: f32| p.filter_env_amount = v);
+        wire_mlp8!(on_mlp8_drive_changed, |p, v: f32| p.drive = v);
+        wire_mlp8!(on_mlp8_keytrack_changed, |p, v: f32| p.filter_keytrack = v);
+        wire_mlp8!(on_mlp8_amp_velocity_changed, |p, v: f32| p.amp_velocity = v);
+        wire_mlp8!(on_mlp8_filter_velocity_changed, |p, v: f32| p.filter_velocity = v);
+        wire_mlp8!(on_mlp8_voice_feedback_changed, |p, v: f32| p.voice_feedback = v);
+        wire_mlp8!(on_mlp8_filter_attack_changed, |p, v: f32| p.filter_attack = v);
+        wire_mlp8!(on_mlp8_filter_decay_changed, |p, v: f32| p.filter_decay = v);
+        wire_mlp8!(on_mlp8_filter_sustain_changed, |p, v: f32| p.filter_sustain = v);
+        wire_mlp8!(on_mlp8_filter_release_changed, |p, v: f32| p.filter_release = v);
 
         // Every ML-P8 value field commits through one handler, because the
         // descriptor id travels with the text. `GeneratorParams::set` does

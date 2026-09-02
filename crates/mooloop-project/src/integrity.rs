@@ -1492,6 +1492,63 @@ fn check_mlp8(doctor: &mut Doctor, who: &str, params: &mut MlP8Params) {
             -100.0,
             100.0,
         ),
+        ("the filter cutoff".into(), &mut params.filter_cutoff, 0.0, 1.0),
+        (
+            "the filter resonance".into(),
+            &mut params.filter_resonance,
+            0.0,
+            1.0,
+        ),
+        (
+            "the filter envelope amount".into(),
+            &mut params.filter_env_amount,
+            -1.0,
+            1.0,
+        ),
+        ("the drive".into(), &mut params.drive, 0.0, 1.0),
+        (
+            "the filter keytrack".into(),
+            &mut params.filter_keytrack,
+            0.0,
+            2.0,
+        ),
+        (
+            "the filter attack".into(),
+            &mut params.filter_attack,
+            0.0,
+            10.0,
+        ),
+        ("the filter decay".into(), &mut params.filter_decay, 0.0, 10.0),
+        (
+            "the filter sustain".into(),
+            &mut params.filter_sustain,
+            0.0,
+            1.0,
+        ),
+        (
+            "the filter release".into(),
+            &mut params.filter_release,
+            0.0,
+            10.0,
+        ),
+        (
+            "the amplitude velocity depth".into(),
+            &mut params.amp_velocity,
+            0.0,
+            1.0,
+        ),
+        (
+            "the filter velocity depth".into(),
+            &mut params.filter_velocity,
+            -1.0,
+            1.0,
+        ),
+        (
+            "the voice feedback".into(),
+            &mut params.voice_feedback,
+            -1.0,
+            1.0,
+        ),
     ];
     for (index, amount) in params.xmod.iter_mut().enumerate() {
         fields.push((format!("cross-modulation amount {}", index + 1), amount, -100.0, 100.0));

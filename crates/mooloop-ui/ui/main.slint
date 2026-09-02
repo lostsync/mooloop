@@ -955,7 +955,7 @@ export component MainWindow inherits Window {
     // ---- ML-P8 params of the selected channel ----
     // Which oscillator the ML-P8's left column is editing. Face state; it
     // is not a device parameter and never reaches the engine.
-    in-out property <int> mlp8-osc-selected;
+    in-out property <int> mlp8-source-selected;
     in-out property <int> mlp8-osc1-wave: 2;
     in-out property <float> mlp8-osc1-semitones;
     in-out property <float> mlp8-osc1-cents;
@@ -987,6 +987,19 @@ export component MainWindow inherits Window {
     in-out property <float> mlp8-noise-osc1; in-out property <float> mlp8-noise-osc2; in-out property <float> mlp8-noise-osc3;
     in-out property <float> mlp8-feedback1; in-out property <float> mlp8-feedback2; in-out property <float> mlp8-feedback3;
     in-out property <int> mlp8-sync1; in-out property <int> mlp8-sync2; in-out property <int> mlp8-sync3;
+    in-out property <int> mlp8-filter-mode;
+    in-out property <float> mlp8-filter-cutoff: 1;
+    in-out property <float> mlp8-filter-resonance;
+    in-out property <float> mlp8-filter-env;
+    in-out property <float> mlp8-drive;
+    in-out property <float> mlp8-keytrack;
+    in-out property <float> mlp8-amp-velocity: 1;
+    in-out property <float> mlp8-filter-velocity;
+    in-out property <float> mlp8-voice-feedback;
+    in-out property <float> mlp8-filter-attack: 0.005;
+    in-out property <float> mlp8-filter-decay: 0.2;
+    in-out property <float> mlp8-filter-sustain: 0.7;
+    in-out property <float> mlp8-filter-release: 0.15;
     callback mlp8-osc1-wave-changed(int); callback mlp8-osc1-semitones-changed(float); callback mlp8-osc1-cents-changed(float); callback mlp8-osc1-level-changed(float); callback mlp8-osc1-pulse-width-changed(float);
     callback mlp8-osc2-wave-changed(int); callback mlp8-osc2-semitones-changed(float); callback mlp8-osc2-cents-changed(float); callback mlp8-osc2-level-changed(float); callback mlp8-osc2-pulse-width-changed(float);
     callback mlp8-osc3-wave-changed(int); callback mlp8-osc3-semitones-changed(float); callback mlp8-osc3-cents-changed(float); callback mlp8-osc3-level-changed(float); callback mlp8-osc3-pulse-width-changed(float);
@@ -998,6 +1011,19 @@ export component MainWindow inherits Window {
     callback mlp8-noise-osc1-changed(float); callback mlp8-noise-osc2-changed(float); callback mlp8-noise-osc3-changed(float);
     callback mlp8-feedback1-changed(float); callback mlp8-feedback2-changed(float); callback mlp8-feedback3-changed(float);
     callback mlp8-sync1-changed(int); callback mlp8-sync2-changed(int); callback mlp8-sync3-changed(int);
+    callback mlp8-filter-mode-changed(int);
+    callback mlp8-filter-cutoff-changed(float);
+    callback mlp8-filter-resonance-changed(float);
+    callback mlp8-filter-env-changed(float);
+    callback mlp8-drive-changed(float);
+    callback mlp8-keytrack-changed(float);
+    callback mlp8-amp-velocity-changed(float);
+    callback mlp8-filter-velocity-changed(float);
+    callback mlp8-voice-feedback-changed(float);
+    callback mlp8-filter-attack-changed(float);
+    callback mlp8-filter-decay-changed(float);
+    callback mlp8-filter-sustain-changed(float);
+    callback mlp8-filter-release-changed(float);
     // One callback for all forty-one: the id travels with the text, so
     // Rust resolves it through the descriptor table rather than the face
     // needing a named callback per field.
@@ -2818,7 +2844,7 @@ export component MainWindow inherits Window {
                                                     y: DeviceRackMetrics.header-height;
                                                     width: parent.content-width;
                                                     height: parent.height - DeviceRackMetrics.header-height;
-                                                    osc-selected <=> root.mlp8-osc-selected;
+                                                    source-selected <=> root.mlp8-source-selected;
                                                     osc1-wave <=> root.mlp8-osc1-wave; osc1-semitones <=> root.mlp8-osc1-semitones; osc1-cents <=> root.mlp8-osc1-cents; osc1-level <=> root.mlp8-osc1-level; osc1-pulse-width <=> root.mlp8-osc1-pulse-width;
                                                     osc2-wave <=> root.mlp8-osc2-wave; osc2-semitones <=> root.mlp8-osc2-semitones; osc2-cents <=> root.mlp8-osc2-cents; osc2-level <=> root.mlp8-osc2-level; osc2-pulse-width <=> root.mlp8-osc2-pulse-width;
                                                     osc3-wave <=> root.mlp8-osc3-wave; osc3-semitones <=> root.mlp8-osc3-semitones; osc3-cents <=> root.mlp8-osc3-cents; osc3-level <=> root.mlp8-osc3-level; osc3-pulse-width <=> root.mlp8-osc3-pulse-width;
@@ -2843,6 +2869,32 @@ export component MainWindow inherits Window {
                                                     noise-osc3-changed(v) => { root.mlp8-noise-osc3-changed(v); } feedback1-changed(v) => { root.mlp8-feedback1-changed(v); } feedback2-changed(v) => { root.mlp8-feedback2-changed(v); } feedback3-changed(v) => { root.mlp8-feedback3-changed(v); }
                                                     sub-octave-changed(v) => { root.mlp8-sub-octave-changed(v); } sub-wave-changed(v) => { root.mlp8-sub-wave-changed(v); } sub-source-changed(v) => { root.mlp8-sub-source-changed(v); } sync1-changed(v) => { root.mlp8-sync1-changed(v); }
                                                     sync2-changed(v) => { root.mlp8-sync2-changed(v); } sync3-changed(v) => { root.mlp8-sync3-changed(v); }
+                                                    filter-mode <=> root.mlp8-filter-mode;
+                                                    filter-cutoff <=> root.mlp8-filter-cutoff;
+                                                    filter-resonance <=> root.mlp8-filter-resonance;
+                                                    filter-env <=> root.mlp8-filter-env;
+                                                    drive <=> root.mlp8-drive;
+                                                    keytrack <=> root.mlp8-keytrack;
+                                                    amp-velocity <=> root.mlp8-amp-velocity;
+                                                    filter-velocity <=> root.mlp8-filter-velocity;
+                                                    voice-feedback <=> root.mlp8-voice-feedback;
+                                                    filter-attack <=> root.mlp8-filter-attack;
+                                                    filter-decay <=> root.mlp8-filter-decay;
+                                                    filter-sustain <=> root.mlp8-filter-sustain;
+                                                    filter-release <=> root.mlp8-filter-release;
+                                                    filter-mode-changed(v) => { root.mlp8-filter-mode-changed(v); }
+                                                    filter-cutoff-changed(v) => { root.mlp8-filter-cutoff-changed(v); }
+                                                    filter-resonance-changed(v) => { root.mlp8-filter-resonance-changed(v); }
+                                                    filter-env-changed(v) => { root.mlp8-filter-env-changed(v); }
+                                                    drive-changed(v) => { root.mlp8-drive-changed(v); }
+                                                    keytrack-changed(v) => { root.mlp8-keytrack-changed(v); }
+                                                    amp-velocity-changed(v) => { root.mlp8-amp-velocity-changed(v); }
+                                                    filter-velocity-changed(v) => { root.mlp8-filter-velocity-changed(v); }
+                                                    voice-feedback-changed(v) => { root.mlp8-voice-feedback-changed(v); }
+                                                    filter-attack-changed(v) => { root.mlp8-filter-attack-changed(v); }
+                                                    filter-decay-changed(v) => { root.mlp8-filter-decay-changed(v); }
+                                                    filter-sustain-changed(v) => { root.mlp8-filter-sustain-changed(v); }
+                                                    filter-release-changed(v) => { root.mlp8-filter-release-changed(v); }
                                                     text-committed(p, t) => { root.mlp8-text-committed(p, t); }
                                                     modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
                                                     modulation-edit-started(p) => { root.source-modulation-edit-started(p); }

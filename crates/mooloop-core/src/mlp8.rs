@@ -231,6 +231,57 @@ pub const PARAM_OSC_FEEDBACK_BASE: u32 = 36;
 /// First of the three sync-source selectors.
 pub const PARAM_SYNC_SOURCE_BASE: u32 = 39;
 
+// --- Step 03: the voice's filter, its envelope, and its feedback loop ------
+
+pub const PARAM_FILTER_MODE: u32 = 42;
+pub const PARAM_FILTER_CUTOFF: u32 = 43;
+pub const PARAM_FILTER_RESONANCE: u32 = 44;
+pub const PARAM_FILTER_ENV_AMOUNT: u32 = 45;
+pub const PARAM_DRIVE: u32 = 46;
+pub const PARAM_KEYTRACK: u32 = 47;
+pub const PARAM_FILTER_ATTACK: u32 = 48;
+pub const PARAM_FILTER_DECAY: u32 = 49;
+pub const PARAM_FILTER_SUSTAIN: u32 = 50;
+pub const PARAM_FILTER_RELEASE: u32 = 51;
+pub const PARAM_AMP_VELOCITY: u32 = 52;
+pub const PARAM_FILTER_VELOCITY: u32 = 53;
+pub const PARAM_VOICE_FEEDBACK: u32 = 54;
+
+/// Which response the multimode filter runs.
+///
+/// All four come off the same shared state-variable stage; this is a response
+/// menu rather than the ML-M1's character menu, where three low-passes differ
+/// in slope and saturation. Two devices, two different questions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MlP8FilterMode {
+    #[default]
+    Lp12,
+    Lp24,
+    Bp12,
+    Hp12,
+}
+
+impl MlP8FilterMode {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Lp24,
+            2 => Self::Bp12,
+            3 => Self::Hp12,
+            _ => Self::Lp12,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Lp12 => 0,
+            Self::Lp24 => 1,
+            Self::Bp12 => 2,
+            Self::Hp12 => 3,
+        }
+    }
+}
+
 /// Modulation amounts are authored as signed percent. The musical mapping from
 /// percent to phase deviation is one documented curve in the DSP, so the
 /// persisted value stays a number a musician recognises and an automation lane
@@ -333,25 +384,69 @@ const NETWORK_DESCRIPTORS: [ParamDescriptor; 26] = [
     stepped(PARAM_SYNC_SOURCE_BASE + 2, "Sync 3", 4, 0.0),
 ];
 
+const fn bipolar(id: u32, name: &'static str) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "",
+        min: -1.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    }
+}
+
+/// The filter, its envelope, the two velocity depths, and the loop around the
+/// whole voice.
+const VOICE_DESCRIPTORS: [ParamDescriptor; 13] = [
+    stepped(PARAM_FILTER_MODE, "Mode", 4, 0.0),
+    unit(PARAM_FILTER_CUTOFF, "Cutoff", 1.0),
+    unit(PARAM_FILTER_RESONANCE, "Reso", 0.0),
+    bipolar(PARAM_FILTER_ENV_AMOUNT, "Env amt"),
+    unit(PARAM_DRIVE, "Drive", 0.0),
+    // 0-200%: 100% is one octave of cutoff per played octave, and the top
+    // half is the exaggeration that makes a patch open up as it climbs.
+    ParamDescriptor {
+        id: PARAM_KEYTRACK,
+        name: "Keytrack",
+        unit: "",
+        min: 0.0,
+        max: 2.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    seconds(PARAM_FILTER_ATTACK, "F attack", 0.005),
+    seconds(PARAM_FILTER_DECAY, "F decay", 0.2),
+    unit(PARAM_FILTER_SUSTAIN, "F sustain", 0.7),
+    seconds(PARAM_FILTER_RELEASE, "F release", 0.15),
+    // Velocity's amplitude role is a crossfade from "every note the same" to
+    // "every note as played", which is why it is unipolar and defaults open.
+    unit(PARAM_AMP_VELOCITY, "Amp vel", 1.0),
+    bipolar(PARAM_FILTER_VELOCITY, "Filt vel"),
+    bipolar(PARAM_VOICE_FEEDBACK, "Feedback"),
+];
+
 /// The complete ML-P8 table: three oscillator blocks then everything else.
 ///
 /// Written as one `static` so the engine can enumerate it without allocating,
 /// and assembled by a `const fn` rather than by hand so the ids stay derived
 /// from the constants above.
-pub static DESCRIPTORS: [ParamDescriptor; 41] = concat(
+pub static DESCRIPTORS: [ParamDescriptor; 54] = concat(
     osc_descriptors(0, "Osc 1 wave"),
     osc_descriptors(1, "Osc 2 wave"),
     osc_descriptors(2, "Osc 3 wave"),
     NETWORK_DESCRIPTORS,
+    VOICE_DESCRIPTORS,
 );
 
 const fn concat(
     a: [ParamDescriptor; 5],
     b: [ParamDescriptor; 5],
     c: [ParamDescriptor; 5],
-    rest: [ParamDescriptor; 26],
-) -> [ParamDescriptor; 41] {
-    let mut out = [a[0]; 41];
+    network: [ParamDescriptor; 26],
+    voice: [ParamDescriptor; 13],
+) -> [ParamDescriptor; 54] {
+    let mut out = [a[0]; 54];
     let mut i = 0;
     while i < 5 {
         out[i] = a[i];
@@ -361,8 +456,13 @@ const fn concat(
     }
     let mut j = 0;
     while j < 26 {
-        out[15 + j] = rest[j];
+        out[15 + j] = network[j];
         j += 1;
+    }
+    let mut k = 0;
+    while k < 13 {
+        out[41 + k] = voice[k];
+        k += 1;
     }
     out
 }
@@ -401,6 +501,30 @@ pub struct MlP8Params {
     pub osc_feedback: [f32; 3],
     /// Which oscillator, if any, hard-syncs each oscillator.
     pub sync_source: [SyncSource; 3],
+
+    // --- The voice around the network -----------------------------------
+    pub filter_mode: MlP8FilterMode,
+    /// Cutoff on a perceptual `[0, 1]` scale. `1` is wide open.
+    pub filter_cutoff: f32,
+    /// Resonance in `[0, 1]`.
+    pub filter_resonance: f32,
+    /// Bipolar filter-envelope depth in `[-1, 1]`.
+    pub filter_env_amount: f32,
+    /// Pre-filter drive in `[0, 1]`, inside the feedback loop. `0` bypasses.
+    pub drive: f32,
+    /// Cutoff tracking in `[0, 2]`. `1` is one octave per played octave.
+    pub filter_keytrack: f32,
+    pub filter_attack: f32,
+    pub filter_decay: f32,
+    pub filter_sustain: f32,
+    pub filter_release: f32,
+    /// How much velocity scales the VCA, in `[0, 1]`. At `0` every note has
+    /// the same amplitude; at `1` it follows the note as played.
+    pub amp_velocity: f32,
+    /// Bipolar velocity depth added to the filter envelope amount.
+    pub filter_velocity: f32,
+    /// Bipolar output-to-input feedback around the voice's filter.
+    pub voice_feedback: f32,
 }
 
 impl Default for MlP8Params {
@@ -442,6 +566,24 @@ impl Default for MlP8Params {
             noise_to_osc: [0.0; 3],
             osc_feedback: [0.0; 3],
             sync_source: [SyncSource::Off; 3],
+            filter_mode: MlP8FilterMode::Lp12,
+            // The filter starts open and out of the way, so the default patch
+            // is still one saw at the reference level and the gain contract
+            // is calibrated against a path with nothing in it.
+            filter_cutoff: 1.0,
+            filter_resonance: 0.0,
+            filter_env_amount: 0.0,
+            drive: 0.0,
+            filter_keytrack: 0.0,
+            filter_attack: 0.005,
+            filter_decay: 0.2,
+            filter_sustain: 0.7,
+            filter_release: 0.15,
+            // Open, because a synth that ignores how hard you played it is
+            // the surprising default, not the safe one.
+            amp_velocity: 1.0,
+            filter_velocity: 0.0,
+            voice_feedback: 0.0,
         }
     }
 }
@@ -498,6 +640,19 @@ pub fn get(p: &MlP8Params, id: u32) -> Option<f32> {
         return Some(p.sync_source[n].to_index() as f32);
     }
     Some(match id {
+        PARAM_FILTER_MODE => p.filter_mode.to_index() as f32,
+        PARAM_FILTER_CUTOFF => p.filter_cutoff,
+        PARAM_FILTER_RESONANCE => p.filter_resonance,
+        PARAM_FILTER_ENV_AMOUNT => p.filter_env_amount,
+        PARAM_DRIVE => p.drive,
+        PARAM_KEYTRACK => p.filter_keytrack,
+        PARAM_FILTER_ATTACK => p.filter_attack,
+        PARAM_FILTER_DECAY => p.filter_decay,
+        PARAM_FILTER_SUSTAIN => p.filter_sustain,
+        PARAM_FILTER_RELEASE => p.filter_release,
+        PARAM_AMP_VELOCITY => p.amp_velocity,
+        PARAM_FILTER_VELOCITY => p.filter_velocity,
+        PARAM_VOICE_FEEDBACK => p.voice_feedback,
         PARAM_ATTACK => p.attack,
         PARAM_DECAY => p.decay,
         PARAM_SUSTAIN => p.sustain,
@@ -545,6 +700,19 @@ pub fn set(p: &mut MlP8Params, id: u32, value: f32) -> bool {
         return true;
     }
     match id {
+        PARAM_FILTER_MODE => p.filter_mode = MlP8FilterMode::from_index(value.round() as i32),
+        PARAM_FILTER_CUTOFF => p.filter_cutoff = value,
+        PARAM_FILTER_RESONANCE => p.filter_resonance = value,
+        PARAM_FILTER_ENV_AMOUNT => p.filter_env_amount = value,
+        PARAM_DRIVE => p.drive = value,
+        PARAM_KEYTRACK => p.filter_keytrack = value,
+        PARAM_FILTER_ATTACK => p.filter_attack = value,
+        PARAM_FILTER_DECAY => p.filter_decay = value,
+        PARAM_FILTER_SUSTAIN => p.filter_sustain = value,
+        PARAM_FILTER_RELEASE => p.filter_release = value,
+        PARAM_AMP_VELOCITY => p.amp_velocity = value,
+        PARAM_FILTER_VELOCITY => p.filter_velocity = value,
+        PARAM_VOICE_FEEDBACK => p.voice_feedback = value,
         PARAM_ATTACK => p.attack = value,
         PARAM_DECAY => p.decay = value,
         PARAM_SUSTAIN => p.sustain = value,
@@ -579,10 +747,10 @@ mod tests {
     #[test]
     fn descriptor_ids_stay_inside_the_reserved_band() {
         for d in &DESCRIPTORS {
-            assert!(d.id <= 41, "{} ({}) is outside 0-41", d.id, d.name);
+            assert!(d.id <= 54, "{} ({}) is outside 0-54", d.id, d.name);
             assert_ne!(d.id, 24, "24 is reserved for a fifth sub control");
         }
-        assert_eq!(DESCRIPTORS.len(), 41);
+        assert_eq!(DESCRIPTORS.len(), 54);
     }
 
     #[test]
@@ -670,9 +838,10 @@ mod tests {
     #[test]
     fn an_unknown_id_is_neither_readable_nor_writable() {
         let mut params = MlP8Params::default();
+        // 24 is a hole inside the band, 55 is past its end.
         assert_eq!(get(&params, 24), None);
         assert!(!set(&mut params, 24, 1.0));
-        assert_eq!(get(&params, 42), None);
-        assert!(!set(&mut params, 42, 1.0));
+        assert_eq!(get(&params, 55), None);
+        assert!(!set(&mut params, 55, 1.0));
     }
 }
