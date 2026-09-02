@@ -406,6 +406,17 @@ work session you can recall being part of, and don't stress over precision.
 - Notes: Wrote `docs/plans/modulator-modules/` — the modulator-grid plan —
   and started step 01: modulator params join the descriptor system.
 
+### Claude Fable 5.1 — Claude Code
+- First seen: 2026-09-02
+- Last seen: 2026-09-02
+- Sessions: 1
+- Notes: Sanity pass over the sampler slice/commit push: a commit now bakes
+  the `f32` ratio the spec stores so a reload is the same render, revert
+  re-provisions the stretch pool it needs after a reload, fit-to-tempo and
+  its seed measure the playback region in slice mode, the seed measures in
+  the file's own rate, slice auditions get their note-off, and a stale bake
+  can be re-baked in one click.
+
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-01

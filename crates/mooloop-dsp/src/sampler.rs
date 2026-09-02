@@ -527,6 +527,9 @@ impl Sampler {
     ///
     /// The loop is what gets fitted when there is one, since the loop is the
     /// thing that repeats against the grid; otherwise the playback region is.
+    /// In [`PlayMode::Slice`] it is always the playback region: there the
+    /// loop is the slice, the global loop points are hidden, and the thing
+    /// laid against the grid is the whole break the slices are cut from.
     pub fn effective_ratio(
         params: SamplerParams,
         len: usize,
@@ -537,7 +540,7 @@ impl Sampler {
         if !params.stretch_sync {
             return f64::from(params.stretch_ratio);
         }
-        let (region_start, region_end) = if params.loop_mode == LoopMode::Off {
+        let (region_start, region_end) = if Self::fits_the_playback_region(params) {
             Self::resolve_playback_bounds(params, len, None)
         } else {
             Self::resolve_loop_bounds(params, len, None)
@@ -556,6 +559,15 @@ impl Sampler {
             f64::from(mooloop_core::MIN_STRETCH_RATIO),
             f64::from(mooloop_core::MAX_STRETCH_RATIO),
         )
+    }
+
+    /// Which span fit-to-tempo measures: the playback region, or the loop.
+    ///
+    /// Public so the UI's loop-length guess asks the same question the
+    /// derivation answers; two copies of this rule would be the ones that
+    /// disagree about what a bar of this sample is.
+    pub fn fits_the_playback_region(params: SamplerParams) -> bool {
+        params.loop_mode == LoopMode::Off || params.play_mode == PlayMode::Slice
     }
 
     pub fn choke_group(&self) -> u8 {
@@ -1222,6 +1234,25 @@ mod tests {
         // 96,000-frame bar takes 4x rather than 2x.
         let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 1.0);
         assert!((ratio - 4.0).abs() < 1.0e-6, "expected 4x, got {ratio}");
+    }
+
+    /// In slice mode the loop is the slice and the global loop points are
+    /// hidden, so fitting them would fit a region the user cannot see. The
+    /// whole playback region is what a sliced break lays against the grid.
+    #[test]
+    fn fit_to_tempo_measures_the_playback_region_in_slice_mode() {
+        let params = SamplerParams {
+            play_mode: PlayMode::Slice,
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.0,
+            loop_end: 0.5,
+            ..SamplerParams::default()
+        };
+        let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 1.0);
+        assert!((ratio - 2.0).abs() < 1.0e-6, "expected 2x for the region, got {ratio}");
     }
 
     /// A derived ratio still has to land inside what the stretcher accepts:

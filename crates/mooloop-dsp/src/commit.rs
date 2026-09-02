@@ -68,7 +68,15 @@ pub fn commit_stretch(
     // `effective_ratio` reduces to when the sample and the device agree: the
     // committed loop is one bar at the pitch it was recorded at, and
     // transposing it afterwards is an ordinary sampler transposition.
-    let ratio = Sampler::effective_ratio(params, len, source.sample_rate, bpm, 1.0);
+    //
+    // Rounded to the `f32` the spec stores *before* rendering, not after.
+    // `render_stretched` is length-determined by its ratio and steps its
+    // analysis pointer by `hop / ratio`, so a render at the `f64` and a
+    // re-render at the stored `f32` were two slightly different renders: for
+    // a tempo-fitted ratio that is rarely dyadic, the reload could come back
+    // a frame longer or with a splice placed one frame over. Baking the
+    // number the file will hold is what makes "re-render on load" exact.
+    let ratio = Sampler::effective_ratio(params, len, source.sample_rate, bpm, 1.0) as f32;
 
     let render = render_stretched(
         &source.frames,
@@ -79,7 +87,7 @@ pub fn commit_stretch(
         },
         params.stretch_mode,
         u32::from(params.stretch_grain),
-        ratio,
+        f64::from(ratio),
         source.sample_rate,
     );
     if render.is_empty() {
@@ -103,7 +111,7 @@ pub fn commit_stretch(
     };
     let commit = SampleCommit {
         mode: params.stretch_mode,
-        ratio: ratio as f32,
+        ratio,
         grain: params.stretch_grain,
         source_markers: slices.markers().to_vec(),
         source_start: params.start,
@@ -326,6 +334,34 @@ mod tests {
             (i64::from(mapped[1]) - 38_400).abs() < 48,
             "the region midpoint should land mid-render: {mapped:?}"
         );
+    }
+
+    /// The same property under a ratio the spec cannot hold exactly. A
+    /// tempo-fitted ratio is almost never dyadic -- a 44.1 kHz break against
+    /// an odd tempo -- and the spec stores it as an `f32`. The bake has to
+    /// use the number the file will hold, or the reload is a different
+    /// render by a frame.
+    #[test]
+    fn a_reloaded_commit_with_an_inexact_ratio_still_reproduces_the_buffer() {
+        let source = SampleData {
+            sample_rate: 44_100,
+            ..ramp(30_000)
+        };
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            ..SamplerParams::default()
+        };
+        let committed = commit_stretch(&source, params, &SliceMap::new(), 127.3).unwrap();
+        assert_ne!(
+            f64::from(committed.commit.ratio),
+            f64::from(committed.commit.ratio).round(),
+            "the fixture should exercise a non-integer ratio"
+        );
+        let reloaded = rerender_commit(&source, &committed.commit).unwrap();
+        assert_eq!(reloaded.frames.len(), committed.sample.frames.len());
+        assert_eq!(reloaded.frames, committed.sample.frames);
     }
 
     /// Fit-to-tempo bakes the resolved number, so the committed loop is the
