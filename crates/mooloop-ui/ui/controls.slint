@@ -486,6 +486,10 @@ export component ParameterKnob inherits Rectangle {
     // rather than drawing them twice and paying three rows of height for it.
     in property <bool> show-label: true;
     in property <bool> show-value-text: true;
+    // Dense device faces can put the name, dial, and value on one shared
+    // baseline without giving up this component's full gesture and
+    // modulation contract. The whole row remains the drag/reset target.
+    in property <bool> compact-horizontal;
     // And a caller that draws the parameter *itself* some other way -- a cell
     // in a matrix that fills like a bar -- turns the dial off too, keeping
     // the drag, wheel, double-click-to-default, keyboard and modulation-
@@ -515,8 +519,8 @@ export component ParameterKnob inherits Rectangle {
     private property <float> normalized: root.normalized-value(root.value);
     private property <bool> modulation-active: root.modulation-armed && root.modulation-allowed;
 
-    width: root.show-label ? 56px : root.diameter;
-    height: root.show-label || root.show-value-text ? 80px : root.diameter;
+    width: root.compact-horizontal ? 124px : root.show-label ? 56px : root.diameter;
+    height: root.compact-horizontal ? 42px : root.show-label || root.show-value-text ? 80px : root.diameter;
     accessible-role: slider;
     accessible-label: root.tooltip;
     accessible-value: root.value-text;
@@ -564,7 +568,7 @@ export component ParameterKnob inherits Rectangle {
         }
     }
 
-    VerticalLayout {
+    if !root.compact-horizontal : VerticalLayout {
         spacing: 3px;
         alignment: center;
 
@@ -608,6 +612,47 @@ export component ParameterKnob inherits Rectangle {
                 value-text: root.value-text;
                 readout-max-width: root.width;
             }
+        }
+    }
+
+    if root.compact-horizontal : Rectangle {
+        if root.show-label : Text {
+            x: 0px;
+            width: 45px;
+            height: parent.height;
+            text: root.label;
+            color: !root.enabled ? Theme.text-faint
+                : root.modulation-active ? Theme.warning : Theme.text-muted;
+            font-size: 9px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.show-dial : KnobFace {
+            x: 46px;
+            y: (parent.height - root.diameter) / 2;
+            diameter: root.diameter;
+            normalized: root.normalized;
+            bipolar: root.bipolar;
+            enabled: root.enabled;
+            fill: root.fill;
+            modulation-armed: root.modulation-active;
+            modulation-depth: root.modulation-depth;
+            modulation-offset: root.modulation-offset;
+            modulation-route-count: root.modulation-route-count;
+            focused: keyboard.has-focus;
+            hovered: knob-touch.has-hover;
+        }
+        if root.show-value-text : Text {
+            x: 78px;
+            width: parent.width - self.x;
+            height: parent.height;
+            text: root.value-text;
+            color: root.enabled ? Theme.text : Theme.text-faint;
+            font-size: 9px;
+            font-family: "monospace";
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            overflow: elide;
         }
     }
 

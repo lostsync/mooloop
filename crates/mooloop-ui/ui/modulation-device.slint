@@ -8,8 +8,8 @@ component ModulationDisplay inherits Rectangle {
     in property <int> mode;
     in property <float> depth;
     in property <float> spread;
-    in property <string> mode-detail;
     background: Theme.panel;
+    border-radius: Theme.radius-sm;
     border-width: 1px;
     border-color: Theme.border;
     clip: true;
@@ -30,22 +30,11 @@ component ModulationDisplay inherits Rectangle {
         width: max(1px, parent.width / 50); height: 2px;
         background: Theme.focus.with-alpha(0.7);
     }
-    Text {
-        x: 4px;
-        y: parent.height - 14px;
-        width: parent.width - 8px;
-        height: 10px;
-        text: root.mode-detail;
-        color: Theme.text-faint;
-        font-size: 8px;
-        horizontal-alignment: right;
-        vertical-alignment: center;
-    }
 }
 
 export component ModulationDeviceFace inherits EffectDeviceShell {
     name: "Mod";
-    kind: "FX / 3U";
+    kind: "FX / 2U";
     in-out property <int> mode;
     in-out property <float> rate;
     in-out property <float> depth;
@@ -66,49 +55,46 @@ export component ModulationDeviceFace inherits EffectDeviceShell {
     private property <float> rate-hz: 0.02 * pow(600, root.rate);
     private property <int> stage-count: 4 + round(root.stages * 4) * 2;
     private property <string> color-label: root.mode == 2 ? "Center" : root.mode == 4 ? "Age" : "Delay";
-    private property <string> mode-detail: root.mode == 0 ? "MOVING DOUBLE"
-        : root.mode == 1 ? "THROUGH-ZERO SWEEP"
-        : root.mode == 2 ? "ALL-PASS CASCADE"
-        : root.mode == 3 ? "THREE VOICES" : "TAPE DOUBLE";
+    SelectorBank {
+        x: 6px;
+        y: DeviceRackMetrics.header-height + 6px;
+        options: ["CHORUS", "FLANGE", "PHASER", "ENS", "ADT"];
+        selected-index <=> root.mode;
+        segment-width: 52px;
+        tooltip: "Modulation mode";
+        selected(i) => { root.mode-changed(i); }
+    }
+
+    ModulationDisplay {
+        x: 6px;
+        y: 108px;
+        width: 172px;
+        height: 92px;
+        mode: root.mode;
+        depth: root.depth;
+        spread: root.spread;
+    }
 
     VerticalLayout {
-        padding: 6px;
-        padding-top: DeviceRackMetrics.header-height + 6px;
-        spacing: 4px;
-        HorizontalLayout {
-            alignment: start;
-            spacing: 4px;
-            SelectorBank {
-                options: ["CHORUS", "FLANGE", "PHASER", "ENS", "ADT"];
-                selected-index <=> root.mode;
-                segment-width: 60px;
-                tooltip: "Modulation mode";
-                selected(i) => { root.mode-changed(i); }
-            }
-            Rectangle { horizontal-stretch: 1; }
-        }
-        HorizontalLayout {
-            height: 108px;
-            spacing: 8px;
-            ModulationDisplay { width: 330px; height: 108px; mode: root.mode; depth: root.depth; spread: root.spread; mode-detail: root.mode-detail; }
-            VerticalLayout {
-                spacing: 2px;
-                Text { text: root.mode == 2 ? root.stage-count + " STAGES / STEREO PHASE" : root.mode == 3 ? "3 VOICES / STEREO PHASE" : "STEREO VARIABLE DELAY"; color: Theme.text-muted; font-size: 9px; horizontal-alignment: center; }
-                Rectangle { vertical-stretch: 1; }
-                Text { text: round(root.rate-hz * 100) / 100 + " Hz / " + round(root.depth * 100) + " DEPTH"; color: Theme.accent; font-size: 9px; horizontal-alignment: center; }
-                Rectangle { vertical-stretch: 1; }
-            }
-        }
-        HorizontalLayout {
-            spacing: 0px;
-            ParameterKnob { width: 72px; diameter: 40px; label: "Rate"; tooltip: "LFO speed"; value <=> root.rate; default-value: 0.445; value-text: round(root.rate-hz * 100) / 100 + " Hz"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[1]; modulation-depth: root.modulation-depths[1]; modulation-offset: root.modulation-offsets[1]; modulation-route-count: root.modulation-route-counts[1]; changed(v) => { root.rate-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); } modulation-edit-started => { root.modulation-edit-started(1); } modulation-edit-finished => { root.modulation-edit-finished(1); } }
-            ParameterKnob { width: 72px; diameter: 40px; label: "Depth"; tooltip: "Sweep amount"; value <=> root.depth; default-value: 0.45; value-text: round(root.depth * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; modulation-offset: root.modulation-offsets[2]; modulation-route-count: root.modulation-route-counts[2]; changed(v) => { root.depth-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
-            ParameterKnob { width: 72px; diameter: 40px; label: root.color-label; tooltip: "Delay, phase centre, or tape age"; value <=> root.character; default-value: 0.45; value-text: round(root.character * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; modulation-offset: root.modulation-offsets[3]; modulation-route-count: root.modulation-route-counts[3]; changed(v) => { root.character-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
-            ParameterKnob { width: 72px; diameter: 40px; label: "Feedback"; tooltip: "Regeneration or phase resonance"; bipolar: true; value <=> root.feedback; default-value: 0.5; value-text: round((root.feedback * 1.84 - 0.92) * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; modulation-offset: root.modulation-offsets[4]; modulation-route-count: root.modulation-route-counts[4]; changed(v) => { root.feedback-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }
-            ParameterKnob { width: 72px; diameter: 40px; label: "Spread"; tooltip: "Stereo LFO phase offset"; value <=> root.spread; default-value: 0.65; value-text: round(root.spread * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[5]; modulation-depth: root.modulation-depths[5]; modulation-offset: root.modulation-offsets[5]; modulation-route-count: root.modulation-route-counts[5]; changed(v) => { root.spread-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); } modulation-edit-started => { root.modulation-edit-started(5); } modulation-edit-finished => { root.modulation-edit-finished(5); } }
-            ParameterKnob { width: 72px; diameter: 40px; label: "Tone"; tooltip: "Brightness of the processed signal"; value <=> root.tone; default-value: 0.75; value-text: round(root.tone * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[6]; modulation-depth: root.modulation-depths[6]; modulation-offset: root.modulation-offsets[6]; modulation-route-count: root.modulation-route-counts[6]; changed(v) => { root.tone-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(6, v); } modulation-edit-started => { root.modulation-edit-started(6); } modulation-edit-finished => { root.modulation-edit-finished(6); } }
-            ParameterKnob { width: 72px; diameter: 40px; label: "Stages"; tooltip: "Number of all-pass stages in Phaser mode"; enabled: root.mode == 2; value <=> root.stages; default-value: 0.5; value-text: root.stage-count + ""; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[7]; modulation-depth: root.modulation-depths[7]; modulation-offset: root.modulation-offsets[7]; modulation-route-count: root.modulation-route-counts[7]; changed(v) => { root.stages-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(7, v); } modulation-edit-started => { root.modulation-edit-started(7); } modulation-edit-finished => { root.modulation-edit-finished(7); } }
-            Rectangle { horizontal-stretch: 1; }
-        }
+        x: 182px;
+        y: 70px;
+        width: 124px;
+        height: 168px;
+        spacing: 0px;
+        ParameterKnob { compact-horizontal: true; diameter: 28px; label: "Rate"; tooltip: "LFO speed"; value <=> root.rate; default-value: 0.445; value-text: round(root.rate-hz * 100) / 100 + " Hz"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[1]; modulation-depth: root.modulation-depths[1]; modulation-offset: root.modulation-offsets[1]; modulation-route-count: root.modulation-route-counts[1]; changed(v) => { root.rate-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); } modulation-edit-started => { root.modulation-edit-started(1); } modulation-edit-finished => { root.modulation-edit-finished(1); } }
+        ParameterKnob { compact-horizontal: true; diameter: 28px; label: "Depth"; tooltip: "Sweep amount"; value <=> root.depth; default-value: 0.45; value-text: round(root.depth * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; modulation-offset: root.modulation-offsets[2]; modulation-route-count: root.modulation-route-counts[2]; changed(v) => { root.depth-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
+        ParameterKnob { compact-horizontal: true; diameter: 28px; label: root.color-label; tooltip: "Delay, phase centre, or tape age"; value <=> root.character; default-value: 0.45; value-text: round(root.character * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; modulation-offset: root.modulation-offsets[3]; modulation-route-count: root.modulation-route-counts[3]; changed(v) => { root.character-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
+        ParameterKnob { compact-horizontal: true; diameter: 28px; label: "Feedback"; tooltip: "Regeneration or phase resonance"; bipolar: true; value <=> root.feedback; default-value: 0.5; value-text: round((root.feedback * 1.84 - 0.92) * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; modulation-offset: root.modulation-offsets[4]; modulation-route-count: root.modulation-route-counts[4]; changed(v) => { root.feedback-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }
+    }
+
+    VerticalLayout {
+        x: 310px;
+        y: 91px;
+        width: 124px;
+        height: 126px;
+        spacing: 0px;
+        ParameterKnob { compact-horizontal: true; diameter: 28px; label: "Spread"; tooltip: "Stereo LFO phase offset"; value <=> root.spread; default-value: 0.65; value-text: round(root.spread * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[5]; modulation-depth: root.modulation-depths[5]; modulation-offset: root.modulation-offsets[5]; modulation-route-count: root.modulation-route-counts[5]; changed(v) => { root.spread-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); } modulation-edit-started => { root.modulation-edit-started(5); } modulation-edit-finished => { root.modulation-edit-finished(5); } }
+        ParameterKnob { compact-horizontal: true; diameter: 28px; label: "Tone"; tooltip: "Brightness of the processed signal"; value <=> root.tone; default-value: 0.75; value-text: round(root.tone * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[6]; modulation-depth: root.modulation-depths[6]; modulation-offset: root.modulation-offsets[6]; modulation-route-count: root.modulation-route-counts[6]; changed(v) => { root.tone-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(6, v); } modulation-edit-started => { root.modulation-edit-started(6); } modulation-edit-finished => { root.modulation-edit-finished(6); } }
+        ParameterKnob { compact-horizontal: true; diameter: 28px; label: "Stages"; tooltip: "Number of all-pass stages in Phaser mode"; enabled: root.mode == 2; value <=> root.stages; default-value: 0.5; value-text: root.stage-count + ""; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[7]; modulation-depth: root.modulation-depths[7]; modulation-offset: root.modulation-offsets[7]; modulation-route-count: root.modulation-route-counts[7]; changed(v) => { root.stages-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(7, v); } modulation-edit-started => { root.modulation-edit-started(7); } modulation-edit-finished => { root.modulation-edit-finished(7); } }
     }
 }

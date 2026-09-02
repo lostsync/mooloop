@@ -1667,7 +1667,8 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
         EffectKind::Buffer => 1,
         EffectKind::Gate | EffectKind::Compressor => 2,
         EffectKind::Delay => 3,
-        EffectKind::Reverb | EffectKind::Modulation => 3,
+        EffectKind::Reverb => 3,
+        EffectKind::Modulation => 2,
         EffectKind::Eq => 2,
     }
 }
@@ -12772,6 +12773,11 @@ fn inspect_sample(path: &Path) -> Result<SampleInspection, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn modulation_uses_two_rack_units() {
+        assert_eq!(effect_kind_units(EffectKind::Modulation), 2);
+    }
+
     /// A knob that reports a different number from the one the engine runs is
     /// worse than no knob. Round-trip both stretch mappings across their
     /// declared ranges.
