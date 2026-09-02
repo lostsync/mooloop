@@ -1,17 +1,30 @@
 import { Theme } from "theme.slint";
 import {
-    AudioOrientation, IconButton, InstrumentModule, LedIndicator, MiniKnob, MixerFader,
-    MuteButton, ParameterFader, ParameterKnob, PeakMeter, SectionLabel, SegmentedControl,
-    SelectorBank, SoloButton, StereoPeakMeter, ToggleButton, ToolButton, TransportButton,
-    TrimKnob, ValueReadout, ZoomScrollBar
+    AudioOrientation, DraggablePoint, IconButton, InstrumentModule, KnobField, LedIndicator,
+    MiniKnob, MixerFader, MuteButton, ParameterFader, ParameterKnob, PeakMeter, SectionLabel,
+    SegmentedControl, SelectorBank, SoloButton, StereoPeakMeter, TimeDivisionKnob, ToggleButton,
+    ToolButton, TransportButton, TrimKnob, ValueReadout, ZoomScrollBar
 } from "controls.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import {
     ChannelMeter, ClipIndicator, CorrelationMeter, GainReductionMeter, MasterMeter, MeterScale,
     SegmentedMeter
 } from "meters.slint";
-import { BusPicker } from "mixer.slint";
-import { DeviceFrame, DeviceHeader, DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+import { BusPicker, MixerPane, MixerStripRow } from "mixer.slint";
+import {
+    DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics,
+    EffectDeviceShell
+} from "device-rack.slint";
+import {
+    BitcrushTrace, BitcrusherTrace, DelayEchoDisplay, DriveTransferDisplay, DynamicsCurveDisplay,
+    FilterResponseDisplay, OscillatorTrace, SampleTrace
+} from "device-displays.slint";
+import { OscillatorDeviceStrip } from "device-oscillator.slint";
+import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
+import {
+    BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField, ToolbarLabel,
+    ToolbarRule, ToolModeButton
+} from "toolbar.slint";
 
 // One entry in the mockup tool's palette. This is the single source of truth:
 // the palette list, the render switch below, the default sizes, and the drag
@@ -179,6 +192,124 @@ export global MockupCatalog {
             component: "DeviceFrame", name: "Device frame", module: "device-rack.slint",
             groups: ["Device rack"], default-width: 220px, default-height: 268px, behavior: 0,
             device-units: true,
+        },
+        {
+            component: "SampleTrace", name: "Sample trace", module: "device-displays.slint",
+            groups: ["Scopes & displays"], default-width: 220px, default-height: 60px, behavior: 0,
+        },
+        {
+            component: "OscillatorTrace", name: "Oscillator trace", module: "device-displays.slint",
+            groups: ["Scopes & displays"], default-width: 130px, default-height: 48px, behavior: 1,
+        },
+        {
+            component: "BitcrusherTrace", name: "Bitcrusher trace", module: "device-displays.slint",
+            groups: ["Scopes & displays"], default-width: 200px, default-height: 90px, behavior: 1,
+        },
+        {
+            component: "BitcrushTrace", name: "Bitcrush trace", module: "device-displays.slint",
+            groups: ["Scopes & displays"], default-width: 200px, default-height: 110px, behavior: 1,
+        },
+        {
+            component: "FilterResponseDisplay", name: "Filter response", module: "device-displays.slint",
+            groups: ["Scopes & displays"], default-width: 200px, default-height: 110px, behavior: 1,
+        },
+        {
+            component: "DriveTransferDisplay", name: "Drive transfer", module: "device-displays.slint",
+            groups: ["Scopes & displays"], default-width: 200px, default-height: 110px, behavior: 1,
+        },
+        {
+            component: "DelayEchoDisplay", name: "Delay echoes", module: "device-displays.slint",
+            groups: ["Scopes & displays"], default-width: 200px, default-height: 90px, behavior: 1,
+        },
+        {
+            component: "DynamicsCurveDisplay", name: "Dynamics curve", module: "device-displays.slint",
+            groups: ["Scopes & displays"], default-width: 200px, default-height: 110px, behavior: 1,
+        },
+        {
+            component: "StepperField", name: "Stepper field", module: "toolbar.slint",
+            groups: ["Toolbar"], default-width: 92px, default-height: 24px, behavior: 0,
+        },
+        {
+            component: "MenuField", name: "Menu field", module: "toolbar.slint",
+            groups: ["Toolbar"], default-width: 100px, default-height: 24px, behavior: 3,
+        },
+        {
+            component: "NameField", name: "Name field", module: "toolbar.slint",
+            groups: ["Toolbar"], default-width: 104px, default-height: 24px, behavior: 4,
+        },
+        {
+            component: "ToolModeButton", name: "Tool mode button", module: "toolbar.slint",
+            groups: ["Toolbar", "Buttons"], default-width: 28px, default-height: 24px, behavior: 2,
+        },
+        {
+            component: "PositionReadout", name: "Position readout", module: "toolbar.slint",
+            groups: ["Toolbar"], default-width: 92px, default-height: 24px, behavior: 1,
+        },
+        {
+            component: "TempoField", name: "Tempo field", module: "toolbar.slint",
+            groups: ["Toolbar"], default-width: 76px, default-height: 24px, behavior: 1,
+        },
+        {
+            component: "BeatLamps", name: "Beat lamps", module: "toolbar.slint",
+            groups: ["Toolbar"], default-width: 48px, default-height: 24px, behavior: 1,
+        },
+        {
+            component: "ToolbarRule", name: "Toolbar rule", module: "toolbar.slint",
+            groups: ["Toolbar", "Layout"], default-width: 9px, default-height: 24px, behavior: 0,
+        },
+        {
+            component: "ToolbarLabel", name: "Toolbar label", module: "toolbar.slint",
+            groups: ["Toolbar", "Annotation"], default-width: 60px, default-height: 12px, behavior: 0,
+        },
+        {
+            component: "MenuRow", name: "Menu row", module: "menubar.slint",
+            groups: ["Menus"], default-width: 200px, default-height: 24px, behavior: 2,
+        },
+        {
+            component: "MenuSeparator", name: "Menu separator", module: "menubar.slint",
+            groups: ["Menus"], default-width: 200px, default-height: 5px, behavior: 0,
+        },
+        {
+            component: "MenuBarItem", name: "Menu bar item", module: "menubar.slint",
+            groups: ["Menus"], default-width: 52px, default-height: 26px, behavior: 0,
+        },
+        {
+            component: "MenuBar", name: "Menu bar", module: "menubar.slint",
+            groups: ["Menus", "Layout"], default-width: 420px, default-height: 26px, behavior: 0,
+        },
+        {
+            component: "KnobField", name: "Knob field", module: "controls.slint",
+            groups: ["Knobs & faders"], default-width: 135px, default-height: 30px, behavior: 1,
+        },
+        {
+            component: "TimeDivisionKnob", name: "Time division knob", module: "controls.slint",
+            groups: ["Knobs & faders"], default-width: 230px, default-height: 80px, behavior: 1,
+        },
+        {
+            component: "DraggablePoint", name: "Draggable point", module: "controls.slint",
+            groups: ["Knobs & faders", "Scopes & displays"],
+            default-width: 16px, default-height: 16px, behavior: 0,
+        },
+        {
+            component: "DeviceJoin", name: "Device join", module: "device-rack.slint",
+            groups: ["Device rack"], default-width: 20px, default-height: 268px, behavior: 0,
+        },
+        {
+            component: "DeviceAddSlot", name: "Device add slot", module: "device-rack.slint",
+            groups: ["Device rack"], default-width: 50px, default-height: 268px, behavior: 0,
+        },
+        {
+            component: "DevicePageButton", name: "Device page button", module: "device-rack.slint",
+            groups: ["Device rack", "Buttons"], default-width: 60px, default-height: 22px, behavior: 2,
+        },
+        {
+            component: "MixerPane", name: "Mixer pane", module: "mixer.slint",
+            groups: ["Mixer"], default-width: 440px, default-height: 320px, behavior: 0,
+        },
+        {
+            component: "OscillatorDeviceStrip", name: "Oscillator strip",
+            module: "device-oscillator.slint", groups: ["Device rack", "Mixer"],
+            default-width: 190px, default-height: 190px, behavior: 1,
         },
     ];
 
@@ -415,5 +546,193 @@ export component MockupSpecimen inherits Rectangle {
     if root.kind == 33: DeviceFrame {
         width: 100%;
         height: 100%;
+    }
+    // A stylised hit rather than real audio: a mockup only needs the shape
+    // the widget draws, and a canned envelope keeps it recognisable.
+    if root.kind == 34: SampleTrace {
+        width: 100%;
+        height: 100%;
+        minimums: [-0.05, -0.92, -0.71, -0.55, -0.44, -0.36, -0.29, -0.23,
+                   -0.18, -0.14, -0.11, -0.08, -0.06, -0.04, -0.03, -0.02];
+        maximums: [0.06, 0.88, 0.68, 0.52, 0.42, 0.34, 0.27, 0.22,
+                   0.17, 0.13, 0.10, 0.08, 0.06, 0.04, 0.03, 0.02];
+    }
+    if root.kind == 35: OscillatorTrace {
+        width: 100%;
+        height: 100%;
+        wave: clamp(round(root.value * 4), 0, 4);
+        semitones: 0;
+        cents: 0;
+        level: 0.9;
+        pulse-width: 0.5;
+    }
+    if root.kind == 36: BitcrusherTrace {
+        width: 100%;
+        height: 100%;
+        bit-reduction: root.value;
+        rate-reduction: root.value;
+    }
+    if root.kind == 37: BitcrushTrace {
+        width: 100%;
+        height: 100%;
+        bits: 16 - root.value * 14;
+        downsample: 1 + root.value * 24;
+    }
+    if root.kind == 38: FilterResponseDisplay {
+        width: 100%;
+        height: 100%;
+        mode: 0;
+        cutoff: root.value;
+        resonance: 0.4;
+        slope: 0;
+        env-amount: 0;
+    }
+    if root.kind == 39: DriveTransferDisplay {
+        width: 100%;
+        height: 100%;
+        drive: 1 + root.value * 32;
+        curve: 0;
+    }
+    if root.kind == 40: DelayEchoDisplay {
+        width: 100%;
+        height: 100%;
+        time-ms: 40 + root.value * 560;
+        feedback: root.value * 0.8;
+        cross: 0;
+    }
+    if root.kind == 41: DynamicsCurveDisplay {
+        width: 100%;
+        height: 100%;
+        mode: 1;
+        threshold-db: root.value * 60 - 60;
+        ratio: 4;
+        knee-db: 6;
+    }
+    if root.kind == 42: StepperField {
+        width: 100%;
+        label: root.label == "" ? "STEP" : root.label;
+        value: round(root.value * 99);
+    }
+    if root.kind == 43: MenuField {
+        label: root.label;
+        options: ["1/4", "1/8", "1/16"];
+        selected-index: round(root.value * 2);
+    }
+    if root.kind == 44: NameField {
+        width: 100%;
+        text: root.text;
+        placeholder: root.label == "" ? "Name" : root.label;
+        edited(t) => { root.note-edited(t); }
+    }
+    if root.kind == 45: ToolModeButton {
+        glyph: root.label == "" ? "\u{270e}" : root.label;
+        name: root.label == "" ? "Draw" : root.label;
+        active: root.value > 0.5;
+    }
+    if root.kind == 46: PositionReadout {
+        bar: 1 + round(root.value * 63);
+        beat: 1 + round(root.value * 3);
+        tick: 0;
+    }
+    if root.kind == 47: TempoField {
+        bpm: round(60 + root.value * 140);
+    }
+    if root.kind == 48: BeatLamps {
+        beats: 4;
+        current: round(root.value * 3);
+        running: true;
+    }
+    if root.kind == 49: ToolbarRule {
+        height: 100%;
+    }
+    if root.kind == 50: ToolbarLabel {
+        text: root.label == "" ? "LABEL" : root.label;
+    }
+    if root.kind == 51: MenuRow {
+        width: 100%;
+        text: root.label == "" ? "Save Song" : root.label;
+        shortcut: "Ctrl+S";
+        checked: root.value > 0.5;
+    }
+    if root.kind == 52: MenuSeparator {
+        width: 100%;
+    }
+    if root.kind == 53: MenuBarItem {
+        title: root.label == "" ? "File" : root.label;
+        menu-id: 0;
+        titles: [root.label == "" ? "File" : root.label];
+        bar-width: root.width;
+    }
+    // The bar is the row of titles, so a specimen of it needs titles in it;
+    // its own `titles` is the source of truth for their order.
+    if root.kind == 54: MenuBar {
+        width: 100%;
+        menu-bar-specimen := MenuBar {}
+        for title[i] in menu-bar-specimen.titles: MenuBarItem {
+            title: title;
+            menu-id: i;
+            titles: menu-bar-specimen.titles;
+            bar-width: root.width;
+        }
+    }
+    if root.kind == 55: KnobField {
+        label: root.label == "" ? "PARAM" : root.label;
+        value: root.value;
+        display-text: round(root.value * 100) + "%";
+    }
+    if root.kind == 56: TimeDivisionKnob {
+        value: root.value;
+        bpm: 120;
+    }
+    // Interaction-only, so it draws nothing of its own; the mockup gives it
+    // the handle its consumers each draw for themselves.
+    if root.kind == 57: DraggablePoint {
+        width: 100%;
+        height: 100%;
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            border-radius: min(parent.width, parent.height) / 2;
+            background: Theme.accent;
+            border-width: 1px;
+            border-color: Theme.background;
+        }
+    }
+    if root.kind == 58: DeviceJoin {
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 59: DeviceAddSlot {
+        width: 100%;
+        height: 100%;
+    }
+    if root.kind == 60: DevicePageButton {
+        text: root.label == "" ? "OSC" : root.label;
+        active: root.value > 0.5;
+    }
+    if root.kind == 61: MixerPane {
+        width: 100%;
+        height: 100%;
+        bus-names: ["Master", "Bus A"];
+        strips: [
+            {
+                name: "Master", volume: 0.8, pan: 0, output: 0, is-master: true,
+                feed-count: 2, left-db: -12, right-db: -14,
+            },
+            {
+                name: "Bus A", volume: 0.65, pan: -0.3, output: 0, selected: true,
+                feed-count: 1, left-db: -18, right-db: -17,
+            },
+        ];
+    }
+    if root.kind == 62: OscillatorDeviceStrip {
+        width: 100%;
+        height: 100%;
+        title: root.label == "" ? "OSC 1" : root.label;
+        wave: clamp(round(root.value * 4), 0, 4);
+        semitones: 0;
+        cents: 0;
+        level: 0.8;
+        pulse-width: 0.5;
     }
 }

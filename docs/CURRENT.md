@@ -198,7 +198,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   snap grid. Named layouts save to `layouts/` under the config directory, keyed
   by component name rather than palette index. Exported widgets with no catalog
   row show up in the palette's UNCATALOGUED group, which is the standing list of
-  what the tool cannot yet compose with.
+  what the tool cannot yet compose with. That group is down to `PianoGrid` and
+  `ModulationShelf`. The converse list -- UI patterns that recur but have no
+  reusable component behind them at all -- is `docs/WIDGET_INVENTORY.md`.
 - Some widgets exist ahead of the features that will use them: gain reduction and
   correlation have no audio behind them yet, and solo is a button style only.
 - There is no metronome. The toolbar deliberately does not offer a click-track

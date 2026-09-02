@@ -607,10 +607,13 @@ mod tests {
             assert!(!AUDIT_IGNORE.contains(component));
             assert!(!catalog.iter().any(|row| row.audit == *component));
         }
+        // What is left is the standing to-do, and it is down to the two
+        // composite editors nobody has factored: see docs/WIDGET_INVENTORY.md.
         assert!(
-            missing.iter().any(|(c, _)| *c == "SampleTrace"),
-            "the device displays are the known gap; SampleTrace should be in it"
+            missing.iter().any(|(c, _)| *c == "PianoGrid"),
+            "PianoGrid has no catalog row yet, so it belongs in the group"
         );
+        assert!(missing.len() <= 4, "the group has grown again: {missing:?}");
     }
 
     #[test]

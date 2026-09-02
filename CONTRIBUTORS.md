@@ -407,7 +407,15 @@ work session you can recall being part of, and don't stress over precision.
   palette index, so reordering the catalog stops corrupting them. `build.rs`
   scans `ui/` for exported components and the tool subtracts its own catalog
   from that, which is the part that keeps paying: the gap shows up in the
-  palette as an UNCATALOGUED group rather than in someone's memory.
+  palette as an UNCATALOGUED group rather than in someone's memory. Then
+  filled the palette from that group -- 29 kinds, near enough doubling it,
+  leaving only the two composite editors nobody has factored -- and wrote
+  `docs/WIDGET_INVENTORY.md` for the converse gap: patterns that recur with no
+  component behind them at all. Two of its eleven entries turned out to be
+  live bugs rather than duplication, both caused by the missing component:
+  `DisplayPrefs.smooth-curves` reaches only 4 of the 17 hand-rolled plots, and
+  the mono and poly LFO glyphs are the same hardcoded cubic sitting under a
+  waveform selector neither of them reads.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
