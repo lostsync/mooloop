@@ -352,6 +352,14 @@ pub struct Sampler {
     /// because `render_range` splits a block at event offsets and would
     /// otherwise have to carry it through every split.
     bpm: f64,
+    /// Whether the transport was running last block.
+    ///
+    /// Stopping releases every sounding voice, and that has to happen on the
+    /// *transition* rather than on every stopped block. Repeating it was
+    /// invisible while the only way to sound a note was the sequencer -- a
+    /// stopped transport sends none -- but an auditioned note arrives while
+    /// stopped, and a per-block release cut it off one block after it began.
+    was_playing: bool,
     /// The device's patch-level output trim, lagged so it cannot click.
     ///
     /// One gain for the whole sampler, not one per voice: every voice copies
@@ -391,6 +399,7 @@ impl Sampler {
             next_age: 1,
             stretch: None,
             bpm: 120.0,
+            was_playing: false,
             output_gain: Smoothed::new(
                 clamp_output_gain(params.output_gain),
                 OUTPUT_GAIN_SMOOTHING_S,
@@ -622,9 +631,15 @@ impl Sampler {
         // transpose it: the rate is the sample-rate conversion alone. The tune
         // knobs still apply, through `tuning_ratio` below.
         //
-        // Resolved before `select_voice` on purpose. A note outside the slice
-        // range has nothing to play, and it must not steal a voice or fire the
-        // channel's choke on its way to being silent.
+        // Resolved before `select_voice` on purpose: a note outside the slice
+        // range has nothing to play, so it must not steal a voice or choke
+        // this sampler's own sounding ones on its way to being silent.
+        //
+        // It does still fire the *channel's* choke group. `inject_choke_events`
+        // is a pre-pass over the block's event lists and runs before any
+        // device does, so it cannot know a note found no slice. Making that
+        // true would mean the choke pre-pass asking a device a question, which
+        // is a larger change than this is worth.
         let (slice, key_pitch_ratio) = if self.params.play_mode == PlayMode::Slice {
             let map = self.slice_slot.load_full();
             let (_, region_end) = Self::resolve_playback_bounds(self.params, len, None);
@@ -797,7 +812,10 @@ impl Sampler {
     /// dragging the region end in while a slice is sounding clips that voice
     /// instead of letting it read past the region -- the same live-edit
     /// behaviour a pitched voice already has.
-    fn resolve_playback_bounds(
+    /// Public because committing a stretch has to bake the region that was
+    /// actually sounding, and a second copy of this arithmetic on the control
+    /// thread is what would drift from it.
+    pub fn resolve_playback_bounds(
         params: SamplerParams,
         len: usize,
         slice: Option<(f64, f64)>,
@@ -1061,9 +1079,10 @@ impl AudioNode for Sampler {
         let frames = ctx.frames.min(bus.capacity());
         self.bpm = ctx.bpm;
 
-        if !ctx.playing {
+        if self.was_playing && !ctx.playing {
             self.release_all();
         }
+        self.was_playing = ctx.playing;
 
         // Split the block at event offsets: render, apply event, repeat.
         let mut pos = 0usize;
@@ -1340,8 +1359,7 @@ mod tests {
 
     /// A note outside the map has nothing to play. It must be silent, and it
     /// must not consume a voice on its way there -- stealing one would make
-    /// an out-of-range key cut off the slice that is sounding, and the choke
-    /// group would carry that to the rest of the kit.
+    /// an out-of-range key cut off the slice that is sounding.
     #[test]
     fn a_note_below_or_above_the_slice_range_is_silent_and_steals_no_voice() {
         let sr = 48_000;

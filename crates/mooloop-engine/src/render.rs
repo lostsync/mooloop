@@ -1079,6 +1079,27 @@ fn clamp_bus(bus: u8) -> u8 {
     }
 }
 
+/// The most auditions one block may carry. A block is a couple of
+/// milliseconds; anything past this is a stuck key, not playing.
+const MAX_AUDITIONS_PER_BLOCK: usize = 16;
+
+/// Note ids for auditioned notes, kept clear of the sequencer's.
+///
+/// Counted down from the top rather than up from zero because the sequencer
+/// mints ids from its patterns upwards: a note-off has to find the note-on it
+/// belongs to, and two id spaces that can meet would let an audition release
+/// a sequenced note.
+fn audition_note_id(note: u8) -> u64 {
+    u64::MAX - u64::from(note)
+}
+
+/// One note the UI asked a channel to sound this block.
+#[derive(Clone, Copy)]
+struct Audition {
+    channel: u8,
+    event: Event,
+}
+
 fn inject_choke_events(choke_groups: &[u8], events: &mut [Box<EventList>]) {
     let active = choke_groups.len().min(events.len());
     for source in 0..active {
@@ -1207,6 +1228,13 @@ pub(crate) struct RenderState {
     /// with no channel strip -- so it never pays the pan law the sampler's
     /// 3 dB of extra trim exists to cancel. Both land at -12 dBFS.
     preview_gain: Arc<AtomicU32>,
+    /// Notes the UI asked for since the last block, waiting to be dispatched.
+    ///
+    /// Held rather than applied on arrival because the command drain runs
+    /// before `process_block_inner` clears the event lists, so a note pushed
+    /// straight into one would be thrown away before anything read it. A
+    /// fixed array, so filling it allocates nothing.
+    auditions: [Option<Audition>; MAX_AUDITIONS_PER_BLOCK],
 }
 
 /// One-shot straight to the master output: no envelope, no channel strip.
@@ -1251,6 +1279,7 @@ impl RenderState {
             buffer_cc: BufferCcState::default(),
             playhead_meters: PlayheadMeters::new(),
             modulator_meters: ModulatorMeters::new(),
+            auditions: [None; MAX_AUDITIONS_PER_BLOCK],
             preview: None,
             preview_retired: Vec::new(),
             preview_gain: Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits())),
@@ -1363,13 +1392,43 @@ impl RenderState {
                             }
                         })
                     });
+                    // A committed stretch is baked here too, from the same
+                    // spec the editor uses. `samples` carries sources -- that
+                    // is what a project's assets are -- so without this an
+                    // export would play the unstretched original while the
+                    // app plays the render.
+                    let sample = sample.map(|sample| {
+                        match project
+                            .channels
+                            .get(index)
+                            .and_then(|channel| channel.setup.source.sampler_state())
+                            .and_then(|state| state.commit.as_ref())
+                            .and_then(|commit| {
+                                mooloop_dsp::commit::rerender_commit(&sample, commit)
+                            }) {
+                            Some(rendered) => rendered,
+                            None => sample,
+                        }
+                    });
                     Arc::new(ArcSwapOption::from(sample))
                 })
                 .collect(),
         );
-        let slice_slots = Arc::new(
+        // Slice maps travel with the project, not with `samples`. Omitting
+        // them made every note in a sliced channel resolve out of range, so
+        // an exported mix was silent exactly where the app was not.
+        let slice_slots: Arc<Vec<Arc<ArcSwapOption<mooloop_core::SliceMap>>>> = Arc::new(
             (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::from(None)))
+                .map(|index| {
+                    let slices = project
+                        .channels
+                        .get(index)
+                        .and_then(|channel| channel.setup.source.sampler_state())
+                        .map(|state| state.slices.clone())
+                        .filter(|slices| !slices.is_empty())
+                        .map(Arc::new);
+                    Arc::new(ArcSwapOption::from(slices))
+                })
                 .collect(),
         );
         let mut state = Self::new(sample_rate, slots, slice_slots);
@@ -1973,6 +2032,25 @@ impl RenderState {
                     id,
                 );
             }
+            EngineCommand::TriggerChannelNote {
+                channel,
+                note,
+                velocity,
+            } => self.queue_audition(
+                channel,
+                Event::NoteOn {
+                    id: audition_note_id(note),
+                    note,
+                    velocity,
+                },
+            ),
+            EngineCommand::ReleaseChannelNote { channel, note } => self.queue_audition(
+                channel,
+                Event::NoteOff {
+                    id: audition_note_id(note),
+                    note,
+                },
+            ),
             EngineCommand::SetChannelSamplerParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.sampler.set_params(params);
@@ -2227,6 +2305,38 @@ impl RenderState {
         self.sample_rate as f64 * 60.0 / self.transport.bpm.max(1.0) / 128.0
     }
 
+    /// Hold an auditioned note until the block's event lists exist.
+    ///
+    /// Silently dropped past the cap: sixteen notes inside one block is a
+    /// stuck key, and refusing the seventeenth is better than growing a
+    /// buffer on the audio thread.
+    fn queue_audition(&mut self, channel: u8, event: Event) {
+        if let Some(slot) = self.auditions.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(Audition { channel, event });
+        }
+    }
+
+    /// Dispatch this block's auditions into the channels' event lists.
+    ///
+    /// At offset zero, and after the sequencer has scheduled: an audition is
+    /// a live gesture that already happened, so it belongs at the top of the
+    /// block rather than somewhere inside it. They go in whether or not the
+    /// transport is running, which is the point -- auditioning a slice must
+    /// not require pressing play.
+    fn dispatch_auditions(&mut self) {
+        for slot in self.auditions.iter_mut() {
+            let Some(audition) = slot.take() else {
+                continue;
+            };
+            if let Some(events) = self.events.get_mut(audition.channel as usize) {
+                let _ = events.push_ordered(TimedEvent {
+                    offset: 0,
+                    event: audition.event,
+                });
+            }
+        }
+    }
+
     pub fn process_block(&mut self, frames: usize) -> RenderReport {
         self.process_block_inner(frames, true)
     }
@@ -2278,6 +2388,7 @@ impl RenderState {
                 &mut self.events,
             );
         }
+        self.dispatch_auditions();
 
         let context = ProcessContext {
             sample_rate: self.sample_rate,
@@ -2580,6 +2691,89 @@ mod tests {
         }
     }
 
+    /// Auditioning has to work with the transport stopped -- that is the
+    /// whole gesture -- and the note has to go through the channel's own
+    /// device, not past it, or a slice would be auditioned without the
+    /// envelopes, filter and drive it will actually play through.
+    #[test]
+    fn an_auditioned_note_sounds_a_stopped_channel_through_its_own_device() {
+        // A full second, so the note outlasts the release window the check
+        // below is looking through rather than simply running out of audio.
+        let sample = Arc::new(SampleData {
+            frames: vec![[0.5, -0.5]; 48_000],
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        let slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        slots[0].store(Some(sample));
+        let slice_slots = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        let mut render = RenderState::new(48_000, slots, slice_slots);
+        render.load_project(&Project::default());
+        assert!(!render.transport.playing);
+
+        // Stopped and untouched, the channel is silent.
+        render.process_block(128);
+        assert!(render.strips[0].sampler.voice_positions()[0].is_nan());
+
+        render.apply_command(EngineCommand::TriggerChannelNote {
+            channel: 0,
+            note: 60,
+            velocity: 127,
+        });
+        let opening = render.process_block(128);
+        assert!(
+            !render.strips[0].sampler.voice_positions()[0].is_nan(),
+            "the audition should have started a voice on the channel's sampler"
+        );
+        assert!(opening.peak_l > 0.01, "the audition made no sound");
+
+        // And it has to keep sounding at level. A stopped transport used to
+        // release every voice on every block, which put an audition into
+        // release one block after it began. Measured as level rather than as
+        // playhead position on purpose: a releasing voice is still an active
+        // voice and its head keeps advancing, so a position check passes
+        // straight through the bug it is meant to catch.
+        //
+        // Fifty blocks is 133 ms, comfortably past the 50 ms default release.
+        let mut peak = opening.peak_l;
+        for block in 0..50 {
+            let report = render.process_block(128);
+            assert!(
+                report.peak_l > opening.peak_l * 0.9,
+                "the auditioned note decayed by block {block}: {} vs {}",
+                report.peak_l,
+                opening.peak_l
+            );
+            peak = report.peak_l;
+        }
+        assert!(peak > 0.01);
+
+        // An audition is consumed by the block it arrives in, not replayed.
+        assert!(render.auditions.iter().all(Option::is_none));
+
+        // Pressing stop still cuts sounding voices: the release moved to the
+        // transition, it did not go away. The default release is 50 ms, so
+        // give it comfortably longer than that.
+        render.transport.play();
+        render.process_block(128);
+        render.transport.stop();
+        for _ in 0..40 {
+            render.process_block(128);
+        }
+        assert!(
+            render.strips[0].sampler.voice_positions()[0].is_nan(),
+            "stopping the transport must still release what is sounding"
+        );
+    }
+
     #[test]
     fn preview_voice_plays_replaces_and_retires() {
         let slots = Arc::new(
@@ -2818,6 +3012,74 @@ mod tests {
         };
         project.channels[0].notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
         project
+    }
+
+    /// The offline renderer builds its own slots from the project, so it is a
+    /// second place a channel's audio is assembled. Slice maps travel with the
+    /// project rather than with `samples`, and leaving them out made every
+    /// note in a sliced channel resolve out of range -- an exported mix silent
+    /// exactly where the app was not. A committed stretch has the mirror
+    /// problem: `samples` carries sources, so the export would play the
+    /// unstretched original.
+    #[test]
+    fn an_offline_render_gets_the_slice_map_and_the_committed_buffer() {
+        let sample = Arc::new(SampleData {
+            frames: (0..8_000).map(|_| [0.5, -0.5]).collect(),
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        let mut channel = ProjectChannel::sampler(0, 1);
+        {
+            let sampler = channel.setup.sampler_state_mut().unwrap();
+            sampler.params.play_mode = mooloop_core::PlayMode::Slice;
+            sampler.params.attack = 0.0;
+            sampler.slices.divide_evenly(4, 0, 8_000);
+        }
+        // The third slice, so a map that failed to arrive cannot be mistaken
+        // for one that did.
+        let note = mooloop_core::DEFAULT_SLICE_BASE_NOTE + 2;
+        channel.notes[0].push(NoteEvent::new(1, 0, 96, note, 127));
+        let project = Project {
+            channels: vec![channel],
+            ..Project::default()
+        };
+
+        let samples = vec![Some(sample.clone())];
+        let mut render = RenderState::from_project(48_000, &project, &samples);
+        render.play();
+        let report = render.process_block(512);
+        assert!(
+            report.peak_l > 0.001,
+            "a sliced channel rendered silent offline: the map never arrived"
+        );
+
+        // And a commit is baked here too, so the exported length is the
+        // stretched one rather than the source's.
+        let mut committed = project.clone();
+        {
+            let sampler = committed.channels[0].setup.sampler_state_mut().unwrap();
+            sampler.params.play_mode = mooloop_core::PlayMode::Pitched;
+            sampler.commit = Some(Box::new(mooloop_core::SampleCommit {
+                mode: mooloop_core::StretchMode::Music,
+                ratio: 2.0,
+                grain: 1024,
+                source_markers: Vec::new(),
+                source_start: 0.0,
+                source_end: 1.0,
+                source_loop_start: 0.0,
+                source_loop_end: 1.0,
+            }));
+            sampler.slices = mooloop_core::SliceMap::default();
+        }
+        let render = RenderState::from_project(48_000, &committed, &samples);
+        let published = render.sample_slots[0]
+            .load_full()
+            .expect("the channel should have audio");
+        assert_eq!(
+            published.frames.len(),
+            16_000,
+            "the export played the source rather than the committed render"
+        );
     }
 
     #[test]
@@ -4821,9 +5083,11 @@ mod footprint {
         // itself is allocated only when a sampler asks for stretching.
         // Slicing adds 392: the channel's slice-map slot pointer, plus 24
         // bytes on each of the sixteen voices for the span it was struck
-        // with. The map itself lives in the slot, off the strip.
+        // with. The map itself lives in the slot, off the strip. The last 8
+        // are the sampler's transport-edge flag, which is what lets a note
+        // auditioned while stopped keep sounding.
         assert_eq!(size_of::<MlP8>(), 2_016);
-        assert_eq!(size_of::<ChannelStrip>(), 30_720);
+        assert_eq!(size_of::<ChannelStrip>(), 30_728);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -4834,7 +5098,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 49_160);
+        assert_eq!(per_live, 49_168);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved

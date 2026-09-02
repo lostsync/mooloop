@@ -21,9 +21,11 @@
 
 use std::sync::Arc;
 
-use mooloop_core::{clamp01, LoopMode, SampleCommit, SamplerParams, SliceMap};
-use mooloop_dsp::interpolate::{Region, RegionEdge};
-use mooloop_dsp::{render_stretched, SampleData, Sampler};
+use mooloop_core::{clamp01, SampleCommit, SamplerParams, SliceMap, SliceMarker};
+
+use crate::interpolate::{Region, RegionEdge};
+use crate::sampler::{SampleData, Sampler};
+use crate::stretch::render_stretched;
 
 /// Everything a commit produces, ready to be installed on a channel.
 pub struct CommittedSample {
@@ -35,16 +37,6 @@ pub struct CommittedSample {
     pub params: SamplerParams,
     /// What was baked, and what the editor looked like before it.
     pub commit: SampleCommit,
-}
-
-/// The playback region of `source`, in source frames.
-fn playback_region(params: SamplerParams, len: usize) -> (f64, f64) {
-    let len_f = len.max(1) as f64;
-    let start = f64::from(clamp01(params.start)) * len_f;
-    let end = (f64::from(clamp01(params.end)) * len_f)
-        .max(start + 1.0)
-        .min(len_f);
-    (start.min(end - 1.0), end)
 }
 
 /// Bake `source`'s stretch into a buffer.
@@ -66,7 +58,10 @@ pub fn commit_stretch(
         return None;
     }
     let len = source.frames.len();
-    let (region_start, region_end) = playback_region(params, len);
+    // The sampler's own resolver, so the region that gets baked is exactly
+    // the region that was sounding. A second copy of this arithmetic here is
+    // precisely the thing that would drift from what the user heard.
+    let (region_start, region_end) = Sampler::resolve_playback_bounds(params, len, None);
 
     // The live stretcher's own derivation, not a second copy of it. Measured
     // in the source's frames at unity playback rate, which is what
@@ -94,11 +89,13 @@ pub fn commit_stretch(
 
     // Markers and bounds cross through the trace rather than through the
     // nominal ratio: at a search window's worth of error a break's slices
-    // flam audibly.
+    // flam audibly. Ids ride across unchanged -- the audio moved, the slices
+    // did not become different slices.
     let mut committed_slices = SliceMap::new();
-    for marker in slices.markers() {
-        committed_slices.add(render.output_frame_of(f64::from(marker.frame)).round() as u32);
-    }
+    committed_slices.rebuild(slices.markers().iter().map(|marker| SliceMarker {
+        id: marker.id,
+        frame: render.output_frame_of(f64::from(marker.frame)).round() as u32,
+    }));
 
     let to_fraction = |fraction: f32| {
         let source_frame = f64::from(clamp01(fraction)) * len.max(1) as f64;
@@ -108,7 +105,7 @@ pub fn commit_stretch(
         mode: params.stretch_mode,
         ratio: ratio as f32,
         grain: params.stretch_grain,
-        source_markers: slices.markers().iter().map(|marker| marker.frame).collect(),
+        source_markers: slices.markers().to_vec(),
         source_start: params.start,
         source_end: params.end,
         source_loop_start: params.loop_start,
@@ -117,15 +114,15 @@ pub fn commit_stretch(
 
     let mut params = params;
     // The rendered buffer *is* the region, so the region is now all of it.
-    let (loop_start, loop_end) = if params.loop_mode == LoopMode::Off {
-        (0.0, 1.0)
-    } else {
-        (to_fraction(commit.source_loop_start), to_fraction(commit.source_loop_end))
-    };
+    // The loop points are mapped whatever the loop mode: points parked with
+    // looping switched off are still the user's, and silently flattening them
+    // to the whole buffer would lose an edit they can no longer see.
+    let loop_start = to_fraction(commit.source_loop_start);
+    let loop_end = to_fraction(commit.source_loop_end).max(loop_start);
     params.start = 0.0;
     params.end = 1.0;
     params.loop_start = loop_start;
-    params.loop_end = loop_end.max(loop_start);
+    params.loop_end = loop_end;
     // The stretch is in the audio now. Leaving the switch on would stretch an
     // already-stretched buffer.
     params.stretch_enabled = false;
@@ -154,13 +151,14 @@ pub fn rerender_commit(source: &SampleData, commit: &SampleCommit) -> Option<Arc
         return None;
     }
     let len = source.frames.len();
-    let (region_start, region_end) = playback_region(
+    let (region_start, region_end) = Sampler::resolve_playback_bounds(
         SamplerParams {
             start: commit.source_start,
             end: commit.source_end,
             ..SamplerParams::default()
         },
         len,
+        None,
     );
     let render = render_stretched(
         &source.frames,
@@ -195,22 +193,21 @@ pub fn revert_commit(params: SamplerParams, commit: &SampleCommit) -> (SamplerPa
     params.end = commit.source_end;
     params.loop_start = commit.source_loop_start;
     params.loop_end = commit.source_loop_end;
-    params.stretch_mode = commit.mode;
-    params.stretch_grain = commit.grain;
-    // Deliberately not switched back on. Reverting hands back the source
-    // buffer and the source bounds; whether to stretch it live again is the
-    // next decision, not part of undoing this one.
+    // Only what the commit itself changed is put back. `mode`, `ratio` and
+    // `grain` are recorded as *what was baked*, not as pre-commit editor
+    // state, and restoring them here would quietly undo any stretch setting
+    // touched since. `stretch_enabled` is the one the commit cleared, so it
+    // is the one revert restores: the patch goes back to stretching live.
+    params.stretch_enabled = true;
     let mut slices = SliceMap::new();
-    for frame in &commit.source_markers {
-        slices.add(*frame);
-    }
+    slices.rebuild(commit.source_markers.iter().copied());
     (params, slices)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{PlayMode, StretchMode};
+    use mooloop_core::{LoopMode, PlayMode, StretchMode};
 
     fn ramp(len: usize) -> SampleData {
         SampleData {
@@ -255,16 +252,50 @@ mod tests {
         let committed = commit_stretch(&source, params, &slices, 120.0).unwrap();
         assert!(!committed.params.stretch_enabled, "the stretch is in the audio now");
         assert_eq!(committed.slices.len(), slices.len());
+        // The audio moved; the slices did not become different slices.
+        assert_eq!(
+            committed.slices.markers().iter().map(|m| m.id).collect::<Vec<_>>(),
+            slices.markers().iter().map(|m| m.id).collect::<Vec<_>>(),
+            "committing must not renumber the map"
+        );
 
         let (reverted, restored) = revert_commit(committed.params, &committed.commit);
         assert_eq!(reverted.start, params.start);
         assert_eq!(reverted.end, params.end);
         assert_eq!(reverted.loop_start, params.loop_start);
         assert_eq!(reverted.loop_end, params.loop_end);
-        assert_eq!(
-            restored.markers().iter().map(|m| m.frame).collect::<Vec<_>>(),
-            slices.markers().iter().map(|m| m.frame).collect::<Vec<_>>()
+        assert!(reverted.stretch_enabled, "revert puts the live stretch back");
+        assert_eq!(restored.markers(), slices.markers(), "ids and frames both");
+    }
+
+    /// Loop points are the user's edit whether or not looping is switched on.
+    /// Committing has to carry them across rather than flatten them, or
+    /// turning looping on after a commit would find them gone.
+    #[test]
+    fn loop_points_survive_a_commit_with_looping_switched_off() {
+        let source = ramp(48_000);
+        let params = SamplerParams {
+            loop_mode: LoopMode::Off,
+            loop_start: 0.25,
+            loop_end: 0.5,
+            ..stretched_params()
+        };
+        let committed = commit_stretch(&source, params, &SliceMap::new(), 120.0).unwrap();
+        // The region is 0.1..0.9, so 0.25 of the source sits an eighth of the
+        // way into it and 0.5 sits halfway.
+        assert!(
+            (committed.params.loop_start - 0.1875).abs() < 0.01,
+            "loop start landed at {}",
+            committed.params.loop_start
         );
+        assert!(
+            (committed.params.loop_end - 0.5).abs() < 0.01,
+            "loop end landed at {}",
+            committed.params.loop_end
+        );
+        let (reverted, _) = revert_commit(committed.params, &committed.commit);
+        assert_eq!(reverted.loop_start, 0.25);
+        assert_eq!(reverted.loop_end, 0.5);
     }
 
     /// The commit is length-determined by its spec, which is the property

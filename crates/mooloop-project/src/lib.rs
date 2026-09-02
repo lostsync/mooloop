@@ -1041,16 +1041,21 @@ mod tests {
             state.params.play_mode = mooloop_core::PlayMode::Slice;
             state.params.slice_base_note = 48;
             state.slices.divide_evenly(4, 0, 4_000);
-            state.commit = Some(mooloop_core::SampleCommit {
+            state.commit = Some(Box::new(mooloop_core::SampleCommit {
                 mode: mooloop_core::StretchMode::Drums,
                 ratio: 2.5,
                 grain: 512,
-                source_markers: vec![0, 1_000, 2_000, 3_000],
+                source_markers: (0..4)
+                    .map(|index| mooloop_core::SliceMarker {
+                        id: index + 1,
+                        frame: index as u32 * 1_000,
+                    })
+                    .collect(),
                 source_start: 0.0,
                 source_end: 1.0,
                 source_loop_start: 0.0,
                 source_loop_end: 1.0,
-            });
+            }));
         }
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();

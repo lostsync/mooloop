@@ -8,7 +8,6 @@
 
 mod actions;
 mod audio_file;
-mod commit;
 mod gestures;
 mod history;
 mod meter;
@@ -601,7 +600,7 @@ struct ChannelState {
     committed_sample: Option<Arc<SampleData>>,
     /// What the committed render was baked from, and what the editor looked
     /// like before it. `None` means the published buffer is the source.
-    commit: Option<SampleCommit>,
+    commit: Option<Box<SampleCommit>>,
     /// Slice boundaries into the *published* buffer, in frames, so they move
     /// with the waveform under any zoom.
     slices: SliceMap,
@@ -2383,11 +2382,27 @@ impl UiState {
                 // the spec is length-determined, so the buffer that comes
                 // back is the one that was baked, and the project never had
                 // to carry the audio.
+                //
+                // Only when it has to, though. Undo and every other project
+                // edit reinstall the whole document through here, and a
+                // commit is a couple of hundred milliseconds of rendering per
+                // channel -- paid on the UI thread, so it is a visible stall.
+                // A buffer already in hand, baked from the same source under
+                // the same spec, is the same buffer.
                 let commit = sampler.and_then(|state| state.commit.clone());
-                let committed = commit
-                    .as_ref()
-                    .zip(sample.as_ref())
-                    .and_then(|(commit, source)| commit::rerender_commit(source, commit));
+                let committed = commit.as_ref().zip(sample.as_ref()).and_then(
+                    |(commit, source)| {
+                        let held = self.channels.get(index).filter(|held| {
+                            held.commit.as_ref() == Some(commit)
+                                && held
+                                    .sample_data
+                                    .as_ref()
+                                    .is_some_and(|held| Arc::ptr_eq(held, source))
+                        });
+                        held.and_then(|held| held.committed_sample.clone())
+                            .or_else(|| mooloop_dsp::commit::rerender_commit(source, commit))
+                    },
+                );
                 let published = committed.as_ref().or(sample.as_ref());
                 let waveform = published
                     .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))

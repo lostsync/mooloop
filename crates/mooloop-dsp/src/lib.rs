@@ -27,6 +27,7 @@ pub mod align;
 pub mod analysis;
 pub mod biquad;
 pub mod buffer_device;
+pub mod commit;
 pub mod bus;
 pub mod delayline;
 pub mod drumsynth;

@@ -44,9 +44,16 @@ pub struct SamplerState {
     ///
     /// The rendered audio is deliberately not persisted: a commit is
     /// reproducible from this spec, so loading decodes the source as usual
-    /// and re-renders. An 8-second break takes roughly 200 ms off-thread.
+    /// and re-renders.
+    ///
+    /// Boxed because most samplers have no commit and this type is embedded
+    /// in every channel of every project, kit, and preset: out of line it is
+    /// a pointer in the common case instead of six fields and a `Vec`. That
+    /// is also what keeps `DocumentResult`'s variants within sight of each
+    /// other -- growing this by 48 bytes was enough to trip
+    /// `large_enum_variant` two crates away.
     #[serde(default)]
-    pub commit: Option<SampleCommit>,
+    pub commit: Option<Box<SampleCommit>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]

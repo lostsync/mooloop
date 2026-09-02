@@ -376,6 +376,17 @@ work session you can recall being part of, and don't stress over precision.
   `Stretcher::next_frame` driven by a plain loop on the control thread. That
   collapses every "disable X while stretching" case to one rule: stretch is
   live for forward pitched playback, and committed for reverse or slice.
+  Reviewing that work found two things the tests had been too weak to see. The
+  offline renderer assembles a channel's audio in its own second place, so an
+  export shipped no slice maps and no committed buffers -- a sliced channel
+  rendered silent exactly where the app was not. And auditioning a slice with
+  the transport stopped was cut off a block after it began, because the
+  sampler released every voice on every stopped block rather than on the
+  transition; nothing had noticed because until auditions existed there was no
+  way to sound a note while stopped. Both now have tests confirmed to fail
+  without their fix, the second measured as level rather than as playhead
+  position -- a releasing voice is still an active voice and its head keeps
+  advancing, so the obvious check passed straight through the bug.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

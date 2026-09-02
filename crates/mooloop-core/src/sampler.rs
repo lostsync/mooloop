@@ -113,10 +113,37 @@ pub struct SliceMarker {
 /// [`MAX_SLICES`]. Every mutation restores it, so no caller can publish a map
 /// the voice would have to defend itself against.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "SliceMapWire")]
 pub struct SliceMap {
     markers: Vec<SliceMarker>,
     #[serde(default)]
     next_id: u64,
+}
+
+/// What a `SliceMap` looks like on disk, before the invariant is imposed.
+///
+/// Deserialization is the one path into the type that does not go through a
+/// mutator, so it is the one path that could otherwise publish an unsorted or
+/// duplicated map. Normalizing here keeps "sorted, unique, capped" a property
+/// of the type rather than a property of well-formed files, and matches how
+/// the rest of the format is read: repair, do not refuse.
+#[derive(serde::Deserialize)]
+struct SliceMapWire {
+    #[serde(default)]
+    markers: Vec<SliceMarker>,
+    #[serde(default)]
+    next_id: u64,
+}
+
+impl From<SliceMapWire> for SliceMap {
+    fn from(wire: SliceMapWire) -> Self {
+        let mut map = Self {
+            markers: Vec::new(),
+            next_id: wire.next_id,
+        };
+        map.rebuild(wire.markers);
+        map
+    }
 }
 
 impl SliceMap {
@@ -225,6 +252,32 @@ impl SliceMap {
 
     pub fn clear(&mut self) {
         self.markers.clear();
+    }
+
+    /// Replace every marker, keeping the ids the caller supplies.
+    ///
+    /// The one operation that must *not* mint fresh ids. Committing a stretch
+    /// moves every marker to a new frame, and rebuilding the map through
+    /// `add` would renumber the whole thing -- which is exactly the silent
+    /// retargeting the ids exist to prevent. Enforces the same invariant as
+    /// every other mutation: sorted, unique by frame, capped.
+    pub fn rebuild(&mut self, markers: impl IntoIterator<Item = SliceMarker>) {
+        self.markers.clear();
+        for marker in markers {
+            if self.markers.len() >= MAX_SLICES {
+                break;
+            }
+            if self.markers.iter().any(|held| held.frame == marker.frame) {
+                continue;
+            }
+            let at = self
+                .markers
+                .partition_point(|held| held.frame < marker.frame);
+            self.markers.insert(at, marker);
+            // Keep minting clear of anything just adopted, or the next `add`
+            // would hand out an id that is already in use.
+            self.next_id = self.next_id.max(marker.id);
+        }
     }
 
     /// The source-frame span of slice `index`: its marker to the next one, or
@@ -347,7 +400,14 @@ pub struct SampleCommit {
     pub grain: u16,
     // Pre-commit editor state, so revert and re-commit are exact rather than
     // round-tripped through the trace twice.
-    pub source_markers: Vec<u32>,
+    /// The markers as they stood before the commit, ids included.
+    ///
+    /// Ids and not just frames, so a revert hands back the same slices rather
+    /// than fresh ones wearing their frames. Nothing references a slice by id
+    /// across a save yet -- per-slice parameters are deferred by #15 -- but
+    /// the type's whole reason to carry ids is that this stays true before
+    /// something does.
+    pub source_markers: Vec<SliceMarker>,
     pub source_start: f32,
     pub source_end: f32,
     pub source_loop_start: f32,
@@ -870,6 +930,37 @@ mod slice_tests {
         // two boundaries into one zero-length slice.
         assert!(!map.move_to(a, 100));
         assert_eq!(map.get(1).map(|marker| marker.frame), Some(150));
+    }
+
+    /// Deserialization is the one way into the map that skips its mutators,
+    /// so it is the one way an unsorted or duplicated map could reach a
+    /// voice. A hand-edited document is repaired on the way in, like every
+    /// other out-of-range field in the format.
+    #[test]
+    fn a_hand_edited_map_is_sorted_and_deduplicated_on_load() {
+        let map: SliceMap = toml::from_str(
+            r#"
+next_id = 3
+markers = [
+  { id = 1, frame = 900 },
+  { id = 2, frame = 100 },
+  { id = 3, frame = 900 },
+]
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            map.markers(),
+            &[
+                SliceMarker { id: 2, frame: 100 },
+                SliceMarker { id: 1, frame: 900 },
+            ]
+        );
+        // And a fresh marker must not collide with an adopted id.
+        let fresh = map.clone();
+        let mut fresh = fresh;
+        let id = fresh.add(500).unwrap();
+        assert!(id > 3, "minting handed out an id already in use: {id}");
     }
 
     /// The map holds its own invariants: no duplicate frames, and never more

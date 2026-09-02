@@ -141,6 +141,17 @@ pub enum EngineCommand {
         target: ParamAddr,
         id: PointId,
     },
+    /// Sound one note on a channel's generator, now.
+    ///
+    /// The audition primitive: there was no UI-to-engine path to play a note
+    /// on a channel at all before slicing needed one. The browser's preview
+    /// voice goes straight to the master with no channel strip, so it cannot
+    /// audition a slice through the envelopes, filter and drive the slice
+    /// will actually play through. This is also what an on-screen keyboard
+    /// needs.
+    TriggerChannelNote { channel: u8, note: u8, velocity: u8 },
+    /// Release a note started by [`EngineCommand::TriggerChannelNote`].
+    ReleaseChannelNote { channel: u8, note: u8 },
     /// Replace a channel's sampler parameter set.
     SetChannelSamplerParams { channel: u8, params: SamplerParams },
     /// Replace a channel's sound source while retaining its mixer strip.
