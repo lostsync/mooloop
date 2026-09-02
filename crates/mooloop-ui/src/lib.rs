@@ -31,7 +31,7 @@ use mooloop_core::{
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
     ModPolarity, ModRack, ModRandomTrigger, ModRoute, ModStepTrigger,
     ModulatorKind, ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State,
-    MlP8FilterMode, MlP8Params, MlP8State, SubOctave, SubSource, SubWave, SyncSource,
+    MlP8Params, MlP8State,
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
@@ -10579,81 +10579,98 @@ impl AppUi {
         wire_mlm1_osc_float!(on_mlm1_osc3_pulse_width_changed, 2, pulse_width);
 
 
-        // ML-P8. One macro a shape rather than one a control: the device has
-        // forty-one parameters and hand-writing a closure per knob is where a
-        // wrong field goes unnoticed.
+        // ML-P8. Every control is addressed by its descriptor id rather than
+        // by a field path, so the knob, the typed value and an automation
+        // lane all reach the parameter the same way and land under the same
+        // clamp. The device has sixty-two parameters; a closure a control
+        // writing its own field is where a wrong field goes unnoticed.
         macro_rules! wire_mlp8 {
-            ($callback:ident, |$params:ident, $value:ident: $ty:ty| $write:expr) => {{
+            ($callback:ident, $id:expr, $ty:ty) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
-                window.$callback(move |$value: $ty| {
+                window.$callback(move |value: $ty| {
+                    let id: u32 = $id;
+                    let value = value as f32;
                     let mut st = st.borrow_mut();
                     let channel_index = st.selected;
                     let channel = &mut st.channels[channel_index];
-                    let $params = &mut channel.mlp8_params;
-                    $write;
-                    let _ = tx.send(EngineCommand::SetChannelMlP8Params {
+                    let mut params = GeneratorParams::MlP8(channel.mlp8_params);
+                    let Some(value) = params.set(id, value) else {
+                        return;
+                    };
+                    if let GeneratorParams::MlP8(updated) = params {
+                        channel.mlp8_params = updated;
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
                         channel: channel_index as u8,
-                        params: channel.mlp8_params,
+                        id,
+                        value,
                     });
                 });
             }};
         }
 
-        wire_mlp8!(on_mlp8_osc1_wave_changed, |p, v: i32| p.osc[0].wave = osc_wave_from_int(v));
-        wire_mlp8!(on_mlp8_osc1_semitones_changed, |p, v: f32| p.osc[0].semitones = v);
-        wire_mlp8!(on_mlp8_osc1_cents_changed, |p, v: f32| p.osc[0].cents = v);
-        wire_mlp8!(on_mlp8_osc1_level_changed, |p, v: f32| p.osc[0].level = v);
-        wire_mlp8!(on_mlp8_osc1_pulse_width_changed, |p, v: f32| p.osc[0].pulse_width = v);
-        wire_mlp8!(on_mlp8_osc2_wave_changed, |p, v: i32| p.osc[1].wave = osc_wave_from_int(v));
-        wire_mlp8!(on_mlp8_osc2_semitones_changed, |p, v: f32| p.osc[1].semitones = v);
-        wire_mlp8!(on_mlp8_osc2_cents_changed, |p, v: f32| p.osc[1].cents = v);
-        wire_mlp8!(on_mlp8_osc2_level_changed, |p, v: f32| p.osc[1].level = v);
-        wire_mlp8!(on_mlp8_osc2_pulse_width_changed, |p, v: f32| p.osc[1].pulse_width = v);
-        wire_mlp8!(on_mlp8_osc3_wave_changed, |p, v: i32| p.osc[2].wave = osc_wave_from_int(v));
-        wire_mlp8!(on_mlp8_osc3_semitones_changed, |p, v: f32| p.osc[2].semitones = v);
-        wire_mlp8!(on_mlp8_osc3_cents_changed, |p, v: f32| p.osc[2].cents = v);
-        wire_mlp8!(on_mlp8_osc3_level_changed, |p, v: f32| p.osc[2].level = v);
-        wire_mlp8!(on_mlp8_osc3_pulse_width_changed, |p, v: f32| p.osc[2].pulse_width = v);
-        wire_mlp8!(on_mlp8_attack_changed, |p, v: f32| p.attack = v);
-        wire_mlp8!(on_mlp8_decay_changed, |p, v: f32| p.decay = v);
-        wire_mlp8!(on_mlp8_sustain_changed, |p, v: f32| p.sustain = v);
-        wire_mlp8!(on_mlp8_release_changed, |p, v: f32| p.release = v);
-        wire_mlp8!(on_mlp8_glide_changed, |p, v: f32| p.glide = v);
-        wire_mlp8!(on_mlp8_sub_level_changed, |p, v: f32| p.sub_level = v);
-        wire_mlp8!(on_mlp8_noise_level_changed, |p, v: f32| p.noise_level = v);
-        wire_mlp8!(on_mlp8_noise_color_changed, |p, v: f32| p.noise_color = v);
-        wire_mlp8!(on_mlp8_sub_octave_changed, |p, v: i32| p.sub_octave = SubOctave::from_index(v));
-        wire_mlp8!(on_mlp8_sub_wave_changed, |p, v: i32| p.sub_wave = SubWave::from_index(v));
-        wire_mlp8!(on_mlp8_sub_source_changed, |p, v: i32| p.sub_source = SubSource::from_index(v));
-        wire_mlp8!(on_mlp8_xmod12_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(0, 1)] = v);
-        wire_mlp8!(on_mlp8_xmod13_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(0, 2)] = v);
-        wire_mlp8!(on_mlp8_xmod21_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(1, 0)] = v);
-        wire_mlp8!(on_mlp8_xmod23_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(1, 2)] = v);
-        wire_mlp8!(on_mlp8_xmod31_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(2, 0)] = v);
-        wire_mlp8!(on_mlp8_xmod32_changed, |p, v: f32| p.xmod[mooloop_core::mlp8::xmod_index(2, 1)] = v);
-        wire_mlp8!(on_mlp8_noise_osc1_changed, |p, v: f32| p.noise_to_osc[0] = v);
-        wire_mlp8!(on_mlp8_noise_osc2_changed, |p, v: f32| p.noise_to_osc[1] = v);
-        wire_mlp8!(on_mlp8_noise_osc3_changed, |p, v: f32| p.noise_to_osc[2] = v);
-        wire_mlp8!(on_mlp8_feedback1_changed, |p, v: f32| p.osc_feedback[0] = v);
-        wire_mlp8!(on_mlp8_feedback2_changed, |p, v: f32| p.osc_feedback[1] = v);
-        wire_mlp8!(on_mlp8_feedback3_changed, |p, v: f32| p.osc_feedback[2] = v);
-        wire_mlp8!(on_mlp8_sync1_changed, |p, v: i32| p.sync_source[0] = SyncSource::from_index(v));
-        wire_mlp8!(on_mlp8_sync2_changed, |p, v: i32| p.sync_source[1] = SyncSource::from_index(v));
-        wire_mlp8!(on_mlp8_sync3_changed, |p, v: i32| p.sync_source[2] = SyncSource::from_index(v));
-        wire_mlp8!(on_mlp8_filter_mode_changed, |p, v: i32| p.filter_mode = MlP8FilterMode::from_index(v));
-        wire_mlp8!(on_mlp8_filter_cutoff_changed, |p, v: f32| p.filter_cutoff = v);
-        wire_mlp8!(on_mlp8_filter_resonance_changed, |p, v: f32| p.filter_resonance = v);
-        wire_mlp8!(on_mlp8_filter_env_changed, |p, v: f32| p.filter_env_amount = v);
-        wire_mlp8!(on_mlp8_drive_changed, |p, v: f32| p.drive = v);
-        wire_mlp8!(on_mlp8_keytrack_changed, |p, v: f32| p.filter_keytrack = v);
-        wire_mlp8!(on_mlp8_amp_velocity_changed, |p, v: f32| p.amp_velocity = v);
-        wire_mlp8!(on_mlp8_filter_velocity_changed, |p, v: f32| p.filter_velocity = v);
-        wire_mlp8!(on_mlp8_voice_feedback_changed, |p, v: f32| p.voice_feedback = v);
-        wire_mlp8!(on_mlp8_filter_attack_changed, |p, v: f32| p.filter_attack = v);
-        wire_mlp8!(on_mlp8_filter_decay_changed, |p, v: f32| p.filter_decay = v);
-        wire_mlp8!(on_mlp8_filter_sustain_changed, |p, v: f32| p.filter_sustain = v);
-        wire_mlp8!(on_mlp8_filter_release_changed, |p, v: f32| p.filter_release = v);
+        use mooloop_core::mlp8 as p8;
+        macro_rules! wire_mlp8_osc {
+            ($callback:ident, $osc:expr, $offset:expr, $ty:ty) => {
+                wire_mlp8!($callback, p8::osc_param($osc, $offset), $ty)
+            };
+        }
+
+        wire_mlp8_osc!(on_mlp8_osc1_wave_changed, 0, p8::OSC_OFFSET_WAVE, i32);
+        wire_mlp8_osc!(on_mlp8_osc1_semitones_changed, 0, p8::OSC_OFFSET_SEMITONES, f32);
+        wire_mlp8_osc!(on_mlp8_osc1_cents_changed, 0, p8::OSC_OFFSET_CENTS, f32);
+        wire_mlp8_osc!(on_mlp8_osc1_level_changed, 0, p8::OSC_OFFSET_LEVEL, f32);
+        wire_mlp8_osc!(on_mlp8_osc1_pulse_width_changed, 0, p8::OSC_OFFSET_PULSE_WIDTH, f32);
+        wire_mlp8_osc!(on_mlp8_osc2_wave_changed, 1, p8::OSC_OFFSET_WAVE, i32);
+        wire_mlp8_osc!(on_mlp8_osc2_semitones_changed, 1, p8::OSC_OFFSET_SEMITONES, f32);
+        wire_mlp8_osc!(on_mlp8_osc2_cents_changed, 1, p8::OSC_OFFSET_CENTS, f32);
+        wire_mlp8_osc!(on_mlp8_osc2_level_changed, 1, p8::OSC_OFFSET_LEVEL, f32);
+        wire_mlp8_osc!(on_mlp8_osc2_pulse_width_changed, 1, p8::OSC_OFFSET_PULSE_WIDTH, f32);
+        wire_mlp8_osc!(on_mlp8_osc3_wave_changed, 2, p8::OSC_OFFSET_WAVE, i32);
+        wire_mlp8_osc!(on_mlp8_osc3_semitones_changed, 2, p8::OSC_OFFSET_SEMITONES, f32);
+        wire_mlp8_osc!(on_mlp8_osc3_cents_changed, 2, p8::OSC_OFFSET_CENTS, f32);
+        wire_mlp8_osc!(on_mlp8_osc3_level_changed, 2, p8::OSC_OFFSET_LEVEL, f32);
+        wire_mlp8_osc!(on_mlp8_osc3_pulse_width_changed, 2, p8::OSC_OFFSET_PULSE_WIDTH, f32);
+        wire_mlp8!(on_mlp8_attack_changed, p8::PARAM_ATTACK, f32);
+        wire_mlp8!(on_mlp8_decay_changed, p8::PARAM_DECAY, f32);
+        wire_mlp8!(on_mlp8_sustain_changed, p8::PARAM_SUSTAIN, f32);
+        wire_mlp8!(on_mlp8_release_changed, p8::PARAM_RELEASE, f32);
+        wire_mlp8!(on_mlp8_glide_changed, p8::PARAM_GLIDE, f32);
+        wire_mlp8!(on_mlp8_sub_level_changed, p8::PARAM_SUB_LEVEL, f32);
+        wire_mlp8!(on_mlp8_noise_level_changed, p8::PARAM_NOISE_LEVEL, f32);
+        wire_mlp8!(on_mlp8_noise_color_changed, p8::PARAM_NOISE_COLOR, f32);
+        wire_mlp8!(on_mlp8_sub_octave_changed, p8::PARAM_SUB_OCTAVE, i32);
+        wire_mlp8!(on_mlp8_sub_wave_changed, p8::PARAM_SUB_WAVE, i32);
+        wire_mlp8!(on_mlp8_sub_source_changed, p8::PARAM_SUB_SOURCE, i32);
+        wire_mlp8!(on_mlp8_xmod12_changed, p8::PARAM_XMOD_BASE + p8::xmod_index(0, 1) as u32, f32);
+        wire_mlp8!(on_mlp8_xmod13_changed, p8::PARAM_XMOD_BASE + p8::xmod_index(0, 2) as u32, f32);
+        wire_mlp8!(on_mlp8_xmod21_changed, p8::PARAM_XMOD_BASE + p8::xmod_index(1, 0) as u32, f32);
+        wire_mlp8!(on_mlp8_xmod23_changed, p8::PARAM_XMOD_BASE + p8::xmod_index(1, 2) as u32, f32);
+        wire_mlp8!(on_mlp8_xmod31_changed, p8::PARAM_XMOD_BASE + p8::xmod_index(2, 0) as u32, f32);
+        wire_mlp8!(on_mlp8_xmod32_changed, p8::PARAM_XMOD_BASE + p8::xmod_index(2, 1) as u32, f32);
+        wire_mlp8!(on_mlp8_noise_osc1_changed, p8::PARAM_NOISE_TO_OSC_BASE, f32);
+        wire_mlp8!(on_mlp8_noise_osc2_changed, p8::PARAM_NOISE_TO_OSC_BASE + 1, f32);
+        wire_mlp8!(on_mlp8_noise_osc3_changed, p8::PARAM_NOISE_TO_OSC_BASE + 2, f32);
+        wire_mlp8!(on_mlp8_feedback1_changed, p8::PARAM_OSC_FEEDBACK_BASE, f32);
+        wire_mlp8!(on_mlp8_feedback2_changed, p8::PARAM_OSC_FEEDBACK_BASE + 1, f32);
+        wire_mlp8!(on_mlp8_feedback3_changed, p8::PARAM_OSC_FEEDBACK_BASE + 2, f32);
+        wire_mlp8!(on_mlp8_sync1_changed, p8::PARAM_SYNC_SOURCE_BASE, i32);
+        wire_mlp8!(on_mlp8_sync2_changed, p8::PARAM_SYNC_SOURCE_BASE + 1, i32);
+        wire_mlp8!(on_mlp8_sync3_changed, p8::PARAM_SYNC_SOURCE_BASE + 2, i32);
+        wire_mlp8!(on_mlp8_filter_mode_changed, p8::PARAM_FILTER_MODE, i32);
+        wire_mlp8!(on_mlp8_filter_cutoff_changed, p8::PARAM_FILTER_CUTOFF, f32);
+        wire_mlp8!(on_mlp8_filter_resonance_changed, p8::PARAM_FILTER_RESONANCE, f32);
+        wire_mlp8!(on_mlp8_filter_env_changed, p8::PARAM_FILTER_ENV_AMOUNT, f32);
+        wire_mlp8!(on_mlp8_drive_changed, p8::PARAM_DRIVE, f32);
+        wire_mlp8!(on_mlp8_keytrack_changed, p8::PARAM_KEYTRACK, f32);
+        wire_mlp8!(on_mlp8_amp_velocity_changed, p8::PARAM_AMP_VELOCITY, f32);
+        wire_mlp8!(on_mlp8_filter_velocity_changed, p8::PARAM_FILTER_VELOCITY, f32);
+        wire_mlp8!(on_mlp8_voice_feedback_changed, p8::PARAM_VOICE_FEEDBACK, f32);
+        wire_mlp8!(on_mlp8_filter_attack_changed, p8::PARAM_FILTER_ATTACK, f32);
+        wire_mlp8!(on_mlp8_filter_decay_changed, p8::PARAM_FILTER_DECAY, f32);
+        wire_mlp8!(on_mlp8_filter_sustain_changed, p8::PARAM_FILTER_SUSTAIN, f32);
+        wire_mlp8!(on_mlp8_filter_release_changed, p8::PARAM_FILTER_RELEASE, f32);
 
         // Every ML-P8 value field commits through one handler, because the
         // descriptor id travels with the text. `GeneratorParams::set` does
@@ -10684,12 +10701,13 @@ impl AppUi {
                     let channel_index = st.selected;
                     let channel = &mut st.channels[channel_index];
                     let mut params = GeneratorParams::MlP8(channel.mlp8_params);
-                    if params.set(id, value).is_some() {
+                    if let Some(clamped) = params.set(id, value) {
                         if let GeneratorParams::MlP8(updated) = params {
                             channel.mlp8_params = updated;
-                            let _ = tx.send(EngineCommand::SetChannelMlP8Params {
+                            let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
                                 channel: channel_index as u8,
-                                params: updated,
+                                id,
+                                value: clamped,
                             });
                         }
                     }

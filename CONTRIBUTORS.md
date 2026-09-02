@@ -385,7 +385,17 @@ work session you can recall being part of, and don't stress over precision.
   the answer had to be structural. Making the source column's five tabs the
   same list as the network grid's five rows absorbed the leftover sub and
   noise panel and freed the whole right side for the filter and the amplifier
-  as one region.
+  as one region. Then made good on a note left in step 03: the ML-P8's
+  parameter block had widened the engine's command ring twice, and the comment
+  said the next move should be the fix rather than a bigger number. It was.
+  Every entry in a fixed ring is as wide as its widest variant, so shipping a
+  whole 200-byte struct to move one knob made every unrelated command pay for
+  the largest device; ML-P8 edits go through a narrow
+  `SetChannelGeneratorParam` now and the ring is back to 136 bytes. The test
+  pins the property rather than the number. It made the UI smaller too --
+  addressing controls by descriptor id instead of by field path deleted a
+  closure-per-control macro and got the knobs the same clamping the typed
+  values already had.
   Investigated the `spike/sampler-time-stretch` spike (#32),
   found its "build vs. buy" conclusion under-argued, and merged it to `main`
   once Adam decided to own the build regardless. Built the sampler's #13

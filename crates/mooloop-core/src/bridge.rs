@@ -11,7 +11,7 @@
 
 use crate::{
     AutomationPoint, BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
-    ModRoute, ModSourceId, ModulatorParams, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent,
+    ModRoute, ModSourceId, ModulatorParams, MonoSynthParams, MlM1Params, NoteEvent,
     NoteId,
     ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams,
 };
@@ -171,11 +171,22 @@ pub enum EngineCommand {
         channel: u8,
         params: MlM1Params,
     },
-    /// Replace a channel's ML-P8 parameter set.
-    SetChannelMlP8Params {
-        channel: u8,
-        params: MlP8Params,
-    },
+    /// Set one descriptor-addressed generator parameter on a channel.
+    ///
+    /// The narrow form of the `SetChannel*Params` commands around it, and the
+    /// reason it exists is size: every entry in the engine's fixed ring is as
+    /// wide as the widest variant, so shipping a whole parameter struct to
+    /// move one knob makes every unrelated command pay for the largest
+    /// device. The ML-P8 is the device that made that stop being affordable —
+    /// its network and filter push its struct past 200 bytes, four times the
+    /// next-widest command — so it edits through here instead. The others can
+    /// follow; nothing about this is ML-P8-specific except which device
+    /// needed it first.
+    ///
+    /// Whole-struct installs are unaffected: a project's saved parameters
+    /// arrive through `load_source` on the control thread, which never
+    /// touches this ring.
+    SetChannelGeneratorParam { channel: u8, id: u32, value: f32 },
     /// Replace a channel's poly synth parameter set.
     SetChannelPolySynthParams {
         channel: u8,

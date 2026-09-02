@@ -2158,25 +2158,24 @@ retrigger = true
         );
         assert_eq!(size_of::<ModRack>(), 932);
 
-        // The rack no longer travels. `InstallModulator` is the widest
-        // modulation command and it carries one module — a step pattern's
-        // sixteen values, a durable id, two indices — which is not wide
-        // enough to set the ring's floor any more: a synth parameter block
-        // is. The widest is the ML-P8's, whose oscillator network adds twelve
-        // modulation amounts and three sync selectors to the three
-        // oscillators every synth carries, and whose filter adds a second
-        // envelope, two velocity depths and a feedback loop on top. 200 bytes
-        // an entry, so the engine's 1024-entry queue costs 200 KiB rather
-        // than the 936 KiB the rack used to make it.
+        // The rack no longer travels, and neither does the ML-P8. That
+        // device's parameter block moved this number twice, and the note here
+        // said the next move should be the fix rather than a bigger number,
+        // so it was: ML-P8 edits go through the narrow
+        // `SetChannelGeneratorParam` and its 200-byte whole-struct command is
+        // gone. The floor is back to the next-widest generator, the poly
+        // synth's 128-byte block plus its channel and discriminant, and the
+        // engine's 1024-entry queue costs 136 KiB rather than 200.
         //
-        // This one struct has moved the ring twice now. It is worth saying
-        // where that ends: a whole-struct generator update is the wrong shape
-        // for a device with this many parameters, and the narrow per-parameter
-        // command the modulation rack already uses is the shape that would
-        // stop it growing. Not today's change, but the next time this number
-        // moves it should be the fix rather than a bigger number.
-        assert_eq!(size_of::<crate::MlP8Params>(), 196);
-        assert_eq!(size_of::<crate::EngineCommand>(), 200);
+        // What this test now protects is that property rather than a size:
+        // no command carries a whole generator parameter block bigger than
+        // the poly synth's. The next device to outgrow it should follow the
+        // ML-P8 through the narrow command instead of raising this.
+        assert!(
+            size_of::<crate::MlP8Params>() > size_of::<crate::PolySynthParams>(),
+            "the ML-P8 stopped being the device that justified the narrow command"
+        );
+        assert_eq!(size_of::<crate::EngineCommand>(), 136);
 
         // The property this step bought, stated so it fails if it is lost: a
         // module fits inside an entry that something else already sized, so

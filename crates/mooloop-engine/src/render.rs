@@ -988,6 +988,22 @@ impl ChannelStrip {
         self.destination = MASTER_BUS;
     }
 
+    /// Hand the authored base to whichever generator this channel is running.
+    ///
+    /// Allocation-free for every kind, which is what makes it callable from
+    /// the audio thread: a generator keeps no queue between blocks, so its
+    /// base is applied straight through rather than staged.
+    fn push_source_base(&mut self) {
+        match self.source_base {
+            GeneratorParams::Sampler(params) => self.sampler.set_params(params),
+            GeneratorParams::MonoSynth(params) => self.mono_synth.set_params(params),
+            GeneratorParams::PolySynth(params) => self.poly_synth.set_params(params),
+            GeneratorParams::MlM1(params) => self.mlm1.set_params(params),
+            GeneratorParams::MlP8(params) => self.mlp8.set_params(params),
+            GeneratorParams::DrumSynth => {}
+        }
+    }
+
     /// Install a channel's source device state.
     ///
     /// Takes `sample_rate` because the sampler's stretch pool is sized to it
@@ -1697,15 +1713,7 @@ impl RenderState {
                 let Some(strip) = self.strips.get_mut(channel as usize) else {
                     return;
                 };
-                let base = strip.source_base;
-                match base {
-                    GeneratorParams::Sampler(params) => strip.sampler.set_params(params),
-                    GeneratorParams::MonoSynth(params) => strip.mono_synth.set_params(params),
-                    GeneratorParams::PolySynth(params) => strip.poly_synth.set_params(params),
-                    GeneratorParams::MlM1(params) => strip.mlm1.set_params(params),
-                    GeneratorParams::MlP8(params) => strip.mlp8.set_params(params),
-                    GeneratorParams::DrumSynth => {}
-                }
+                strip.push_source_base();
             }
             // Neither needs one. The strip's output stage keeps no parameter
             // state between blocks -- it re-reads its knob every block -- and
@@ -2127,10 +2135,17 @@ impl RenderState {
                     strip.source_base = GeneratorParams::MlM1(params);
                 }
             }
-            EngineCommand::SetChannelMlP8Params { channel, params } => {
+            EngineCommand::SetChannelGeneratorParam { channel, id, value } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.mlp8.set_params(params);
-                    strip.source_base = GeneratorParams::MlP8(params);
+                    // The base is the authored value modulation offsets from,
+                    // so this edits the base and lets the ordinary modulation
+                    // pass re-derive what the node should hear. Writing the
+                    // node directly here would be the same thing for an
+                    // unmodulated parameter and would fight the rack for a
+                    // modulated one.
+                    if strip.source_base.set(id, value).is_some() {
+                        strip.push_source_base();
+                    }
                 }
             }
             EngineCommand::SetChannelPolySynthParams { channel, params } => {
