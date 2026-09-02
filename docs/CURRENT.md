@@ -188,10 +188,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   instrument modules, visible selector banks for short fixed choices, and
   horizontal or vertical parameter faders where aligned values need to use a
   module's area. Knob labels and value readouts share the knob's drag target.
-  Seeing the controls side by side is the mockup tool's job: load its
-  `tests/fixtures/widget-sheet.toml` layout and capture it headlessly with
-  `MOOLOOP_MOCKUP_SNAPSHOT` and `MOOLOOP_MOCKUP_SIZE`. That sheet is 29 kinds,
-  not the whole catalog, so extend the fixture when a widget is missing from it.
+  There is no standing sheet that renders every control at once; to see one,
+  place it in the mockup tool below.
 - The active interface contract is `docs/UI_DESIGN.md`. A visual composition
   tool using the real controls is available with `cargo run -p mooloop-ui
   --example mockup`, or from Preferences > Developer. Its palette comes from one

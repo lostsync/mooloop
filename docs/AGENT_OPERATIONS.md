@@ -81,15 +81,6 @@ Prefer headless software rendering: it is deterministic, does not need a
 window, and works while the screen is locked. Slint's default GPU backend does
 not support `take_snapshot`.
 
-Capture a sheet of the real widgets, through the mockup tool loaded with a
-saved layout:
-
-```sh
-SLINT_BACKEND=winit-software MOOLOOP_MOCKUP_SNAPSHOT=/tmp/widgets.ppm \
-  MOOLOOP_MOCKUP_LAYOUT=crates/mooloop-ui/tests/fixtures/widget-sheet.toml \
-  MOOLOOP_MOCKUP_SIZE=1400x900 cargo run -p mooloop-ui --example mockup
-```
-
 Capture the real `MainWindow` through its playlist snapshot test:
 
 ```sh
