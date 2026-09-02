@@ -90,6 +90,7 @@ export component StepperField inherits Rectangle {
     in property <int> minimum: 0;
     in property <int> maximum: 999;
     in property <int> step: 1;
+    in property <bool> enabled: true;
     in property <string> display-text: root.value;
     in property <length> value-width: 30px;
     in property <brush> field-background: Theme.surface-raised;
@@ -101,11 +102,13 @@ export component StepperField inherits Rectangle {
     width: layout.preferred-width;
     border-radius: Theme.radius-md;
     background: root.field-background;
+    opacity: root.enabled ? 1.0 : 0.45;
     accessible-role: spinbox;
     accessible-label: root.tooltip;
     accessible-value: root.display-text;
 
     function apply(next: int) {
+        if (!root.enabled) { return; }
         let clamped = clamp(next, root.minimum, root.maximum);
         if (clamped != root.value) {
             root.value = clamped;
@@ -126,7 +129,7 @@ export component StepperField inherits Rectangle {
 
         StepperArrow {
             glyph: "‹";
-            enabled: root.value > root.minimum;
+            enabled: root.enabled && root.value > root.minimum;
             clicked => { root.apply(root.value - root.step); }
         }
         Rectangle {
@@ -143,7 +146,8 @@ export component StepperField inherits Rectangle {
             }
             // Dragging the number is faster than clicking an arrow 16 times.
             drag := TouchArea {
-                mouse-cursor: ns-resize;
+                enabled: root.enabled;
+                mouse-cursor: root.enabled ? ns-resize : default;
                 pointer-event(e) => {
                     if (e.kind == PointerEventKind.down) {
                         root.pressed-value = root.value;
@@ -160,7 +164,7 @@ export component StepperField inherits Rectangle {
         }
         StepperArrow {
             glyph: "›";
-            enabled: root.value < root.maximum;
+            enabled: root.enabled && root.value < root.maximum;
             clicked => { root.apply(root.value + root.step); }
         }
     }
