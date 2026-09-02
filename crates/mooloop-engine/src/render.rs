@@ -8,6 +8,7 @@ use mooloop_core::{
     compile_bus_graph, AutomationLane, ChannelSource, CompiledBusGraph, DeviceKind,
     DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams, ModDestinationDescriptor,
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
+    SlotRemap,
     Project,
     SamplerParams, SliceMap,
     DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
@@ -446,14 +447,28 @@ impl EffectChain {
         removed
     }
 
-    fn swap(&mut self, slot_a: usize, slot_b: usize) {
-        if slot_a < MAX_EFFECTS_PER_CHANNEL && slot_b < MAX_EFFECTS_PER_CHANNEL {
-            self.nodes.swap(slot_a, slot_b);
-            self.slots.swap(slot_a, slot_b);
-            self.dry_align.swap(slot_a, slot_b);
-            self.analyzers.swap(slot_a, slot_b);
-            self.refresh_bound();
+    /// Move the occupant of `from` to `to`, shifting everything between by
+    /// one place: the same permutation `mooloop_core::structure::move_effect`
+    /// performs on the model. A rotation of boxed pointers, so nothing is
+    /// allocated or dropped here. Returns whether anything moved.
+    fn move_slot(&mut self, from: usize, to: usize) -> bool {
+        if from == to || from >= MAX_EFFECTS_PER_CHANNEL || to >= MAX_EFFECTS_PER_CHANNEL {
+            return false;
         }
+        let (low, high) = (from.min(to), from.max(to));
+        if from < to {
+            self.nodes[low..=high].rotate_left(1);
+            self.slots[low..=high].rotate_left(1);
+            self.dry_align[low..=high].rotate_left(1);
+            self.analyzers[low..=high].rotate_left(1);
+        } else {
+            self.nodes[low..=high].rotate_right(1);
+            self.slots[low..=high].rotate_right(1);
+            self.dry_align[low..=high].rotate_right(1);
+            self.analyzers[low..=high].rotate_right(1);
+        }
+        self.refresh_bound();
+        true
     }
 
     fn set_bypassed(&mut self, slot: usize, bypassed: bool) {
@@ -1565,6 +1580,32 @@ impl RenderState {
         Self::chain_for(&mut self.strips, &mut self.buses, target)
     }
 
+    /// Run one chain edit's permutation over everything on this side that
+    /// names a slot in `target`'s chain: the matrix routes and the automation
+    /// lanes. The devices themselves have already moved with their base
+    /// values, event queues and host controls, so nothing needs restoring;
+    /// only the addresses had fallen behind.
+    ///
+    /// A channel's routes can only address that channel, so a channel edit
+    /// touches one rack. A bus chain can be addressed from any channel's
+    /// clip, so a bus edit walks them all -- a few thousand comparisons, on a
+    /// gesture that happens by hand.
+    fn retarget_effect_slots(&mut self, target: EffectTarget, remap: &SlotRemap) {
+        match target {
+            EffectTarget::Channel(channel) => {
+                if let Some(rack) = self.modulation.get_mut(channel as usize) {
+                    rack.retarget_effect_slots(target, remap);
+                }
+            }
+            EffectTarget::Bus(_) => {
+                for rack in self.modulation.iter_mut() {
+                    rack.retarget_effect_slots(target, remap);
+                }
+            }
+        }
+        self.sequencer.retarget_lanes(target, remap);
+    }
+
     fn chain(&self, target: EffectTarget) -> Option<&EffectChain> {
         match target {
             EffectTarget::Channel(index) => self.strips.get(index as usize).map(|s| &s.effects),
@@ -1849,11 +1890,16 @@ impl RenderState {
                     .map(StructuralReclaim::Effect)
             }
             StructuralCommand::RemoveEffect { target, slot } => {
-                Self::chain_for(&mut self.strips, &mut self.buses, target)
-                    .map(|chain| chain.remove(slot as usize))
+                let displaced = Self::chain_for(&mut self.strips, &mut self.buses, target)
+                    .map(|chain| chain.remove(slot as usize));
+                // The routes and lanes that drove the departed device go with
+                // it, and everything above it closes up -- the same table the
+                // model applied when it took the slot out of its `Vec`.
+                self.retarget_effect_slots(target, &SlotRemap::for_remove(slot as usize));
+                displaced
+                    .filter(|displaced| !displaced.is_empty())
+                    .map(StructuralReclaim::Effect)
             }
-            .filter(|displaced| !displaced.is_empty())
-            .map(StructuralReclaim::Effect),
             StructuralCommand::SetSamplerStretch { channel, pool } => {
                 let Some(strip) = self.strips.get_mut(channel as usize) else {
                     // Nothing to install into. Hand the pool straight back
@@ -2093,13 +2139,12 @@ impl RenderState {
                     strip.source_base = GeneratorParams::PolySynth(params);
                 }
             }
-            EngineCommand::SwapEffectSlots {
-                target,
-                slot_a,
-                slot_b,
-            } => {
-                if let Some(chain) = self.chain_mut(target) {
-                    chain.swap(slot_a as usize, slot_b as usize);
+            EngineCommand::MoveEffect { target, from, to } => {
+                let moved = self
+                    .chain_mut(target)
+                    .is_some_and(|chain| chain.move_slot(from as usize, to as usize));
+                if moved {
+                    self.retarget_effect_slots(target, &SlotRemap::for_move(from as usize, to as usize));
                 }
             }
             EngineCommand::SetEffectBypassed {
@@ -3596,6 +3641,75 @@ mod tests {
         ));
     }
 
+    /// The defect this guards: a route and a lane name their destination by
+    /// slot, and reordering the chain used to leave both pointing at the old
+    /// number -- so the LFO that was on the filter's cutoff started driving
+    /// whatever device slid into that slot, and the filter went dry.
+    #[test]
+    fn a_route_and_a_lane_follow_their_device_through_a_reorder_and_die_with_it() {
+        let (project, _source) = lfo_on_cutoff(0.25);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let channel = EffectTarget::Channel(0);
+        let _ = render.apply_structural(install_effect(
+            channel,
+            1,
+            default_effect(mooloop_core::EffectKind::Drive),
+        ));
+        render.apply_command(EngineCommand::UpsertAutomationPoint {
+            pattern: 0,
+            channel: 0,
+            target: CUTOFF,
+            point: mooloop_core::AutomationPoint::new(1, 0, 0.5),
+        });
+        assert!(render.effect_is_modulated(channel, 0, mooloop_core::FILTER_PARAM_CUTOFF_HZ));
+        assert!(render.sequencer.automation_lane_at(CUTOFF, 0.0).is_some());
+
+        // Filter to the end of the chain: drive first, filter second.
+        render.apply_command(EngineCommand::MoveEffect {
+            target: channel,
+            from: 0,
+            to: 1,
+        });
+        let moved = ParamAddr::effect(channel, 1, mooloop_core::FILTER_PARAM_CUTOFF_HZ);
+        assert!(
+            !render.effect_is_modulated(channel, 0, mooloop_core::FILTER_PARAM_CUTOFF_HZ),
+            "the drive inherited the filter's route"
+        );
+        assert!(
+            render.effect_is_modulated(channel, 1, mooloop_core::FILTER_PARAM_CUTOFF_HZ),
+            "the route did not follow the filter"
+        );
+        assert!(render.sequencer.automation_lane_at(CUTOFF, 0.0).is_none());
+        assert!(
+            render.sequencer.automation_lane_at(moved, 0.0).is_some(),
+            "the lane did not follow the filter"
+        );
+        assert_eq!(
+            render.strips[0].effects.slot(1).and_then(|slot| slot.kind),
+            Some(mooloop_core::EffectKind::Filter)
+        );
+
+        // And the filter in its new slot is actually being driven: the scratch
+        // list holds the last slot's events after a block, which is now the
+        // filter's.
+        render.play();
+        render.process_block(128);
+        let events = cutoff_events(&render);
+        assert!(
+            events.iter().any(|(_, value)| (value - 1_000.0).abs() > 100.0),
+            "the filter in slot 1 never left its base: {events:?}"
+        );
+
+        // Removing the filter takes its route and its lane with it rather than
+        // leaving either parked on an empty slot for the next device to inherit.
+        let _ = render.apply_structural(StructuralCommand::RemoveEffect {
+            target: channel,
+            slot: 1,
+        });
+        assert_eq!(render.modulation[0].routes.iter().flatten().count(), 0);
+        assert!(render.sequencer.automation_lane_at(moved, 0.0).is_none());
+    }
+
     /// Emptying a slot is the same fact stated once for every route it drove.
     #[test]
     fn clearing_a_module_restores_what_it_was_driving() {
@@ -4474,12 +4588,15 @@ mod tests {
         }
         assert_eq!(chain.bound, 6);
 
-        chain.swap(5, 1);
-        assert_eq!(chain.bound, 3);
+        // Moving 5 to 1 rotates 1..=5 right: the delay in 5 lands on 1 and
+        // the one in 2 shifts to 3.
+        assert!(chain.move_slot(5, 1));
+        assert_eq!(chain.bound, 4);
         assert!(chain.nodes[1].is_some());
-        assert!(chain.nodes[2].is_some());
+        assert!(chain.nodes[2].is_none());
+        assert!(chain.nodes[3].is_some());
 
-        assert!(chain.remove(2).node.is_some());
+        assert!(chain.remove(3).node.is_some());
         assert_eq!(chain.bound, 2);
         assert!(chain.remove(1).node.is_some());
         assert_eq!(chain.bound, 0);
@@ -4731,22 +4848,22 @@ mod tests {
             "bypassed should match dry: {bypassed} vs {dry}"
         );
 
-        // Swapping an occupied slot with an empty one moves the filter.
+        // Moving the filter into an empty slot keeps it in the chain.
         let mut render = RenderState::from_project(48_000, &project, &[]);
         let _ = render.apply_structural(install_effect(
             EffectTarget::Channel(0),
             0,
             muffling_filter(),
         ));
-        render.apply_command(EngineCommand::SwapEffectSlots {
+        render.apply_command(EngineCommand::MoveEffect {
             target: EffectTarget::Channel(0),
-            slot_a: 0,
-            slot_b: 3,
+            from: 0,
+            to: 3,
         });
         render.play();
         render.process_block(1024);
         let moved = render.master().l[..1024].iter().map(|s| s * s).sum::<f32>();
-        assert!(moved < dry * 0.5, "filter should still muffle after swap");
+        assert!(moved < dry * 0.5, "filter should still muffle after the move");
 
         // Removing the slot reclaims the node instead of dropping it here.
         let reclaimed = render.apply_structural(StructuralCommand::RemoveEffect {

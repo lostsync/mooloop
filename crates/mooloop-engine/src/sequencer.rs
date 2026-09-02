@@ -5,8 +5,8 @@
 //! scheduling and edits never allocate on the audio thread.
 
 use mooloop_core::{
-    AutomationLane, AutomationPoint, NoteEvent, NoteId, ParamAddr, Pattern, PatternPlacement,
-    PlaybackMode, PointId, Ppq, Project,
+    AutomationLane, AutomationPoint, EffectTarget, NoteEvent, NoteId, ParamAddr, Pattern,
+    PatternPlacement, PlaybackMode, PointId, Ppq, Project, SlotRemap,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
     MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT,
     MIN_SWING_PERCENT, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -283,6 +283,30 @@ impl Sequencer {
             .and_then(|channel| channel.lane_mut(target))
             .and_then(|lane| lane.remove(id))
             .is_some()
+    }
+
+    /// Run one chain edit's permutation over every lane that addresses
+    /// `scope`'s effect chain, in every pattern. A channel's chain is only
+    /// ever addressed from that channel's clips; a bus chain can be addressed
+    /// from any of them.
+    pub fn retarget_lanes(&mut self, scope: EffectTarget, remap: &SlotRemap) {
+        let channels = self.active_channels;
+        for pattern in &mut self.patterns {
+            match scope {
+                EffectTarget::Channel(channel) => {
+                    if let Some(channel) = pattern.channel_mut(channel as usize) {
+                        channel.retarget_lanes(scope, remap);
+                    }
+                }
+                EffectTarget::Bus(_) => {
+                    for channel in 0..channels {
+                        if let Some(channel) = pattern.channel_mut(channel) {
+                            channel.retarget_lanes(scope, remap);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Resolve `target` to the lane driving it at `song_tick`, together with

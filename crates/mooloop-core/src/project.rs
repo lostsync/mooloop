@@ -2,9 +2,10 @@
 
 use std::path::PathBuf;
 
+use crate::structure::{rescope_lanes, ChannelEdit};
 use crate::{
-    default_buses, BusSetup, Channel, DeviceKind, DrumMode, DrumSynthParams, KickCharacter,
-    AutomationLane, ModRack, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
+    default_buses, BusSetup, Channel, DeviceKind, DrumMode, DrumSynthParams, EffectTarget,
+    KickCharacter, AutomationLane, ModRack, MAX_CHANNELS, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
     PatternPlacement,
     PlaybackMode, PolySynthParams,
     SampleCommit, SamplerParams, SliceMap, SnareCharacter, DEFAULT_STEPS,
@@ -300,6 +301,24 @@ impl ChannelSetup {
         self.source.kind()
     }
 
+    /// Points every channel-scoped modulation route in this setup at
+    /// `channel`.
+    ///
+    /// A route names its destination channel absolutely, so a rack is only
+    /// correct on the channel it was authored on. That is right for a project
+    /// -- the scope is what will let one channel modulate another -- and wrong
+    /// for a preset, a kit entry, or a pasted channel, none of which has any
+    /// business claiming a channel number. Wherever a setup lands somewhere
+    /// new is where the rewrite belongs. Bus-scoped routes are left alone: a
+    /// bus exists independently of which channel loaded the setup.
+    pub fn rescope_modulation(&mut self, channel: u8) {
+        for route in self.modulation.routes.iter_mut().flatten() {
+            if matches!(route.destination.scope, EffectTarget::Channel(_)) {
+                route.destination.scope = EffectTarget::Channel(channel);
+            }
+        }
+    }
+
     pub fn sampler_state(&self) -> Option<&SamplerState> {
         self.source.sampler_state()
     }
@@ -461,6 +480,20 @@ impl ProjectChannel {
         }
     }
 
+    /// Point everything in this channel that names its own channel index at
+    /// `channel`: its routes, and every lane in every pattern. What a
+    /// pasted or loaded channel needs before it can live at a new index.
+    pub fn rescope(&mut self, channel: u8) {
+        self.setup.rescope_modulation(channel);
+        for lanes in &mut self.automation {
+            for lane in lanes.iter_mut() {
+                if matches!(lane.target.scope, EffectTarget::Channel(_)) {
+                    lane.target.scope = EffectTarget::Channel(channel);
+                }
+            }
+        }
+    }
+
     /// Pad `automation` out to match `notes`. A song saved before clip
     /// automation has none at all, and one saved before a pattern was added
     /// has fewer; both must end up addressable by pattern index.
@@ -519,6 +552,46 @@ impl Default for Project {
 }
 
 impl Project {
+    /// Delete the channel at `index`, closing the gap. Every route and lane
+    /// in the song that named a later channel is renumbered to follow it,
+    /// and anything that named the deleted channel is dropped with it: a
+    /// lane left pointing at index 3 would otherwise start automating
+    /// whichever channel moved into that seat. `None` leaves the song
+    /// untouched when the index does not exist or it is the last channel.
+    pub fn remove_channel(&mut self, index: usize) -> Option<ProjectChannel> {
+        if self.channels.len() <= 1 || index >= self.channels.len() {
+            return None;
+        }
+        let removed = self.channels.remove(index);
+        self.rescope_after(ChannelEdit::Removed(index as u8));
+        self.selected_channel =
+            (self.selected_channel as usize).min(self.channels.len() - 1) as u8;
+        Some(removed)
+    }
+
+    /// Insert `channel` at `index` (clamped to the end), opening a gap. The
+    /// newcomer's own references are pointed at its new index and every
+    /// later channel's follow it up by one. Refused when the song is full.
+    pub fn insert_channel(&mut self, index: usize, mut channel: ProjectChannel) -> Option<usize> {
+        if self.channels.len() >= MAX_CHANNELS {
+            return None;
+        }
+        let index = index.min(self.channels.len());
+        self.rescope_after(ChannelEdit::Inserted(index as u8));
+        channel.rescope(index as u8);
+        self.channels.insert(index, channel);
+        Some(index)
+    }
+
+    fn rescope_after(&mut self, edit: ChannelEdit) {
+        for channel in &mut self.channels {
+            channel.setup.modulation.rescope_channels(edit);
+            for lanes in &mut channel.automation {
+                rescope_lanes(lanes, edit);
+            }
+        }
+    }
+
     /// Creates a concise, deterministic four-piece drum kit ready for sequencing.
     pub fn starter_kit(seed: u64) -> Self {
         let mut random = StarterRandom::new(seed);
@@ -668,6 +741,62 @@ mod tests {
         assert_eq!(poly.kind(), DeviceKind::PolySynth);
         assert!(poly.poly_synth_state().is_some());
         assert!(poly.sampler_state().is_none());
+    }
+
+    /// Every channel-scoped address in the song has to follow its channel
+    /// through a deletion and an insertion, and the deleted channel's own
+    /// have to go with it -- otherwise a lane on channel 3 starts driving
+    /// whichever channel moves into seat 3.
+    #[test]
+    fn channel_edits_renumber_every_address_that_named_a_channel() {
+        let mut project = Project::default();
+        for index in 1..4 {
+            project.channels.push(ProjectChannel::mlm1(index, 1));
+        }
+        let strip = |channel: u8| crate::ParamAddr::strip(
+            crate::EffectTarget::Channel(channel),
+            crate::STRIP_PARAM_VOLUME,
+        );
+        let bus = crate::ParamAddr::strip(crate::EffectTarget::Bus(2), crate::STRIP_PARAM_PAN);
+        for index in 0..4u8 {
+            let channel = &mut project.channels[index as usize];
+            channel.setup.modulation.install(0, crate::ModulatorParams::Lfo(Default::default()));
+            channel
+                .setup
+                .modulation
+                .add_route(crate::ModRoute::to_slot(0, strip(index), 0.5, Default::default()))
+                .unwrap();
+            channel.automation[0].push(AutomationLane::new(strip(index)));
+            channel.automation[0].push(AutomationLane::new(bus));
+        }
+
+        let removed = project.remove_channel(1).expect("channel 1 exists");
+        assert_eq!(project.channels.len(), 3);
+        assert_eq!(removed.setup.modulation.routes[0].unwrap().destination, strip(1));
+        for index in 0..3u8 {
+            let channel = &project.channels[index as usize];
+            assert_eq!(
+                channel.setup.modulation.routes[0].unwrap().destination,
+                strip(index),
+                "route on channel {index}"
+            );
+            assert_eq!(channel.automation[0][0].target, strip(index), "lane on channel {index}");
+            assert_eq!(channel.automation[0][1].target, bus, "bus lane on channel {index}");
+        }
+
+        // Putting it back at the front renumbers everyone again, and the
+        // newcomer's addresses point at its new seat rather than its old one.
+        assert_eq!(project.insert_channel(0, removed), Some(0));
+        for index in 0..4u8 {
+            let channel = &project.channels[index as usize];
+            assert_eq!(
+                channel.setup.modulation.routes[0].unwrap().destination,
+                strip(index),
+                "route on channel {index} after insert"
+            );
+            assert_eq!(channel.automation[0][0].target, strip(index));
+        }
+        assert!(project.remove_channel(9).is_none());
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub mod pattern;
 pub mod playlist;
 pub mod project;
 pub mod sampler;
+pub mod structure;
 pub mod synth;
 pub mod time;
 
@@ -131,6 +132,10 @@ pub use sampler::{
     RetriggerMode, SampleCommit, SamplerParams, SliceMap, SliceMarker, StretchMode, VoiceMode,
     DEFAULT_SLICE_BASE_NOTE, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES, MAX_SLICES, MAX_STRETCH_BARS,
     MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
+};
+pub use structure::{
+    insert_effect, move_effect, remove_effect, rescope_lanes, retarget_lanes, ChannelEdit,
+    SlotRemap,
 };
 pub use synth::{
     DrumMode, DrumSynthParams, HatCharacter, KickCharacter, LfoParams, LfoWave, MonoSynthParams,

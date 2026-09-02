@@ -520,13 +520,15 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Fable 5.1 — Claude Code
 - First seen: 2026-09-02
 - Last seen: 2026-09-02
-- Sessions: 1
-- Notes: Sanity pass over the sampler slice/commit push: a commit now bakes
-  the `f32` ratio the spec stores so a reload is the same render, revert
-  re-provisions the stretch pool it needs after a reload, fit-to-tempo and
-  its seed measure the playback region in slice mode, the seed measures in
-  the file's own rate, slice auditions get their note-off, and a stale bake
-  can be re-baked in one click.
+- Sessions: 2
+- Notes: Sanity pass over the sampler slice/commit push (commit bakes the
+  stored ratio, revert re-provisions the stretch pool, slice-mode seed and
+  rate fixes, slice note-offs, one-click re-bake). Then device ordering:
+  one permutation per structural edit, run over routes and lanes on both
+  the UI and engine sides, so modulation and automation follow a moved
+  effect and die with a removed one; channel delete/paste renumber every
+  channel-scoped address; effect add/move/remove became undoable; the
+  integrity pass repairs stranded and dangling addresses.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21

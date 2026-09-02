@@ -25,6 +25,7 @@ use mooloop_core::{
     compile_bus_graph, snap_bars_to_power_of_two, default_buses, sanitize_route, strip_descriptor, would_create_cycle,
     AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup,
     ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectParams,
+    insert_effect, move_effect, remove_effect, retarget_lanes, SlotRemap,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
@@ -39,7 +40,7 @@ use mooloop_core::{
     VoiceMode, MAX_SLICES,
     DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
-    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
+    MAX_CHANNELS, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
     MAX_SAMPLER_VOICES, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
     MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
@@ -1237,8 +1238,11 @@ fn queue_channel_insert(
         .automation
         .resize_with(project.pattern_lengths.len(), Vec::new);
     channel.setup.channel.name = copied_channel_name(&project, &channel.setup.channel.name);
-    let index = after + 1;
-    project.channels.insert(index, channel);
+    // The song renumbers every route and lane that named a later channel,
+    // and points the newcomer's own at its new seat.
+    let Some(index) = project.insert_channel(after + 1, channel) else {
+        return false;
+    };
     samples.insert(index, clipboard.sample);
     project.selected_channel = index as u8;
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
@@ -1260,7 +1264,12 @@ fn queue_channel_delete(
     if project.channels.len() <= 1 || index >= project.channels.len() {
         return false;
     }
-    project.channels.remove(index);
+    // The song drops what named this channel and renumbers what named the
+    // ones after it; a lane left on the old index would otherwise automate
+    // whichever channel slid into the seat.
+    if project.remove_channel(index).is_none() {
+        return false;
+    }
     samples.remove(index);
     project.selected_channel = index.min(project.channels.len() - 1) as u8;
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
@@ -3206,6 +3215,33 @@ impl UiState {
                 .map(|c| &mut c.effects),
             EffectTarget::Bus(index) => self.buses.get_mut(index as usize).map(|b| &mut b.effects),
         }
+    }
+
+    /// Run one chain edit's permutation over everything on this side that
+    /// names a slot in `target`'s chain: the channel's routes, every lane in
+    /// every pattern, and the lane the editor is showing. The engine runs the
+    /// same table for the same command, which is what keeps a route meaning
+    /// the same knob on both sides after the rack is reordered.
+    fn retarget_effect_slots(&mut self, target: EffectTarget, remap: &SlotRemap) {
+        let channels: &mut [ChannelState] = match target {
+            EffectTarget::Channel(channel) => match self.channels.get_mut(channel as usize) {
+                Some(channel) => std::slice::from_mut(channel),
+                None => &mut [],
+            },
+            // A bus chain can be automated from any channel's clip.
+            EffectTarget::Bus(_) => &mut self.channels,
+        };
+        for channel in channels {
+            channel.modulation.retarget_effect_slots(target, remap);
+            for lanes in &mut channel.automation {
+                retarget_lanes(lanes, target, remap);
+            }
+        }
+        self.automation_target.set(
+            self.automation_target
+                .get()
+                .and_then(|shown| remap.address(target, shown)),
+        );
     }
 
     /// Resolve every tempo-synced delay to the new transport BPM. The engine
@@ -8749,60 +8785,74 @@ impl AppUi {
         }
 
         // --- Effect chain callbacks (edit whatever the rack is pointed at) ---
+        //
+        // Each structural edit is one permutation of the chain, computed by
+        // `mooloop_core::structure` and applied here to the model, its routes
+        // and its lanes, then mirrored on the engine with the two realtime
+        // primitives it has: a structural install/remove at the vacant tail,
+        // and a pointer-rotating move. The engine runs the same table over
+        // its own routes and lanes for the same command.
         {
             let tx = cmd_tx.clone();
             let stx = structural_tx.clone();
             let st = state.clone();
+            let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_add_effect_clicked(move |kind_index, insert_before| {
                 let Some(kind) = effect_kind_from_index(kind_index) else {
                     return;
                 };
-                let mut st = st.borrow_mut();
-                let target = st.effect_target;
-                let (slot, tail_slot, params) = {
-                    let Some(effects) = st.effect_chain_mut() else {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let added = {
+                    let mut st = st.borrow_mut();
+                    let target = st.effect_target;
+                    let inserted = st.effect_chain_mut().and_then(|effects| {
+                        let tail = effects.len();
+                        let effect = EffectSlotState::of_kind(kind);
+                        insert_effect(effects, insert_before as usize, effect)
+                            .map(|(slot, remap)| (slot, tail, remap, effect.params))
+                    });
+                    let Some((slot, tail, remap, params)) = inserted else {
                         return;
                     };
-                    if effects.len() >= MAX_EFFECTS_PER_CHANNEL {
-                        return;
-                    }
-                    let effect = EffectSlotState::of_kind(kind);
-                    let slot = (insert_before as usize).min(effects.len());
-                    let tail_slot = effects.len();
-                    effects.insert(slot, effect);
-                    (slot, tail_slot, effect.params)
-                };
-                st.sync_effects();
-                // Install into the vacant tail then move it left. Keeping this
-                // on the ordered stream means the realtime chain sees the same
-                // order as the UI/model without allocating in its callback.
-                // The dry-align ring is built here for the same reason as the
-                // node: construction allocates, so it happens off the audio
-                // thread and rides the same structural command.
-                let bpm = weak
-                    .upgrade()
-                    .map_or(INITIAL_BPM as f64, |window| window.get_bpm() as f64);
-                let node = build_effect_at_tempo(params, sample_rate, bpm);
-                let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
-                let _ = stx.send(StructuralCommand::InstallEffect {
-                    target,
-                    slot: tail_slot as u8,
-                    kind,
-                    resource_key: params.buffer().copied().map(buffer_allocation_key),
-                    node,
-                    align,
-                    analyzer: Box::new(SpectrumAnalyzer::new()),
-                    // Allocated here with the node: an empty addressable slot
-                    // costs a pointer rather than its full host state.
-                    state: Box::new(EffectSlot::new()),
-                });
-                for position in (slot + 1..=tail_slot).rev() {
-                    let _ = tx.send(EngineCommand::SwapEffectSlots {
+                    st.retarget_effect_slots(target, &remap);
+                    st.sync_effects();
+                    st.refresh_automation(&window);
+                    st.refresh_modulation(&window);
+                    // Install into the vacant tail then move it left. Keeping
+                    // this on the ordered stream means the realtime chain
+                    // sees the same order as the model without allocating in
+                    // its callback. The dry-align ring is built here for the
+                    // same reason as the node: construction allocates, so it
+                    // happens off the audio thread and rides the same
+                    // structural command.
+                    let bpm = window.get_bpm() as f64;
+                    let node = build_effect_at_tempo(params, sample_rate, bpm);
+                    let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
+                    let _ = stx.send(StructuralCommand::InstallEffect {
                         target,
-                        slot_a: position as u8,
-                        slot_b: position as u8 - 1,
+                        slot: tail as u8,
+                        kind,
+                        resource_key: params.buffer().copied().map(buffer_allocation_key),
+                        node,
+                        align,
+                        analyzer: Box::new(SpectrumAnalyzer::new()),
+                        // Allocated here with the node: an empty addressable
+                        // slot costs a pointer rather than its full host state.
+                        state: Box::new(EffectSlot::new()),
                     });
+                    if slot != tail {
+                        let _ = tx.send(EngineCommand::MoveEffect {
+                            target,
+                            from: tail as u8,
+                            to: slot as u8,
+                        });
+                    }
+                    true
+                };
+                if added {
+                    record_project_history(&commands, before, &st, &window, "Effect added");
                 }
             });
         }
@@ -8811,34 +8861,44 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let stx = structural_tx.clone();
             let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
             window.on_remove_effect_clicked(move |slot| {
-                let mut st = st.borrow_mut();
-                let target = st.effect_target;
-                let slot = slot as usize;
-                let removed_tail = {
-                    let Some(effects) = st.effect_chain_mut() else {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let removed = {
+                    let mut st = st.borrow_mut();
+                    let target = st.effect_target;
+                    let slot = slot as usize;
+                    let removed = st.effect_chain_mut().and_then(|effects| {
+                        remove_effect(effects, slot).map(|(_, remap)| (effects.len(), remap))
+                    });
+                    let Some((tail, remap)) = removed else {
                         return;
                     };
-                    if slot >= effects.len() {
-                        return;
+                    st.retarget_effect_slots(target, &remap);
+                    st.sync_effects();
+                    st.refresh_automation(&window);
+                    st.refresh_modulation(&window);
+                    // Mirror on the engine: move the device to the vacated
+                    // tail, then drop the tail. Its routes and lanes ride
+                    // along and are dropped with it.
+                    if slot != tail {
+                        let _ = tx.send(EngineCommand::MoveEffect {
+                            target,
+                            from: slot as u8,
+                            to: tail as u8,
+                        });
                     }
-                    effects.remove(slot);
-                    effects.len()
-                };
-                st.sync_effects();
-                // Mirror on the engine with its two primitives: shift later
-                // slots down by adjacent swaps, then drop the vacated tail.
-                for j in (slot + 1)..=removed_tail {
-                    let _ = tx.send(EngineCommand::SwapEffectSlots {
+                    let _ = stx.send(StructuralCommand::RemoveEffect {
                         target,
-                        slot_a: j as u8,
-                        slot_b: j as u8 - 1,
+                        slot: tail as u8,
                     });
+                    true
+                };
+                if removed {
+                    record_project_history(&commands, before, &st, &window, "Effect removed");
                 }
-                let _ = stx.send(StructuralCommand::RemoveEffect {
-                    target,
-                    slot: removed_tail as u8,
-                });
             });
         }
 
@@ -9082,40 +9142,34 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
             window.on_reorder_effect(move |from, to| {
-                let mut st = st.borrow_mut();
-                let target = st.effect_target;
-                let (from, to) = (from as usize, to as usize);
-                {
-                    let Some(effects) = st.effect_chain_mut() else {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let moved = {
+                    let mut st = st.borrow_mut();
+                    let target = st.effect_target;
+                    let (from, to) = (from as usize, to as usize);
+                    let Some(remap) = st
+                        .effect_chain_mut()
+                        .and_then(|effects| move_effect(effects, from, to))
+                    else {
                         return;
                     };
-                    let len = effects.len();
-                    if from >= len || to >= len || from == to {
-                        return;
-                    }
-                    let effect = effects.remove(from);
-                    effects.insert(to, effect);
-                }
-                st.sync_effects();
-                // The engine's only reorder primitive is an adjacent-slot
-                // swap (pointer swap, realtime-safe); a move is a run of them.
-                if from < to {
-                    for i in from..to {
-                        let _ = tx.send(EngineCommand::SwapEffectSlots {
-                            target,
-                            slot_a: i as u8,
-                            slot_b: i as u8 + 1,
-                        });
-                    }
-                } else {
-                    for i in (to + 1..=from).rev() {
-                        let _ = tx.send(EngineCommand::SwapEffectSlots {
-                            target,
-                            slot_a: i as u8,
-                            slot_b: i as u8 - 1,
-                        });
-                    }
+                    st.retarget_effect_slots(target, &remap);
+                    st.sync_effects();
+                    st.refresh_automation(&window);
+                    st.refresh_modulation(&window);
+                    let _ = tx.send(EngineCommand::MoveEffect {
+                        target,
+                        from: from as u8,
+                        to: to as u8,
+                    });
+                    true
+                };
+                if moved {
+                    record_project_history(&commands, before, &st, &window, "Effect moved");
                 }
             });
         }
@@ -11240,7 +11294,11 @@ impl AppUi {
                                             .channels
                                             .into_iter()
                                             .enumerate()
-                                            .map(|(index, setup)| {
+                                            .map(|(index, mut setup)| {
+                                                // A kit entry's routes name
+                                                // the channel they were saved
+                                                // from; they mean this one.
+                                                setup.rescope_modulation(index as u8);
                                                 if let Some(mut channel) =
                                                     current.channels.get(index).cloned()
                                                 {

@@ -17,8 +17,7 @@ use std::fs;
 use std::path::Path;
 
 use mooloop_core::mlm1_factory::{self, FactoryPatch};
-use mooloop_core::modulation::ParamOwner;
-use mooloop_core::{ChannelSetup, EffectTarget};
+use mooloop_core::ChannelSetup;
 
 use crate::{sanitize_preset_name, save_channel_preset, AssetMode, Error, PresetInfo};
 
@@ -94,41 +93,20 @@ fn preset_info(patch: &FactoryPatch) -> PresetInfo {
     }
 }
 
-/// Points every modulation route in `setup` at `channel`.
-///
-/// A [`mooloop_core::ModRoute`] names its destination channel absolutely, so
-/// a rack is only correct on the channel it was authored on. That is right
-/// for a project — the scope is what will let one channel modulate another —
-/// and wrong for a preset, which is a description of an instrument and has no
-/// business claiming a channel number. Loading is where the two meet, so
-/// loading is where the rewrite belongs.
-///
-/// Only `Channel`-scoped destinations move. A route aimed at a bus is aimed
-/// at shared state that exists independently of which channel loaded it.
+/// Points every channel-scoped modulation route in `setup` at `channel`.
+/// Kept as the name the factory bank and its tests use; the rewrite itself
+/// is [`ChannelSetup::rescope_modulation`], because loading is only one of
+/// the places a setup lands on a new channel.
 pub fn rescope_modulation(setup: &mut ChannelSetup, channel: u8) {
-    for route in setup.modulation.routes.iter_mut().flatten() {
-        if matches!(route.destination.scope, EffectTarget::Channel(_)) {
-            route.destination.scope = EffectTarget::Channel(channel);
-        }
-        // A route into a modulator or effect slot is scoped twice over: the
-        // slot number is already channel-local, so only the scope needs
-        // moving. Spelled out because the `owner` match looks conspicuously
-        // absent otherwise.
-        debug_assert!(matches!(
-            route.destination.owner,
-            ParamOwner::Source
-                | ParamOwner::Strip
-                | ParamOwner::Effect { .. }
-                | ParamOwner::Modulator { .. }
-        ));
-    }
+    setup.rescope_modulation(channel);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{list_presets, load_bundle, LoadedDocument};
-    use mooloop_core::modulation::{ModPolarity, ModRoute, ParamAddr};
+    use mooloop_core::modulation::{ModPolarity, ModRoute, ParamAddr, ParamOwner};
+    use mooloop_core::EffectTarget;
     use mooloop_core::{ChannelSource, DeviceKind};
     use tempfile::tempdir;
 

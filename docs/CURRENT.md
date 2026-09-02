@@ -396,10 +396,21 @@ land on its own when it starts to matter:
   generator. Value edits, boxed structural edits, and prepared projects share
   one ordered control stream, so no edit can cross a project-generation
   boundary. Displaced nodes and whole render states return through a bounded
-  reclaim ring for control-thread destruction; reorder is an in-place slot
-  swap, and knob changes arrive as sample-timed `ParamValue` events. Effect
-  chains persist in song files
+  reclaim ring for control-thread destruction; reorder is an in-place pointer
+  rotation (`MoveEffect`), and knob changes arrive as sample-timed
+  `ParamValue` events. Effect chains persist in song files
   (`ChannelSetup.effects`, serde-defaulted for older manifests).
+- Structural edits keep every address honest. An effect is addressed by its
+  slot and a channel by its index, so adding, moving, or removing a device --
+  or deleting or pasting a channel -- is stated once as a permutation
+  (`mooloop_core::structure`) and run over everything that names a position:
+  the modulation matrix, every automation lane in every pattern, and the
+  lane the editor is showing. The UI's model and the engine's mirror apply
+  the same table for the same command, so a route or lane keeps meaning the
+  device it was drawn on; a removed device takes its routes and lanes with
+  it. Add, move and remove are undoable edits. On load, the integrity pass
+  points a route or lane stranded on another channel's index back at its own
+  channel and drops one that names a device or control that is not there.
 - Ten effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
   oversampled, a stereo delay with damped cross-feedable feedback and

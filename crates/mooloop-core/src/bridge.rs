@@ -181,14 +181,17 @@ pub enum EngineCommand {
         channel: u8,
         params: PolySynthParams,
     },
-    /// Swap two slots in a channel's effect chain (drag reorder). Swapping
-    /// array entries moves pointers only, so this is safe on the realtime
-    /// thread — installing/removing nodes is not, and goes through the
-    /// engine's structural command ring instead.
-    SwapEffectSlots {
+    /// Move one effect to another position in its chain, shifting the slots
+    /// between them by one (drag reorder). Rotating array entries moves
+    /// pointers only, so this is safe on the realtime thread -- installing
+    /// and removing nodes is not, and goes through the engine's structural
+    /// command ring instead. The engine runs the same `SlotRemap` over its
+    /// routes and lanes that the sender ran over its model, so everything
+    /// that named a slot in this chain keeps naming the same device.
+    MoveEffect {
         target: EffectTarget,
-        slot_a: u8,
-        slot_b: u8,
+        from: u8,
+        to: u8,
     },
     /// Bypass or re-enable one effect slot. While bypassed the slot's
     /// parameter events keep accumulating and flush on re-enable.

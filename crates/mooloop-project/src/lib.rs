@@ -954,10 +954,9 @@ mod tests {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("song.mooloop");
         let mut project = Project::default();
-        let mut lane = AutomationLane::new(ParamAddr::effect(
+        let mut lane = AutomationLane::new(ParamAddr::strip(
             mooloop_core::EffectTarget::Channel(0),
-            2,
-            7,
+            mooloop_core::STRIP_PARAM_PAN,
         ));
         assert!(lane.upsert(AutomationPoint::new(1, 0, 0.0)));
         assert!(lane.upsert(AutomationPoint::new(2, 96, 0.75)));

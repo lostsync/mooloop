@@ -21,8 +21,9 @@ use std::collections::HashSet;
 use std::fmt;
 
 use mooloop_core::{
-    sanitize_route, BusSetup, ChannelSetup, ChannelSource, DrumSynthParams, EffectSlotState,
-    MlM1Params, MlP8Params, ModRack, MonoSynthParams, NoteId, PolySynthParams, Project,
+    sanitize_route, strip_descriptor, BusSetup, ChannelSetup, ChannelSource, DeviceKind,
+    DrumSynthParams, EffectKind, EffectSlotState, EffectTarget, MlM1Params, MlP8Params, ModRack,
+    ModulatorKind, MonoSynthParams, NoteId, ParamAddr, ParamOwner, PolySynthParams, Project,
     ProjectChannel,
     SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL,
     MAX_AUTOMATION_POINTS_PER_LANE, MAX_BUSES, MAX_CHANNELS, MAX_CHOKE_GROUP,
@@ -276,6 +277,12 @@ fn walk_setups(document: DocumentKind, setups: &mut [ChannelSetup], apply: bool)
     }
     for (index, setup) in setups.iter_mut().enumerate() {
         check_setup(&mut doctor, index, setup);
+        // A preset or kit entry is re-scoped to whatever channel loads it,
+        // and cannot see the buses it will meet there: only what it names
+        // inside itself is checkable here.
+        let who = channel_name(index, setup);
+        let shape = ChainShape::of(setup);
+        check_route_addresses(&mut doctor, &who, &shape, None, None, &mut setup.modulation);
     }
     Diagnosis {
         document,
@@ -527,6 +534,22 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
     for (index, channel) in project.channels.iter_mut().enumerate() {
         check_setup(doctor, index, &mut channel.setup);
         check_channel_banks(doctor, index, channel, pattern_count);
+    }
+    // After the chains and racks are themselves sound, so an address is
+    // checked against what will actually be there.
+    let buses: Vec<Vec<EffectKind>> = project
+        .buses
+        .iter()
+        .map(|bus| bus.effects.iter().map(EffectSlotState::kind).collect())
+        .collect();
+    for (index, channel) in project.channels.iter_mut().enumerate() {
+        let who = channel_name(index, &channel.setup);
+        let shape = ChainShape::of(&channel.setup);
+        check_route_addresses(doctor, &who, &shape, Some(index as u8), Some(&buses), &mut channel.setup.modulation);
+        for (pattern, lanes) in channel.automation.iter_mut().enumerate() {
+            let where_ = format!("{who}, pattern {}", pattern + 1);
+            check_lane_addresses(doctor, &where_, &shape, index as u8, &buses, lanes);
+        }
     }
 }
 
@@ -1130,6 +1153,218 @@ fn check_effect(doctor: &mut Doctor, who: &str, slot: usize, effect: &mut Effect
         ) {
             effect.params.set(descriptor.id, descriptor.default);
         }
+    }
+}
+
+/// What one channel's devices can be addressed as: the shape a route or lane
+/// is resolved against. Copied out so the routes and lanes can be edited
+/// while it is consulted.
+struct ChainShape {
+    source: DeviceKind,
+    effects: Vec<EffectKind>,
+    modulators: Vec<Option<ModulatorKind>>,
+}
+
+impl ChainShape {
+    fn of(setup: &ChannelSetup) -> Self {
+        Self {
+            source: setup.source.kind(),
+            effects: setup.effects.iter().map(EffectSlotState::kind).collect(),
+            modulators: setup
+                .modulation
+                .slots
+                .iter()
+                .map(|slot| slot.map(|slot| slot.params.kind()))
+                .collect(),
+        }
+    }
+
+    /// Why `address` names nothing on this channel, or `None` when it does.
+    /// Only the owner and parameter are judged here; the scope is the
+    /// caller's to settle first.
+    fn problem_with(&self, address: ParamAddr) -> Option<String> {
+        let id = address.param;
+        match address.owner {
+            ParamOwner::Source => self.source.descriptor(id).is_none().then(|| {
+                format!("it drives control {id} of the {:?}, which has no such control", self.source)
+            }),
+            ParamOwner::Strip => strip_descriptor(id)
+                .is_none()
+                .then(|| format!("it drives strip control {id}, which does not exist")),
+            ParamOwner::Effect { slot } => match self.effects.get(slot as usize) {
+                None => Some(format!(
+                    "it drives effect slot {}, but the chain holds {} effects",
+                    slot + 1,
+                    self.effects.len()
+                )),
+                Some(kind) => kind.descriptor(id).is_none().then(|| {
+                    format!(
+                        "it drives control {id} of the {} in slot {}, which has no such control",
+                        kind.label(),
+                        slot + 1
+                    )
+                }),
+            },
+            ParamOwner::Modulator { slot } => match self.modulators.get(slot as usize).copied().flatten() {
+                None => Some(format!("it drives modulator slot {}, which is empty", slot + 1)),
+                Some(kind) => kind.descriptor(id).is_none().then(|| {
+                    format!(
+                        "it drives control {id} of the {:?} in modulator slot {}, which has no such control",
+                        kind,
+                        slot + 1
+                    )
+                }),
+            },
+        }
+    }
+}
+
+/// Why `address` names nothing reachable from `own` -- a bus that does not
+/// exist, a device that is not there, a control the device lacks -- or
+/// `None` when it resolves. `buses` is absent for documents that cannot see
+/// any, in which case a bus address is taken on trust.
+fn address_problem(
+    address: ParamAddr,
+    own: &ChainShape,
+    buses: Option<&[Vec<EffectKind>]>,
+) -> Option<String> {
+    match address.scope {
+        EffectTarget::Channel(_) => own.problem_with(address),
+        EffectTarget::Bus(bus) => {
+            let Some(buses) = buses else {
+                return None;
+            };
+            let Some(chain) = buses.get(bus as usize) else {
+                return Some(format!("it drives bus {bus}, which does not exist"));
+            };
+            let id = address.param;
+            match address.owner {
+                ParamOwner::Strip => strip_descriptor(id)
+                    .is_none()
+                    .then(|| format!("it drives strip control {id}, which does not exist")),
+                ParamOwner::Effect { slot } => match chain.get(slot as usize) {
+                    None => Some(format!(
+                        "it drives effect slot {} of bus {bus}, but that chain holds {} effects",
+                        slot + 1,
+                        chain.len()
+                    )),
+                    Some(kind) => kind.descriptor(id).is_none().then(|| {
+                        format!(
+                            "it drives control {id} of the {} in slot {} of bus {bus}, which has no such control",
+                            kind.label(),
+                            slot + 1
+                        )
+                    }),
+                },
+                ParamOwner::Source | ParamOwner::Modulator { .. } => {
+                    Some(format!("it drives a generator or modulator on bus {bus}; a bus has neither"))
+                }
+            }
+        }
+    }
+}
+
+/// A channel-scoped address authored on channel `own` can only mean that
+/// channel: the editor offers nothing else, and the engine evaluates a rack
+/// only against its own channel. One that names another channel is what a
+/// channel deletion used to leave behind, so it is pointed home rather than
+/// dropped.
+fn rescoped_home(address: ParamAddr, own: Option<u8>) -> Option<ParamAddr> {
+    let own = own?;
+    match address.scope {
+        EffectTarget::Channel(channel) if channel != own => Some(ParamAddr {
+            scope: EffectTarget::Channel(own),
+            ..address
+        }),
+        _ => None,
+    }
+}
+
+fn check_route_addresses(
+    doctor: &mut Doctor,
+    who: &str,
+    own: &ChainShape,
+    own_index: Option<u8>,
+    buses: Option<&[Vec<EffectKind>]>,
+    rack: &mut ModRack,
+) {
+    for (index, entry) in rack.routes.iter_mut().enumerate() {
+        let Some(route) = entry else { continue };
+        let where_ = format!("{who}, modulation route {}", index + 1);
+        if let Some(home) = rescoped_home(route.destination, own_index) {
+            let EffectTarget::Channel(foreign) = route.destination.scope else {
+                unreachable!()
+            };
+            if doctor.correct(
+                "modulation.route.scope",
+                &where_,
+                format!(
+                    "it is addressed to channel {}, but a route can only drive the channel it lives on",
+                    foreign + 1
+                ),
+                "point it at this channel".into(),
+            ) {
+                route.destination = home;
+            }
+        }
+        if let Some(problem) = address_problem(route.destination, own, buses) {
+            if doctor.correct(
+                "modulation.route.destination",
+                &where_,
+                problem,
+                "drop the route".into(),
+            ) {
+                *entry = None;
+            }
+        }
+    }
+}
+
+fn check_lane_addresses(
+    doctor: &mut Doctor,
+    where_: &str,
+    own: &ChainShape,
+    own_index: u8,
+    buses: &[Vec<EffectKind>],
+    lanes: &mut Vec<mooloop_core::AutomationLane>,
+) {
+    let mut drop: Vec<usize> = Vec::new();
+    for (index, lane) in lanes.iter_mut().enumerate() {
+        if let Some(home) = rescoped_home(lane.target, Some(own_index)) {
+            let EffectTarget::Channel(foreign) = lane.target.scope else {
+                unreachable!()
+            };
+            if doctor.correct(
+                "channel.automation.scope",
+                where_,
+                format!(
+                    "an automation lane is addressed to channel {}, but a clip can only \
+                     automate its own channel or a bus",
+                    foreign + 1
+                ),
+                "point it at this channel".into(),
+            ) {
+                lane.target = home;
+            }
+        }
+        if let Some(problem) = address_problem(lane.target, own, Some(buses)) {
+            if doctor.correct(
+                "channel.automation.destination",
+                where_,
+                format!("an automation lane names nothing: {problem}"),
+                "drop the lane".into(),
+            ) {
+                drop.push(index);
+            }
+        }
+    }
+    if !drop.is_empty() {
+        let mut index = 0;
+        lanes.retain(|_| {
+            let keep = !drop.contains(&index);
+            index += 1;
+            keep
+        });
     }
 }
 
@@ -1856,7 +2091,7 @@ mod tests {
     #[test]
     fn two_lanes_on_one_control_keep_the_one_with_more_points() {
         let mut project = Project::default();
-        let target = ParamAddr::effect(EffectTarget::Channel(0), 2, 7);
+        let target = ParamAddr::strip(EffectTarget::Channel(0), mooloop_core::STRIP_PARAM_VOLUME);
         let mut thin = AutomationLane::new(target);
         assert!(thin.upsert(AutomationPoint::new(1, 0, 0.25)));
         let mut thick = AutomationLane::new(target);
@@ -2012,6 +2247,118 @@ mod tests {
         assert!(diagnosis.is_usable(), "{diagnosis}");
         assert_eq!(project.buses.len(), MAX_BUSES);
         assert_eq!(project.buses[1].bus.name, "Drums");
+    }
+
+    fn lfo_channel(name: &str) -> ChannelSetup {
+        let mut setup = ChannelSetup::mlm1(name);
+        setup
+            .modulation
+            .install(0, mooloop_core::ModulatorParams::Lfo(Default::default()));
+        setup
+    }
+
+    /// What a channel deletion used to leave behind: every later channel's
+    /// routes still stamped with its old index, silently inert. The repair
+    /// points them home rather than deleting the user's assignments.
+    #[test]
+    fn a_route_stranded_on_another_channels_index_is_pointed_home() {
+        let mut project = Project::default();
+        project.channels[0].setup = lfo_channel("Lead");
+        project.channels[0]
+            .setup
+            .modulation
+            .add_route(mooloop_core::ModRoute::to_slot(
+                0,
+                ParamAddr {
+                    scope: EffectTarget::Channel(3),
+                    owner: ParamOwner::Strip,
+                    param: mooloop_core::STRIP_PARAM_VOLUME,
+                },
+                0.5,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
+            .unwrap();
+        let diagnosis = repair_project(&mut project);
+        assert_eq!(codes(&diagnosis), ["modulation.route.scope"]);
+        let route = project.channels[0].setup.modulation.routes[0].unwrap();
+        assert_eq!(route.destination.scope, EffectTarget::Channel(0));
+    }
+
+    #[test]
+    fn a_route_to_a_device_that_is_not_there_is_dropped() {
+        let mut project = Project::default();
+        project.channels[0].setup = lfo_channel("Lead");
+        project.channels[0]
+            .setup
+            .effects
+            .push(EffectSlotState::of_kind(EffectKind::Filter));
+        let rack = &mut project.channels[0].setup.modulation;
+        // Slot 2 does not exist; slot 1's filter has no control 99.
+        rack.add_route(mooloop_core::ModRoute::to_slot(
+            0,
+            ParamAddr::effect(EffectTarget::Channel(0), 1, 0),
+            0.5,
+            mooloop_core::ModPolarity::Bipolar,
+        ))
+        .unwrap();
+        rack.add_route(mooloop_core::ModRoute::to_slot(
+            0,
+            ParamAddr::effect(EffectTarget::Channel(0), 0, 99),
+            0.5,
+            mooloop_core::ModPolarity::Bipolar,
+        ))
+        .unwrap();
+        rack.add_route(mooloop_core::ModRoute::to_slot(
+            0,
+            ParamAddr::effect(
+                EffectTarget::Channel(0),
+                0,
+                mooloop_core::FILTER_PARAM_CUTOFF_HZ,
+            ),
+            0.5,
+            mooloop_core::ModPolarity::Bipolar,
+        ))
+        .unwrap();
+        let diagnosis = repair_project(&mut project);
+        assert_eq!(
+            codes(&diagnosis),
+            ["modulation.route.destination", "modulation.route.destination"]
+        );
+        assert!(diagnosis.issues[0].problem.contains("slot 2"), "{}", diagnosis.issues[0].problem);
+        let surviving: Vec<_> = project.channels[0]
+            .setup
+            .modulation
+            .routes
+            .iter()
+            .flatten()
+            .collect();
+        assert_eq!(surviving.len(), 1);
+        assert_eq!(surviving[0].destination.param, mooloop_core::FILTER_PARAM_CUTOFF_HZ);
+    }
+
+    /// The dangerous one: the engine looks a lane up by its address across
+    /// every clip, so a lane stranded on another channel's index does not go
+    /// quiet -- it drives whichever channel now sits there.
+    #[test]
+    fn a_lane_stranded_on_another_channels_index_is_pointed_home() {
+        let mut project = Project::default();
+        project.channels[0].setup = ChannelSetup::mlm1("Lead");
+        project.channels[0].automation[0].push(mooloop_core::AutomationLane::new(ParamAddr {
+            scope: EffectTarget::Channel(2),
+            owner: ParamOwner::Strip,
+            param: mooloop_core::STRIP_PARAM_PAN,
+        }));
+        project.channels[0].automation[0].push(mooloop_core::AutomationLane::new(
+            ParamAddr::effect(EffectTarget::Bus(0), 4, 0),
+        ));
+        let diagnosis = repair_project(&mut project);
+        assert_eq!(
+            codes(&diagnosis),
+            ["channel.automation.scope", "channel.automation.destination"]
+        );
+        let lanes = &project.channels[0].automation[0];
+        assert_eq!(lanes.len(), 1);
+        assert_eq!(lanes[0].target.scope, EffectTarget::Channel(0));
     }
 
     #[test]

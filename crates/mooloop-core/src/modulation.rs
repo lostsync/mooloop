@@ -1694,6 +1694,57 @@ impl ModRack {
         removed
     }
 
+    /// Re-point every route at where its destination's device now sits after
+    /// a chain edit in `scope`, dropping the routes whose device is gone. The
+    /// UI's rack and the engine's mirror both run this for the same gesture,
+    /// which is what keeps a route meaning the same knob on both sides.
+    /// Returns whether anything changed.
+    pub fn retarget_effect_slots(
+        &mut self,
+        scope: EffectTarget,
+        remap: &crate::structure::SlotRemap,
+    ) -> bool {
+        let mut changed = false;
+        for entry in self.routes.iter_mut() {
+            let Some(route) = entry else {
+                continue;
+            };
+            match remap.address(scope, route.destination) {
+                Some(destination) => {
+                    changed |= destination != route.destination;
+                    route.destination = destination;
+                }
+                None => {
+                    *entry = None;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
+    /// Re-scope every channel-addressed route after a channel edit, dropping
+    /// those whose channel is gone. Returns whether anything changed.
+    pub fn rescope_channels(&mut self, edit: crate::structure::ChannelEdit) -> bool {
+        let mut changed = false;
+        for entry in self.routes.iter_mut() {
+            let Some(route) = entry else {
+                continue;
+            };
+            match edit.address(route.destination) {
+                Some(destination) => {
+                    changed |= destination != route.destination;
+                    route.destination = destination;
+                }
+                None => {
+                    *entry = None;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     /// Total signed offset applied to `destination`, as a fraction of its
     /// range, given each slot's current output and the destination's declared
     /// policy.

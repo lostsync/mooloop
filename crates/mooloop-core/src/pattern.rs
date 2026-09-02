@@ -176,6 +176,17 @@ impl ChannelPattern {
         Some(self.lanes.remove(index))
     }
 
+    /// Re-point the lanes that address `scope`'s effect chain after it was
+    /// edited, dropping those whose device is gone. In place and without
+    /// allocating, so the engine can run it where the edit arrives.
+    pub fn retarget_lanes(
+        &mut self,
+        scope: crate::EffectTarget,
+        remap: &crate::structure::SlotRemap,
+    ) -> bool {
+        crate::structure::retarget_lanes(&mut self.lanes, scope, remap)
+    }
+
     /// Replace the whole lane set. Used by project load, which is the only
     /// caller allowed to allocate.
     pub fn set_lanes(&mut self, lanes: Vec<AutomationLane>) {
