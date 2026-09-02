@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { KnobField, ParameterKnob, SectionLabel, SelectorBank, InstrumentModule } from "controls.slint";
+import { KnobField, ParameterKnob, SectionLabel, SelectorBank } from "controls.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { OscillatorTrace } from "device-displays.slint";
 import { GainMath } from "gain.slint";
@@ -20,6 +20,15 @@ component NetworkCell inherits Rectangle {
     // the same one-sample state as a pair route, which is why it lives in the
     // grid rather than in a Feedback panel somewhere else.
     in property <bool> self-route;
+    // A mix level: this source into the output. Unipolar and in dB, so it
+    // fills from the floor rather than from the middle -- a level has no
+    // sign to show, and drawing it like one would be a lie about what the
+    // control does.
+    in property <bool> level;
+    // A relationship this device does not have. The sub is derived from an
+    // oscillator and cannot modulate one, so its route cells are drawn as
+    // absent rather than as zero: nothing to turn up.
+    in property <bool> inert;
     in property <int> param-id;
     in-out property <float> value;
     in property <bool> modulation-armed;
@@ -32,38 +41,51 @@ component NetworkCell inherits Rectangle {
     callback route-edit-started(int);
     callback route-edit-finished(int);
 
-    private property <float> magnitude: abs(root.value) / 100;
-    private property <bool> live: abs(root.value) > 0.5;
+    // A level's travel is its dB range; a route's is its signed percent.
+    private property <float> db: GainMath.linear-to-db(root.value);
+    private property <float> magnitude: root.level
+        ? clamp((root.db + 60) / 60, 0, 1)
+        : abs(root.value) / 100;
+    private property <bool> live: root.level ? root.db > -59.5 : abs(root.value) > 0.5;
 
-    min-height: 26px;
+    min-height: 22px;
     border-radius: Theme.radius-sm;
-    background: Theme.panel;
+    background: root.inert ? Theme.surface : Theme.panel;
     border-width: 1px;
-    border-color: knob.hovered ? Theme.accent.with-alpha(0.5)
+    border-color: root.inert ? Theme.border.with-alpha(0.35)
+        : knob.hovered ? Theme.accent.with-alpha(0.55)
         : root.self-route ? Theme.accent.with-alpha(0.3) : Theme.border;
 
-    // Zero, drawn once, so an empty cell still reads as a control rather than
-    // as a gap in the grid.
-    Rectangle {
-        y: parent.height / 2;
+    // The datum a fill grows from: the middle for a signed route, the floor
+    // for a level. Drawn even at zero so an idle cell still reads as a
+    // control rather than as a gap in the grid.
+    if !root.inert : Rectangle {
+        y: root.level ? parent.height - 1px : parent.height / 2;
         width: parent.width;
         height: 1px;
         background: Theme.border;
     }
-    Rectangle {
+    if !root.inert : Rectangle {
         x: 1px;
         width: parent.width - 2px;
-        y: root.value >= 0
-            ? parent.height / 2 - (parent.height / 2 - 1px) * root.magnitude
-            : parent.height / 2;
-        height: (parent.height / 2 - 1px) * root.magnitude;
-        background: Theme.accent.with-alpha(root.value >= 0 ? 0.42 : 0.24);
+        y: root.level
+            ? parent.height - 1px - (parent.height - 2px) * root.magnitude
+            : root.value >= 0
+                ? parent.height / 2 - (parent.height / 2 - 1px) * root.magnitude
+                : parent.height / 2;
+        height: root.level
+            ? (parent.height - 2px) * root.magnitude
+            : (parent.height / 2 - 1px) * root.magnitude;
+        background: Theme.accent.with-alpha(root.level ? 0.34 : root.value >= 0 ? 0.42 : 0.24);
     }
     Text {
         width: 100%;
         height: 100%;
-        text: root.live ? (root.value > 0 ? "+" : "") + round(root.value) : "";
-        color: Theme.text;
+        text: root.inert ? "-"
+            : root.level ? (root.live ? round(root.db) + "" : "-inf")
+            : root.live ? (root.value > 0 ? "+" : "") + round(root.value)
+            : "";
+        color: root.inert || !root.live ? Theme.text-faint : Theme.text;
         font-family: "monospace";
         font-size: 9px;
         horizontal-alignment: center;
@@ -73,23 +95,31 @@ component NetworkCell inherits Rectangle {
     knob := ParameterKnob {
         width: 100%;
         height: 100%;
+        visible: !root.inert;
         show-label: false;
         show-value-text: false;
         show-dial: false;
         label: root.tooltip;
         tooltip: root.tooltip;
-        value <=> root.value;
-        minimum: -100;
-        maximum: 100;
-        default-value: 0;
-        bipolar: true;
-        value-text: (root.value > 0 ? "+" : "") + round(root.value) + "%";
+        // A level drags in dB and stores linear, like every other mix control
+        // on this face; `mlp8::is_gain_param` is the other half of it.
+        value: root.level ? root.db : root.value;
+        minimum: root.level ? -60 : -100;
+        maximum: root.level ? 0 : 100;
+        default-value: root.level ? -60 : 0;
+        bipolar: !root.level;
+        value-text: root.level
+            ? GainMath.format-db(root.db)
+            : (root.value > 0 ? "+" : "") + round(root.value) + "%";
         modulation-armed: root.modulation-armed;
         modulation-allowed: root.allowed[root.param-id];
         modulation-depth: root.depths[root.param-id];
         modulation-offset: root.offsets[root.param-id];
         modulation-route-count: root.route-counts[root.param-id];
-        changed(v) => { root.changed(v); }
+        changed(v) => {
+            root.value = root.level ? GainMath.db-to-linear(v) : v;
+            root.changed(root.value);
+        }
         modulation-depth-changed(v) => { root.route-depth-changed(root.param-id, v); }
         modulation-edit-started => { root.route-edit-started(root.param-id); }
         modulation-edit-finished => { root.route-edit-finished(root.param-id); }
@@ -201,8 +231,7 @@ component OscEditor inherits Rectangle {
     VerticalLayout {
         spacing: 4px;
         Rectangle {
-            vertical-stretch: 1;
-            min-height: 40px;
+            height: 56px;
             background: Theme.panel;
             border-radius: Theme.radius-sm;
             OscillatorTrace {
@@ -226,6 +255,8 @@ component OscEditor inherits Rectangle {
         }
         KnobField {
             diameter: 24px;
+            label-width: 30px;
+            field-width: 52px;
             label: "SEMI";
             tooltip: "Coarse tuning";
             value <=> root.semitones; minimum: -48; maximum: 48; default-value: 0; step: 1;
@@ -243,6 +274,8 @@ component OscEditor inherits Rectangle {
         }
         KnobField {
             diameter: 24px;
+            label-width: 30px;
+            field-width: 52px;
             label: "FINE";
             tooltip: "Fine tuning";
             value <=> root.cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
@@ -260,28 +293,8 @@ component OscEditor inherits Rectangle {
         }
         KnobField {
             diameter: 24px;
-            label: "LEVEL";
-            tooltip: "Mix level -- a muted oscillator still modulates and still syncs";
-            // Drags and reads in dB while the parameter stays linear: a level
-            // is a gain, and a linear 0..1 knob spends nine tenths of its
-            // travel above -20 dB. `mlp8::is_gain_param` is the other half of
-            // this, so what gets typed into the field is read as dB too.
-            value: GainMath.linear-to-db(root.level);
-            minimum: -60; maximum: 0; default-value: -60;
-            display-text: GainMath.format-db(GainMath.linear-to-db(root.level));
-            modulation-armed: root.modulation-armed;
-            modulation-allowed: root.allowed[root.base + 3];
-            modulation-depth: root.depths[root.base + 3];
-            modulation-offset: root.offsets[root.base + 3];
-            modulation-route-count: root.route-counts[root.base + 3];
-            changed(v) => { root.level = GainMath.db-to-linear(v); root.level-changed(root.level); }
-            text-committed(t) => { root.text-committed(root.base + 3, t); }
-            modulation-depth-changed(v) => { root.route-depth-changed(root.base + 3, v); }
-            modulation-edit-started => { root.route-edit-started(root.base + 3); }
-            modulation-edit-finished => { root.route-edit-finished(root.base + 3); }
-        }
-        KnobField {
-            diameter: 24px;
+            label-width: 30px;
+            field-width: 52px;
             label: "WIDTH";
             tooltip: "Pulse width";
             value <=> root.pulse-width; minimum: 0.05; maximum: 0.95; default-value: 0.5;
@@ -297,6 +310,7 @@ component OscEditor inherits Rectangle {
             modulation-edit-started => { root.route-edit-started(root.base + 4); }
             modulation-edit-finished => { root.route-edit-finished(root.base + 4); }
         }
+        Rectangle { vertical-stretch: 1; }
     }
 }
 
@@ -349,13 +363,18 @@ export component MlP8DeviceFace inherits Rectangle {
     callback modulation-edit-started(int);
     callback modulation-edit-finished(int);
 
+    // One surface divided by rules, left to right along the signal path,
+    // rather than three bordered cards floating on it. Three identical
+    // rounded panels is the look of a settings dialog; a rule is the least
+    // ink that says "this ends here".
     HorizontalLayout {
-        padding: 6px;
-        spacing: 5px;
+        padding: 7px;
+        spacing: 0px;
 
-        // --- Oscillators ---------------------------------------------------
-        InstrumentModule {
-            width: 196px;
+        // --- Oscillators ------------------------------------------------
+        VerticalLayout {
+            width: 152px;
+            spacing: 4px;
             HorizontalLayout {
                 spacing: 3px;
                 SectionLabel { text: "OSC"; vertical-alignment: center; }
@@ -447,32 +466,59 @@ export component MlP8DeviceFace inherits Rectangle {
             }
         }
 
-        // --- The network ----------------------------------------------------
-        InstrumentModule {
-            // Fixed, because the grid inside it is. Stretching the panel and
-            // not its contents just moves empty space around.
-            horizontal-stretch: 0;
-            title: "NETWORK";
-            // Placed rather than laid out, and every dimension is a constant.
-            //
-            // A cell's interaction is a full-size `ParameterKnob`, and that
-            // knob sizes its own insides from its width -- so the moment a
-            // layout asks a cell how wide it would like to be, the answer
-            // depends on the answer. `KnobField` sidesteps the same problem
-            // the same way. A grid of uniform cells has nothing to negotiate
-            // anyway: the numbers below *are* the layout.
+        Rectangle { width: 7px; }
+        Rectangle { width: 1px; background: Theme.border; }
+        Rectangle { width: 7px; }
+
+        // --- The network -------------------------------------------------
+        //
+        // Every route out of every source, including the one to the mixer: a
+        // level is "this source into the output", which is the same kind of
+        // fact as "this source into that oscillator" and used to be a knob in
+        // another panel saying so less clearly. The MIX column is unipolar and
+        // reads in dB; the route columns are signed.
+        //
+        // Placed rather than laid out, and every dimension is a constant. A
+        // cell's interaction is a full-size `ParameterKnob`, and a knob sizes
+        // its insides from its width -- so the moment a layout asks a cell how
+        // wide it would like to be, the answer depends on the answer.
+        // `KnobField` sidesteps the same problem the same way.
+        VerticalLayout {
+            spacing: 0px;
+            SectionLabel { text: "NETWORK"; }
             grid := Rectangle {
                 property <length> label-w: 42px;
-                property <length> cell-w: 54px;
-                property <length> cell-h: 26px;
+                property <length> cell-w: 56px;
+                property <length> cell-h: 30px;
                 property <length> gap: 3px;
                 property <length> header-h: 14px;
-                property <length> sync-y: self.header-h + 4 * (self.cell-h + self.gap) + 5px;
+                property <length> mix-x: self.label-w + 3 * (self.cell-w + self.gap) + 11px;
+                property <length> sync-y: self.header-h + 5 * (self.cell-h + self.gap) + 4px;
 
                 horizontal-stretch: 0;
-                width: self.label-w + 3 * (self.cell-w + self.gap);
+                width: self.mix-x + self.cell-w;
                 height: self.sync-y + 18px;
 
+                // The rule that separates "into another oscillator" from
+                // "into the output". Two kinds of destination, one grid.
+                Rectangle {
+                    x: grid.mix-x - 6px;
+                    y: 0;
+                    width: 1px;
+                    height: grid.sync-y + 14px;
+                    background: Theme.text-faint.with-alpha(0.5);
+                }
+                Text {
+                    x: grid.mix-x;
+                    y: 0;
+                    width: grid.cell-w;
+                    height: grid.header-h;
+                    text: "MIX";
+                    color: Theme.text-faint;
+                    font-size: 9px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
                 Text {
                     x: grid.label-w + 0 * (grid.cell-w + grid.gap);
                     y: 0;
@@ -541,7 +587,6 @@ export component MlP8DeviceFace inherits Rectangle {
                     width: grid.cell-w;
                     height: grid.cell-h;
                     tooltip: "Oscillator 1 phase-modulates 2";
-                    self-route: false;
                     param-id: 27;
                     value <=> root.xmod12;
                     modulation-armed: root.modulation-armed;
@@ -560,7 +605,6 @@ export component MlP8DeviceFace inherits Rectangle {
                     width: grid.cell-w;
                     height: grid.cell-h;
                     tooltip: "Oscillator 1 phase-modulates 3";
-                    self-route: false;
                     param-id: 28;
                     value <=> root.xmod13;
                     modulation-armed: root.modulation-armed;
@@ -569,6 +613,25 @@ export component MlP8DeviceFace inherits Rectangle {
                     offsets: root.modulation-offsets;
                     route-counts: root.modulation-route-counts;
                     changed(v) => { root.xmod13-changed(v); }
+                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                    route-edit-started(p) => { root.modulation-edit-started(p); }
+                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                }
+                NetworkCell {
+                    x: grid.mix-x;
+                    y: grid.header-h + 0 * (grid.cell-h + grid.gap);
+                    width: grid.cell-w;
+                    height: grid.cell-h;
+                    tooltip: "Oscillator 1 into the mix";
+                    level: true;
+                    param-id: 3;
+                    value <=> root.osc1-level;
+                    modulation-armed: root.modulation-armed;
+                    allowed: root.modulation-allowed;
+                    depths: root.modulation-depths;
+                    offsets: root.modulation-offsets;
+                    route-counts: root.modulation-route-counts;
+                    changed(v) => { root.osc1-level-changed(v); }
                     route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                     route-edit-started(p) => { root.modulation-edit-started(p); }
                     route-edit-finished(p) => { root.modulation-edit-finished(p); }
@@ -589,7 +652,6 @@ export component MlP8DeviceFace inherits Rectangle {
                     width: grid.cell-w;
                     height: grid.cell-h;
                     tooltip: "Oscillator 2 phase-modulates 1";
-                    self-route: false;
                     param-id: 29;
                     value <=> root.xmod21;
                     modulation-armed: root.modulation-armed;
@@ -627,7 +689,6 @@ export component MlP8DeviceFace inherits Rectangle {
                     width: grid.cell-w;
                     height: grid.cell-h;
                     tooltip: "Oscillator 2 phase-modulates 3";
-                    self-route: false;
                     param-id: 30;
                     value <=> root.xmod23;
                     modulation-armed: root.modulation-armed;
@@ -636,6 +697,25 @@ export component MlP8DeviceFace inherits Rectangle {
                     offsets: root.modulation-offsets;
                     route-counts: root.modulation-route-counts;
                     changed(v) => { root.xmod23-changed(v); }
+                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                    route-edit-started(p) => { root.modulation-edit-started(p); }
+                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                }
+                NetworkCell {
+                    x: grid.mix-x;
+                    y: grid.header-h + 1 * (grid.cell-h + grid.gap);
+                    width: grid.cell-w;
+                    height: grid.cell-h;
+                    tooltip: "Oscillator 2 into the mix";
+                    level: true;
+                    param-id: 8;
+                    value <=> root.osc2-level;
+                    modulation-armed: root.modulation-armed;
+                    allowed: root.modulation-allowed;
+                    depths: root.modulation-depths;
+                    offsets: root.modulation-offsets;
+                    route-counts: root.modulation-route-counts;
+                    changed(v) => { root.osc2-level-changed(v); }
                     route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                     route-edit-started(p) => { root.modulation-edit-started(p); }
                     route-edit-finished(p) => { root.modulation-edit-finished(p); }
@@ -656,7 +736,6 @@ export component MlP8DeviceFace inherits Rectangle {
                     width: grid.cell-w;
                     height: grid.cell-h;
                     tooltip: "Oscillator 3 phase-modulates 1";
-                    self-route: false;
                     param-id: 31;
                     value <=> root.xmod31;
                     modulation-armed: root.modulation-armed;
@@ -675,7 +754,6 @@ export component MlP8DeviceFace inherits Rectangle {
                     width: grid.cell-w;
                     height: grid.cell-h;
                     tooltip: "Oscillator 3 phase-modulates 2";
-                    self-route: false;
                     param-id: 32;
                     value <=> root.xmod32;
                     modulation-armed: root.modulation-armed;
@@ -707,12 +785,31 @@ export component MlP8DeviceFace inherits Rectangle {
                     route-edit-started(p) => { root.modulation-edit-started(p); }
                     route-edit-finished(p) => { root.modulation-edit-finished(p); }
                 }
+                NetworkCell {
+                    x: grid.mix-x;
+                    y: grid.header-h + 2 * (grid.cell-h + grid.gap);
+                    width: grid.cell-w;
+                    height: grid.cell-h;
+                    tooltip: "Oscillator 3 into the mix";
+                    level: true;
+                    param-id: 13;
+                    value <=> root.osc3-level;
+                    modulation-armed: root.modulation-armed;
+                    allowed: root.modulation-allowed;
+                    depths: root.modulation-depths;
+                    offsets: root.modulation-offsets;
+                    route-counts: root.modulation-route-counts;
+                    changed(v) => { root.osc3-level-changed(v); }
+                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                    route-edit-started(p) => { root.modulation-edit-started(p); }
+                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                }
                 Text {
                     x: 0;
                     y: grid.header-h + 3 * (grid.cell-h + grid.gap);
                     width: grid.label-w;
                     height: grid.cell-h;
-                    text: "NOISE";
+                    text: "SUB";
                     color: Theme.text-muted;
                     font-size: 9px;
                     vertical-alignment: center;
@@ -722,8 +819,60 @@ export component MlP8DeviceFace inherits Rectangle {
                     y: grid.header-h + 3 * (grid.cell-h + grid.gap);
                     width: grid.cell-w;
                     height: grid.cell-h;
+                    tooltip: "The sub is derived from an oscillator and cannot modulate one";
+                    inert: true;
+                }
+                NetworkCell {
+                    x: grid.label-w + 1 * (grid.cell-w + grid.gap);
+                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                    width: grid.cell-w;
+                    height: grid.cell-h;
+                    tooltip: "The sub is derived from an oscillator and cannot modulate one";
+                    inert: true;
+                }
+                NetworkCell {
+                    x: grid.label-w + 2 * (grid.cell-w + grid.gap);
+                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                    width: grid.cell-w;
+                    height: grid.cell-h;
+                    tooltip: "The sub is derived from an oscillator and cannot modulate one";
+                    inert: true;
+                }
+                NetworkCell {
+                    x: grid.mix-x;
+                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                    width: grid.cell-w;
+                    height: grid.cell-h;
+                    tooltip: "Sub into the mix";
+                    level: true;
+                    param-id: 20;
+                    value <=> root.sub-level;
+                    modulation-armed: root.modulation-armed;
+                    allowed: root.modulation-allowed;
+                    depths: root.modulation-depths;
+                    offsets: root.modulation-offsets;
+                    route-counts: root.modulation-route-counts;
+                    changed(v) => { root.sub-level-changed(v); }
+                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                    route-edit-started(p) => { root.modulation-edit-started(p); }
+                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                }
+                Text {
+                    x: 0;
+                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
+                    width: grid.label-w;
+                    height: grid.cell-h;
+                    text: "NOISE";
+                    color: Theme.text-muted;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                }
+                NetworkCell {
+                    x: grid.label-w + 0 * (grid.cell-w + grid.gap);
+                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
+                    width: grid.cell-w;
+                    height: grid.cell-h;
                     tooltip: "Noise phase-modulates oscillator 1";
-                    self-route: false;
                     param-id: 33;
                     value <=> root.noise-osc1;
                     modulation-armed: root.modulation-armed;
@@ -738,11 +887,10 @@ export component MlP8DeviceFace inherits Rectangle {
                 }
                 NetworkCell {
                     x: grid.label-w + 1 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
                     width: grid.cell-w;
                     height: grid.cell-h;
                     tooltip: "Noise phase-modulates oscillator 2";
-                    self-route: false;
                     param-id: 34;
                     value <=> root.noise-osc2;
                     modulation-armed: root.modulation-armed;
@@ -757,11 +905,10 @@ export component MlP8DeviceFace inherits Rectangle {
                 }
                 NetworkCell {
                     x: grid.label-w + 2 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
                     width: grid.cell-w;
                     height: grid.cell-h;
                     tooltip: "Noise phase-modulates oscillator 3";
-                    self-route: false;
                     param-id: 35;
                     value <=> root.noise-osc3;
                     modulation-armed: root.modulation-armed;
@@ -770,6 +917,25 @@ export component MlP8DeviceFace inherits Rectangle {
                     offsets: root.modulation-offsets;
                     route-counts: root.modulation-route-counts;
                     changed(v) => { root.noise-osc3-changed(v); }
+                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                    route-edit-started(p) => { root.modulation-edit-started(p); }
+                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                }
+                NetworkCell {
+                    x: grid.mix-x;
+                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
+                    width: grid.cell-w;
+                    height: grid.cell-h;
+                    tooltip: "Noise into the mix";
+                    level: true;
+                    param-id: 25;
+                    value <=> root.noise-level;
+                    modulation-armed: root.modulation-armed;
+                    allowed: root.modulation-allowed;
+                    depths: root.modulation-depths;
+                    offsets: root.modulation-offsets;
+                    route-counts: root.modulation-route-counts;
+                    changed(v) => { root.noise-level-changed(v); }
                     route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                     route-edit-started(p) => { root.modulation-edit-started(p); }
                     route-edit-finished(p) => { root.modulation-edit-finished(p); }
@@ -815,128 +981,101 @@ export component MlP8DeviceFace inherits Rectangle {
             Rectangle { vertical-stretch: 1; }
         }
 
-        // --- Amplitude, and the two sources that are not oscillators --------
+        Rectangle { width: 7px; }
+        Rectangle { width: 1px; background: Theme.border; }
+        Rectangle { width: 7px; }
+
+        // --- Shaping ---------------------------------------------------
         VerticalLayout {
             horizontal-stretch: 1;
-            min-width: 214px;
-            spacing: 5px;
-            InstrumentModule {
-                title: "AMP";
-                EnvelopeEditor {
-                    vertical-stretch: 1;
-                    min-height: 38px;
-                    attack: root.attack / 2; decay: root.decay / 2; sustain <=> root.sustain; release: root.release / 2;
-                    attack-text: round(root.attack * 1000) + " ms"; decay-text: round(root.decay * 1000) + " ms";
-                    sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 1000) + " ms";
-                    attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
-                    decay-changed(v) => { root.decay = v * 2; root.decay-changed(root.decay); }
-                    sustain-changed(v) => { root.sustain-changed(v); }
-                    release-changed(v) => { root.release = v * 2; root.release-changed(root.release); }
-                }
-                KnobField {
-                    diameter: 24px;
-                    label: "GLIDE";
-                    tooltip: "Portamento between reused voices";
-                    value <=> root.glide; minimum: 0; maximum: 2; default-value: 0;
-                    display-text: round(root.glide * 1000) + " ms";
-                    modulation-armed: root.modulation-armed;
-                    modulation-allowed: root.modulation-allowed[19];
-                    modulation-depth: root.modulation-depths[19];
-                    modulation-offset: root.modulation-offsets[19];
-                    modulation-route-count: root.modulation-route-counts[19];
-                    changed(v) => { root.glide-changed(v); }
-                    text-committed(t) => { root.text-committed(19, t); }
-                    modulation-depth-changed(v) => { root.modulation-depth-changed(19, v); }
-                    modulation-edit-started => { root.modulation-edit-started(19); }
-                    modulation-edit-finished => { root.modulation-edit-finished(19); }
-                }
+            min-width: 186px;
+            spacing: 4px;
+            SectionLabel { text: "AMP"; }
+            EnvelopeEditor {
+                vertical-stretch: 1;
+                min-height: 44px;
+                attack: root.attack / 2; decay: root.decay / 2; sustain <=> root.sustain; release: root.release / 2;
+                attack-text: round(root.attack * 1000) + " ms"; decay-text: round(root.decay * 1000) + " ms";
+                sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 1000) + " ms";
+                attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
+                decay-changed(v) => { root.decay = v * 2; root.decay-changed(root.decay); }
+                sustain-changed(v) => { root.sustain-changed(v); }
+                release-changed(v) => { root.release = v * 2; root.release-changed(root.release); }
             }
-            InstrumentModule {
-                title: "SUB / NOISE";
-                HorizontalLayout {
-                    spacing: 3px;
-                    SelectorBank {
-                        options: ["-1", "-2"];
-                        selected-index <=> root.sub-octave;
-                        segment-width: 26px;
-                        tooltip: "Sub octave";
-                        selected(i) => { root.sub-octave-changed(i); }
-                    }
-                    SelectorBank {
-                        options: ["SIN", "SQR"];
-                        selected-index <=> root.sub-wave;
-                        segment-width: 32px;
-                        tooltip: "Sub waveform";
-                        selected(i) => { root.sub-wave-changed(i); }
-                    }
-                    SelectorBank {
-                        options: ["1", "2", "3"];
-                        selected-index <=> root.sub-source;
-                        segment-width: 22px;
-                        tooltip: "Which oscillator the sub divides";
-                        selected(i) => { root.sub-source-changed(i); }
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                }
-                KnobField {
-                    diameter: 24px;
-                    label: "LEVEL";
-                    tooltip: "Sub mix level";
-                    // dB on the control, linear in the parameter; see the
-                    // oscillator level above and `mlp8::is_gain_param`.
-                    value: GainMath.linear-to-db(root.sub-level);
-                    minimum: -60; maximum: 0; default-value: -60;
-                    display-text: GainMath.format-db(GainMath.linear-to-db(root.sub-level));
-                    modulation-armed: root.modulation-armed;
-                    modulation-allowed: root.modulation-allowed[20];
-                    modulation-depth: root.modulation-depths[20];
-                    modulation-offset: root.modulation-offsets[20];
-                    modulation-route-count: root.modulation-route-counts[20];
-                    changed(v) => { root.sub-level = GainMath.db-to-linear(v); root.sub-level-changed(root.sub-level); }
-                    text-committed(t) => { root.text-committed(20, t); }
-                    modulation-depth-changed(v) => { root.modulation-depth-changed(20, v); }
-                    modulation-edit-started => { root.modulation-edit-started(20); }
-                    modulation-edit-finished => { root.modulation-edit-finished(20); }
-                }
-                KnobField {
-                    diameter: 24px;
-                    label: "NOISE";
-                    tooltip: "Noise mix level, independent of what noise modulates";
-                    // dB on the control, linear in the parameter; see the
-                    // oscillator level above and `mlp8::is_gain_param`.
-                    value: GainMath.linear-to-db(root.noise-level);
-                    minimum: -60; maximum: 0; default-value: -60;
-                    display-text: GainMath.format-db(GainMath.linear-to-db(root.noise-level));
-                    modulation-armed: root.modulation-armed;
-                    modulation-allowed: root.modulation-allowed[25];
-                    modulation-depth: root.modulation-depths[25];
-                    modulation-offset: root.modulation-offsets[25];
-                    modulation-route-count: root.modulation-route-counts[25];
-                    changed(v) => { root.noise-level = GainMath.db-to-linear(v); root.noise-level-changed(root.noise-level); }
-                    text-committed(t) => { root.text-committed(25, t); }
-                    modulation-depth-changed(v) => { root.modulation-depth-changed(25, v); }
-                    modulation-edit-started => { root.modulation-edit-started(25); }
-                    modulation-edit-finished => { root.modulation-edit-finished(25); }
-                }
-                KnobField {
-                    diameter: 24px;
-                    label: "COLOR";
-                    tooltip: "Dark through white to bright";
-                    value <=> root.noise-color; minimum: -100; maximum: 100; default-value: 0; bipolar: true;
-                    display-text: root.noise-color < -1 ? round(-root.noise-color) + "% dark"
-                        : root.noise-color > 1 ? round(root.noise-color) + "% bright" : "white";
-                    modulation-armed: root.modulation-armed;
-                    modulation-allowed: root.modulation-allowed[26];
-                    modulation-depth: root.modulation-depths[26];
-                    modulation-offset: root.modulation-offsets[26];
-                    modulation-route-count: root.modulation-route-counts[26];
-                    changed(v) => { root.noise-color-changed(v); }
-                    text-committed(t) => { root.text-committed(26, t); }
-                    modulation-depth-changed(v) => { root.modulation-depth-changed(26, v); }
-                    modulation-edit-started => { root.modulation-edit-started(26); }
-                    modulation-edit-finished => { root.modulation-edit-finished(26); }
-                }
+            KnobField {
+                diameter: 24px;
+                label-width: 30px;
+                field-width: 52px;
+                label: "GLIDE";
+                tooltip: "Portamento between reused voices";
+                value <=> root.glide; minimum: 0; maximum: 2; default-value: 0;
+                display-text: round(root.glide * 1000) + " ms";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[19];
+                modulation-depth: root.modulation-depths[19];
+                modulation-offset: root.modulation-offsets[19];
+                modulation-route-count: root.modulation-route-counts[19];
+                changed(v) => { root.glide-changed(v); }
+                text-committed(t) => { root.text-committed(19, t); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(19, v); }
+                modulation-edit-started => { root.modulation-edit-started(19); }
+                modulation-edit-finished => { root.modulation-edit-finished(19); }
             }
+
+            Rectangle { height: 3px; }
+            Rectangle { height: 1px; background: Theme.border; }
+            Rectangle { height: 3px; }
+
+            // What is left of the two sources once their levels are in the
+            // grid: the choices that decide what they *are*, not how loud.
+            SectionLabel { text: "SUB"; }
+            HorizontalLayout {
+                spacing: 4px;
+                SelectorBank {
+                    options: ["-1", "-2"];
+                    selected-index <=> root.sub-octave;
+                    segment-width: 24px;
+                    tooltip: "Sub octave";
+                    selected(i) => { root.sub-octave-changed(i); }
+                }
+                SelectorBank {
+                    options: ["SIN", "SQR"];
+                    selected-index <=> root.sub-wave;
+                    segment-width: 30px;
+                    tooltip: "Sub waveform";
+                    selected(i) => { root.sub-wave-changed(i); }
+                }
+                SelectorBank {
+                    options: ["1", "2", "3"];
+                    selected-index <=> root.sub-source;
+                    segment-width: 20px;
+                    tooltip: "Which oscillator the sub divides";
+                    selected(i) => { root.sub-source-changed(i); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            SectionLabel { text: "NOISE"; }
+            KnobField {
+                diameter: 24px;
+                label-width: 40px;
+                field-width: 68px;
+                label: "COLOR";
+                tooltip: "Dark through white to bright";
+                value <=> root.noise-color; minimum: -100; maximum: 100; default-value: 0; bipolar: true;
+                display-text: root.noise-color < -1 ? round(-root.noise-color) + "% dark"
+                    : root.noise-color > 1 ? round(root.noise-color) + "% bright" : "white";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[26];
+                modulation-depth: root.modulation-depths[26];
+                modulation-offset: root.modulation-offsets[26];
+                modulation-route-count: root.modulation-route-counts[26];
+                changed(v) => { root.noise-color-changed(v); }
+                text-committed(t) => { root.text-committed(26, t); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(26, v); }
+                modulation-edit-started => { root.modulation-edit-started(26); }
+                modulation-edit-finished => { root.modulation-edit-finished(26); }
+            }
+            Rectangle { vertical-stretch: 1; }
         }
     }
 }

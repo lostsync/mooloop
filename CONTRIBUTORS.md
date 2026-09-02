@@ -363,7 +363,17 @@ work session you can recall being part of, and don't stress over precision.
   drift. Laying it out with layouts was a binding loop -- a knob sizes its
   insides from its width, so asking a cell how wide it wants to be depends on
   the answer -- which is the same wall `KnobField` hit and solved by placing
-  its parts by hand.
+  its parts by hand. Adam then marked up a screenshot in GIMP,
+  purple for space used and not needed, orange for space awkwardly empty, and
+  said it still read as a stereotypical Linux UI. Both marks had one cause:
+  the layout spread space evenly instead of spending it on what carried
+  information. The fix was an idea rather than a nudge -- a mix level is a
+  route too, source into the output, so it became a MIX column of the grid.
+  That filled the matrix's empty half with real information, emptied the knob
+  columns that were crowded, and let the grid state the whole truth about
+  where every source goes. The three bordered cards became one surface split
+  by hairlines along the signal path, since three identical rounded panels is
+  the look of a settings dialog.
   Investigated the `spike/sampler-time-stretch` spike (#32),
   found its "build vs. buy" conclusion under-argued, and merged it to `main`
   once Adam decided to own the build regardless. Built the sampler's #13
