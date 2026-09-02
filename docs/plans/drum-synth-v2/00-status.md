@@ -86,11 +86,18 @@ instrument. Hence DS-01.
 | `08-the-face.md` | The device face, with rendered concepts in `mockups/` |
 | `09-the-kit.md` | Factory patches, range tuning, and the listening pass |
 
-`mockups/` holds two rendered face concepts at the real face size, against the
-real widgets. They are checked in because they are the argument for a layout
-decision rather than notes from making one: the adopted layout is there, and so
-is the one that was built, found illegible, and rejected. `08-the-face.md`
+`mockups/` holds three rendered face concepts at the real face size, against
+the real widgets. They are checked in because they are the argument for a
+layout decision rather than notes from making one: the adopted layout is
+there, and so are the two that were built and rejected. `08-the-face.md`
 records why.
+
+The adopted one is Adam's: each layer's scope sits directly under the controls
+that make it. It carries a consequence the earlier layouts had hidden —
+**DS-01's controls do not fit on one face unless the scopes are the envelope
+editor.** Envelope times are handles dragged on the curve, not knobs. A scope
+without handles is not a smaller version of this face; it is a different one
+that needs a page.
 
 Descriptor addressing lands in **step 02**, not at the end. It is the reason
 this instrument exists; it does not get to be the last thing anyone gets to.

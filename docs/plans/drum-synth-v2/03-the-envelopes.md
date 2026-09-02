@@ -80,6 +80,13 @@ against each other.
 Envelopes are per voice and evaluated per sample. All of their times and
 curves are latched at trigger per `01`.
 
+**Their times are edited on the face by dragging the curve, not by turning a
+knob** — see `08-the-face.md`. That is a layout decision, but it constrains
+this step in one way worth stating here: attack, hold and decay must be
+expressible as points on a plotted contour, and the plot's time axis is shared
+across all four envelopes. A segment that cannot be drawn as a handle on that
+axis does not belong in this envelope.
+
 ## Ids
 
 ```text

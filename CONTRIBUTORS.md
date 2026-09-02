@@ -496,6 +496,19 @@ work session you can recall being part of, and don't stress over precision.
   `mockups/`, against `AGENT_OPERATIONS.md`'s rule that sketches stay in
   `$TMPDIR`, because these are the argument for a decision rather than notes
   from making one.
+  Adam then asked what if each scope sat directly under its own generator,
+  which is a better idea than the lanes and for a reason I had missed: the
+  three layers are parallel in the signal path, so drawing them as parallel
+  columns is truer than stacking them as rows, which implies an order they do
+  not have. Building it surfaced the thing all three concepts had been
+  hiding -- roughly 55 controls do not fit on a 268px face, and every layout
+  so far had quietly been showing about two thirds of them. A scope directly
+  under its controls is what fixes it, because it can carry that envelope's
+  handles: attack, hold and decay come off the knob rows and onto the curve,
+  which is 13 cells back and takes the face from short to 61 cells for 55
+  controls. So the scope being an editor rather than a readout is load-bearing
+  rather than a nicety, and `08-the-face.md` says to build the handles in the
+  same step as the scopes.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

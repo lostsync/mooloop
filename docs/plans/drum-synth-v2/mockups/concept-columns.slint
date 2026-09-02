@@ -1,0 +1,495 @@
+// DS-01 face concept C -- "columns".
+//
+// Adam's proposal: keep the parallel source columns, and put each layer's
+// scope directly underneath the controls that make it. The three layers are
+// parallel in the signal path, so they are drawn parallel; AMP is the fourth
+// column because the summed output is what its envelope shapes.
+//
+// Concept only: values are literals, nothing is wired, and the widgets are the
+// real ones from crates/mooloop-ui/ui so spacing and colour are honest.
+
+import { Theme } from "theme.slint";
+import { MiniKnob, SectionLabel, SelectorBank, ValueScale } from "controls.slint";
+
+// One per-hit route: source, destination, signed amount.
+struct RouteRow { source: string, destination: string, amount: float }
+
+// A knob with its name under it. MiniKnob draws only the dial, so a dense row
+// of them needs its caption placed rather than laid out.
+component LaneKnob inherits Rectangle {
+    in property <string> label;
+    in property <float> value: 0.5;
+    in property <bool> bipolar;
+    in property <color> fill: Theme.accent;
+    width: 58px;
+    MiniKnob {
+        x: (parent.width - self.width) / 2;
+        y: 1px;
+        diameter: 21px;
+        value: root.value;
+        bipolar: root.bipolar;
+        fill: root.fill;
+        label: root.label;
+    }
+    Text {
+        y: 24px;
+        width: 100%;
+        text: root.label;
+        color: Theme.text-muted;
+        font-size: 8px;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+}
+
+// A stepped selector small enough to sit in a knob row.
+component LaneChip inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    width: 58px;
+    Rectangle {
+        x: 3px; y: 2px;
+        width: parent.width - 6px; height: 17px;
+        background: Theme.surface-raised;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: Theme.border;
+        Text {
+            width: 100%; height: 100%;
+            text: root.value;
+            color: Theme.text;
+            font-size: 8px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    Text {
+        y: 24px;
+        width: 100%;
+        text: root.label;
+        color: Theme.text-muted;
+        font-size: 8px;
+        horizontal-alignment: center;
+    }
+}
+
+// One layer's contour, drawn on the face-wide time axis. Attack, hold and
+// decay are fractions of the same span every other lane uses, which is the
+// whole point: the noise lane being shorter than the tone lane is a thing you
+// see rather than a pair of numbers to compare.
+component LaneCurve inherits Rectangle {
+    in property <float> attack;
+    in property <float> hold;
+    in property <float> decay: 0.4;
+    // -1 logarithmic, 0 exponential, +1 linear.
+    in property <float> curve: 0;
+    in property <color> tint: Theme.accent;
+    in property <bool> filled: true;
+    private property <int> steps: 200;
+
+    pure function level-at(x: float) -> float {
+        if (x < root.attack) { return x / max(0.0001, root.attack); }
+        if (x < root.attack + root.hold) { return 1.0; }
+        let t = (x - root.attack - root.hold) / max(0.0001, root.decay);
+        if (t >= 1) { return 0; }
+        return pow(1 - t, root.curve >= 0 ? 2.8 - root.curve * 1.8 : 2.8 - root.curve * 3.2);
+    }
+
+    for index in root.steps : Rectangle {
+        property <float> here: root.level-at(index / (root.steps - 1));
+        property <float> prev: root.level-at(max(0, index - 1) / (root.steps - 1));
+        x: index * parent.width / root.steps;
+        // Overlap by half a pixel so sub-pixel rounding cannot leave a gap
+        // between steps. The fill is opaque rather than alpha for the same
+        // reason in reverse: an overlapping translucent seam double-blends.
+        width: max(1px, parent.width / root.steps + 0.5px);
+        y: parent.height * (1 - max(self.here, self.prev));
+        height: root.filled
+            ? parent.height * max(self.here, self.prev)
+            : max(1px, parent.height * (abs(self.here - self.prev) + 0.012));
+        background: root.filled ? Theme.panel.mix(root.tint, 0.78) : root.tint;
+    }
+    // The line on top of the fill, so the shape reads at a glance.
+    if root.filled : Rectangle {
+        for index in root.steps : Rectangle {
+            property <float> here: root.level-at(index / (root.steps - 1));
+            property <float> prev: root.level-at(max(0, index - 1) / (root.steps - 1));
+            x: index * parent.width / root.steps;
+            width: max(1px, parent.width / root.steps + 0.5px);
+            y: parent.height * (1 - max(self.here, self.prev));
+            height: max(1px, parent.height * (abs(self.here - self.prev) + 0.01));
+            background: root.tint;
+        }
+    }
+}
+
+// The rendered hit, drawn from the production voice path in the real device.
+// Here it is a decaying swept sine so the lane has something honest-shaped in
+// it.
+component HitTrace inherits Rectangle {
+    private property <int> steps: 260;
+    pure function sample-at(x: float) -> float {
+        let env = pow(1 - clamp(x, 0, 1), 2.6);
+        let sweep = 5 + 44 * pow(1 - clamp(x, 0, 1), 0.35);
+        return env * sin(x * sweep * 1rad);
+    }
+    for index in root.steps : Rectangle {
+        property <float> v: root.sample-at(index / (root.steps - 1));
+        x: index * parent.width / root.steps;
+        width: max(1px, parent.width / root.steps + 0.5px);
+        y: parent.height / 2 - max(0px, parent.height * 0.46 * self.v);
+        height: max(1px, parent.height * 0.46 * abs(self.v));
+        background: Theme.accent.with-alpha(0.42);
+    }
+    Rectangle {
+        y: parent.height / 2; width: 100%; height: 1px;
+        background: Theme.border.with-alpha(0.5);
+    }
+}
+
+component Rule inherits Rectangle { height: 1px; background: Theme.border; }
+component VRule inherits Rectangle { width: 1px; background: Theme.border; }
+
+// One lane: the layer's controls on the left, its contour on the right, both
+// on the same row so the eye never has to carry a value across the panel.
+
+
+// One layer: a title, its controls, and its own scope directly under them.
+// The scope is the same span in every column, so a shorter contour is a
+// shorter contour rather than a different scale.
+component SourceColumn inherits Rectangle {
+    in property <string> title;
+    in property <string> span-note;
+    in property <color> tint: Theme.accent;
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 5px;
+            Rectangle {
+                width: 3px; height: 10px;
+                y: 1px;
+                background: root.tint;
+                border-radius: Theme.radius-xs;
+            }
+            SectionLabel { text: root.title; }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.span-note;
+                color: Theme.text-faint;
+                font-size: 8px;
+                vertical-alignment: center;
+            }
+        }
+        @children
+    }
+}
+
+component KnobRow inherits Rectangle {
+    height: 34px;
+    HorizontalLayout { spacing: 0px; alignment: start; @children }
+}
+
+// The scope under a column. Faint verticals at the same time fractions in
+// every column key the four boxes to one another without pretending they are
+// one continuous axis -- they are four drawings of the same span.
+// A draggable envelope handle. Its presence is the claim that the scope is
+// the editor for that envelope rather than a picture of it.
+component ScopeHandle inherits Rectangle {
+    in property <color> tint: Theme.accent;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: root.tint;
+    border-width: 1px;
+    border-color: Theme.background;
+}
+
+component Scope inherits Rectangle {
+    background: Theme.panel;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    for line[i] in [0.25, 0.5, 0.75] : Rectangle {
+        x: parent.width * line;
+        width: 1px; height: 100%;
+        background: Theme.border.with-alpha(0.45);
+    }
+    @children
+}
+
+export component Ds01ConceptColumns inherits Window {
+    width: 1040px;
+    height: 268px;
+    background: Theme.background;
+    title: "DS-01 concept -- columns";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // Globals, and the span every scope below is drawn over.
+        Rectangle {
+            height: 22px;
+            background: Theme.surface;
+            HorizontalLayout {
+                padding-left: 7px;
+                padding-right: 8px;
+                spacing: 12px;
+                Text { text: "DS-01"; color: Theme.text; font-size: 10px; vertical-alignment: center; }
+                Text { text: "TUNE  +0 st"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                Text { text: "CHOKE  1 / 5 ms"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                Text { text: "MONO"; color: Theme.accent; font-size: 9px; vertical-alignment: center; }
+                Text { text: "VEL  100%"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: "every scope  0 \u{2013} 240 ms";
+                    color: Theme.text-faint;
+                    font-size: 8px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        Rule {}
+
+        // The four columns. Controls, then the scope they produce.
+        //
+        // Envelope times are not knobs: each scope carries its own draggable
+        // handles, which is what a scope sitting directly under its controls
+        // buys. Curve, sustain, release and gate stay as controls because
+        // dragging cannot express them.
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.surface;
+            HorizontalLayout {
+                spacing: 0px;
+                SourceColumn {
+                    title: "TONE";
+                    horizontal-stretch: 1;
+                    KnobRow {
+                        LaneKnob { label: "LEVEL"; value: 0.95; }
+                        LaneKnob { label: "PITCH"; value: 0.42; }
+                        LaneKnob { label: "WAVE"; value: 0.12; }
+                        LaneKnob { label: "PART"; value: 0.0; }
+                    }
+                    KnobRow {
+                        LaneKnob { label: "SPREAD"; value: 0.5; }
+                        LaneKnob { label: "FM"; value: 0.18; }
+                        LaneKnob { label: "RATIO"; value: 0.33; }
+                        LaneKnob { label: "P.CURVE"; value: 0.0; bipolar: true; fill: Theme.warning; }
+                    }
+                    Scope {
+                        vertical-stretch: 1;
+                        LaneCurve {
+                            x: 1px; y: 1px;
+                            width: parent.width - 2px; height: parent.height - 2px;
+                            attack: 0.0; hold: 0.01; decay: 0.30; curve: 0.1;
+                        }
+                        // The tone layer's other contour: the pitch envelope,
+                        // whose depth is the handle's height.
+                        LaneCurve {
+                            x: 1px; y: 1px;
+                            width: parent.width - 2px; height: parent.height - 2px;
+                            attack: 0.0; hold: 0.0; decay: 0.07; curve: -0.4;
+                            filled: false; tint: Theme.warning;
+                        }
+                        ScopeHandle { x: clamp(parent.width * 0.01 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 0.0 - 4px, 1px, parent.height - 9px); }
+                        ScopeHandle { x: clamp(parent.width * 0.31 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 1.0 - 4px, 1px, parent.height - 9px); }
+                        ScopeHandle { x: clamp(parent.width * 0.07 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 0.0 - 4px, 1px, parent.height - 9px); tint: Theme.warning; }
+                    }
+                }
+                VRule {}
+                SourceColumn {
+                    title: "NOISE";
+                    tint: #6ea8d8;
+                    horizontal-stretch: 1;
+                    KnobRow {
+                        LaneKnob { label: "LEVEL"; value: 0.55; fill: #6ea8d8; }
+                        LaneChip { label: "COLOR"; value: "PINK"; }
+                        LaneKnob { label: "RATE"; value: 0.8; fill: #6ea8d8; }
+                        LaneKnob { label: "MORPH"; value: 0.5; fill: #6ea8d8; }
+                    }
+                    KnobRow {
+                        LaneKnob { label: "CUTOFF"; value: 0.66; fill: #6ea8d8; }
+                        LaneKnob { label: "RES"; value: 0.24; fill: #6ea8d8; }
+                        LaneKnob { label: "CURVE"; value: 0.0; bipolar: true; fill: #6ea8d8; }
+                        LaneChip { label: "GATE"; value: "ONE"; }
+                    }
+                    Scope {
+                        vertical-stretch: 1;
+                        LaneCurve {
+                            x: 1px; y: 1px;
+                            width: parent.width - 2px; height: parent.height - 2px;
+                            attack: 0.0; hold: 0.0; decay: 0.13; curve: -0.2;
+                            tint: #6ea8d8;
+                        }
+                        ScopeHandle { x: clamp(parent.width * 0.0 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 0.0 - 4px, 1px, parent.height - 9px); tint: #6ea8d8; }
+                        ScopeHandle { x: clamp(parent.width * 0.13 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 1.0 - 4px, 1px, parent.height - 9px); tint: #6ea8d8; }
+                    }
+                }
+                VRule {}
+                SourceColumn {
+                    title: "BODY";
+                    tint: #d8a24a;
+                    horizontal-stretch: 1;
+                    KnobRow {
+                        LaneKnob { label: "LEVEL"; value: 0.4; fill: #d8a24a; }
+                        LaneKnob { label: "PITCH"; value: 0.35; fill: #d8a24a; }
+                        LaneKnob { label: "RATIO"; value: 0.62; fill: #d8a24a; }
+                        LaneKnob { label: "DECAY"; value: 0.7; fill: #d8a24a; }
+                    }
+                    KnobRow {
+                        LaneKnob { label: "DAMP"; value: 0.45; fill: #d8a24a; }
+                        LaneKnob { label: "EXCITE"; value: 0.3; fill: #d8a24a; }
+                    }
+                    Scope {
+                        vertical-stretch: 1;
+                        LaneCurve {
+                            x: 1px; y: 1px;
+                            width: parent.width - 2px; height: parent.height - 2px;
+                            attack: 0.01; hold: 0.0; decay: 0.85; curve: 0.5;
+                            tint: #d8a24a;
+                        }
+                        ScopeHandle { x: clamp(parent.width * 0.86 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 1.0 - 4px, 1px, parent.height - 9px); tint: #d8a24a; }
+                    }
+                }
+                VRule {}
+                SourceColumn {
+                    title: "AMP  \u{00b7}  MOD ENV";
+                    tint: Theme.text;
+                    horizontal-stretch: 1;
+                    KnobRow {
+                        LaneKnob { label: "CURVE"; value: 0.0; bipolar: true; }
+                        LaneKnob { label: "SUSTAIN"; value: 0.0; }
+                        LaneKnob { label: "RELEASE"; value: 0.2; }
+                        LaneChip { label: "GATE"; value: "ONE"; }
+                    }
+                    KnobRow {
+                        LaneKnob { label: "M.CURVE"; value: 0.2; bipolar: true; fill: #b07fd8; }
+                        LaneKnob { label: "M.SUS"; value: 0.0; fill: #b07fd8; }
+                        LaneKnob { label: "M.REL"; value: 0.15; fill: #b07fd8; }
+                        LaneChip { label: "M.GATE"; value: "ONE"; }
+                    }
+                    // The one scope that is not a contour on its own: the
+                    // summed hit, rendered through the production voice path,
+                    // with the amplitude envelope over it.
+                    Scope {
+                        vertical-stretch: 1;
+                        HitTrace {
+                            x: 1px; y: 1px;
+                            width: parent.width - 2px; height: parent.height - 2px;
+                        }
+                        LaneCurve {
+                            x: 1px; y: 1px;
+                            width: parent.width - 2px; height: parent.height - 2px;
+                            attack: 0.0; hold: 0.02; decay: 0.55; curve: 0.0;
+                            filled: false;
+                        }
+                        // The mod envelope has no layer of its own, so it is
+                        // drawn where it is edited.
+                        LaneCurve {
+                            x: 1px; y: 1px;
+                            width: parent.width - 2px; height: parent.height - 2px;
+                            attack: 0.05; hold: 0.0; decay: 0.4; curve: 0.0;
+                            filled: false; tint: #b07fd8;
+                        }
+                        ScopeHandle { x: clamp(parent.width * 0.02 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 0.0 - 4px, 1px, parent.height - 9px); }
+                        ScopeHandle { x: clamp(parent.width * 0.57 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 1.0 - 4px, 1px, parent.height - 9px); }
+                        ScopeHandle { x: clamp(parent.width * 0.05 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 0.0 - 4px, 1px, parent.height - 9px); tint: #b07fd8; }
+                        ScopeHandle { x: clamp(parent.width * 0.45 - 4px, 1px, parent.width - 9px); y: clamp(parent.height * 1.0 - 4px, 1px, parent.height - 9px); tint: #b07fd8; }
+                    }
+                }
+            }
+        }
+        Rule {}
+
+        // After the voice.
+        Rectangle {
+            height: 58px;
+            background: Theme.surface;
+            HorizontalLayout {
+                spacing: 0px;
+                Rectangle {
+                    width: 290px;
+                    SectionLabel { x: 7px; y: 3px; text: "BURST"; }
+                    // The impulse train, on the same span the scopes use.
+                    Rectangle {
+                        x: 62px; y: 4px; width: parent.width - 70px; height: 9px;
+                        Rectangle { y: 8px; width: 100%; height: 1px; background: Theme.border; }
+                        for pos[i] in [0.06, 0.17, 0.25, 0.31] : Rectangle {
+                            x: parent.width * pos;
+                            width: 2px; height: 9px;
+                            background: Theme.warning;
+                        }
+                    }
+                    Rectangle {
+                        x: 7px; y: 17px; width: parent.width - 14px; height: 36px;
+                        HorizontalLayout {
+                            spacing: 0px;
+                            LaneChip { label: "REPEAT"; value: "4"; }
+                            LaneKnob { label: "SPACING"; value: 0.35; }
+                            LaneKnob { label: "SPREAD"; value: 0.28; bipolar: true; }
+                            LaneKnob { label: "LVL ST"; value: 0.35; bipolar: true; }
+                            LaneKnob { label: "PCH ST"; value: 0.5; bipolar: true; }
+                        }
+                    }
+                }
+                VRule {}
+                Rectangle {
+                    width: 356px;
+                    SectionLabel { x: 7px; y: 3px; text: "SHAPE"; }
+                    Rectangle {
+                        x: 7px; y: 17px; width: parent.width - 14px; height: 36px;
+                        HorizontalLayout {
+                            spacing: 0px;
+                            LaneKnob { label: "DRIVE"; value: 0.4; }
+                            LaneChip { label: "CHAR"; value: "FOLD"; }
+                            LaneKnob { label: "BIAS"; value: 0.22; }
+                            LaneKnob { label: "BITS"; value: 0.9; }
+                            LaneKnob { label: "OUT HP"; value: 0.15; }
+                            LaneKnob { label: "LEVEL"; value: 0.8; }
+                        }
+                    }
+                }
+                VRule {}
+                Rectangle {
+                    background: Theme.panel;
+                    SectionLabel { x: 8px; y: 3px; text: "MOD"; }
+                    Rectangle {
+                        x: 44px; y: 3px;
+                        width: parent.width - 52px; height: 50px;
+                        VerticalLayout {
+                            spacing: 2px;
+                            for row[i] in [
+                                { source: "VELOCITY", destination: "AMP", amount: 1.0 },
+                                { source: "VELOCITY", destination: "AMP DECAY", amount: 0.62 },
+                                { source: "BURST IDX", destination: "TONE PITCH", amount: -0.48 },
+                                { source: "HIT ALT", destination: "NOISE CUTOFF", amount: 0.30 },
+                            ] : Rectangle {
+                                height: 11px;
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text { width: 64px; text: row.source; color: Theme.text-muted; font-size: 8px; vertical-alignment: center; }
+                                    Text { width: 10px; text: "\u{2192}"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                                    Text { width: 82px; text: row.destination; color: Theme.text; font-size: 8px; vertical-alignment: center; }
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        Rectangle { y: 4px; width: 100%; height: 3px; background: Theme.surface-raised; border-radius: Theme.radius-xs; }
+                                        Rectangle {
+                                            y: 4px; height: 3px;
+                                            x: row.amount >= 0 ? parent.width / 2 : parent.width / 2 * (1 + row.amount);
+                                            width: parent.width / 2 * abs(row.amount);
+                                            background: row.amount >= 0 ? Theme.accent : Theme.warning;
+                                            border-radius: Theme.radius-xs;
+                                        }
+                                        Rectangle { x: parent.width / 2; y: 2px; width: 1px; height: 7px; background: Theme.border; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
