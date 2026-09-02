@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-02
-- Sessions: 32
+- Sessions: 33
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -465,6 +465,24 @@ work session you can recall being part of, and don't stress over precision.
   the four minutes were pricing out the look-and-adjust loop that visual work
   runs on, so `.slint` got written defensively from memory instead of checked.
   `slint-viewer` interprets the real widgets in ~0.05s, which closes the loop.
+  Then planned the drum synth's v2 as `docs/plans/drum-synth-v2/`, after Adam
+  reported that mod-source assignment could not be enabled for it the way it
+  was for the sampler and the synths. The cause is not the missing descriptor
+  table `generator.rs` calls mechanical work: `DrumSynthParams` is a
+  mode-union, so two thirds of it is inert at any moment and a parameter id's
+  meaning depends on a discrete selector that must not itself be a modulation
+  destination. Giving v1 a table is therefore a different instrument, which is
+  what DS-01 is -- one universal percussion voice on Microtonic's argument
+  rather than Tattoo's selectable engines, since per-engine namespaces would
+  reintroduce the same union with more code in it. Reading v1 turned up two
+  things the plan had to answer that nobody had decided: `render_range`
+  re-reads params per range while `trigger` latches envelope coefficients and
+  cutoffs, so what a knob does to a hit already sounding is an artifact of
+  where the code happened to read the struct -- DS-01 publishes that split as
+  a table instead. And because `trigger` snapshots, a route aimed at a hit
+  lands on the next one unless parameter events precede note-ons at the same
+  offset, which is a renderer contract no descriptor-addressed generator has
+  needed before.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
