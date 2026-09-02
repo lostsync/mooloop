@@ -26,6 +26,7 @@
 //! breaks every saved project.
 
 use crate::generator::{seconds, stepped, unit};
+use crate::modulation::ModTimeDivision;
 use crate::{OscParams, OscWave, ParamCurve, ParamDescriptor};
 
 /// Physical voice slots. Not a knob: "eight voices" is the instrument's name
@@ -247,6 +248,19 @@ pub const PARAM_AMP_VELOCITY: u32 = 52;
 pub const PARAM_FILTER_VELOCITY: u32 = 53;
 pub const PARAM_VOICE_FEEDBACK: u32 = 54;
 
+// --- Step 04: the device's own LFO ----------------------------------------
+
+pub const PARAM_LFO_WAVE: u32 = 55;
+pub const PARAM_LFO_SYNC: u32 = 56;
+pub const PARAM_LFO_RATE_HZ: u32 = 57;
+pub const PARAM_LFO_RATE_DIVISION: u32 = 58;
+pub const PARAM_LFO_PHASE: u32 = 59;
+pub const PARAM_LFO_WARP: u32 = 60;
+pub const PARAM_LFO_SLEW: u32 = 61;
+pub const PARAM_LFO_RETRIGGER: u32 = 62;
+// 63 closes the band the plan reserved for the LFO and is deliberately
+// unused, like 24. A reservation spent early is a renumbering later.
+
 /// Which response the multimode filter runs.
 ///
 /// All four come off the same shared state-variable stage; this is a response
@@ -279,6 +293,521 @@ impl MlP8FilterMode {
             Self::Bp12 => 2,
             Self::Hp12 => 3,
         }
+    }
+}
+
+/// The shape of ML-P8's own LFO.
+///
+/// Not [`crate::modulation::ModLfoWaveform`], which is the channel rack's
+/// five-shape list. The overlap is real but the lists answer different
+/// questions: this one names `Ramp` and `Pulse` because [`MlP8LfoParams::warp`]
+/// is what makes them adjustable, and it carries `Chaos`, which has no
+/// meaning without the per-sample evaluation an instrument LFO gets.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MlP8LfoWave {
+    #[default]
+    Sine,
+    Triangle,
+    Ramp,
+    Pulse,
+    /// One held value per cycle.
+    SampleHold,
+    /// A bounded aperiodic wander. Deterministic, and not a renamed
+    /// [`Self::SampleHold`]: it never holds still.
+    Chaos,
+}
+
+impl MlP8LfoWave {
+    pub const ALL: [Self; 6] = [
+        Self::Sine,
+        Self::Triangle,
+        Self::Ramp,
+        Self::Pulse,
+        Self::SampleHold,
+        Self::Chaos,
+    ];
+
+    /// Whether this shape has a phase for [`MlP8LfoParams::warp`] to skew.
+    ///
+    /// The two that do not are the two that are not periodic, so warp reads
+    /// as a distribution bias there instead. One control, two honest
+    /// meanings, decided by the wave rather than by a second knob.
+    pub fn is_periodic(self) -> bool {
+        !matches!(self, Self::SampleHold | Self::Chaos)
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|wave| *wave == self)
+            .unwrap_or_default() as i32
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sine => "Sine",
+            Self::Triangle => "Tri",
+            Self::Ramp => "Ramp",
+            Self::Pulse => "Pulse",
+            Self::SampleHold => "S&H",
+            Self::Chaos => "Chaos",
+        }
+    }
+}
+
+/// When the LFO restarts its cycle.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MlP8LfoRetrigger {
+    /// Never. The LFO runs with the transport and every voice reads the same
+    /// place in the cycle.
+    #[default]
+    Free,
+    /// On a note-on that arrives while nothing is held, so a chord starts the
+    /// cycle once and notes added to it do not.
+    Chord,
+    /// On every note-on, including notes added to a held chord. This moves
+    /// modulation on the notes already sounding; the status text says so.
+    Note,
+}
+
+impl MlP8LfoRetrigger {
+    pub const ALL: [Self; 3] = [Self::Free, Self::Chord, Self::Note];
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|mode| *mode == self)
+            .unwrap_or_default() as i32
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Free => "Free",
+            Self::Chord => "Chord",
+            Self::Note => "Note",
+        }
+    }
+}
+
+/// ML-P8's own LFO: one global shape, read per sample.
+///
+/// Global rather than per voice because it is the instrument's clock, and the
+/// route amounts in step 04 are what make it land differently on each voice.
+/// A per-voice LFO would be a different feature and would need its own
+/// retrigger vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MlP8LfoParams {
+    pub wave: MlP8LfoWave,
+    /// Take the rate from [`Self::rate_division`] and the transport instead of
+    /// from [`Self::rate_hz`].
+    pub synced: bool,
+    /// Free-running rate in Hz.
+    pub rate_hz: f32,
+    /// Synced rate, on the same musical grid every other synced control in
+    /// the project uses.
+    pub rate_division: ModTimeDivision,
+    /// Read offset in cycles, `[0, 1]`. Applied where the shape is read, not
+    /// to the accumulator, so turning it never changes the rate — the same
+    /// choice the oscillators make for phase modulation.
+    pub phase: f32,
+    /// Bipolar shape skew in `[-1, 1]`. Phase asymmetry for the periodic
+    /// waves, distribution bias for the other two.
+    pub warp: f32,
+    /// Rounding, in `[0, 1]`, as a fraction of the cycle rather than a fixed
+    /// time, so a shape keeps its character when the rate changes.
+    pub slew: f32,
+    pub retrigger: MlP8LfoRetrigger,
+}
+
+impl Default for MlP8LfoParams {
+    fn default() -> Self {
+        Self {
+            wave: MlP8LfoWave::Sine,
+            synced: false,
+            rate_hz: 2.0,
+            rate_division: ModTimeDivision::Quarter,
+            phase: 0.0,
+            warp: 0.0,
+            slew: 0.0,
+            retrigger: MlP8LfoRetrigger::Free,
+        }
+    }
+}
+
+/// The LFO's free rate reaches audio frequencies on purpose: it is evaluated
+/// per sample, and a route from it to a pitch or an XMOD amount at 30 Hz is a
+/// different sound rather than a faster wobble. It is not band limited, so
+/// the top is where that stops being musical rather than where it stops
+/// working.
+const LFO_RATE_MIN_HZ: f32 = 0.01;
+const LFO_RATE_MAX_HZ: f32 = 100.0;
+
+const LFO_DESCRIPTORS: [ParamDescriptor; 8] = [
+    stepped(
+        PARAM_LFO_WAVE,
+        "LFO wave",
+        MlP8LfoWave::ALL.len() as u8,
+        0.0,
+    ),
+    stepped(PARAM_LFO_SYNC, "LFO sync", 2, 0.0),
+    ParamDescriptor {
+        id: PARAM_LFO_RATE_HZ,
+        name: "LFO rate",
+        unit: "Hz",
+        min: LFO_RATE_MIN_HZ,
+        max: LFO_RATE_MAX_HZ,
+        curve: ParamCurve::Exponential,
+        default: 2.0,
+    },
+    ParamDescriptor {
+        id: PARAM_LFO_RATE_DIVISION,
+        name: "LFO div",
+        unit: "",
+        min: 0.0,
+        max: (ModTimeDivision::ALL.len() - 1) as f32,
+        curve: ParamCurve::Stepped(ModTimeDivision::ALL.len() as u8),
+        default: 7.0,
+    },
+    unit(PARAM_LFO_PHASE, "LFO phase", 0.0),
+    bipolar(PARAM_LFO_WARP, "LFO warp"),
+    unit(PARAM_LFO_SLEW, "LFO slew", 0.0),
+    stepped(
+        PARAM_LFO_RETRIGGER,
+        "LFO trig",
+        MlP8LfoRetrigger::ALL.len() as u8,
+        0.0,
+    ),
+];
+
+/// This device's descriptor for `id`, if it has one.
+pub fn descriptor(id: u32) -> Option<&'static ParamDescriptor> {
+    DESCRIPTORS.iter().find(|descriptor| descriptor.id == id)
+}
+
+/// What an internal route reads.
+///
+/// Deliberately short, and deliberately without oscillator or noise signals:
+/// those already reach each other at audio rate through the XMOD network, and
+/// offering them here as slow control values would be a misleading second
+/// kind of FM. `Trigger` is absent for the opposite reason — it is a moment,
+/// not a value, so it belongs on a reset inlet rather than in a list of
+/// things sampled every sample.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MlP8ModSource {
+    /// The device's own LFO. One global value, bipolar.
+    #[default]
+    Lfo,
+    /// This voice's amplitude envelope, unipolar.
+    AmpEnv,
+    /// This voice's filter envelope, unipolar.
+    FilterEnv,
+    /// How hard this voice's note was played, unipolar.
+    Velocity,
+    /// This voice's pitch, bipolar about middle C.
+    Key,
+    /// High while this voice's note is held, low once it is released.
+    Gate,
+}
+
+impl MlP8ModSource {
+    pub const ALL: [Self; 6] = [
+        Self::Lfo,
+        Self::AmpEnv,
+        Self::FilterEnv,
+        Self::Velocity,
+        Self::Key,
+        Self::Gate,
+    ];
+
+    /// Whether this source swings both ways about zero. Unipolar sources rest
+    /// at zero and only ever add in the direction the amount's sign chooses.
+    pub fn is_bipolar(self) -> bool {
+        matches!(self, Self::Lfo | Self::Key)
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|source| *source == self)
+            .unwrap_or_default() as i32
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lfo => "LFO",
+            Self::AmpEnv => "Amp Env",
+            Self::FilterEnv => "Filt Env",
+            Self::Velocity => "Velocity",
+            Self::Key => "Key",
+            Self::Gate => "Gate",
+        }
+    }
+}
+
+/// What an internal route moves.
+///
+/// Almost every destination is an ordinary authored parameter, addressed by
+/// the same descriptor id automation uses, so "base plus offset, then clamp
+/// through the descriptor" needs no second table to stay honest. The two that
+/// are not are the voice's own output stage, which has no knob because the
+/// channel strip already owns the device's level and position — per *voice*
+/// is a different thing from per device, and only a route can ask for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum MlP8ModDest {
+    /// An authored parameter, by descriptor id.
+    Param { id: u32 },
+    /// This voice's output gain, offset down from unity.
+    VcaLevel,
+    /// This voice's position in the stereo field, offset from centre.
+    Pan,
+}
+
+/// Width of a voice's per-sample offset table, which is one entry per
+/// destination. Named so the audio path can size a fixed array against the
+/// same number [`MlP8ModDest::slot`] indexes into.
+pub const MLP8_MOD_DESTS: usize = 31;
+
+impl MlP8ModDest {
+    /// Every legal destination, in the order the panel lists them.
+    pub const ALL: [Self; MLP8_MOD_DESTS] = [
+        Self::Param { id: osc_param(0, OSC_OFFSET_SEMITONES) },
+        Self::Param { id: osc_param(1, OSC_OFFSET_SEMITONES) },
+        Self::Param { id: osc_param(2, OSC_OFFSET_SEMITONES) },
+        Self::Param { id: osc_param(0, OSC_OFFSET_PULSE_WIDTH) },
+        Self::Param { id: osc_param(1, OSC_OFFSET_PULSE_WIDTH) },
+        Self::Param { id: osc_param(2, OSC_OFFSET_PULSE_WIDTH) },
+        Self::Param { id: osc_param(0, OSC_OFFSET_LEVEL) },
+        Self::Param { id: osc_param(1, OSC_OFFSET_LEVEL) },
+        Self::Param { id: osc_param(2, OSC_OFFSET_LEVEL) },
+        Self::Param { id: PARAM_SUB_LEVEL },
+        Self::Param { id: PARAM_NOISE_LEVEL },
+        Self::Param { id: PARAM_NOISE_COLOR },
+        Self::Param { id: PARAM_XMOD_BASE },
+        Self::Param { id: PARAM_XMOD_BASE + 1 },
+        Self::Param { id: PARAM_XMOD_BASE + 2 },
+        Self::Param { id: PARAM_XMOD_BASE + 3 },
+        Self::Param { id: PARAM_XMOD_BASE + 4 },
+        Self::Param { id: PARAM_XMOD_BASE + 5 },
+        Self::Param { id: PARAM_NOISE_TO_OSC_BASE },
+        Self::Param { id: PARAM_NOISE_TO_OSC_BASE + 1 },
+        Self::Param { id: PARAM_NOISE_TO_OSC_BASE + 2 },
+        Self::Param { id: PARAM_OSC_FEEDBACK_BASE },
+        Self::Param { id: PARAM_OSC_FEEDBACK_BASE + 1 },
+        Self::Param { id: PARAM_OSC_FEEDBACK_BASE + 2 },
+        Self::Param { id: PARAM_VOICE_FEEDBACK },
+        Self::Param { id: PARAM_FILTER_CUTOFF },
+        Self::Param { id: PARAM_FILTER_RESONANCE },
+        Self::Param { id: PARAM_FILTER_ENV_AMOUNT },
+        Self::Param { id: PARAM_DRIVE },
+        Self::VcaLevel,
+        Self::Pan,
+    ];
+
+    /// Dense index into a voice's per-sample offset table.
+    ///
+    /// The audio path adds offsets into a flat array and reads them back by
+    /// this index, so nothing in `process()` searches a descriptor table or
+    /// matches on a parameter id.
+    pub fn slot(self) -> Option<usize> {
+        Self::ALL.iter().position(|dest| *dest == self)
+    }
+
+    /// `==`, but usable in a `const` context so the DSP can resolve its slot
+    /// indices at compile time instead of searching for them per sample.
+    pub const fn same(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Param { id: a }, Self::Param { id: b }) => a == b,
+            (Self::VcaLevel, Self::VcaLevel) | (Self::Pan, Self::Pan) => true,
+            _ => false,
+        }
+    }
+
+    /// Whether this destination may be routed to at all.
+    ///
+    /// The rule is the descriptor's own curve rather than a hand-kept list:
+    /// a stepped parameter is a structural choice — a waveform, a sync
+    /// source, a filter mode — and flapping one at audio rate is a click, not
+    /// a modulation. Keeping the rule here means a stepped control added
+    /// later is excluded the day it is added.
+    pub fn is_legal(self) -> bool {
+        match self {
+            Self::Param { id } => match descriptor(id) {
+                Some(d) => !matches!(d.curve, ParamCurve::Stepped(_)),
+                None => false,
+            },
+            Self::VcaLevel | Self::Pan => true,
+        }
+    }
+
+    /// The span a route amount of 1.0 covers.
+    pub fn full_range(self) -> f32 {
+        match self {
+            Self::Param { id } => descriptor(id).map(|d| d.max - d.min).unwrap_or(0.0),
+            // Unity down to silence. A route can duck a voice but not push it
+            // past the reference the gain contract puts at the top.
+            Self::VcaLevel => 1.0,
+            // Hard left to hard right.
+            Self::Pan => 2.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Param { id } => match descriptor(id) {
+                Some(d) => d.name,
+                None => "?",
+            },
+            Self::VcaLevel => "Voice level",
+            Self::Pan => "Voice pan",
+        }
+    }
+}
+
+/// The most internal routes one ML-P8 patch may have active.
+///
+/// A measured ceiling on callback work, not a panel with sixteen empty slots
+/// and not a promise. The UI shows the routes a patch actually has, plus an
+/// add affordance that stops offering itself here.
+pub const MLP8_MAX_ROUTES: usize = 16;
+
+/// One internal modulation route.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MlP8Route {
+    /// Durable identity, handed out once and never reused within a patch.
+    /// Automation addresses [`Self::amount`] through this, so reordering or
+    /// removing a neighbour must not move it.
+    pub id: u16,
+    pub source: MlP8ModSource,
+    pub dest: MlP8ModDest,
+    /// Signed depth, `[-1, 1]`, as a fraction of the destination's full
+    /// range.
+    pub amount: f32,
+}
+
+/// A patch's internal routes.
+///
+/// Fixed capacity and `Copy`, so installing a patch never allocates and the
+/// audio thread never grows a container. Empty slots are `None` rather than
+/// placeholder rows, so a saved patch carries the routes it has and no more.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MlP8Routes {
+    routes: [Option<MlP8Route>; MLP8_MAX_ROUTES],
+    /// Next durable id. Monotonic within a patch so a removed route's id is
+    /// never handed to a different route later, which would silently
+    /// re-point an automation lane.
+    next_id: u16,
+}
+
+impl Default for MlP8Routes {
+    fn default() -> Self {
+        Self {
+            routes: [None; MLP8_MAX_ROUTES],
+            next_id: 1,
+        }
+    }
+}
+
+impl MlP8Routes {
+    pub fn iter(&self) -> impl Iterator<Item = &MlP8Route> {
+        self.routes.iter().flatten()
+    }
+
+    pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, id: u16) -> Option<&MlP8Route> {
+        self.iter().find(|route| route.id == id)
+    }
+
+    /// Add a route, returning its durable id.
+    ///
+    /// `None` when the patch is full or the destination is structural. A
+    /// rejected route is not silently dropped in place of a different one —
+    /// the caller still holds what it authored and can say why it did not
+    /// land.
+    pub fn add(&mut self, source: MlP8ModSource, dest: MlP8ModDest) -> Option<u16> {
+        if !dest.is_legal() {
+            return None;
+        }
+        let slot = self.routes.iter().position(Option::is_none)?;
+        let id = self.next_id;
+        self.next_id = self.next_id.checked_add(1)?;
+        self.routes[slot] = Some(MlP8Route {
+            id,
+            source,
+            dest,
+            amount: 0.0,
+        });
+        Some(id)
+    }
+
+    pub fn remove(&mut self, id: u16) -> bool {
+        for slot in &mut self.routes {
+            if slot.is_some_and(|route| route.id == id) {
+                *slot = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Set a route's signed amount. This is the one part of a route that is
+    /// an ordinary automatable value rather than a structural edit.
+    pub fn set_amount(&mut self, id: u16, amount: f32) -> bool {
+        for route in self.routes.iter_mut().flatten() {
+            if route.id == id {
+                route.amount = amount.clamp(-1.0, 1.0);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Re-point an existing route. Structural: prepared off the audio thread.
+    pub fn set_endpoints(&mut self, id: u16, source: MlP8ModSource, dest: MlP8ModDest) -> bool {
+        if !dest.is_legal() {
+            return false;
+        }
+        for route in self.routes.iter_mut().flatten() {
+            if route.id == id {
+                route.source = source;
+                route.dest = dest;
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -431,12 +960,13 @@ const VOICE_DESCRIPTORS: [ParamDescriptor; 13] = [
 /// Written as one `static` so the engine can enumerate it without allocating,
 /// and assembled by a `const fn` rather than by hand so the ids stay derived
 /// from the constants above.
-pub static DESCRIPTORS: [ParamDescriptor; 54] = concat(
+pub static DESCRIPTORS: [ParamDescriptor; 62] = concat(
     osc_descriptors(0, "Osc 1 wave"),
     osc_descriptors(1, "Osc 2 wave"),
     osc_descriptors(2, "Osc 3 wave"),
     NETWORK_DESCRIPTORS,
     VOICE_DESCRIPTORS,
+    LFO_DESCRIPTORS,
 );
 
 const fn concat(
@@ -445,8 +975,9 @@ const fn concat(
     c: [ParamDescriptor; 5],
     network: [ParamDescriptor; 26],
     voice: [ParamDescriptor; 13],
-) -> [ParamDescriptor; 54] {
-    let mut out = [a[0]; 54];
+    lfo: [ParamDescriptor; 8],
+) -> [ParamDescriptor; 62] {
+    let mut out = [a[0]; 62];
     let mut i = 0;
     while i < 5 {
         out[i] = a[i];
@@ -463,6 +994,11 @@ const fn concat(
     while k < 13 {
         out[41 + k] = voice[k];
         k += 1;
+    }
+    let mut l = 0;
+    while l < 8 {
+        out[54 + l] = lfo[l];
+        l += 1;
     }
     out
 }
@@ -525,6 +1061,14 @@ pub struct MlP8Params {
     pub filter_velocity: f32,
     /// Bipolar output-to-input feedback around the voice's filter.
     pub voice_feedback: f32,
+
+    // --- The instrument's own modulation --------------------------------
+    pub lfo: MlP8LfoParams,
+    /// Internal routes. Not addressed by descriptor id: a route's amount is
+    /// automated through its durable route identity instead, so the id space
+    /// above stays a description of the instrument rather than a fixed number
+    /// of route slots.
+    pub routes: MlP8Routes,
 }
 
 impl Default for MlP8Params {
@@ -584,6 +1128,8 @@ impl Default for MlP8Params {
             amp_velocity: 1.0,
             filter_velocity: 0.0,
             voice_feedback: 0.0,
+            lfo: MlP8LfoParams::default(),
+            routes: MlP8Routes::default(),
         }
     }
 }
@@ -653,6 +1199,14 @@ pub fn get(p: &MlP8Params, id: u32) -> Option<f32> {
         PARAM_AMP_VELOCITY => p.amp_velocity,
         PARAM_FILTER_VELOCITY => p.filter_velocity,
         PARAM_VOICE_FEEDBACK => p.voice_feedback,
+        PARAM_LFO_WAVE => p.lfo.wave.to_index() as f32,
+        PARAM_LFO_SYNC => f32::from(u8::from(p.lfo.synced)),
+        PARAM_LFO_RATE_HZ => p.lfo.rate_hz,
+        PARAM_LFO_RATE_DIVISION => p.lfo.rate_division.to_index() as f32,
+        PARAM_LFO_PHASE => p.lfo.phase,
+        PARAM_LFO_WARP => p.lfo.warp,
+        PARAM_LFO_SLEW => p.lfo.slew,
+        PARAM_LFO_RETRIGGER => p.lfo.retrigger.to_index() as f32,
         PARAM_ATTACK => p.attack,
         PARAM_DECAY => p.decay,
         PARAM_SUSTAIN => p.sustain,
@@ -713,6 +1267,18 @@ pub fn set(p: &mut MlP8Params, id: u32, value: f32) -> bool {
         PARAM_AMP_VELOCITY => p.amp_velocity = value,
         PARAM_FILTER_VELOCITY => p.filter_velocity = value,
         PARAM_VOICE_FEEDBACK => p.voice_feedback = value,
+        PARAM_LFO_WAVE => p.lfo.wave = MlP8LfoWave::from_index(value.round() as i32),
+        PARAM_LFO_SYNC => p.lfo.synced = value.round() > 0.0,
+        PARAM_LFO_RATE_HZ => p.lfo.rate_hz = value,
+        PARAM_LFO_RATE_DIVISION => {
+            p.lfo.rate_division = ModTimeDivision::from_index(value.round() as i32)
+        }
+        PARAM_LFO_PHASE => p.lfo.phase = value,
+        PARAM_LFO_WARP => p.lfo.warp = value,
+        PARAM_LFO_SLEW => p.lfo.slew = value,
+        PARAM_LFO_RETRIGGER => {
+            p.lfo.retrigger = MlP8LfoRetrigger::from_index(value.round() as i32)
+        }
         PARAM_ATTACK => p.attack = value,
         PARAM_DECAY => p.decay = value,
         PARAM_SUSTAIN => p.sustain = value,
@@ -747,10 +1313,11 @@ mod tests {
     #[test]
     fn descriptor_ids_stay_inside_the_reserved_band() {
         for d in &DESCRIPTORS {
-            assert!(d.id <= 54, "{} ({}) is outside 0-54", d.id, d.name);
+            assert!(d.id <= 63, "{} ({}) is outside 0-63", d.id, d.name);
             assert_ne!(d.id, 24, "24 is reserved for a fifth sub control");
+            assert_ne!(d.id, 63, "63 closes the LFO band and stays reserved");
         }
-        assert_eq!(DESCRIPTORS.len(), 54);
+        assert_eq!(DESCRIPTORS.len(), 62);
     }
 
     #[test]
@@ -836,12 +1403,99 @@ mod tests {
     }
 
     #[test]
+    fn every_route_destination_is_continuous_and_addressable() {
+        for dest in MlP8ModDest::ALL {
+            assert!(dest.is_legal(), "{:?} is listed but not legal", dest);
+            assert!(dest.slot().is_some(), "{:?} has no offset slot", dest);
+            assert!(
+                dest.full_range() > 0.0,
+                "{:?} spans nothing, so an amount would mean nothing",
+                dest
+            );
+        }
+        let mut slots: Vec<usize> = MlP8ModDest::ALL
+            .iter()
+            .map(|dest| dest.slot().unwrap())
+            .collect();
+        slots.sort_unstable();
+        slots.dedup();
+        assert_eq!(slots.len(), MLP8_MOD_DESTS, "two destinations share a slot");
+    }
+
+    #[test]
+    fn structural_selectors_refuse_to_be_routed() {
+        // The rule is the descriptor's curve, so this list is a restatement
+        // of the plan rather than a second source of truth: waveform, sync
+        // source, filter mode, sub source and sub octave are all stepped.
+        for id in [
+            osc_param(0, OSC_OFFSET_WAVE),
+            PARAM_SUB_OCTAVE,
+            PARAM_SUB_WAVE,
+            PARAM_SUB_SOURCE,
+            PARAM_SYNC_SOURCE_BASE,
+            PARAM_FILTER_MODE,
+            PARAM_LFO_WAVE,
+            PARAM_LFO_RETRIGGER,
+        ] {
+            let dest = MlP8ModDest::Param { id };
+            assert!(!dest.is_legal(), "id {id} is stepped but was accepted");
+            let mut routes = MlP8Routes::default();
+            assert_eq!(routes.add(MlP8ModSource::Lfo, dest), None);
+        }
+    }
+
+    #[test]
+    fn a_removed_route_never_gives_its_id_away() {
+        let mut routes = MlP8Routes::default();
+        let cutoff = MlP8ModDest::Param { id: PARAM_FILTER_CUTOFF };
+        let drive = MlP8ModDest::Param { id: PARAM_DRIVE };
+
+        let first = routes.add(MlP8ModSource::Lfo, cutoff).unwrap();
+        assert!(routes.set_amount(first, 0.5));
+        assert!(routes.remove(first));
+
+        // The freed slot is reused, but the identity is not: an automation
+        // lane still pointed at `first` must not start driving this instead.
+        let second = routes.add(MlP8ModSource::Velocity, drive).unwrap();
+        assert_ne!(first, second);
+        assert!(routes.get(first).is_none());
+        assert!(!routes.set_amount(first, 1.0));
+    }
+
+    #[test]
+    fn the_route_list_stops_at_its_measured_ceiling() {
+        let mut routes = MlP8Routes::default();
+        let dest = MlP8ModDest::Param { id: PARAM_FILTER_CUTOFF };
+        for _ in 0..MLP8_MAX_ROUTES {
+            assert!(routes.add(MlP8ModSource::Lfo, dest).is_some());
+        }
+        assert_eq!(routes.len(), MLP8_MAX_ROUTES);
+        // Refused rather than silently replacing one that was authored.
+        assert_eq!(routes.add(MlP8ModSource::Lfo, dest), None);
+        assert_eq!(routes.len(), MLP8_MAX_ROUTES);
+    }
+
+    #[test]
+    fn a_route_amount_is_signed_and_clamped() {
+        let mut routes = MlP8Routes::default();
+        let id = routes
+            .add(MlP8ModSource::FilterEnv, MlP8ModDest::Param { id: PARAM_XMOD_BASE })
+            .unwrap();
+        assert!(routes.set_amount(id, -3.0));
+        assert_eq!(routes.get(id).unwrap().amount, -1.0);
+        assert!(routes.set_amount(id, 0.25));
+        assert_eq!(routes.get(id).unwrap().amount, 0.25);
+    }
+
+    #[test]
     fn an_unknown_id_is_neither_readable_nor_writable() {
         let mut params = MlP8Params::default();
-        // 24 is a hole inside the band, 55 is past its end.
+        // 24 and 63 are holes inside the band, 64 is past its end.
         assert_eq!(get(&params, 24), None);
         assert!(!set(&mut params, 24, 1.0));
-        assert_eq!(get(&params, 55), None);
-        assert!(!set(&mut params, 55, 1.0));
+        assert_eq!(get(&params, 63), None);
+        assert!(!set(&mut params, 63, 1.0));
+        assert_eq!(get(&params, 64), None);
+        assert!(!set(&mut params, 64, 1.0));
     }
 }

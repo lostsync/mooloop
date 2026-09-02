@@ -35,7 +35,9 @@ pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
 pub use mlm1::{EnvTrigger, FilterModel, GlideMode, MlM1Params, NotePriority};
 pub use mlp8::{
-    MlP8FilterMode, MlP8Params, SubOctave, SubSource, SubWave, SyncSource, MLP8_VOICES,
+    MlP8FilterMode, MlP8LfoParams, MlP8LfoRetrigger, MlP8LfoWave, MlP8ModDest,
+    MlP8ModSource, MlP8Params, MlP8Route, MlP8Routes, SubOctave, SubSource, SubWave,
+    SyncSource, MLP8_MAX_ROUTES, MLP8_VOICES,
 };
 pub use mlm1_factory::FactoryPatch;
 pub use modulation::{

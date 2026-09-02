@@ -36,8 +36,10 @@ use crate::osc::{sync_blep, Noise, Osc};
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
+use mooloop_core::mlp8::{MlP8Routes, MLP8_MAX_ROUTES, MLP8_MOD_DESTS};
 use mooloop_core::{
-    mlp8::xmod_index, MlP8FilterMode, MlP8Params, OscWave, SubWave, MLP8_VOICES,
+    mlp8::xmod_index, MlP8FilterMode, MlP8LfoParams, MlP8LfoRetrigger, MlP8LfoWave, MlP8Params,
+    OscWave, SubWave, MLP8_VOICES,
 };
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
@@ -278,6 +280,376 @@ const LP24_CORNER_SCALE: f32 = 1.553_774;
 const LP24_RESONANCE_SHARE: f32 = 0.62;
 
 /// One physical voice. Eight of these exist for the life of the device.
+/// How much of one cycle full Slew rounds off.
+///
+/// A fraction of the cycle rather than a time in seconds, which is the whole
+/// idea: a sample-and-hold at half Slew is the same wander at 0.2 Hz as at
+/// 20 Hz, so the control survives being automated alongside Rate instead of
+/// meaning something different at every speed.
+const LFO_SLEW_MAX_CYCLES: f32 = 0.5;
+
+/// The narrowest either half of a warped cycle may become. A pivot that
+/// reaches the edge is a shape with no rising side at all, which is a
+/// division by zero before it is a sound.
+const LFO_WARP_MIN_SIDE: f32 = 0.02;
+
+/// The chaos pair's frequency ratio. Irrational on purpose: a rational ratio
+/// closes the figure and the "chaos" wave becomes a periodic one.
+const CHAOS_RATIO: f32 = 0.618_034;
+
+/// How hard each phasor bends the other's rate. Weak coupling lets the pair
+/// phase-lock, which is the failure mode that would quietly turn this back
+/// into a periodic wave, so it is set well past that.
+const CHAOS_COUPLING: f32 = 0.85;
+
+/// Seed for the sample-and-hold sequence. Fixed, so two renders of the same
+/// events are the same samples.
+const LFO_SH_SEED: u32 = 0x1d3f_a7c5;
+
+/// ML-P8's own LFO: one global shape, evaluated per sample.
+///
+/// Global rather than per voice because it is the instrument's clock; the
+/// route amounts are what make it land differently on each voice.
+struct MlP8Lfo {
+    phase: f32,
+    /// The current sample-and-hold value, already warped.
+    hold: f32,
+    noise: Noise,
+    /// The chaos generator's whole state: two phasors, each modulating the
+    /// other's rate. Bounded by construction because the output is a sum of
+    /// sines rather than an accumulator that could run away.
+    chaos: [f32; 2],
+    /// The slew filter's memory, which is also the LFO's output.
+    slewed: f32,
+    /// Whether `slewed` has ever been written. A slew starting from zero
+    /// would ramp in from silence on the first note; starting from the
+    /// shape's own first value does not.
+    primed: bool,
+}
+
+impl MlP8Lfo {
+    fn new() -> Self {
+        let mut noise = Noise::new(LFO_SH_SEED);
+        let hold = noise.next_sample();
+        Self {
+            phase: 0.0,
+            hold,
+            noise,
+            // Not both zero: identical phases stay identical forever, and the
+            // pair would sum to one sine rather than wander.
+            chaos: [0.0, 0.37],
+            slewed: 0.0,
+            primed: false,
+        }
+    }
+
+    /// Restart the cycle. The accumulator goes to zero rather than to the
+    /// Phase parameter, because Phase is a read offset — see `value_at`.
+    fn retrigger(&mut self) {
+        self.phase = 0.0;
+        self.chaos = [0.0, 0.37];
+        self.hold = self.noise.next_sample();
+        self.primed = false;
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    /// The rate this LFO is running at, in Hz.
+    fn rate_hz(params: &MlP8LfoParams, bpm: f64) -> f32 {
+        if params.synced {
+            params.rate_division.rate_hz(bpm)
+        } else {
+            params.rate_hz
+        }
+    }
+
+    /// One sample, bipolar in `[-1, 1]`.
+    fn next_sample(&mut self, params: &MlP8LfoParams, bpm: f64, sample_rate: u32) -> f32 {
+        let sr = sample_rate as f32;
+        // A quarter of the sample rate is the same ceiling the shared LFO
+        // uses: past it the "shape" is decided by where the samples land
+        // rather than by the wave.
+        let rate = Self::rate_hz(params, bpm).clamp(0.0, sr * 0.25);
+        let dt = rate / sr;
+
+        let raw = match params.wave {
+            MlP8LfoWave::Chaos => {
+                self.advance_chaos(dt);
+                bias(0.5 * (sin_tau(self.chaos[0]) + sin_tau(self.chaos[1])), params.warp)
+            }
+            MlP8LfoWave::SampleHold => self.hold,
+            wave => {
+                let read = (self.phase + params.phase).rem_euclid(1.0);
+                periodic_shape(warp_phase(read, params.warp), wave)
+            }
+        };
+
+        self.advance(dt, params);
+        self.slew(raw, rate, params.slew, sr)
+    }
+
+    /// Advance the phase accumulator, refreshing the held value on the wrap.
+    fn advance(&mut self, dt: f32, params: &MlP8LfoParams) {
+        let next = self.phase + dt;
+        if next >= 1.0 {
+            // Warp biases the *distribution* here rather than skewing a phase,
+            // because a held value has no phase to skew. One control, and the
+            // wave decides which of its two honest meanings applies.
+            self.hold = bias(self.noise.next_sample(), params.warp);
+        }
+        self.phase = next.fract();
+    }
+
+    /// Two phasors, each bending the other's rate.
+    ///
+    /// Deterministic, allocation-free, and bounded without a clamp: the
+    /// output is a sum of sines, so there is no accumulator that can escape.
+    /// The phases themselves are kept in `[0, 1)` so they cannot drift into
+    /// the range where `f32` stops resolving a cycle.
+    fn advance_chaos(&mut self, dt: f32) {
+        let a = sin_tau(self.chaos[0]);
+        let b = sin_tau(self.chaos[1]);
+        self.chaos[0] = (self.chaos[0] + dt * (1.0 + CHAOS_COUPLING * b)).rem_euclid(1.0);
+        self.chaos[1] =
+            (self.chaos[1] + dt * (CHAOS_RATIO + CHAOS_COUPLING * a)).rem_euclid(1.0);
+    }
+
+    /// A one-pole whose time constant is a fraction of the cycle.
+    fn slew(&mut self, target: f32, rate_hz: f32, amount: f32, sample_rate: f32) -> f32 {
+        if !self.primed {
+            self.slewed = target;
+            self.primed = true;
+            return target;
+        }
+        let amount = amount.clamp(0.0, 1.0);
+        if amount <= 0.0 || rate_hz <= 0.0 {
+            self.slewed = target;
+            return target;
+        }
+        let tau = amount * LFO_SLEW_MAX_CYCLES / rate_hz;
+        let coeff = (-1.0 / (tau * sample_rate)).exp();
+        self.slewed = target + (self.slewed - target) * coeff;
+        self.slewed
+    }
+}
+
+fn sin_tau(phase: f32) -> f32 {
+    (phase * core::f32::consts::TAU).sin()
+}
+
+/// Skew a phase about a moved pivot, so half the cycle is spent on each side
+/// of it. Turns a triangle into a ramp, a pulse into a variable width, and a
+/// sine into a shape that leans.
+fn warp_phase(phase: f32, warp: f32) -> f32 {
+    let warp = warp.clamp(-1.0, 1.0);
+    if warp == 0.0 {
+        return phase;
+    }
+    let pivot = (0.5 * (1.0 - warp)).clamp(LFO_WARP_MIN_SIDE, 1.0 - LFO_WARP_MIN_SIDE);
+    if phase < pivot {
+        0.5 * phase / pivot
+    } else {
+        0.5 + 0.5 * (phase - pivot) / (1.0 - pivot)
+    }
+}
+
+/// Bias a bipolar value toward the extremes or toward the centre, keeping its
+/// sign and its bounds. This is Warp's meaning for the two waves that have no
+/// phase: positive pushes values out to the rails, negative pulls them in.
+fn bias(value: f32, warp: f32) -> f32 {
+    let warp = warp.clamp(-1.0, 1.0);
+    if warp == 0.0 {
+        return value;
+    }
+    let exponent = if warp > 0.0 {
+        1.0 - 0.75 * warp
+    } else {
+        1.0 - 2.0 * warp
+    };
+    value.signum() * value.abs().powf(exponent)
+}
+
+/// The four waves that have a phase. All leave zero rising at phase zero, so
+/// a retriggered LFO never steps the sound at the note boundary.
+fn periodic_shape(phase: f32, wave: MlP8LfoWave) -> f32 {
+    match wave {
+        MlP8LfoWave::Sine => sin_tau(phase),
+        MlP8LfoWave::Triangle => 1.0 - 4.0 * ((phase + 0.25).fract() - 0.5).abs(),
+        MlP8LfoWave::Ramp => 2.0 * (phase + 0.5).fract() - 1.0,
+        MlP8LfoWave::Pulse => {
+            if phase < 0.5 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        // Handled by the caller; neither is periodic.
+        MlP8LfoWave::SampleHold | MlP8LfoWave::Chaos => 0.0,
+    }
+}
+
+/// One internal route, reduced to the work the audio path actually does.
+///
+/// No descriptor id, no enum to match on a destination, no lookup: a source
+/// index, a slot index, and the factor to multiply by. Everything that needed
+/// a table was resolved when the topology was compiled.
+#[derive(Clone, Copy)]
+struct CompiledRoute {
+    source: usize,
+    slot: usize,
+    scale: f32,
+}
+
+/// A patch's routes, compiled flat.
+struct CompiledRoutes {
+    routes: [CompiledRoute; MLP8_MAX_ROUTES],
+    len: usize,
+    /// Which destination slots any route touches, so a voice zeroes and reads
+    /// only those. An unrouted patch does no per-sample work at all.
+    touched: [bool; MLP8_MOD_DESTS],
+    any: bool,
+}
+
+impl CompiledRoutes {
+    fn new() -> Self {
+        Self {
+            routes: [CompiledRoute {
+                source: 0,
+                slot: 0,
+                scale: 0.0,
+            }; MLP8_MAX_ROUTES],
+            len: 0,
+            touched: [false; MLP8_MOD_DESTS],
+            any: false,
+        }
+    }
+
+    /// Resolve the authored route list into flat operations.
+    ///
+    /// Bounded and allocation-free — sixteen routes against a fixed
+    /// destination list — which is what makes it safe to run from the
+    /// parameter drain rather than needing a separate prepared-topology
+    /// handoff. It is not per block and never per sample: it runs when the
+    /// patch's topology changes.
+    fn compile(&mut self, routes: &MlP8Routes) {
+        self.len = 0;
+        self.touched = [false; MLP8_MOD_DESTS];
+        for route in routes.iter() {
+            if self.len == MLP8_MAX_ROUTES {
+                break;
+            }
+            let Some(slot) = route.dest.slot() else {
+                continue;
+            };
+            if !route.dest.is_legal() {
+                continue;
+            }
+            let scale = route.amount.clamp(-1.0, 1.0) * route.dest.full_range();
+            if scale == 0.0 {
+                continue;
+            }
+            self.routes[self.len] = CompiledRoute {
+                source: route.source.to_index() as usize,
+                slot,
+                scale,
+            };
+            self.len += 1;
+            self.touched[slot] = true;
+        }
+        self.any = self.len > 0;
+    }
+}
+
+/// Dense slot indices the voice reads back. Derived from the same `ALL` order
+/// the UI lists, rather than written out twice.
+mod slot {
+    use mooloop_core::mlp8::{MlP8ModDest, MLP8_MOD_DESTS};
+
+    /// Resolve at startup rather than per sample, and panic loudly here
+    /// rather than silently mis-routing if the destination list is reordered.
+    const fn find(target: MlP8ModDest) -> usize {
+        let mut i = 0;
+        while i < MLP8_MOD_DESTS {
+            if MlP8ModDest::ALL[i].same(target) {
+                return i;
+            }
+            i += 1;
+        }
+        panic!("destination is not in MlP8ModDest::ALL")
+    }
+
+    pub const OSC_SEMIS: [usize; 3] = [
+        find(MlP8ModDest::Param {
+            id: mooloop_core::mlp8::osc_param(0, mooloop_core::mlp8::OSC_OFFSET_SEMITONES),
+        }),
+        find(MlP8ModDest::Param {
+            id: mooloop_core::mlp8::osc_param(1, mooloop_core::mlp8::OSC_OFFSET_SEMITONES),
+        }),
+        find(MlP8ModDest::Param {
+            id: mooloop_core::mlp8::osc_param(2, mooloop_core::mlp8::OSC_OFFSET_SEMITONES),
+        }),
+    ];
+    pub const OSC_WIDTH: [usize; 3] = [
+        find(MlP8ModDest::Param {
+            id: mooloop_core::mlp8::osc_param(0, mooloop_core::mlp8::OSC_OFFSET_PULSE_WIDTH),
+        }),
+        find(MlP8ModDest::Param {
+            id: mooloop_core::mlp8::osc_param(1, mooloop_core::mlp8::OSC_OFFSET_PULSE_WIDTH),
+        }),
+        find(MlP8ModDest::Param {
+            id: mooloop_core::mlp8::osc_param(2, mooloop_core::mlp8::OSC_OFFSET_PULSE_WIDTH),
+        }),
+    ];
+    pub const OSC_LEVEL: [usize; 3] = [
+        find(MlP8ModDest::Param {
+            id: mooloop_core::mlp8::osc_param(0, mooloop_core::mlp8::OSC_OFFSET_LEVEL),
+        }),
+        find(MlP8ModDest::Param {
+            id: mooloop_core::mlp8::osc_param(1, mooloop_core::mlp8::OSC_OFFSET_LEVEL),
+        }),
+        find(MlP8ModDest::Param {
+            id: mooloop_core::mlp8::osc_param(2, mooloop_core::mlp8::OSC_OFFSET_LEVEL),
+        }),
+    ];
+    pub const SUB_LEVEL: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_SUB_LEVEL,
+    });
+    pub const NOISE_LEVEL: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_NOISE_LEVEL,
+    });
+    pub const NOISE_COLOR: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_NOISE_COLOR,
+    });
+    pub const XMOD: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_XMOD_BASE,
+    });
+    pub const NOISE_TO_OSC: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_NOISE_TO_OSC_BASE,
+    });
+    pub const OSC_FEEDBACK: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_OSC_FEEDBACK_BASE,
+    });
+    pub const VOICE_FEEDBACK: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_VOICE_FEEDBACK,
+    });
+    pub const CUTOFF: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_FILTER_CUTOFF,
+    });
+    pub const RESONANCE: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_FILTER_RESONANCE,
+    });
+    pub const ENV_AMOUNT: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_FILTER_ENV_AMOUNT,
+    });
+    pub const DRIVE: usize = find(MlP8ModDest::Param {
+        id: mooloop_core::mlp8::PARAM_DRIVE,
+    });
+    pub const VCA_LEVEL: usize = find(MlP8ModDest::VcaLevel);
+    pub const PAN: usize = find(MlP8ModDest::Pan);
+}
+
 struct Voice {
     active: bool,
     event_id: u64,
