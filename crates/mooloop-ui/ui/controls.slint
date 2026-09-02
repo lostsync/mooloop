@@ -486,6 +486,13 @@ export component ParameterKnob inherits Rectangle {
     // rather than drawing them twice and paying three rows of height for it.
     in property <bool> show-label: true;
     in property <bool> show-value-text: true;
+    // And a caller that draws the parameter *itself* some other way -- a cell
+    // in a matrix that fills like a bar -- turns the dial off too, keeping
+    // the drag, wheel, double-click-to-default, keyboard and modulation-
+    // arming contract. That contract is the reason to reach for this rather
+    // than build a second interactive control: there would then be two
+    // implementations of what arming a route does to a gesture.
+    in property <bool> show-dial: true;
     // Callers opt only legal, continuous destinations into this mode. While
     // active, every ordinary knob gesture adjusts this source's route depth
     // and leaves `value` — the authored base — untouched.
@@ -574,7 +581,7 @@ export component ParameterKnob inherits Rectangle {
         // VerticalLayout aligns its children along the vertical axis only.
         // Without this full-width cell, a narrow knob face starts at the left
         // of a wider ParameterKnob, visibly skewing every device control row.
-        Rectangle {
+        if root.show-dial : Rectangle {
             width: root.width;
             height: root.diameter;
             knob-face := KnobFace {

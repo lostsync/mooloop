@@ -153,7 +153,27 @@ comparisons (`eq-device.slint:39-53`), sitting next to another 8 unrolled
 lines of band summing (`:54-61`), because a fixed seven-band list has no
 component to iterate it.
 
-## 10. Small, and already admitted in comments
+## 10. `RoutingGrid` / `NetworkCell` — one call site, deliberately inline
+
+`mlp8-device.slint` draws the ML-P8's oscillator network as a matrix: rows are
+sources, columns are destinations, the diagonal is an oscillator on itself,
+and each cell is a bipolar amount you drag. `NetworkCell` and `SyncChip` are
+private to that file **on this list's own rule** — twelve cells is twelve
+instantiations of one component in one device, not two devices sharing one.
+
+It is recorded because there is a plausible second caller. Step 04 of
+`docs/plans/poly-synth-v2/` adds ML-P8's internal modulation routes, and a
+source-by-destination grid is the same picture with a different vocabulary;
+if that step reaches for this, it becomes a shared component then rather
+than speculatively now.
+
+Worth keeping whichever way it goes: the cell is a `ParameterKnob` with
+`show-dial: false` rather than a second draggable control. Arming a
+modulation source changes what every gesture *means*, and a hand-rolled cell
+would have been a second implementation of that contract. `show-dial` joins
+`show-label` and `show-value-text`, which existed for the same reason.
+
+## 11. Small, and already admitted in comments
 
 - **`IconToggleButton`** — `main.slint:4262` says it outright: *"the pinned
   ToolButton style exposes no checkable state, so these are hand-rolled
@@ -166,7 +186,7 @@ component to iterate it.
   `audio-preferences.slint:74` and `main.slint:3896` phrase and style the
   same idea differently, and most surfaces that can be empty say nothing.
 
-## 11. bug — the mono and poly LFO glyphs ignore their own selector
+## 12. bug — the mono and poly LFO glyphs ignore their own selector
 
 `mono-device.slint:185` and `poly-device.slint:189` are byte-identical:
 

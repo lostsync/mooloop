@@ -953,7 +953,9 @@ export component MainWindow inherits Window {
 
 
     // ---- ML-P8 params of the selected channel ----
-    in-out property <int> mlp8-device-page;
+    // Which oscillator the ML-P8's left column is editing. Face state; it
+    // is not a device parameter and never reaches the engine.
+    in-out property <int> mlp8-osc-selected;
     in-out property <int> mlp8-osc1-wave: 2;
     in-out property <float> mlp8-osc1-semitones;
     in-out property <float> mlp8-osc1-cents;
@@ -996,6 +998,10 @@ export component MainWindow inherits Window {
     callback mlp8-noise-osc1-changed(float); callback mlp8-noise-osc2-changed(float); callback mlp8-noise-osc3-changed(float);
     callback mlp8-feedback1-changed(float); callback mlp8-feedback2-changed(float); callback mlp8-feedback3-changed(float);
     callback mlp8-sync1-changed(int); callback mlp8-sync2-changed(int); callback mlp8-sync3-changed(int);
+    // One callback for all forty-one: the id travels with the text, so
+    // Rust resolves it through the descriptor table rather than the face
+    // needing a named callback per field.
+    callback mlp8-text-committed(int, string);
 
     // ---- ML-M1 params of the selected channel ----
     in-out property <int> mlm1-osc1-wave: 2;
@@ -2812,7 +2818,7 @@ export component MainWindow inherits Window {
                                                     y: DeviceRackMetrics.header-height;
                                                     width: parent.content-width;
                                                     height: parent.height - DeviceRackMetrics.header-height;
-                                                    page <=> root.mlp8-device-page;
+                                                    osc-selected <=> root.mlp8-osc-selected;
                                                     osc1-wave <=> root.mlp8-osc1-wave; osc1-semitones <=> root.mlp8-osc1-semitones; osc1-cents <=> root.mlp8-osc1-cents; osc1-level <=> root.mlp8-osc1-level; osc1-pulse-width <=> root.mlp8-osc1-pulse-width;
                                                     osc2-wave <=> root.mlp8-osc2-wave; osc2-semitones <=> root.mlp8-osc2-semitones; osc2-cents <=> root.mlp8-osc2-cents; osc2-level <=> root.mlp8-osc2-level; osc2-pulse-width <=> root.mlp8-osc2-pulse-width;
                                                     osc3-wave <=> root.mlp8-osc3-wave; osc3-semitones <=> root.mlp8-osc3-semitones; osc3-cents <=> root.mlp8-osc3-cents; osc3-level <=> root.mlp8-osc3-level; osc3-pulse-width <=> root.mlp8-osc3-pulse-width;
@@ -2837,6 +2843,7 @@ export component MainWindow inherits Window {
                                                     noise-osc3-changed(v) => { root.mlp8-noise-osc3-changed(v); } feedback1-changed(v) => { root.mlp8-feedback1-changed(v); } feedback2-changed(v) => { root.mlp8-feedback2-changed(v); } feedback3-changed(v) => { root.mlp8-feedback3-changed(v); }
                                                     sub-octave-changed(v) => { root.mlp8-sub-octave-changed(v); } sub-wave-changed(v) => { root.mlp8-sub-wave-changed(v); } sub-source-changed(v) => { root.mlp8-sub-source-changed(v); } sync1-changed(v) => { root.mlp8-sync1-changed(v); }
                                                     sync2-changed(v) => { root.mlp8-sync2-changed(v); } sync3-changed(v) => { root.mlp8-sync3-changed(v); }
+                                                    text-committed(p, t) => { root.mlp8-text-committed(p, t); }
                                                     modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
                                                     modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
                                                     modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }

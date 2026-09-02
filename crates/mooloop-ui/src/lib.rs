@@ -10562,6 +10562,51 @@ impl AppUi {
         wire_mlp8!(on_mlp8_sync2_changed, |p, v: i32| p.sync_source[1] = SyncSource::from_index(v));
         wire_mlp8!(on_mlp8_sync3_changed, |p, v: i32| p.sync_source[2] = SyncSource::from_index(v));
 
+        // Every ML-P8 value field commits through one handler, because the
+        // descriptor id travels with the text. `GeneratorParams::set` does
+        // the clamping, so a typed number lands under exactly the same rules
+        // as a dragged one -- which is the thing forty-one hand-written
+        // handlers would eventually stop doing.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_mlp8_text_committed(move |id, text| {
+                let Some(typed) = parse_typed_value(text.as_str()) else {
+                    if let Some(window) = weak.upgrade() {
+                        st.borrow().refresh_editor(&window);
+                    }
+                    return;
+                };
+                let id = id.max(0) as u32;
+                // The five mix levels read in dB and store linear; core owns
+                // which those are so the face and this handler cannot drift.
+                let value = if mooloop_core::mlp8::is_gain_param(id) {
+                    mooloop_core::gain::db_to_linear(typed)
+                } else {
+                    typed
+                };
+                {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.selected;
+                    let channel = &mut st.channels[channel_index];
+                    let mut params = GeneratorParams::MlP8(channel.mlp8_params);
+                    if params.set(id, value).is_some() {
+                        if let GeneratorParams::MlP8(updated) = params {
+                            channel.mlp8_params = updated;
+                            let _ = tx.send(EngineCommand::SetChannelMlP8Params {
+                                channel: channel_index as u8,
+                                params: updated,
+                            });
+                        }
+                    }
+                }
+                if let Some(window) = weak.upgrade() {
+                    st.borrow().refresh_editor(&window);
+                }
+            });
+        }
+
         macro_rules! wire_mono_osc_float {
             ($callback:ident, $index:expr, $field:ident) => {{
                 let tx = cmd_tx.clone();

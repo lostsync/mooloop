@@ -446,6 +446,18 @@ impl Default for MlP8Params {
     }
 }
 
+/// Whether this parameter's control surface reads in decibels.
+///
+/// The five mix levels are stored linear in `[0, 1]` and shown as gain, so a
+/// value typed into one of their fields is a dB figure and has to be
+/// converted before it is written. That pairing is named here rather than
+/// assumed separately by the face and by the handler that parses the text,
+/// which is how the two would come to disagree.
+pub fn is_gain_param(id: u32) -> bool {
+    matches!(id, PARAM_SUB_LEVEL | PARAM_NOISE_LEVEL)
+        || (id < 15 && id % 5 == OSC_OFFSET_LEVEL)
+}
+
 /// Split an id into `(oscillator, offset)` when it lands in an oscillator
 /// block. Unlike the shared synths' `100 + n * 10`, ML-P8's blocks start at
 /// zero and are exactly five wide, because this table was never grown from an
@@ -628,6 +640,31 @@ mod tests {
         assert_eq!(xmod_index(1, 2), 3);
         assert_eq!(xmod_index(2, 0), 4);
         assert_eq!(xmod_index(2, 1), 5);
+    }
+
+    #[test]
+    fn the_gain_parameters_are_exactly_the_five_mix_levels() {
+        let gains: Vec<u32> = DESCRIPTORS
+            .iter()
+            .map(|d| d.id)
+            .filter(|id| is_gain_param(*id))
+            .collect();
+        assert_eq!(
+            gains,
+            vec![
+                osc_param(0, OSC_OFFSET_LEVEL),
+                osc_param(1, OSC_OFFSET_LEVEL),
+                osc_param(2, OSC_OFFSET_LEVEL),
+                PARAM_SUB_LEVEL,
+                PARAM_NOISE_LEVEL,
+            ]
+        );
+        // Every one of them is a linear unit range, which is what makes the
+        // dB reading a display convention rather than the stored value.
+        for id in gains {
+            let d = DESCRIPTORS.iter().find(|d| d.id == id).unwrap();
+            assert_eq!((d.min, d.max), (0.0, 1.0), "{} is not a unit range", d.name);
+        }
     }
 
     #[test]

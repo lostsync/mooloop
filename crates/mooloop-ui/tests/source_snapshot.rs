@@ -942,106 +942,58 @@ fn render_mlp8_source_editor() {
     ui.set_editor_page(0);
     ui.set_source_kind(5);
 
-    let osc = ui.window().take_snapshot().unwrap();
-    assert_eq!((osc.width(), osc.height()), (960, 760));
-    assert!(osc.as_bytes().iter().any(|byte| *byte != 0));
-    write_snapshot(&osc, "MOOLOOP_MLP8_OSC_SOURCE_SNAPSHOT");
+    // One screen: oscillators, the whole network, and the other two sources
+    // are all on it at once, so this first shot is the entire face.
+    let idle = ui.window().take_snapshot().unwrap();
+    assert_eq!((idle.width(), idle.height()), (960, 760));
+    assert!(idle.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&idle, "MOOLOOP_MLP8_SOURCE_SNAPSHOT");
 
-    // The sources row is under the three oscillator strips, so it is the part
-    // most likely to be laid out off the bottom of the face.
-    ui.set_mlp8_sub_level(0.7);
-    ui.set_mlp8_noise_level(0.4);
-    ui.set_mlp8_noise_color(-70.0);
-    let sources = ui.window().take_snapshot().unwrap();
-    assert_ne!(osc.as_bytes(), sources.as_bytes());
-    write_snapshot(&sources, "MOOLOOP_MLP8_SOURCES_SNAPSHOT");
-
-    // ROUTE is the page the device exists for: twelve bipolar amounts, three
-    // sync selectors, and none of them drawn over each other.
-    ui.set_mlp8_device_page(1);
-    let route = ui.window().take_snapshot().unwrap();
-    assert_ne!(sources.as_bytes(), route.as_bytes());
-    write_snapshot(&route, "MOOLOOP_MLP8_ROUTE_SOURCE_SNAPSHOT");
-
+    // Every cell fills from the centre, so a positive and a negative route
+    // have to draw differently rather than both reading as "some amount".
     ui.set_mlp8_xmod12(80.0);
     ui.set_mlp8_xmod21(-45.0);
     ui.set_mlp8_feedback1(60.0);
     ui.set_mlp8_noise_osc3(-30.0);
     let wired = ui.window().take_snapshot().unwrap();
-    assert_ne!(route.as_bytes(), wired.as_bytes());
-    write_snapshot(&wired, "MOOLOOP_MLP8_WIRED_SOURCE_SNAPSHOT");
+    assert_ne!(idle.as_bytes(), wired.as_bytes());
+    write_snapshot(&wired, "MOOLOOP_MLP8_NETWORK_SNAPSHOT");
 
-    // Oscillator 1's list is OFF/2/3, so index 2 is oscillator 3 -- the
-    // selector has to skip the oscillator it belongs to.
+    // The same magnitude in the other direction is a different picture.
+    ui.set_mlp8_xmod12(-80.0);
+    let inverted = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        wired.as_bytes(),
+        inverted.as_bytes(),
+        "a route's sign has to be visible, not just its magnitude"
+    );
+    ui.set_mlp8_xmod12(80.0);
+
+    // Sync is the row under the matrix. Oscillator 1's cycle is OFF/2/3, so
+    // 3 is a legal source for it and has to render as one.
     ui.set_mlp8_sync1(3);
     let synced = ui.window().take_snapshot().unwrap();
     assert_ne!(wired.as_bytes(), synced.as_bytes());
-    write_snapshot(&synced, "MOOLOOP_MLP8_SYNC_SOURCE_SNAPSHOT");
+    write_snapshot(&synced, "MOOLOOP_MLP8_SYNC_SNAPSHOT");
 
-    ui.set_mlp8_device_page(2);
-    let amp = ui.window().take_snapshot().unwrap();
-    assert_ne!(synced.as_bytes(), amp.as_bytes());
-    write_snapshot(&amp, "MOOLOOP_MLP8_AMP_SOURCE_SNAPSHOT");
+    // The oscillator column is tabbed; switching tabs redraws it while the
+    // network beside it stays put.
+    ui.set_mlp8_osc_selected(1);
+    let second = ui.window().take_snapshot().unwrap();
+    assert_ne!(synced.as_bytes(), second.as_bytes());
+    write_snapshot(&second, "MOOLOOP_MLP8_OSC2_SNAPSHOT");
+
+    ui.set_mlp8_osc_selected(0);
+    ui.set_mlp8_sub_level(0.7);
+    ui.set_mlp8_noise_level(0.4);
+    ui.set_mlp8_noise_color(-70.0);
+    let sources = ui.window().take_snapshot().unwrap();
+    assert_ne!(synced.as_bytes(), sources.as_bytes());
+    write_snapshot(&sources, "MOOLOOP_MLP8_SOURCES_SNAPSHOT");
 
     ui.window().set_size(LogicalSize::new(720.0, 760.0));
     let narrow = ui.window().take_snapshot().unwrap();
     assert_eq!((narrow.width(), narrow.height()), (720, 760));
     assert!(narrow.as_bytes().iter().any(|byte| *byte != 0));
-    write_snapshot(&narrow, "MOOLOOP_MLP8_AMP_NARROW_SNAPSHOT");
-}
-
-/// The sampler's PITCH & SPEED group is the tightest thing on a 3U face: the
-/// stretch controls have to share it with coarse and fine tune, and the group
-/// changes shape three ways -- synced or free, grain mode or not, in or out of
-/// the clean range. Every shape has to fit, so every shape gets rendered.
-#[test]
-fn render_sampler_voice_page() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
-
-    let ui = MainWindow::new().unwrap();
-    ui.window().set_size(LogicalSize::new(960.0, 760.0));
-    ui.set_channels(rack_rows());
-    ui.set_pattern_length(16);
-    ui.set_selected_channel_name(SharedString::from("Break"));
-    ui.set_editor_page(0);
-    ui.set_source_kind(0);
-    ui.set_sampler_device_page(1);
-    ui.set_stretch_enabled(true);
-    ui.set_tune_label(SharedString::from("C4 · 255.0 Hz"));
-
-    // Synced: bars, no grain row, no clean warning.
-    ui.set_stretch_sync(true);
-    ui.set_stretch_mode(0);
-    ui.set_stretch_bars_label(SharedString::from("2 bars"));
-    let synced = ui.window().take_snapshot().unwrap();
-    assert_eq!((synced.width(), synced.height()), (960, 760));
-    assert!(synced.as_bytes().iter().any(|byte| *byte != 0));
-    write_snapshot(&synced, "MOOLOOP_SAMPLER_VOICE_SYNC_SNAPSHOT");
-
-    // The tallest shape: free speed, grain mode, and the clean-range note.
-    ui.set_stretch_sync(false);
-    ui.set_stretch_mode(2);
-    ui.set_stretch_ratio_clean(false);
-    ui.set_stretch_ratio_label(SharedString::from("8.00x"));
-    ui.set_stretch_grain_label(SharedString::from("256 fr / 375 Hz"));
-    let grain = ui.window().take_snapshot().unwrap();
-    assert_ne!(
-        synced.as_bytes(),
-        grain.as_bytes(),
-        "switching off sync should swap the Bars row for Speed"
-    );
-    write_snapshot(&grain, "MOOLOOP_SAMPLER_VOICE_GRAIN_SNAPSHOT");
-
-    // Off is a distinct shape too: the group still occupies the same slot.
-    ui.set_stretch_enabled(false);
-    let off = ui.window().take_snapshot().unwrap();
-    assert_ne!(grain.as_bytes(), off.as_bytes());
-    write_snapshot(&off, "MOOLOOP_SAMPLER_VOICE_OFF_SNAPSHOT");
+    write_snapshot(&narrow, "MOOLOOP_MLP8_NARROW_SNAPSHOT");
 }

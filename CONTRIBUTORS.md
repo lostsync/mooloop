@@ -351,7 +351,19 @@ work session you can recall being part of, and don't stress over precision.
   instead. The plan's "skip an oscillator nothing reads" rule also needed a
   caveat it could not have known: the skip reads target levels and levels are
   smoothed, so a knob reaching zero un-needs a source while its ramp is still
-  running, replacing the ramp with the step the smoother exists to prevent.
+  running, replacing the ramp with the step the smoother exists to prevent. Then
+  Adam pushed back on the face -- three pages of knob rows, the same synth UI
+  again, and twelve identical bipolar knobs for the one thing that makes this
+  device different from the last one. Rebuilt it as a matrix: rows are
+  sources, columns destinations, the diagonal is an oscillator on itself, and
+  sync is the row underneath, so the topology is a picture instead of twelve
+  labels to read. The cell is a `ParameterKnob` with a new `show-dial: false`
+  rather than a second draggable control, because arming a modulation source
+  changes what every gesture means and two implementations of that would
+  drift. Laying it out with layouts was a binding loop -- a knob sizes its
+  insides from its width, so asking a cell how wide it wants to be depends on
+  the answer -- which is the same wall `KnobField` hit and solved by placing
+  its parts by hand.
   Investigated the `spike/sampler-time-stretch` spike (#32),
   found its "build vs. buy" conclusion under-argued, and merged it to `main`
   once Adam decided to own the build regardless. Built the sampler's #13
