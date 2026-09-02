@@ -425,7 +425,8 @@ work session you can recall being part of, and don't stress over precision.
   list to keep in step for no coverage the audit does not already give. Then
   dropped `widget-sheet.toml` behind it: proposing it as the gallery's
   replacement was the wrong instinct, since it was scaffolding an agent had
-  left that afternoon, unread by any test and unknown to Adam.
+  left that afternoon, unread by any test and unknown to Adam. `rack-row.toml`
+  went with it, emptying `tests/fixtures/` entirely.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
