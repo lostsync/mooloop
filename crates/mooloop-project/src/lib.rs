@@ -1028,6 +1028,57 @@ mod tests {
         assert_eq!(params.stretch_mode, mooloop_core::StretchMode::Music);
     }
 
+    /// Slice markers are project data, not a view: they survive a save/load
+    /// with their ids and frames intact, and a song written before slicing
+    /// existed comes back as an ordinary pitched sampler.
+    #[test]
+    fn slices_round_trip_and_older_songs_load_without_them() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        {
+            let state = project.channels[0].setup.sampler_state_mut().unwrap();
+            state.params.play_mode = mooloop_core::PlayMode::Slice;
+            state.params.slice_base_note = 48;
+            state.slices.divide_evenly(4, 0, 4_000);
+        }
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let loaded = load_bundle(&bundle).unwrap();
+        assert_eq!(loaded.document, LoadedDocument::Song(project.clone()));
+
+        // What a song saved before slicing actually looks like: no play mode,
+        // no base note, and no slice table at all.
+        let source = toml::to_string(&project.channels[0].setup.source).unwrap();
+        let mut legacy = Vec::new();
+        let mut in_slices = false;
+        for line in source.lines() {
+            if line.trim_start().starts_with('[') {
+                in_slices = line.contains("slices");
+            }
+            if in_slices
+                || line.trim_start().starts_with("play_mode")
+                || line.trim_start().starts_with("slice_base_note")
+            {
+                continue;
+            }
+            legacy.push(line);
+        }
+        let legacy = legacy.join("\n");
+        assert!(!legacy.contains("slice"), "the legacy fixture still mentions slices");
+
+        let restored: ChannelSource = toml::from_str(&legacy).unwrap();
+        let ChannelSource::Sampler(state) = &restored else {
+            panic!("expected a sampler, got {restored:?}");
+        };
+        assert_eq!(state.params.play_mode, mooloop_core::PlayMode::Pitched);
+        assert_eq!(
+            state.params.slice_base_note,
+            mooloop_core::DEFAULT_SLICE_BASE_NOTE
+        );
+        assert!(state.slices.is_empty());
+    }
+
     /// A hand-edited or corrupted document must be repaired rather than
     /// refused, like every other out-of-range field.
     #[test]

@@ -7,7 +7,7 @@ use crate::{
     AutomationLane, ModRack, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
     PatternPlacement,
     PlaybackMode, PolySynthParams,
-    SamplerParams, SnareCharacter, DEFAULT_STEPS,
+    SamplerParams, SliceMap, SnareCharacter, DEFAULT_STEPS,
 };
 
 pub const MIN_SWING_PERCENT: u8 = 50;
@@ -34,6 +34,11 @@ pub enum SampleReference {
 pub struct SamplerState {
     pub params: SamplerParams,
     pub sample: SampleReference,
+    /// Slice boundaries into the sample. Absent in a project written before
+    /// slicing existed, which loads as an empty map -- and an empty map with
+    /// the defaulted `Pitched` play mode is exactly the old behaviour.
+    #[serde(default)]
+    pub slices: SliceMap,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]

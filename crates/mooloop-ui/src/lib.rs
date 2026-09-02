@@ -34,7 +34,8 @@ use mooloop_core::{
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
-    SamplerParams, SamplerState, SnareCharacter, StretchMode, VoiceMode,
+    SamplerParams, SamplerState, SliceMap, SnareCharacter, StretchMode, VoiceMode,
+    PlayMode, DEFAULT_SLICE_BASE_NOTE, MAX_SLICES,
     DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
@@ -592,6 +593,9 @@ struct ChannelState {
     sample_path: Option<PathBuf>,
     sample_embedded: bool,
     sample_data: Option<Arc<SampleData>>,
+    /// Slice boundaries into `sample_data`. Frames into the source, so they
+    /// move with the waveform under any zoom.
+    slices: SliceMap,
     waveform: Vec<f32>,
     can_previous_sample: bool,
     can_next_sample: bool,
@@ -643,6 +647,7 @@ impl ChannelState {
             sample_path: None,
             sample_embedded: false,
             sample_data: None,
+            slices: SliceMap::default(),
             waveform: Vec::new(),
             can_previous_sample: false,
             can_next_sample: false,
@@ -2199,6 +2204,7 @@ impl UiState {
                         ChannelSource::Sampler(SamplerState {
                             params: channel.params,
                             sample,
+                            slices: channel.slices.clone(),
                         })
                     }
                     DeviceKind::DrumSynth => ChannelSource::DrumSynth(DrumSynthState {
@@ -2399,6 +2405,7 @@ impl UiState {
                     sample_path,
                     sample_embedded: embedded,
                     sample_data: sample,
+                    slices: sampler.map(|state| state.slices.clone()).unwrap_or_default(),
                     waveform,
                     can_previous_sample: can_previous,
                     can_next_sample: can_next,

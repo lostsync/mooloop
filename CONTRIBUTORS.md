@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-01
-- Sessions: 29
+- Sessions: 30
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -364,6 +364,18 @@ work session you can recall being part of, and don't stress over precision.
   the realtime thread instead of paying it per voice, and added a
   fit-to-tempo mode that derives the stretch ratio from bars/tempo/playback
   rate so a sample's loop locks to the grid however it's transposed.
+  Then slice mode, which had to resolve the rule the stretch work inherited
+  from the spike -- WSOLA runs forwards only, so reverse was disabled whenever
+  stretch was on, and a slicer that loses reverse the moment a loop is
+  tempo-fitted is not a groovebox. Two findings settled the design. Slicing
+  does not depend on the stretcher at all: ReCycle/REX fitted breaks to tempo
+  by retriggering markers, with no resynthesis, so the three time strategies
+  stay independent rather than layered. And committing a stretch is a render,
+  not a new engine -- `SampleData` is already an immutable `Arc` published
+  through an `ArcSwapOption`, so freezing a stretched region is the existing
+  `Stretcher::next_frame` driven by a plain loop on the control thread. That
+  collapses every "disable X while stretching" case to one rule: stretch is
+  live for forward pitched playback, and committed for reverse or slice.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

@@ -110,6 +110,11 @@ a pattern is lossless. The sampler state also contains every field in
 `SamplerParams`: voice/retrigger/choke settings, trim, reverse, root and tune,
 loop settings, ADSR, filter, drive, bit reduction, and rate reduction.
 
+Slice mode adds `play_mode` and `slice_base_note` to the parameters, plus a
+`slices` table beside them holding the slice boundaries as `{ id, frame }`
+pairs sorted by source frame. All three default, so a song written before
+slicing loads as an ordinary pitched sampler with no markers.
+
 `swing_percent` is global sixteenth-note swing from `50` (straight) through
 `75` (strong shuffle); `66` is approximately triplet swing. Readers default
 the field to `50` for version 1 manifests written before swing was added.

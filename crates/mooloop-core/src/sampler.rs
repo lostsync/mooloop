@@ -44,6 +44,203 @@ impl LoopMode {
     }
 }
 
+/// How a note picks material out of the sample.
+///
+/// The two are genuinely different instruments, not a quality setting. In
+/// `Pitched` the note transposes the whole region, so pitch and duration move
+/// together. In `Slice` the note *chooses* a slice and plays it at its
+/// original pitch, which is what ReCycle/REX established for fitting a break
+/// to a tempo without resynthesising anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayMode {
+    /// The note transposes the playback region.
+    #[default]
+    Pitched,
+    /// The note selects a slice by ordinal position from `slice_base_note`.
+    Slice,
+}
+
+impl PlayMode {
+    pub fn all() -> [PlayMode; 2] {
+        [PlayMode::Pitched, PlayMode::Slice]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PlayMode::Pitched => "Pitched",
+            PlayMode::Slice => "Slice",
+        }
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Slice,
+            _ => Self::Pitched,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Pitched => 0,
+            Self::Slice => 1,
+        }
+    }
+}
+
+/// The most slices one sample may carry. 128 is the MIDI note range, which is
+/// also the most a chromatic keyboard could ever address at once.
+pub const MAX_SLICES: usize = 128;
+
+/// The lowest note that plays a slice: C1, the Ableton and MPC convention.
+pub const DEFAULT_SLICE_BASE_NOTE: u8 = 36;
+
+/// One slice boundary: a source frame with a stable identity.
+///
+/// The id is what makes a persisted reference to "this slice" survive its
+/// neighbours being inserted or deleted. Note-to-slice mapping deliberately
+/// does *not* use it -- a chromatic keyboard means ordinal position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SliceMarker {
+    pub id: u64,
+    pub frame: u32,
+}
+
+/// The slice boundaries of one sample, sorted by frame and unique.
+///
+/// The invariant lives here rather than in the callers: markers are always
+/// sorted ascending, no two share a frame, and there are never more than
+/// [`MAX_SLICES`]. Every mutation restores it, so no caller can publish a map
+/// the voice would have to defend itself against.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SliceMap {
+    markers: Vec<SliceMarker>,
+    #[serde(default)]
+    next_id: u64,
+}
+
+impl SliceMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn markers(&self) -> &[SliceMarker] {
+        &self.markers
+    }
+
+    pub fn len(&self) -> usize {
+        self.markers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.markers.is_empty()
+    }
+
+    /// Ordinal position of the slice with this id, or `None` if it is gone.
+    pub fn index_of(&self, id: u64) -> Option<usize> {
+        self.markers.iter().position(|marker| marker.id == id)
+    }
+
+    pub fn get(&self, index: usize) -> Option<SliceMarker> {
+        self.markers.get(index).copied()
+    }
+
+    fn mint(&mut self) -> u64 {
+        // Ids start at 1 so a zero read out of an uninitialized field is
+        // never mistaken for a live slice.
+        self.next_id = self.next_id.max(0).wrapping_add(1).max(1);
+        self.next_id
+    }
+
+    /// Add a boundary at `frame`, returning its id. A frame that already has
+    /// a marker, or a map already at [`MAX_SLICES`], is refused rather than
+    /// silently collapsing two slices into one.
+    pub fn add(&mut self, frame: u32) -> Option<u64> {
+        if self.markers.len() >= MAX_SLICES {
+            return None;
+        }
+        if self.markers.iter().any(|marker| marker.frame == frame) {
+            return None;
+        }
+        let id = self.mint();
+        let at = self
+            .markers
+            .partition_point(|marker| marker.frame < frame);
+        self.markers.insert(at, SliceMarker { id, frame });
+        Some(id)
+    }
+
+    /// Remove one boundary by id. Its slice merges into the one before it,
+    /// which is what deleting a boundary means.
+    pub fn remove(&mut self, id: u64) -> bool {
+        match self.index_of(id) {
+            Some(index) => {
+                self.markers.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Move one boundary to a new frame, re-sorting so ordinal position
+    /// follows the frame rather than the insertion order. A move onto an
+    /// occupied frame is refused; the caller's drag simply does not land
+    /// there.
+    pub fn move_to(&mut self, id: u64, frame: u32) -> bool {
+        let Some(index) = self.index_of(id) else {
+            return false;
+        };
+        if self
+            .markers
+            .iter()
+            .any(|marker| marker.id != id && marker.frame == frame)
+        {
+            return false;
+        }
+        self.markers[index].frame = frame;
+        self.markers.sort_by_key(|marker| marker.frame);
+        true
+    }
+
+    /// Replace the map with `count` equal slices spanning `[start, end)`.
+    ///
+    /// The first marker sits on `start`, so slice 0 is the region's own
+    /// beginning: a break divided into 8 has its downbeat on the first note,
+    /// not a silent lead-in before it.
+    pub fn divide_evenly(&mut self, count: usize, start: u32, end: u32) {
+        self.markers.clear();
+        let count = count.min(MAX_SLICES);
+        if count == 0 || end <= start {
+            return;
+        }
+        let span = f64::from(end - start);
+        for slice in 0..count {
+            let frame = start + (span * slice as f64 / count as f64).round() as u32;
+            // `round` can land two low slice counts on the same frame in a
+            // very short region; `add` refuses the duplicate rather than
+            // producing a zero-length slice.
+            self.add(frame);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.markers.clear();
+    }
+
+    /// The source-frame span of slice `index`: its marker to the next one, or
+    /// to `region_end` for the last slice. `None` when the index is past the
+    /// end of the map.
+    pub fn span(&self, index: usize, region_end: f64) -> Option<(f64, f64)> {
+        let marker = self.markers.get(index)?;
+        let start = f64::from(marker.frame);
+        let end = match self.markers.get(index + 1) {
+            Some(next) => f64::from(next.frame),
+            None => region_end,
+        };
+        Some((start, end))
+    }
+}
+
 /// How the time stretcher sizes its window and whether it looks for a splice
 /// point.
 ///
@@ -324,6 +521,16 @@ pub struct SamplerParams {
     /// on, then free to edit.
     #[serde(default = "default_stretch_bars")]
     pub stretch_bars: f32,
+    /// Whether a note transposes the region or selects a slice.
+    ///
+    /// Defaulted so a project saved before slicing existed loads as `Pitched`
+    /// and behaves byte-identically.
+    #[serde(default)]
+    pub play_mode: PlayMode,
+    /// The note that plays slice 0 in [`PlayMode::Slice`]; each semitone above
+    /// it steps one slice on.
+    #[serde(default = "default_slice_base_note")]
+    pub slice_base_note: u8,
     /// The filter envelope's own stages, or `None` to follow the amplitude
     /// envelope.
     ///
@@ -353,6 +560,10 @@ fn default_stretch_grain() -> u16 {
 
 fn default_stretch_bars() -> f32 {
     1.0
+}
+
+fn default_slice_base_note() -> u8 {
+    DEFAULT_SLICE_BASE_NOTE
 }
 
 /// The trim a project saved before the field existed plays at. Those mixes
@@ -396,6 +607,8 @@ impl Default for SamplerParams {
             stretch_grain: 1024,
             stretch_sync: false,
             stretch_bars: 1.0,
+            play_mode: PlayMode::Pitched,
+            slice_base_note: DEFAULT_SLICE_BASE_NOTE,
             filter_env: None,
         }
     }
@@ -568,5 +781,78 @@ mod stretch_tests {
         assert_eq!(frames_per_bar(48_000, 60.0), 192_000.0);
         // A zero or negative tempo must not divide by zero.
         assert!(frames_per_bar(48_000, 0.0).is_finite());
+    }
+}
+
+#[cfg(test)]
+mod slice_tests {
+    use super::*;
+
+    /// The two operations #15 calls for on the whole map: lay slices out
+    /// evenly, then throw them away. Nothing may survive the clear.
+    #[test]
+    fn dividing_evenly_then_clearing_returns_the_map_to_empty() {
+        let mut map = SliceMap::new();
+        map.divide_evenly(8, 0, 800);
+        assert_eq!(map.len(), 8);
+        let frames: Vec<u32> = map.markers().iter().map(|marker| marker.frame).collect();
+        assert_eq!(frames, vec![0, 100, 200, 300, 400, 500, 600, 700]);
+        // The last slice runs to the region end rather than to a ninth
+        // marker: eight slices need eight boundaries, not nine.
+        assert_eq!(map.span(7, 800.0), Some((700.0, 800.0)));
+        map.clear();
+        assert!(map.is_empty());
+        assert_eq!(map.span(0, 800.0), None);
+    }
+
+    /// A persisted reference names a slice, not a position. Inserting a
+    /// marker before it and deleting one after it must leave the same id
+    /// pointing at the same audio, even though its ordinal position moved.
+    #[test]
+    fn slice_ids_survive_inserting_and_deleting_neighbours() {
+        let mut map = SliceMap::new();
+        let first = map.add(0).unwrap();
+        let middle = map.add(100).unwrap();
+        let last = map.add(200).unwrap();
+        assert_eq!(map.index_of(middle), Some(1));
+
+        map.add(50).unwrap();
+        assert_eq!(map.index_of(middle), Some(2), "an insert before it shifts it");
+        assert_eq!(map.get(2).map(|marker| marker.frame), Some(100));
+
+        assert!(map.remove(first));
+        assert_eq!(map.index_of(middle), Some(1));
+        assert!(map.remove(last));
+        assert_eq!(map.index_of(middle), Some(1));
+        assert_eq!(map.get(1).map(|marker| marker.frame), Some(100));
+        assert_eq!(map.index_of(last), None, "a deleted id resolves to nothing");
+    }
+
+    /// Moving a marker past its neighbour reorders the map, because ordinal
+    /// position is what a note selects and that has to follow the frame.
+    #[test]
+    fn moving_a_marker_past_a_neighbour_reorders_the_map() {
+        let mut map = SliceMap::new();
+        let a = map.add(0).unwrap();
+        let b = map.add(100).unwrap();
+        assert!(map.move_to(a, 150));
+        assert_eq!(map.index_of(b), Some(0));
+        assert_eq!(map.index_of(a), Some(1));
+        // A move onto an occupied frame is refused rather than collapsing
+        // two boundaries into one zero-length slice.
+        assert!(!map.move_to(a, 100));
+        assert_eq!(map.get(1).map(|marker| marker.frame), Some(150));
+    }
+
+    /// The map holds its own invariants: no duplicate frames, and never more
+    /// than the addressable range.
+    #[test]
+    fn the_map_refuses_duplicates_and_stops_at_the_cap() {
+        let mut map = SliceMap::new();
+        assert!(map.add(10).is_some());
+        assert!(map.add(10).is_none());
+        map.divide_evenly(MAX_SLICES + 40, 0, 1_000_000);
+        assert_eq!(map.len(), MAX_SLICES);
+        assert!(map.add(999_999).is_none());
     }
 }

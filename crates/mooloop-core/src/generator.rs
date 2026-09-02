@@ -15,8 +15,9 @@
 use crate::{
     DeviceKind, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode, MlP8Params,
     MonoSynthParams, MlM1Params,
-    NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PolySynthParams, RetriggerMode,
-    SamplerParams, StretchMode, VoiceMode, MAX_LINEAR_GAIN, MAX_POLY_VOICES,
+    NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PlayMode, PolySynthParams,
+    RetriggerMode,
+    SamplerParams, StretchMode, VoiceMode, DEFAULT_SLICE_BASE_NOTE, MAX_LINEAR_GAIN, MAX_POLY_VOICES,
     MAX_SAMPLER_VOICES, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
     MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
 };
@@ -57,6 +58,8 @@ pub const SAMPLER_PARAM_STRETCH_GRAIN: u32 = 30;
 pub const SAMPLER_PARAM_STRETCH_SYNC: u32 = 31;
 pub const SAMPLER_PARAM_STRETCH_BARS: u32 = 32;
 pub const SAMPLER_PARAM_RETUNE_LIVE: u32 = 33;
+pub const SAMPLER_PARAM_PLAY_MODE: u32 = 34;
+pub const SAMPLER_PARAM_SLICE_BASE_NOTE: u32 = 35;
 
 /// Envelope stages share this range across every generator. Exponential, so
 /// the fast end where percussion lives gets most of the travel.
@@ -103,7 +106,7 @@ pub(crate) const fn stepped(id: u32, name: &'static str, steps: u8, default: f32
     }
 }
 
-static SAMPLER_DESCRIPTORS: [ParamDescriptor; 34] = [
+static SAMPLER_DESCRIPTORS: [ParamDescriptor; 36] = [
     unit(SAMPLER_PARAM_START, "Start", 0.0),
     unit(SAMPLER_PARAM_END, "End", 1.0),
     stepped(SAMPLER_PARAM_REVERSE, "Reverse", 2, 0.0),
@@ -236,6 +239,19 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 34] = [
     // correctness gap, not a preference, so the ordinary case is fixed and
     // the historical one is opt-in.
     stepped(SAMPLER_PARAM_RETUNE_LIVE, "Live tune", 2, 1.0),
+    // Slicing. Both are `Stepped`, so `mod_metadata` refuses to modulate
+    // them: an LFO flapping the play mode or walking the keyboard map is
+    // never what was meant.
+    stepped(SAMPLER_PARAM_PLAY_MODE, "Play mode", 2, 0.0),
+    ParamDescriptor {
+        id: SAMPLER_PARAM_SLICE_BASE_NOTE,
+        name: "Slice base",
+        unit: "",
+        min: 0.0,
+        max: 127.0,
+        curve: ParamCurve::Stepped(128),
+        default: DEFAULT_SLICE_BASE_NOTE as f32,
+    },
 ];
 
 // --- Shared synth voice ----------------------------------------------------
@@ -690,6 +706,8 @@ impl GeneratorParams {
                 SAMPLER_PARAM_STRETCH_SYNC => f32::from(u8::from(p.stretch_sync)),
                 SAMPLER_PARAM_STRETCH_BARS => p.stretch_bars,
                 SAMPLER_PARAM_RETUNE_LIVE => f32::from(u8::from(p.retune_live)),
+                SAMPLER_PARAM_PLAY_MODE => p.play_mode.to_index() as f32,
+                SAMPLER_PARAM_SLICE_BASE_NOTE => f32::from(p.slice_base_note),
                 _ => return None,
             }),
             Self::MonoSynth(p) => {
@@ -830,6 +848,10 @@ impl GeneratorParams {
                     p.stretch_bars = value.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS)
                 }
                 SAMPLER_PARAM_RETUNE_LIVE => p.retune_live = value >= 0.5,
+                SAMPLER_PARAM_PLAY_MODE => {
+                    p.play_mode = PlayMode::from_index(value.round() as i32)
+                }
+                SAMPLER_PARAM_SLICE_BASE_NOTE => p.slice_base_note = value.round() as u8,
                 _ => return None,
             },
             Self::MonoSynth(p) => {
