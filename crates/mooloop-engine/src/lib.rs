@@ -19,7 +19,7 @@ use jack::{AudioOut, Client, ClientOptions, MidiIn};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
     MAX_MODULATORS_PER_CHANNEL,
-    DeviceKind,
+    DeviceKind, SliceMap,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, DryAlign, SampleData,
@@ -240,6 +240,14 @@ impl Engine {
                 .map(|_| Arc::new(ArcSwapOption::from(None)))
                 .collect(),
         );
+        // The slice map takes the same route the sample takes, for the same
+        // reason: `EngineCommand` is `Copy` and unboxed by design, so a
+        // `Vec` of markers cannot ride the command ring.
+        let slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>> = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::from(None)))
+                .collect(),
+        );
 
         let xrun_count = Arc::new(AtomicU64::new(0));
         let bus_meters = BusMeters::new();
@@ -250,7 +258,7 @@ impl Engine {
         let preview_gain = Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits()));
         let buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>> =
             Arc::new(ArcSwapOption::empty());
-        let mut render = RenderState::new(sample_rate, sample_slots.clone());
+        let mut render = RenderState::new(sample_rate, sample_slots.clone(), slice_slots.clone());
         render.attach_meters(bus_meters.clone());
         render.attach_device_meters(device_meters.clone());
         render.attach_device_telemetry(device_telemetry.clone());
@@ -318,6 +326,7 @@ impl Engine {
                 playhead_meters,
                 modulator_meters,
                 sample_slots,
+                slice_slots,
                 sample_rate,
                 install_generation: 0,
                 client: async_client,
@@ -343,6 +352,7 @@ pub struct EngineHandle {
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
+    slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>>,
     sample_rate: u32,
     install_generation: u64,
     client: Arc<AsyncClient>,
@@ -435,6 +445,20 @@ impl EngineHandle {
         }
     }
 
+    /// Publish a channel's slice map. Same contract as `load_sample`: the
+    /// realtime voice reads it at note-on and never mutates or drops it.
+    pub fn load_slices(&self, channel: usize, slices: Arc<SliceMap>) {
+        if let Some(slot) = self.slice_slots.get(channel) {
+            slot.store(Some(slices));
+        }
+    }
+
+    pub fn clear_slices(&self, channel: usize) {
+        if let Some(slot) = self.slice_slots.get(channel) {
+            slot.store(None);
+        }
+    }
+
     /// Queue a preview-voice command. Non-blocking; drops on overflow.
     pub fn preview(&mut self, command: PreviewCommand) {
         let _ = self.cmd_tx.push(RealtimeCommand::Preview(command));
@@ -449,7 +473,10 @@ impl EngineHandle {
         let Some(slot) = self.sample_slots.get(channel).cloned() else {
             return;
         };
-        let storage = RenderState::build_channel(slot, self.sample_rate);
+        let Some(slices) = self.slice_slots.get(channel).cloned() else {
+            return;
+        };
+        let storage = RenderState::build_channel(slot, slices, self.sample_rate);
         self.send_structural(StructuralCommand::AddChannel { storage, source });
     }
 
@@ -467,7 +494,11 @@ impl EngineHandle {
             .install_generation
             .checked_add(1)
             .expect("project install generation exhausted");
-        let mut render = RenderState::new(self.sample_rate, self.sample_slots.clone());
+        let mut render = RenderState::new(
+            self.sample_rate,
+            self.sample_slots.clone(),
+            self.slice_slots.clone(),
+        );
         render.attach_meters(self.bus_meters.clone());
         // A project swap replaces the complete renderer. Reconnect every meter
         // transport before it reaches the audio thread: otherwise the new

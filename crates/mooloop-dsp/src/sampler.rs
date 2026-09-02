@@ -26,8 +26,8 @@ use crate::node::{AudioNode, ProcessContext};
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use mooloop_core::{
-    clamp01, EnvTimes, LoopMode, RetriggerMode, SamplerParams, VoiceMode, MAX_CHOKE_GROUP,
-    MAX_LINEAR_GAIN, MAX_SAMPLER_VOICES,
+    clamp01, EnvTimes, LoopMode, PlayMode, RetriggerMode, SamplerParams, SliceMap, VoiceMode,
+    MAX_CHOKE_GROUP, MAX_LINEAR_GAIN, MAX_SAMPLER_VOICES,
 };
 
 use arc_swap::ArcSwapOption;
@@ -238,6 +238,14 @@ struct Voice {
     /// every segment so a tune edit reaches an already-sounding voice. See
     /// `SamplerParams::retune_live`.
     key_pitch_ratio: f64,
+    /// The source-frame span this voice was given at note-on, in
+    /// [`PlayMode::Slice`]; `None` in `Pitched`, where the region is the
+    /// whole answer.
+    ///
+    /// Captured rather than re-resolved every segment because which slice was
+    /// struck is a property of the note, and the map can be republished
+    /// underneath a sounding voice.
+    slice: Option<(f64, f64)>,
     direction: f64,
     env: AdsrEnv,
     /// The filter's own envelope, advanced beside the amplitude one.
@@ -267,6 +275,7 @@ impl Voice {
             play_pos: 0.0,
             playback_rate: 1.0,
             key_pitch_ratio: 1.0,
+            slice: None,
             direction: 1.0,
             env: AdsrEnv::new(sample_rate),
             filter_env: AdsrEnv::new(sample_rate),
@@ -290,6 +299,7 @@ impl Voice {
         self.play_pos = 0.0;
         self.playback_rate = 1.0;
         self.key_pitch_ratio = 1.0;
+        self.slice = None;
         self.direction = 1.0;
         self.env = AdsrEnv::new(sample_rate);
         self.env.configure(params.amp_env());
@@ -320,6 +330,9 @@ struct VoiceContext {
 /// The sampler node.
 pub struct Sampler {
     sample_slot: Arc<ArcSwapOption<SampleData>>,
+    /// The channel's slice boundaries, published from the control thread the
+    /// same way the sample is. Read only at note-on.
+    slice_slot: Arc<ArcSwapOption<SliceMap>>,
     params: SamplerParams,
     sample_rate: u32,
     voices: [Voice; MAX_SAMPLER_VOICES as usize],
@@ -354,6 +367,7 @@ impl Sampler {
     /// the same slot from the non-RT thread.
     pub fn new(
         sample_slot: Arc<ArcSwapOption<SampleData>>,
+        slice_slot: Arc<ArcSwapOption<SliceMap>>,
         mut params: SamplerParams,
         sample_rate: u32,
     ) -> Self {
@@ -370,6 +384,7 @@ impl Sampler {
         }
         Self {
             sample_slot,
+            slice_slot,
             params,
             sample_rate,
             voices,
@@ -470,6 +485,7 @@ impl Sampler {
     /// DSP independent of the UI being right about that.
     fn stretch_is_active(params: SamplerParams) -> bool {
         params.stretch_enabled
+            && params.play_mode != PlayMode::Slice
             && !params.reverse
             && params.loop_mode != LoopMode::Pingpong
             && (params.stretch_sync
@@ -508,9 +524,9 @@ impl Sampler {
             return f64::from(params.stretch_ratio);
         }
         let (region_start, region_end) = if params.loop_mode == LoopMode::Off {
-            Self::resolve_playback_bounds(params, len)
+            Self::resolve_playback_bounds(params, len, None)
         } else {
-            Self::resolve_loop_bounds(params, len)
+            Self::resolve_loop_bounds(params, len, None)
         };
         let region = region_end - region_start;
         if region <= 0.0 {
@@ -592,14 +608,41 @@ impl Sampler {
         let Some(sample) = self.sample_slot.load_full() else {
             return;
         };
-        let index = self.select_voice(note);
         let len = sample.len().max(1);
-        let (start, end) = Self::resolve_playback_bounds(self.params, len);
-        let root_note = self.params.root_note.min(127);
-        let key_semitones = i16::from(note.min(127)) - i16::from(root_note);
-        let key_pitch_ratio =
-            sample.sample_rate as f64 / self.sample_rate as f64
-                * 2.0_f64.powf(f64::from(key_semitones) / 12.0);
+        let sample_rate_ratio = sample.sample_rate as f64 / self.sample_rate as f64;
+
+        // Which material this note plays, and at what rate.
+        //
+        // In slice mode the note *chose* the slice, so it must not also
+        // transpose it: the rate is the sample-rate conversion alone. The tune
+        // knobs still apply, through `tuning_ratio` below.
+        //
+        // Resolved before `select_voice` on purpose. A note outside the slice
+        // range has nothing to play, and it must not steal a voice or fire the
+        // channel's choke on its way to being silent.
+        let (slice, key_pitch_ratio) = if self.params.play_mode == PlayMode::Slice {
+            let map = self.slice_slot.load_full();
+            let (_, region_end) = Self::resolve_playback_bounds(self.params, len, None);
+            let index = i32::from(note.min(127)) - i32::from(self.params.slice_base_note.min(127));
+            let Some(span) = usize::try_from(index)
+                .ok()
+                .zip(map.as_ref())
+                .and_then(|(index, map)| map.span(index, region_end))
+            else {
+                return;
+            };
+            (Some(span), sample_rate_ratio)
+        } else {
+            let root_note = self.params.root_note.min(127);
+            let key_semitones = i16::from(note.min(127)) - i16::from(root_note);
+            (
+                None,
+                sample_rate_ratio * 2.0_f64.powf(f64::from(key_semitones) / 12.0),
+            )
+        };
+
+        let index = self.select_voice(note);
+        let (start, end) = Self::resolve_playback_bounds(self.params, len, slice);
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1).max(1);
 
@@ -617,6 +660,7 @@ impl Sampler {
         } else {
             start
         };
+        voice.slice = slice;
         voice.key_pitch_ratio = key_pitch_ratio;
         voice.playback_rate = key_pitch_ratio * tuning_ratio(self.params);
         voice.direction = if self.params.reverse { -1.0 } else { 1.0 };
@@ -741,25 +785,54 @@ impl Sampler {
         frame
     }
 
-    /// Normalized playback region resolved against the current sample length.
-    fn resolve_playback_bounds(params: SamplerParams, len: usize) -> (f64, f64) {
+    /// Normalized playback region resolved against the current sample length,
+    /// narrowed to `slice` when the voice is playing one.
+    ///
+    /// The slice is intersected with the region rather than replacing it, so
+    /// dragging the region end in while a slice is sounding clips that voice
+    /// instead of letting it read past the region -- the same live-edit
+    /// behaviour a pitched voice already has.
+    fn resolve_playback_bounds(
+        params: SamplerParams,
+        len: usize,
+        slice: Option<(f64, f64)>,
+    ) -> (f64, f64) {
         let len = len.max(1) as f64;
         let start = f64::from(clamp01(params.start)) * len;
         let end = (f64::from(clamp01(params.end)) * len)
             .max(start + 1.0)
             .min(len);
-        (start.min(end - 1.0), end)
+        let (start, end) = (start.min(end - 1.0), end);
+        let Some((slice_start, slice_end)) = slice else {
+            return (start, end);
+        };
+        let slice_start = slice_start.clamp(start, end - 1.0);
+        let slice_end = slice_end.clamp(slice_start + 1.0, end);
+        (slice_start, slice_end)
     }
 
     #[cfg(test)]
     fn playback_bounds(&self, len: usize) -> (f64, f64) {
-        Self::resolve_playback_bounds(self.params, len)
+        Self::resolve_playback_bounds(self.params, len, None)
     }
 
     /// Normalized loop bounds resolved against the current sample length.
-    fn resolve_loop_bounds(params: SamplerParams, len: usize) -> (f64, f64) {
+    ///
+    /// A slice loops over itself: `LoopMode` still chooses Off/Forward/
+    /// Pingpong, but the thing being looped is the whole slice. Per-slice
+    /// loop points are explicitly deferred by #15, and a global loop fraction
+    /// pointed at some other part of the sample would be meaningless once a
+    /// note has chosen its material.
+    fn resolve_loop_bounds(
+        params: SamplerParams,
+        len: usize,
+        slice: Option<(f64, f64)>,
+    ) -> (f64, f64) {
         let len_f = len.max(1) as f64;
-        let (play_start, play_end) = Self::resolve_playback_bounds(params, len);
+        let (play_start, play_end) = Self::resolve_playback_bounds(params, len, slice);
+        if slice.is_some() {
+            return (play_start, play_end);
+        }
         let loop_start =
             (f64::from(clamp01(params.loop_start)) * len_f).clamp(play_start, play_end - 1.0);
         let loop_end = (f64::from(clamp01(params.loop_end)) * len_f)
@@ -770,7 +843,7 @@ impl Sampler {
 
     #[cfg(test)]
     fn loop_bounds(&self, len: usize) -> (f64, f64) {
-        Self::resolve_loop_bounds(self.params, len)
+        Self::resolve_loop_bounds(self.params, len, None)
     }
 
     /// Render the voice into `bus[start..end]`, adding into the buffers.
@@ -804,8 +877,8 @@ impl Sampler {
             voice.active = false;
             return;
         };
-        let (play_start, play_end) = Self::resolve_playback_bounds(params, len);
-        let (ls, le) = Self::resolve_loop_bounds(params, len);
+        let (play_start, play_end) = Self::resolve_playback_bounds(params, len, voice.slice);
+        let (ls, le) = Self::resolve_loop_bounds(params, len, voice.slice);
         let loop_mode = if voice.loop_enabled {
             params.loop_mode
         } else {
@@ -1009,11 +1082,16 @@ impl AudioNode for Sampler {
 mod tests {
     use super::*;
     use crate::event::TimedEvent;
+    use mooloop_core::DEFAULT_SLICE_BASE_NOTE;
+
+    fn no_slices() -> Arc<ArcSwapOption<SliceMap>> {
+        Arc::new(ArcSwapOption::empty())
+    }
 
     fn make_sampler(sr: u32) -> Sampler {
         let kick = SampleData::default_kick(sr);
         let slot: Arc<ArcSwapOption<SampleData>> = Arc::new(ArcSwapOption::from(Some(kick)));
-        Sampler::new(slot, SamplerParams::default(), sr)
+        Sampler::new(slot, no_slices(), SamplerParams::default(), sr)
     }
 
     fn sampler_with_frames(sr: u32, len: usize, params: SamplerParams) -> Sampler {
@@ -1029,7 +1107,7 @@ mod tests {
             root_note: 60,
         });
         let slot = Arc::new(ArcSwapOption::from(Some(sample)));
-        Sampler::new(slot, params, sr)
+        Sampler::new(slot, no_slices(), params, sr)
     }
 
     /// Fit-to-tempo derives the ratio so the region lasts the requested
@@ -1160,6 +1238,225 @@ mod tests {
             ..SamplerParams::default()
         };
         assert!(Sampler::stretch_is_active(params));
+    }
+
+    // --- Slice mode ------------------------------------------------------
+
+    /// How long the slice fixtures below are, and how many slices they hold.
+    /// A ramp over exactly this many frames makes every sample value name its
+    /// own frame index, so an assertion can say which slice was played.
+    const SLICED_LEN: usize = 800;
+    const SLICE_COUNT: usize = 8;
+
+    /// A sampler over a `0..1` ramp, divided into eight equal slices, with the
+    /// envelope out of the way so an output frame is the sample value.
+    fn sliced_sampler(sr: u32, params: SamplerParams) -> Sampler {
+        let frames = (0..SLICED_LEN)
+            .map(|index| {
+                let value = index as f32 / SLICED_LEN as f32;
+                [value, value]
+            })
+            .collect();
+        let sample = Arc::new(SampleData {
+            frames,
+            sample_rate: sr,
+            root_note: 60,
+        });
+        let mut map = SliceMap::new();
+        map.divide_evenly(SLICE_COUNT, 0, SLICED_LEN as u32);
+        Sampler::new(
+            Arc::new(ArcSwapOption::from(Some(sample))),
+            Arc::new(ArcSwapOption::from(Some(Arc::new(map)))),
+            SamplerParams {
+                play_mode: PlayMode::Slice,
+                attack: 0.0,
+                decay: 8.0,
+                sustain: 1.0,
+                release: 8.0,
+                output_gain: 1.0,
+                ..params
+            },
+            sr,
+        )
+    }
+
+    /// Play one note and hand back the rendered block.
+    fn render_note(sampler: &mut Sampler, sr: u32, note: u8, frames: usize) -> StereoBus {
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: u64::from(note),
+                note,
+                velocity: 127,
+            },
+        });
+        sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+        bus
+    }
+
+    /// The frame index a rendered value names, given the ramp fixture. Undoes
+    /// the `index / len` the sample was built with.
+    fn ramp_frame(value: f32) -> f64 {
+        f64::from(value) * SLICED_LEN as f64
+    }
+
+    /// The core of #15: each semitone up from the base note plays the next
+    /// slice, and it plays at the pitch it was recorded at. The second half
+    /// is what separates slicing from transposing -- the note chose the
+    /// material, so it must not also transpose it.
+    #[test]
+    fn consecutive_notes_trigger_consecutive_slices_at_original_pitch() {
+        let sr = 48_000;
+        // Well past the ~5-frame minimum attack, and well inside a 100-frame
+        // slice.
+        let probe = 40usize;
+        for slice in 0..SLICE_COUNT {
+            let mut sampler = sliced_sampler(sr, SamplerParams::default());
+            let note = DEFAULT_SLICE_BASE_NOTE + slice as u8;
+            let bus = render_note(&mut sampler, sr, note, 64);
+            let expected = (slice * 100 + probe) as f64;
+            let played = ramp_frame(bus.l[probe]);
+            assert!(
+                (played - expected).abs() < 1.0,
+                "note {note} played frame {played}, expected {expected}"
+            );
+            // Two probes a fixed distance apart pin the rate: one output
+            // frame must advance the source by exactly one frame.
+            let later = ramp_frame(bus.l[probe + 20]);
+            assert!(
+                (later - played - 20.0).abs() < 0.5,
+                "slice {slice} played at rate {}, expected 1.0",
+                (later - played) / 20.0
+            );
+        }
+    }
+
+    /// A note outside the map has nothing to play. It must be silent, and it
+    /// must not consume a voice on its way there -- stealing one would make
+    /// an out-of-range key cut off the slice that is sounding, and the choke
+    /// group would carry that to the rest of the kit.
+    #[test]
+    fn a_note_below_or_above_the_slice_range_is_silent_and_steals_no_voice() {
+        let sr = 48_000;
+        let mut sampler = sliced_sampler(sr, SamplerParams::default());
+
+        for note in [
+            DEFAULT_SLICE_BASE_NOTE - 1,
+            DEFAULT_SLICE_BASE_NOTE + SLICE_COUNT as u8,
+        ] {
+            let bus = render_note(&mut sampler, sr, note, 64);
+            assert!(
+                bus.l[..64].iter().all(|sample| *sample == 0.0),
+                "note {note} is outside the map and must be silent"
+            );
+            assert_eq!(sampler.active_voice_count(), 0);
+        }
+
+        // And with a slice already sounding, an out-of-range note leaves it
+        // alone.
+        let bus = render_note(&mut sampler, sr, DEFAULT_SLICE_BASE_NOTE + 2, 32);
+        assert!((ramp_frame(bus.l[20]) - 220.0).abs() < 1.0);
+        assert_eq!(sampler.active_voice_count(), 1);
+        let bus = render_note(&mut sampler, sr, DEFAULT_SLICE_BASE_NOTE + 99, 32);
+        assert_eq!(sampler.active_voice_count(), 1, "the sounding slice survived");
+        assert!(
+            (ramp_frame(bus.l[20]) - 252.0).abs() < 1.0,
+            "the sounding slice kept advancing through its own span"
+        );
+    }
+
+    /// Reverse-per-slice is the gesture #15 exists for, and it is the existing
+    /// reverse path pointed at a narrower region: the head starts at the
+    /// slice's own end and walks back to its own start, then stops. It must
+    /// not run on into the slice before it.
+    #[test]
+    fn a_reversed_slice_plays_its_own_span_backwards_and_stops() {
+        let sr = 48_000;
+        let mut sampler = sliced_sampler(
+            sr,
+            SamplerParams {
+                reverse: true,
+                ..SamplerParams::default()
+            },
+        );
+        // Slice 3 spans frames 300..400.
+        let bus = render_note(&mut sampler, sr, DEFAULT_SLICE_BASE_NOTE + 3, 256);
+
+        let first = ramp_frame(bus.l[10]);
+        assert!(
+            (first - 389.0).abs() < 1.5,
+            "a reversed slice starts at its own end, not the region's: {first}"
+        );
+        let later = ramp_frame(bus.l[50]);
+        assert!(
+            (first - later - 40.0).abs() < 1.0,
+            "the head must walk backwards one frame per frame: {first} then {later}"
+        );
+        // 100 frames of slice from its end, then nothing: the voice must not
+        // continue down into slice 2.
+        assert!(
+            bus.l[150..256].iter().all(|sample| *sample == 0.0),
+            "a reversed slice ran past its own start"
+        );
+        assert_eq!(sampler.active_voice_count(), 0);
+    }
+
+    /// Eight slices need eight boundaries, not nine, so the last slice is
+    /// bounded by the playback region rather than by a marker.
+    #[test]
+    fn the_last_slice_ends_at_the_playback_region_end() {
+        let sr = 48_000;
+        let mut sampler = sliced_sampler(sr, SamplerParams::default());
+        let bus = render_note(
+            &mut sampler,
+            sr,
+            DEFAULT_SLICE_BASE_NOTE + SLICE_COUNT as u8 - 1,
+            256,
+        );
+        assert!((ramp_frame(bus.l[40]) - 740.0).abs() < 1.0);
+        assert!(
+            bus.l[150..256].iter().all(|sample| *sample == 0.0),
+            "the last slice must end at the region end"
+        );
+        assert_eq!(sampler.active_voice_count(), 0);
+    }
+
+    /// The slice span is intersected with the playback region every segment
+    /// rather than captured once, so pulling the region end in while a slice
+    /// is sounding clips that voice instead of letting it read past.
+    #[test]
+    fn shrinking_the_region_clips_a_sounding_slice_instead_of_reading_past_it() {
+        let sr = 48_000;
+        let mut sampler = sliced_sampler(sr, SamplerParams::default());
+        let mut params = sampler.params();
+
+        // Start the last slice, 700..800.
+        let bus = render_note(
+            &mut sampler,
+            sr,
+            DEFAULT_SLICE_BASE_NOTE + SLICE_COUNT as u8 - 1,
+            32,
+        );
+        assert!((ramp_frame(bus.l[20]) - 720.0).abs() < 1.0);
+        assert_eq!(sampler.active_voice_count(), 1);
+
+        // Pull the region end back to frame 750, halfway through it.
+        params.end = 750.0 / SLICED_LEN as f32;
+        sampler.set_params(params);
+        let mut bus = StereoBus::with_capacity(64);
+        sampler.process(&ctx(64, sr), &mut bus, &EventList::empty(), None);
+
+        assert!(
+            bus.l[..17].iter().any(|sample| *sample != 0.0),
+            "the slice should still sound up to the new region end"
+        );
+        assert!(
+            bus.l[24..64].iter().all(|sample| *sample == 0.0),
+            "the slice read past the shortened region"
+        );
+        assert_eq!(sampler.active_voice_count(), 0);
     }
 
     /// Play one note and report how far through the sample the head reached.
@@ -2176,7 +2473,12 @@ mod tests {
             sample_rate: sr,
             root_note: 60,
         });
-        Sampler::new(Arc::new(ArcSwapOption::from(Some(sample))), params, sr)
+        Sampler::new(
+            Arc::new(ArcSwapOption::from(Some(sample))),
+            no_slices(),
+            params,
+            sr,
+        )
     }
 
     fn window_rms(bus: &StereoBus, from: usize, to: usize) -> f32 {

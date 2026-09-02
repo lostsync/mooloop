@@ -9,7 +9,7 @@ use mooloop_core::{
     DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams, ModDestinationDescriptor,
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
-    SamplerParams,
+    SamplerParams, SliceMap,
     DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
@@ -928,9 +928,13 @@ pub struct ChannelStrip {
 }
 
 impl ChannelStrip {
-    fn new(sample_slot: Arc<ArcSwapOption<SampleData>>, sample_rate: u32) -> Self {
+    fn new(
+        sample_slot: Arc<ArcSwapOption<SampleData>>,
+        slice_slot: Arc<ArcSwapOption<SliceMap>>,
+        sample_rate: u32,
+    ) -> Self {
         Self {
-            sampler: Sampler::new(sample_slot, SamplerParams::default(), sample_rate),
+            sampler: Sampler::new(sample_slot, slice_slot, SamplerParams::default(), sample_rate),
             drum_synth: DrumSynth::new(DrumSynthParams::default(), sample_rate),
             mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
             poly_synth: PolySynth::new(PolySynthParams::default(), sample_rate),
@@ -1152,6 +1156,9 @@ pub(crate) struct RenderState {
     /// Kept so a channel can be materialized after construction: a strip
     /// needs its channel's sample slot, and the control thread builds them.
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
+    /// The channels' slice maps, published beside their samples and read by
+    /// the sampler voice at note-on.
+    slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>>,
     /// The full bus bank, master first. Always `MAX_BUSES` long, so assigning
     /// a channel to any bus is a bounded mutation rather than an allocation.
     buses: Vec<BusStrip>,
@@ -1210,17 +1217,23 @@ struct PreviewVoice {
 }
 
 impl RenderState {
-    pub fn new(sample_rate: u32, sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>) -> Self {
+    pub fn new(
+        sample_rate: u32,
+        sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
+        slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>>,
+    ) -> Self {
         #![allow(clippy::let_and_return)]
         // Deliberately empty. Channels are materialized from a project on
         // this thread, or pushed one at a time through the structural ring.
         let strips = Vec::with_capacity(MAX_CHANNELS);
         let slots_for_growth = sample_slots.clone();
+        let slice_slots_for_growth = slice_slots.clone();
         let mut state = Self {
             transport: Transport::new(sample_rate),
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
             sample_slots: slots_for_growth,
+            slice_slots: slice_slots_for_growth,
             buses: (0..MAX_BUSES).map(|_| BusStrip::new()).collect(),
             bus_graph: CompiledBusGraph::default(),
             events: Vec::with_capacity(MAX_CHANNELS),
@@ -1354,7 +1367,12 @@ impl RenderState {
                 })
                 .collect(),
         );
-        let mut state = Self::new(sample_rate, slots);
+        let slice_slots = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::from(None)))
+                .collect(),
+        );
+        let mut state = Self::new(sample_rate, slots, slice_slots);
         state.load_project(project);
         state
     }
@@ -1364,10 +1382,11 @@ impl RenderState {
     /// structural command that carries the result across.
     pub(crate) fn build_channel(
         sample_slot: Arc<ArcSwapOption<SampleData>>,
+        slice_slot: Arc<ArcSwapOption<SliceMap>>,
         sample_rate: u32,
     ) -> Box<ChannelStorage> {
         Box::new(ChannelStorage {
-            strip: Box::new(ChannelStrip::new(sample_slot, sample_rate)),
+            strip: Box::new(ChannelStrip::new(sample_slot, slice_slot, sample_rate)),
             events: Box::new(EventList::empty()),
             control_outputs: Box::new(
                 [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK],
@@ -1404,7 +1423,8 @@ impl RenderState {
         let sample_rate = self.sample_rate;
         while self.strips.len() < count.min(MAX_CHANNELS) {
             let slot = self.sample_slots[self.strips.len()].clone();
-            self.push_channel(Self::build_channel(slot, sample_rate));
+            let slices = self.slice_slots[self.strips.len()].clone();
+            self.push_channel(Self::build_channel(slot, slices, sample_rate));
         }
     }
 
@@ -2498,7 +2518,7 @@ mod tests {
 
     fn test_strip() -> ChannelStrip {
         let slot = Arc::new(ArcSwapOption::empty());
-        ChannelStrip::new(slot, 48_000)
+        ChannelStrip::new(slot, Arc::new(ArcSwapOption::empty()), 48_000)
     }
 
     #[test]
@@ -2567,7 +2587,12 @@ mod tests {
                 .map(|_| Arc::new(ArcSwapOption::empty()))
                 .collect(),
         );
-        let mut render = RenderState::new(48_000, slots);
+        let slice_slots = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        let mut render = RenderState::new(48_000, slots, slice_slots);
         let first = Arc::new(SampleData {
             frames: vec![[0.5, -0.5]; 1_000],
             sample_rate: 48_000,
@@ -2621,7 +2646,12 @@ mod tests {
                 .map(|_| Arc::new(ArcSwapOption::empty()))
                 .collect(),
         );
-        let mut render = RenderState::new(48_000, slots);
+        let slice_slots = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        let mut render = RenderState::new(48_000, slots, slice_slots);
         let loud = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         render.attach_preview_gain(loud.clone());
         render.apply_preview(PreviewCommand::Play {
@@ -2827,7 +2857,11 @@ mod tests {
     /// Adding a channel allocates, so it goes through the structural ring
     /// with storage built off-thread — the same route an effect node takes.
     fn add_channel(render: &mut RenderState, source: DeviceKind) {
-        let storage = RenderState::build_channel(Arc::new(ArcSwapOption::from(None)), 48_000);
+        let storage = RenderState::build_channel(
+            Arc::new(ArcSwapOption::from(None)),
+            Arc::new(ArcSwapOption::from(None)),
+            48_000,
+        );
         let returned = render.apply_structural(StructuralCommand::AddChannel { storage, source });
         // Reused storage comes straight back rather than being dropped here.
         drop(returned);
@@ -4785,8 +4819,11 @@ mod footprint {
         // and coloured noise. Sampler stretch adds another 160 bytes for its
         // pool pointer, tempo, and per-voice struck pitches; the ~1.6 MB pool
         // itself is allocated only when a sampler asks for stretching.
+        // Slicing adds 392: the channel's slice-map slot pointer, plus 24
+        // bytes on each of the sixteen voices for the span it was struck
+        // with. The map itself lives in the slot, off the strip.
         assert_eq!(size_of::<MlP8>(), 2_016);
-        assert_eq!(size_of::<ChannelStrip>(), 30_328);
+        assert_eq!(size_of::<ChannelStrip>(), 30_720);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -4797,13 +4834,14 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 48_768);
+        assert_eq!(per_live, 49_160);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
         // it by 41 KiB, which is what a device costs now: linear in the
         // channels a project has rather than in the channels it could address.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_201);
+        // Slice mode moved it by 6 KiB across sixteen channels.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_207);
     }
 }
 
