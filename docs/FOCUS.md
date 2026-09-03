@@ -45,16 +45,19 @@ reopened, and rendered through the ordinary UI.
 
 ### 1. Finish ML-P8
 
-Execute `docs/plans/poly-synth-v2/` steps 04 through 07. Steps 02 and 03 are
-in: the device plays, with the three-oscillator network, all six directed XMOD
-routes, sync, the derived sub, coloured noise, both envelopes, four filter
-modes, and the feedback loop with drive inside it.
+Execute `docs/plans/poly-synth-v2/` steps 05 through 07. Steps 02, 03 and 04
+are in: the device plays, with the three-oscillator network, all six directed
+XMOD routes, sync, the derived sub, coloured noise, both envelopes, four filter
+modes, the feedback loop with drive inside it, and its own modulation — an
+audio-rate LFO, six per-voice sources, authored routes onto thirty-one
+continuous destinations, and an ML-P8 MOD page to build them on. A complete
+moving patch needs nothing from the channel shelf.
 
-What remains is unison groups, the internal chorus, oscillator sync's remaining
-surface, and — the one that matters beyond this device — **step 07's internal
-modulation and published outlets**. `origin/feat/mlp8-mod` already carries WIP
-for it (the LFO and internal route model, plus a per-knob command narrowing);
-decide whether to finish that branch or restart from the plan.
+What remains is voice allocation's finishers (unison, drift, spread, the
+internal chorus) and — the one that matters beyond this device — **step 06's
+published outlets**. Its second half is genuinely blocked: the audio outlets
+need the typed auxiliary audio edges `AUDIO_ARCHITECTURE.md` describes, which
+do not exist, so 06 lands in the two slices the step already names.
 
 This step is first because it is half built, its cost is known, and DS-01's own
 step 07 publishes outlets the same way. Doing it here means designing that

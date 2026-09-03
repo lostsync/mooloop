@@ -119,10 +119,16 @@ resolving it.
 
 ## 7. `modulation-shelf.slint`: one export for 1640 lines
 
-`ModulatorShape`, `StepBank`, `ModuleTile`, `RouteRow`, `SyncMiniKnob` and
-`LedToggle` are all private to the file. `StepBank`'s column math is
-duplicated inside it (`:293` and `:363`). The shelf is the second-largest
-`.slint` in the tree and none of it is reachable.
+`ModulatorShape`, `StepBank`, `ModuleTile`, `RouteRow` and `LedToggle` are all
+private to the file. `StepBank`'s column math is duplicated inside it (`:293`
+and `:363`). The shelf is the second-largest `.slint` in the tree and almost
+none of it is reachable.
+
+`SyncMiniKnob` is the one that got out: the ML-P8's own LFO wanted the same
+free-Hz-or-division knob, so it and the `Divisions` vocabulary moved into
+`controls.slint` rather than being copied. That is the pattern the rest of this
+list is waiting for — a second caller is what makes a private component's
+generality real rather than assumed.
 
 ## 8. Adoption, not authorship
 
