@@ -9,6 +9,7 @@
 //! the view converts.
 
 pub mod audio_file;
+pub mod automation;
 pub mod browser;
 pub mod channel;
 pub mod command;

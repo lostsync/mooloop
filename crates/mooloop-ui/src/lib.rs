@@ -20,7 +20,7 @@ use mooloop_core::log::Level;
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     compile_bus_graph, snap_bars_to_power_of_two, sanitize_route, would_create_cycle,
-    AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup,
+    BufferDuration, BufferEvent, BusSetup,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind, EffectParams,
     insert_effect, move_effect, remove_effect,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
@@ -35,7 +35,7 @@ use mooloop_core::{
     Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
     PlayMode, SampleCommit, SamplerParams, SliceMap, SnareCharacter, StretchMode,
     VoiceMode, MAX_SLICES,
-    DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
+    DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
     MAX_CHANNELS, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
     MAX_MOD_ROUTES_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
@@ -5432,40 +5432,14 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let destinations = st.session.automation_destinations();
-                let Some(target) = destinations
-                    .get(index.max(0) as usize)
-                    .map(|(target, _, _)| *target)
-                else {
+                let Some(command) = st.session.open_automation_lane(index) else {
                     return;
                 };
-                st.session.automation_target.set(Some(target));
-                st.session.automation_selected_point.set(None);
-                // Opening the lane in the project and in the engine keeps the
-                // picker's "already open" marks meaningful even before the
-                // first point is drawn.
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                if let Some(lanes) = st
-                    .session.channels
-                    .get_mut(channel)
-                    .and_then(|state| state.automation.get_mut(pattern))
-                {
-                    if !lanes.iter().any(|lane| lane.target == target)
-                        && lanes.len() < MAX_AUTOMATION_LANES_PER_CHANNEL
-                    {
-                        lanes.push(AutomationLane::new(target));
-                    }
-                }
-                let _ = tx.send(EngineCommand::OpenAutomationLane {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    target,
-                });
+                let _ = tx.send(command);
                 st.refresh_automation(&window);
                 drop(st);
-                // An open lane is saved state even before it has a point in
-                // it, so opening one has to mark the document dirty.
+                // An open lane is saved state even before it has a point in it, so
+                // opening one has to mark the document dirty.
                 record_project_history(
                     &commands,
                     before,
@@ -5485,29 +5459,13 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
-                let Some(target) = st.session.automation_target.get() else {
+                let Some(command) = st.session.clear_automation_lane() else {
                     return;
                 };
-                let Some(lane) = st.session.automation_lane_mut() else {
-                    return;
-                };
-                lane.clear();
-                st.session.automation_selected_point.set(None);
-                let _ = tx.send(EngineCommand::ClearAutomationLane {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    target,
-                });
+                let _ = tx.send(command);
                 st.refresh_automation(&window);
                 drop(st);
-                record_project_history(
-                    &commands,
-                    before,
-                    &history_state,
-                    &window,
-                    "Automation cleared",
-                );
+                record_project_history(&commands, before, &history_state, &window, "Automation cleared");
             });
         }
         {
@@ -5520,24 +5478,10 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
-                let Some(target) = st.session.automation_target.get() else {
+                let Some(command) = st.session.close_automation_lane() else {
                     return;
                 };
-                if let Some(lanes) = st
-                    .session.channels
-                    .get_mut(channel)
-                    .and_then(|state| state.automation.get_mut(pattern))
-                {
-                    lanes.retain(|lane| lane.target != target);
-                }
-                st.session.automation_target.set(None);
-                st.session.automation_selected_point.set(None);
-                let _ = tx.send(EngineCommand::RemoveAutomationLane {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    target,
-                });
+                let _ = tx.send(command);
                 st.refresh_automation(&window);
                 drop(st);
                 record_project_history(
@@ -5552,24 +5496,10 @@ impl AppUi {
         {
             let st = state.clone();
             window.on_automation_point_hit_test(move |tick, value, tolerance| {
-                let st = st.borrow();
-                let Some(lane) = st.session.automation_lane() else {
-                    return -1;
-                };
-                let tolerance = tolerance.max(1);
-                lane.points()
-                    .iter()
-                    .filter(|point| (point.tick as i32 - tick).abs() <= tolerance)
-                    .filter(|point| (point.value - value).abs() <= 0.12)
-                    .min_by(|a, b| {
-                        let key = |point: &AutomationPoint| {
-                            (point.tick as i32 - tick).abs() as f32 / tolerance as f32
-                                + (point.value - value).abs() / 0.12
-                        };
-                        key(a).total_cmp(&key(b))
-                    })
-                    .map(|point| point.id as i32)
-                    .unwrap_or(-1)
+                st.borrow()
+                    .session
+                    .automation_point_at(tick, value, tolerance)
+                    .map_or(-1, |id| id as i32)
             });
         }
         {
@@ -5584,30 +5514,10 @@ impl AppUi {
                 };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let Some(target) = st.session.automation_target.get() else {
+                let Some((id, command)) = st.session.create_automation_point(tick, value) else {
                     return -1;
                 };
-                let Some(lane) = st.session.automation_lane_mut() else {
-                    return -1;
-                };
-                let id = lane.allocate_id();
-                let point = AutomationPoint::new(
-                    id,
-                    (tick.max(0) as u32).min(length_ticks),
-                    value.clamp(0.0, 1.0),
-                );
-                if !lane.upsert(point) {
-                    return -1;
-                }
-                st.session.automation_selected_point.set(Some(id));
-                let _ = tx.send(EngineCommand::UpsertAutomationPoint {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    target,
-                    point,
-                });
+                let _ = tx.send(command);
                 st.refresh_automation_points(&window);
                 drop(st);
                 record_project_history(
@@ -5630,31 +5540,13 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let Some(target) = st.session.automation_target.get() else {
+                let Some(command) = st
+                    .session
+                    .move_automation_point(id.max(0) as PointId, tick, value)
+                else {
                     return;
                 };
-                let Some(lane) = st.session.automation_lane_mut() else {
-                    return;
-                };
-                let id = id.max(0) as PointId;
-                if !lane.points().iter().any(|point| point.id == id) {
-                    return;
-                }
-                let point = AutomationPoint::new(
-                    id,
-                    (tick.max(0) as u32).min(length_ticks),
-                    value.clamp(0.0, 1.0),
-                );
-                lane.upsert(point);
-                st.session.automation_selected_point.set(Some(id));
-                let _ = tx.send(EngineCommand::UpsertAutomationPoint {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    target,
-                    point,
-                });
+                let _ = tx.send(command);
                 st.refresh_automation_points(&window);
                 drop(st);
                 record_project_history(
@@ -5676,26 +5568,10 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
-                let Some(target) = st.session.automation_target.get() else {
+                let Some(command) = st.session.remove_automation_point(id.max(0) as PointId) else {
                     return;
                 };
-                let id = id.max(0) as PointId;
-                let Some(lane) = st.session.automation_lane_mut() else {
-                    return;
-                };
-                if lane.remove(id).is_none() {
-                    return;
-                }
-                if st.session.automation_selected_point.get() == Some(id) {
-                    st.session.automation_selected_point.set(None);
-                }
-                let _ = tx.send(EngineCommand::RemoveAutomationPoint {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    target,
-                    id,
-                });
+                let _ = tx.send(command);
                 st.refresh_automation_points(&window);
                 drop(st);
                 record_project_history(
