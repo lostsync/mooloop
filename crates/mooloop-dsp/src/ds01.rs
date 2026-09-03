@@ -1481,6 +1481,28 @@ impl Ds01 {
         }
     }
 
+    /// Where a burst's impulses fall, in seconds from the hit.
+    ///
+    /// Run through the same schedule the voice runs rather than re-derived
+    /// from the controls, so a display of a burst cannot disagree with the
+    /// burst: the spread's compounding and the bound on the total are one
+    /// implementation, and this is a reading of it.
+    pub fn burst_offsets(params: Ds01Params, sample_rate: u32) -> Vec<f32> {
+        let mut burst = Burst::default();
+        burst.start(&params, sample_rate);
+        let mut offsets = vec![0.0];
+        let limit = (DS01_BURST_MAX_S * sample_rate as f32) as usize + sample_rate as usize;
+        for frame in 0..limit {
+            if burst.tick(sample_rate) {
+                offsets.push(frame as f32 / sample_rate as f32);
+            }
+            if burst.remaining == 0 && burst.countdown == 0 {
+                break;
+            }
+        }
+        offsets
+    }
+
     /// Render one deterministic hit through the production voice path and
     /// reduce it to min/max bins suitable for a waveform overview. v1's best
     /// property, kept: the drawn hit is the hit.
@@ -3271,6 +3293,33 @@ mod tests {
         }
         cases.push(everything);
         cases
+    }
+
+    /// The tick display reads the schedule rather than re-deriving it, so a
+    /// drawn burst and a played one cannot disagree.
+    #[test]
+    fn burst_offsets_are_the_schedule_the_voice_runs() {
+        assert_eq!(Ds01::burst_offsets(Ds01Params::default(), SR), vec![0.0]);
+
+        let even = Ds01::burst_offsets(burst_patch(4, 0.0, 0.0, 0.0), SR);
+        assert_eq!(even.len(), 4);
+        for pair in even.windows(2) {
+            assert!((pair[1] - pair[0] - 0.02).abs() < 0.001, "{even:?}");
+        }
+
+        let accelerating = Ds01::burst_offsets(burst_patch(4, -1.0, 0.0, 0.0), SR);
+        let gaps: Vec<f32> = accelerating.windows(2).map(|p| p[1] - p[0]).collect();
+        assert!(gaps.windows(2).all(|p| p[1] < p[0]), "{gaps:?}");
+
+        // The bound holds here too, because it is the same schedule.
+        let long = Ds01::burst_offsets(
+            Ds01Params {
+                burst_spacing: 0.5,
+                ..burst_patch(DS01_MAX_REPEATS, 1.0, 0.0, 0.0)
+            },
+            SR,
+        );
+        assert!(long.last().copied().unwrap_or(0.0) <= DS01_BURST_MAX_S, "{long:?}");
     }
 
     #[test]

@@ -263,7 +263,7 @@ And three from step 08:
 ## What step 08 still owes
 
 The layout, the controls, the four scopes and their handles are in, along with
-the rendered hit in the amp scope, verified by a software-rendered snapshot at
+the rendered hit in the amp scope and the burst's impulse ticks, verified by a software-rendered snapshot at
 the default patch and at a four-second one.
 
 The preview follows the patch's span rather than a fixed window, which needed
@@ -271,16 +271,23 @@ The preview follows the patch's span rather than a fixed window, which needed
 the span grows: it is still the production voice path, clocked slower, because
 rendering four seconds at the full rate is a fifth of a second of arithmetic
 that `08-the-face.md` says must not happen on the UI thread. It is debounced
-on top of that, so a knob drag renders the hit once when it stops. Three things are not:
+on top of that, so a knob drag renders the hit once when it stops. Two things are not:
 
 - **The MOD panel.** The three checked-in concepts settled the columns and the
   bands and none of them draws it, so the layout for the matrix's thirty-two
   controls is genuinely undecided rather than a detail to fill in. The band
   carries a labelled empty region where it goes. **This is the one thing in
   the plan that wants Adam before it wants code.**
-- **Burst impulse ticks** on a short axis inside the BURST section.
 - **Focus dimming** — the touched column's scope drawn solid and the others
-  quiet.
+  quiet. Emphasis rather than information, and the only one of the four that
+  changes nothing about what the face can tell you.
+
+The ticks are read from `Ds01::burst_offsets`, which runs the same schedule
+the voice runs rather than re-deriving it from the controls: the spread's
+compounding and the bound on the total are one implementation, so a drawn
+burst cannot disagree with a played one. They get their own axis rather than
+the scopes' span, because a twelve-millisecond flam inside a four-second ride
+would be four ticks in the first pixel.
 
 The face is **not** part of steps 02 through 07. DS-01 is selectable, playable,
 automatable and modulatable without one — every parameter is

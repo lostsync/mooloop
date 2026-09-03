@@ -2416,6 +2416,23 @@ pub fn refresh_ds01(window: &MainWindow, params: &Ds01Params) {
     window.set_ds01_step_counts(face.steps.as_slice().into());
     refresh_ds01_contours(window, params);
     sync_ds01_preview(window, params);
+    sync_ds01_burst_ticks(window, params);
+}
+
+/// Where a burst's impulses fall, as fractions of the burst's own length.
+///
+/// Its own axis rather than the scopes' span: a twelve-millisecond flam
+/// inside a four-second ride would be four ticks in the first pixel, which
+/// shows the spacing and the spread less well than not drawing them.
+fn sync_ds01_burst_ticks(window: &MainWindow, params: &Ds01Params) {
+    let offsets = Ds01::burst_offsets(*params, 48_000);
+    let last = offsets.last().copied().unwrap_or(0.0);
+    let ticks: Vec<f32> = if last <= 0.0 {
+        vec![0.0]
+    } else {
+        offsets.iter().map(|at| at / last).collect()
+    };
+    window.set_ds01_burst_ticks(ticks.as_slice().into());
 }
 
 /// The rendered hit, over the same span the scopes are drawn on.
@@ -11025,6 +11042,7 @@ impl AppUi {
                             st.channels[st.selected].ds01_params
                         };
                         sync_ds01_preview(&window, &params);
+                        sync_ds01_burst_ticks(&window, &params);
                     },
                 );
             }
