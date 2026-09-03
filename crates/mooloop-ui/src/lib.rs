@@ -15,14 +15,13 @@ mod settings;
 slint::include_modules!();
 
 use meter::MeterBallistics;
-use mooloop_core::gain::{db_to_linear, linear_to_db, MIN_DB as METER_FLOOR_DB};
+use mooloop_core::gain::{linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::log::Level;
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     compile_bus_graph, snap_bars_to_power_of_two, sanitize_route, would_create_cycle,
     BufferDuration, BufferEvent, BusSetup,
-    DeviceKind, DrumMode, DrumSynthParams, EffectKind, EffectParams,
-    insert_effect, move_effect, remove_effect,
+    DeviceKind, DrumMode, DrumSynthParams, EffectKind,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
@@ -2357,6 +2356,14 @@ impl UiState {
     /// after an edit (like a multi-note delete) that can touch notes spread
     /// across many steps, where refreshing one step at a time would miss
     /// the rest.
+    /// Re-draws one device-rack row from the slot behind it.
+    fn refresh_effect_row(&self, slot: usize) {
+        if let Some(effect) = self.session.effect_chain().and_then(|chain| chain.get(slot)) {
+            self.effect_slot_model
+                .set_row_data(slot, effect_slot_row(effect));
+        }
+    }
+
     /// Draws a roll edit: the rack cells whose summary changed, then the
     /// roll and its lanes.
     fn apply_note_edit(&self, edit: &NoteEdit, window: &MainWindow) {
@@ -6794,57 +6801,45 @@ impl AppUi {
                     return;
                 };
                 let Some(window) = weak.upgrade() else { return };
+                let Ok(insert_before) = usize::try_from(insert_before) else {
+                    return;
+                };
                 let before = project_snapshot(&st.borrow(), &window);
-                let added = {
+                {
                     let mut st = st.borrow_mut();
-                    let target = st.session.effect_target;
-                    let inserted = st.session.effect_chain_mut().and_then(|effects| {
-                        let tail = effects.len();
-                        let effect = EffectSlotState::of_kind(kind);
-                        insert_effect(effects, insert_before as usize, effect)
-                            .map(|(slot, remap)| (slot, tail, remap, effect.params))
-                    });
-                    let Some((slot, tail, remap, params)) = inserted else {
+                    let Some(added) = st.session.insert_effect_at(kind, insert_before) else {
                         return;
                     };
-                    st.session.retarget_effect_slots(target, &remap);
                     st.sync_effects();
                     st.refresh_automation(&window);
                     st.refresh_modulation(&window);
-                    // Install into the vacant tail then move it left. Keeping
-                    // this on the ordered stream means the realtime chain
-                    // sees the same order as the model without allocating in
-                    // its callback. The dry-align ring is built here for the
-                    // same reason as the node: construction allocates, so it
-                    // happens off the audio thread and rides the same
-                    // structural command.
+                    // The node and its dry-align ring are built here because
+                    // construction allocates: off the audio thread, riding the same
+                    // structural command as the slot they belong to.
                     let bpm = window.get_bpm() as f64;
-                    let node = build_effect_at_tempo(params, sample_rate, bpm);
+                    let node = build_effect_at_tempo(added.params, sample_rate, bpm);
                     let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
                     let _ = stx.send(StructuralCommand::InstallEffect {
-                        target,
-                        slot: tail as u8,
-                        kind,
-                        resource_key: params.buffer().copied().map(buffer_allocation_key),
+                        target: added.target,
+                        slot: added.tail as u8,
+                        kind: added.kind,
+                        resource_key: added.params.buffer().copied().map(buffer_allocation_key),
                         node,
                         align,
                         analyzer: Box::new(SpectrumAnalyzer::new()),
-                        // Allocated here with the node: an empty addressable
-                        // slot costs a pointer rather than its full host state.
+                        // Allocated here with the node: an empty addressable slot
+                        // costs a pointer rather than its full host state.
                         state: Box::new(EffectSlot::new()),
                     });
-                    if slot != tail {
+                    if added.slot != added.tail {
                         let _ = tx.send(EngineCommand::MoveEffect {
-                            target,
-                            from: tail as u8,
-                            to: slot as u8,
+                            target: added.target,
+                            from: added.tail as u8,
+                            to: added.slot as u8,
                         });
                     }
-                    true
-                };
-                if added {
-                    record_project_history(&commands, before, &st, &window, "Effect added");
                 }
+                record_project_history(&commands, before, &st, &window, "Effect added");
             });
         }
 
@@ -6856,40 +6851,33 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_remove_effect_clicked(move |slot| {
                 let Some(window) = weak.upgrade() else { return };
+                let Ok(slot) = usize::try_from(slot) else {
+                    return;
+                };
                 let before = project_snapshot(&st.borrow(), &window);
-                let removed = {
+                {
                     let mut st = st.borrow_mut();
-                    let target = st.session.effect_target;
-                    let slot = slot as usize;
-                    let removed = st.session.effect_chain_mut().and_then(|effects| {
-                        remove_effect(effects, slot).map(|(_, remap)| (effects.len(), remap))
-                    });
-                    let Some((tail, remap)) = removed else {
+                    let Some(removed) = st.session.remove_effect_at(slot) else {
                         return;
                     };
-                    st.session.retarget_effect_slots(target, &remap);
                     st.sync_effects();
                     st.refresh_automation(&window);
                     st.refresh_modulation(&window);
-                    // Mirror on the engine: move the device to the vacated
-                    // tail, then drop the tail. Its routes and lanes ride
-                    // along and are dropped with it.
-                    if slot != tail {
+                    // Mirror on the engine: move the device to the vacated tail, then
+                    // drop the tail. Its routes and lanes ride along and go with it.
+                    if removed.slot != removed.tail {
                         let _ = tx.send(EngineCommand::MoveEffect {
-                            target,
-                            from: slot as u8,
-                            to: tail as u8,
+                            target: removed.target,
+                            from: removed.slot as u8,
+                            to: removed.tail as u8,
                         });
                     }
                     let _ = stx.send(StructuralCommand::RemoveEffect {
-                        target,
-                        slot: tail as u8,
+                        target: removed.target,
+                        slot: removed.tail as u8,
                     });
-                    true
-                };
-                if removed {
-                    record_project_history(&commands, before, &st, &window, "Effect removed");
                 }
+                record_project_history(&commands, before, &st, &window, "Effect removed");
             });
         }
 
@@ -6898,23 +6886,11 @@ impl AppUi {
             let st = state.clone();
             window.on_effect_bypass_toggled(move |slot| {
                 let mut st = st.borrow_mut();
-                let target = st.session.effect_target;
-                let slot = slot as usize;
-                let Some(effects) = st.session.effect_chain_mut() else {
+                let Some(command) = st.session.toggle_effect_bypass(slot) else {
                     return;
                 };
-                let Some(effect) = effects.get_mut(slot) else {
-                    return;
-                };
-                effect.bypassed = !effect.bypassed;
-                let bypassed = effect.bypassed;
-                let row = effect_slot_row(effect);
-                st.effect_slot_model.set_row_data(slot, row);
-                let _ = tx.send(EngineCommand::SetEffectBypassed {
-                    target,
-                    slot: slot as u8,
-                    bypassed,
-                });
+                st.refresh_effect_row(slot as usize);
+                let _ = tx.send(command);
             });
         }
 
@@ -6923,22 +6899,11 @@ impl AppUi {
             let st = state.clone();
             window.on_effect_wet_dry_changed(move |slot, wet_dry| {
                 let mut st = st.borrow_mut();
-                let target = st.session.effect_target;
-                let Some(effect) = st
-                    .session.effect_chain_mut()
-                    .and_then(|chain| chain.get_mut(slot as usize))
-                else {
+                let Some(command) = st.session.set_effect_wet_dry(slot, wet_dry) else {
                     return;
                 };
-                effect.wet_dry = wet_dry.clamp(0.0, 1.0);
-                let value = effect.wet_dry;
-                let row = effect_slot_row(effect);
-                st.effect_slot_model.set_row_data(slot as usize, row);
-                let _ = tx.send(EngineCommand::SetEffectWetDry {
-                    target,
-                    slot: slot as u8,
-                    wet_dry: value,
-                });
+                st.refresh_effect_row(slot as usize);
+                let _ = tx.send(command);
             });
         }
         {
@@ -6946,24 +6911,11 @@ impl AppUi {
             let st = state.clone();
             window.on_effect_input_trim_changed(move |slot, input_trim_db| {
                 let mut st = st.borrow_mut();
-                let target = st.session.effect_target;
-                let Some(effect) = st
-                    .session.effect_chain_mut()
-                    .and_then(|chain| chain.get_mut(slot as usize))
-                else {
+                let Some(command) = st.session.set_effect_input_trim(slot, input_trim_db) else {
                     return;
                 };
-                // The knob works in dB from unity; the project and the wire
-                // carry linear gain.
-                effect.input_trim = db_to_linear(input_trim_db.clamp(METER_FLOOR_DB, 12.0));
-                let value = effect.input_trim;
-                let row = effect_slot_row(effect);
-                st.effect_slot_model.set_row_data(slot as usize, row);
-                let _ = tx.send(EngineCommand::SetEffectInputTrim {
-                    target,
-                    slot: slot as u8,
-                    input_trim: value,
-                });
+                st.refresh_effect_row(slot as usize);
+                let _ = tx.send(command);
             });
         }
         {
@@ -6971,22 +6923,11 @@ impl AppUi {
             let st = state.clone();
             window.on_effect_output_trim_changed(move |slot, output_trim_db| {
                 let mut st = st.borrow_mut();
-                let target = st.session.effect_target;
-                let Some(effect) = st
-                    .session.effect_chain_mut()
-                    .and_then(|chain| chain.get_mut(slot as usize))
-                else {
+                let Some(command) = st.session.set_effect_output_trim(slot, output_trim_db) else {
                     return;
                 };
-                effect.output_trim = db_to_linear(output_trim_db.clamp(METER_FLOOR_DB, 12.0));
-                let value = effect.output_trim;
-                let row = effect_slot_row(effect);
-                st.effect_slot_model.set_row_data(slot as usize, row);
-                let _ = tx.send(EngineCommand::SetEffectOutputTrim {
-                    target,
-                    slot: slot as u8,
-                    output_trim: value,
-                });
+                st.refresh_effect_row(slot as usize);
+                let _ = tx.send(command);
             });
         }
 
@@ -7046,35 +6987,11 @@ impl AppUi {
             // and the DSP use.
             window.on_effect_param_changed(move |slot, param_index, normalized| {
                 let mut st = st.borrow_mut();
-                let target = st.session.effect_target;
-                let slot = slot as usize;
-                let Some(effects) = st.session.effect_chain_mut() else {
+                let Some(command) = st.session.set_effect_param(slot, param_index, normalized) else {
                     return;
                 };
-                let Some(effect) = effects.get_mut(slot) else {
-                    return;
-                };
-                let Ok(param_index) = usize::try_from(param_index) else {
-                    return;
-                };
-                let Some(descriptor) = effect.kind().descriptors().get(param_index) else {
-                    return;
-                };
-                let id = descriptor.id;
-                let Some(value) = effect
-                    .params
-                    .set(id, descriptor.from_normalized(normalized))
-                else {
-                    return;
-                };
-                let row = effect_slot_row(effect);
-                st.effect_slot_model.set_row_data(slot, row);
-                let _ = tx.send(EngineCommand::SetEffectParam {
-                    target,
-                    slot: slot as u8,
-                    id,
-                    value,
-                });
+                st.refresh_effect_row(slot as usize);
+                let _ = tx.send(command);
             });
         }
 
@@ -7083,21 +7000,10 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_delay_tempo_sync_changed(move |slot, enabled| {
                 let mut state = st.borrow_mut();
-                let slot = slot as usize;
-                let Some(effects) = state.session.effect_chain_mut() else {
+                if !state.session.set_delay_tempo_sync(slot, enabled) {
                     return;
-                };
-                let Some(effect) = effects.get_mut(slot) else {
-                    return;
-                };
-                let EffectParams::Delay(params) = &mut effect.params else {
-                    return;
-                };
-                params.tempo_sync = enabled;
-                let row = effect_slot_row(effect);
-                state.effect_slot_model.set_row_data(slot, row);
-                state.session.dirty = true;
-                state.session.revision = state.session.revision.wrapping_add(1);
+                }
+                state.refresh_effect_row(slot as usize);
                 if let Some(window) = weak.upgrade() {
                     state.update_document_title(&window);
                 }
@@ -7109,21 +7015,10 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_delay_time_division_changed(move |slot, division| {
                 let mut state = st.borrow_mut();
-                let slot = slot as usize;
-                let Some(effects) = state.session.effect_chain_mut() else {
+                if !state.session.set_delay_time_division(slot, division) {
                     return;
-                };
-                let Some(effect) = effects.get_mut(slot) else {
-                    return;
-                };
-                let EffectParams::Delay(params) = &mut effect.params else {
-                    return;
-                };
-                params.time_division = mooloop_core::DelayTimeDivision::from_index(division);
-                let row = effect_slot_row(effect);
-                state.effect_slot_model.set_row_data(slot, row);
-                state.session.dirty = true;
-                state.session.revision = state.session.revision.wrapping_add(1);
+                }
+                state.refresh_effect_row(slot as usize);
                 if let Some(window) = weak.upgrade() {
                     state.update_document_title(&window);
                 }
@@ -7137,18 +7032,15 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_reorder_effect(move |from, to| {
                 let Some(window) = weak.upgrade() else { return };
+                let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
+                    return;
+                };
                 let before = project_snapshot(&st.borrow(), &window);
-                let moved = {
+                {
                     let mut st = st.borrow_mut();
-                    let target = st.session.effect_target;
-                    let (from, to) = (from as usize, to as usize);
-                    let Some(remap) = st
-                        .session.effect_chain_mut()
-                        .and_then(|effects| move_effect(effects, from, to))
-                    else {
+                    let Some(target) = st.session.move_effect_to(from, to) else {
                         return;
                     };
-                    st.session.retarget_effect_slots(target, &remap);
                     st.sync_effects();
                     st.refresh_automation(&window);
                     st.refresh_modulation(&window);
@@ -7157,11 +7049,8 @@ impl AppUi {
                         from: from as u8,
                         to: to as u8,
                     });
-                    true
-                };
-                if moved {
-                    record_project_history(&commands, before, &st, &window, "Effect moved");
                 }
+                record_project_history(&commands, before, &st, &window, "Effect moved");
             });
         }
 

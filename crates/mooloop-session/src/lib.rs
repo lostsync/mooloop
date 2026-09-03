@@ -15,6 +15,7 @@ pub mod channel;
 pub mod command;
 pub mod dialogs;
 pub mod document;
+pub mod effects;
 pub mod history;
 pub mod notes;
 pub mod project;
