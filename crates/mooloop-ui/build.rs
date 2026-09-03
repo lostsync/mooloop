@@ -3,7 +3,26 @@ use std::path::Path;
 
 fn main() {
     emit_component_audit();
-    slint_build::compile("ui/main.slint").expect("Slint compilation failed");
+    compile_ui();
+}
+
+/// Compiles `ui/main.slint`, with element debug info when the `mcp` feature
+/// asks for it.
+///
+/// Slint documents `SLINT_EMIT_DEBUG_INFO=1` for this, but an environment
+/// variable is a second switch to remember and forget: without the debug info
+/// every MCP tool that names an element fails at runtime, long after the
+/// build. Tying it to the feature makes one flag mean one thing. It is not
+/// free -- toggling it recompiles the whole generated module -- which is why
+/// it stays off unless the MCP server is being compiled in too.
+fn compile_ui() {
+    if std::env::var_os("CARGO_FEATURE_MCP").is_some() {
+        let config = slint_build::CompilerConfiguration::new().with_debug_info(true);
+        slint_build::compile_with_config("ui/main.slint", config)
+            .expect("Slint compilation failed");
+    } else {
+        slint_build::compile("ui/main.slint").expect("Slint compilation failed");
+    }
 }
 
 /// Records every `export component` in `ui/` so the mockup tool can subtract

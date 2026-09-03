@@ -10,6 +10,10 @@ authors.workspace = true
 name = "mooloop"
 path = "src/main.rs"
 
+[features]
+# Forwarded to `mooloop-ui`; see its manifest and `docs/AGENT_OPERATIONS.md`.
+mcp = ["mooloop-ui/mcp"]
+
 [dependencies]
 mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }

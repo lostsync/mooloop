@@ -1540,6 +1540,13 @@ impl AudioNode for Ds01 {
                 Event::NoteOff { id, .. } => self.note_off(id),
                 Event::Choke => self.choke(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
+                // ML-P8's routes are addressed by a durable id because its
+                // route list is a variable-length thing a patch grows. DS-01's
+                // eight rows are fixed and are ordinary parameters at
+                // `matrix_param(row, MATRIX_OFFSET_AMOUNT)`, so an amount
+                // arrives as a `ParamValue` like any other knob and this
+                // reaches nothing here.
+                Event::SourceRouteAmount { .. } => {}
                 Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
             }
             pos = offset;

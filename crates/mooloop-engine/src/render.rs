@@ -995,6 +995,24 @@ impl ChannelStrip {
         self.destination = MASTER_BUS;
     }
 
+    /// Move one internal route's depth on both the base and the running node.
+    ///
+    /// Not routed through `push_source_base` like a knob is, because a route
+    /// amount is the one authored value that must not rebuild the compiled
+    /// topology: the node retunes the row it already has.
+    fn set_source_route_amount(&mut self, route: u16, amount: f32) {
+        let moved = self
+            .source_base
+            .internal_routes_mut()
+            .is_some_and(|routes| routes.set_amount(route, amount));
+        if !moved {
+            return;
+        }
+        if matches!(self.source_base, GeneratorParams::MlP8(_)) {
+            self.mlp8.set_route_amount(route, amount);
+        }
+    }
+
     /// Hand the authored base to whichever generator this channel is running.
     ///
     /// Allocation-free for every kind, which is what makes it callable from
@@ -1729,6 +1747,18 @@ impl RenderState {
                 };
                 strip.push_source_base();
             }
+            // A route amount lives in the same parameter block as the rest of
+            // the patch, so the base push that restores a generator knob
+            // restores this too.
+            ParamOwner::SourceRoute { .. } => {
+                let EffectTarget::Channel(channel) = destination.scope else {
+                    return;
+                };
+                let Some(strip) = self.strips.get_mut(channel as usize) else {
+                    return;
+                };
+                strip.push_source_base();
+            }
             // Neither needs one. The strip's output stage keeps no parameter
             // state between blocks -- it re-reads its knob every block -- and
             // a modulator's own parameters are not modulation destinations
@@ -2162,6 +2192,40 @@ impl RenderState {
                     }
                 }
             }
+            EngineCommand::SetSourceRoute { channel, route } => {
+                // Structural, so it goes through the base and is pushed
+                // whole: the node recompiles its flat table from the routes
+                // it is handed.
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    let landed = strip
+                        .source_base
+                        .internal_routes_mut()
+                        .is_some_and(|routes| routes.upsert(route));
+                    if landed {
+                        strip.push_source_base();
+                    }
+                }
+            }
+            EngineCommand::RemoveSourceRoute { channel, route } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    let removed = strip
+                        .source_base
+                        .internal_routes_mut()
+                        .is_some_and(|routes| routes.remove(route));
+                    if removed {
+                        strip.push_source_base();
+                    }
+                }
+            }
+            EngineCommand::SetSourceRouteAmount {
+                channel,
+                route,
+                amount,
+            } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.set_source_route_amount(route, amount);
+                }
+            }
             EngineCommand::SetChannelPolySynthParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.poly_synth.set_params(params);
@@ -2579,6 +2643,58 @@ impl RenderState {
                                 value,
                             },
                         });
+                    }
+                }
+
+                // The generator's own internal routes, whose amounts are
+                // automatable but are not entries in the table above: they
+                // are addressed by the route's durable id, so they resolve
+                // through the same base-plus-offset pass and leave through
+                // their own event.
+                let internal: Option<mooloop_core::MlP8Routes> =
+                    base.internal_routes().copied();
+                for route in internal.iter().flat_map(|routes| routes.iter()) {
+                    for descriptor in base.kind().route_descriptors() {
+                        let destination = ParamAddr {
+                            scope,
+                            owner: ParamOwner::SourceRoute { route: route.id },
+                            param: descriptor.id,
+                        };
+                        let policy = ModDestinationDescriptor::for_param(descriptor);
+                        let modulated = modulation.rack.modulates(destination, &policy);
+                        let curve = automation
+                            .as_ref()
+                            .and_then(|automation| automation.curve_for(destination));
+                        if !modulated && curve.is_none() {
+                            continue;
+                        }
+                        let knob_normalized = descriptor.to_normalized(route.amount);
+                        for tick in 0..ticks.max(automation.as_ref().map_or(0, |a| a.ticks)) {
+                            let base_normalized = curve
+                                .as_ref()
+                                .zip(automation.as_ref())
+                                .and_then(|(curve, automation)| automation.value_at(curve, tick))
+                                .unwrap_or(knob_normalized);
+                            let offset_normalized = if modulated {
+                                modulation.rack.offset_for(
+                                    destination,
+                                    &modulation.outputs[tick],
+                                    &policy,
+                                )
+                            } else {
+                                0.0
+                            };
+                            let amount = descriptor.from_normalized(
+                                (base_normalized + offset_normalized).clamp(0.0, 1.0),
+                            );
+                            let _ = self.events[index].push_ordered(TimedEvent {
+                                offset: (tick * CONTROL_RATE_FRAMES) as u32,
+                                event: Event::SourceRouteAmount {
+                                    route: route.id,
+                                    amount,
+                                },
+                            });
+                        }
                     }
                 }
             }
@@ -4033,6 +4149,227 @@ mod tests {
         );
     }
 
+    // --- ML-P8 internal routes ------------------------------------------
+
+    /// An ML-P8 channel with one internal route already authored, and the
+    /// route's durable id.
+    fn mlp8_project_with_route() -> (Project, u16) {
+        let mut channel = ProjectChannel::mlp8(0, 1);
+        let state = channel
+            .setup
+            .mlp8_state_mut()
+            .expect("an ML-P8 channel has ML-P8 state");
+        let id = state
+            .params
+            .routes
+            .add(
+                mooloop_core::MlP8ModSource::Lfo,
+                mooloop_core::MlP8ModDest::Param {
+                    id: mooloop_core::mlp8::PARAM_FILTER_CUTOFF,
+                },
+            )
+            .expect("the route should be accepted");
+        assert!(state.params.routes.set_amount(id, 40.0));
+        (synth_project(channel), id)
+    }
+
+    fn route_amounts(render: &RenderState, route: u16) -> Vec<f32> {
+        render.events[0]
+            .iter()
+            .filter_map(|event| match event.event {
+                Event::SourceRouteAmount { route: id, amount } if id == route => Some(amount),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn authored_amount(render: &RenderState, route: u16) -> f32 {
+        render.strips[0]
+            .source_base
+            .internal_routes()
+            .and_then(|routes| routes.get(route))
+            .expect("the route should still be authored")
+            .amount
+    }
+
+    /// A lane drawn on a route's amount resolves at the control rate through
+    /// the ordinary event path, exactly like a lane on a knob -- but through
+    /// the route's durable id rather than a parameter of the device.
+    #[test]
+    fn a_lane_drives_an_internal_route_amount() {
+        let (project, route) = mlp8_project_with_route();
+        let target = ParamAddr::source_route(
+            EffectTarget::Channel(0),
+            route,
+            mooloop_core::MLP8_ROUTE_PARAM_AMOUNT,
+        );
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        for (id, tick, value) in [(1u32, 0u32, 1.0f32), (2, 96, 0.0)] {
+            render.apply_command(EngineCommand::UpsertAutomationPoint {
+                pattern: 0,
+                channel: 0,
+                target,
+                point: mooloop_core::AutomationPoint::new(id, tick, value),
+            });
+        }
+        render.play();
+        render.process_block(128);
+
+        let values = route_amounts(&render, route);
+        assert_eq!(
+            values.len(),
+            4,
+            "the lane should resolve once per control tick: {values:?}"
+        );
+        assert!(
+            values.windows(2).all(|pair| pair[1] < pair[0]),
+            "the ramp did not fall across the block: {values:?}"
+        );
+        // Full scale at the top of the lane and centre at the bottom, which
+        // is the route amount's own -100..100 range rather than a unit one.
+        assert!((values[0] - 100.0).abs() < 1.0, "{values:?}");
+        // The authored depth is untouched: a lane supplies the base.
+        assert_eq!(authored_amount(&render, route), 40.0);
+    }
+
+    /// A route with no lane and no rack route on it emits nothing at all, so
+    /// an ordinary ML-P8 patch does not pay for the machinery.
+    #[test]
+    fn an_unautomated_route_amount_emits_no_events() {
+        let (project, route) = mlp8_project_with_route();
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        render.process_block(128);
+        assert!(route_amounts(&render, route).is_empty());
+    }
+
+    /// Moving a depth is not a structural edit. The engine writes it to the
+    /// authored base and to the running node without pushing the whole
+    /// parameter block, which is what would rebuild the compiled topology.
+    #[test]
+    fn setting_a_route_amount_keeps_the_authored_topology() {
+        let (project, route) = mlp8_project_with_route();
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let before = *render.strips[0]
+            .source_base
+            .internal_routes()
+            .expect("ML-P8 has internal routes");
+
+        render.apply_command(EngineCommand::SetSourceRouteAmount {
+            channel: 0,
+            route,
+            amount: -80.0,
+        });
+        let after = render.strips[0]
+            .source_base
+            .internal_routes()
+            .expect("ML-P8 has internal routes");
+        assert!(
+            before.same_topology(after),
+            "moving a depth changed the topology"
+        );
+        assert_eq!(authored_amount(&render, route), -80.0);
+    }
+
+    /// Adding and removing a route is structural, and both directions land on
+    /// the authored base so a save records what is being heard.
+    #[test]
+    fn a_route_can_be_added_and_removed_through_the_command_ring() {
+        let project = synth_project(ProjectChannel::mlp8(0, 1));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let route = mooloop_core::MlP8Route {
+            id: 7,
+            source: mooloop_core::MlP8ModSource::FilterEnv,
+            dest: mooloop_core::MlP8ModDest::Param {
+                id: mooloop_core::mlp8::PARAM_DRIVE,
+            },
+            amount: 55.0,
+        };
+
+        render.apply_command(EngineCommand::SetSourceRoute { channel: 0, route });
+        assert_eq!(authored_amount(&render, 7), 55.0);
+
+        // Repointing under the same id replaces rather than adds.
+        render.apply_command(EngineCommand::SetSourceRoute {
+            channel: 0,
+            route: mooloop_core::MlP8Route {
+                dest: mooloop_core::MlP8ModDest::VcaLevel,
+                ..route
+            },
+        });
+        let routes = render.strips[0]
+            .source_base
+            .internal_routes()
+            .expect("ML-P8 has internal routes");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes.get(7).unwrap().dest, mooloop_core::MlP8ModDest::VcaLevel);
+
+        render.apply_command(EngineCommand::RemoveSourceRoute { channel: 0, route: 7 });
+        assert!(render.strips[0]
+            .source_base
+            .internal_routes()
+            .expect("ML-P8 has internal routes")
+            .is_empty());
+    }
+
+    /// A generator that has no internal routes ignores the commands entirely
+    /// rather than misapplying them.
+    #[test]
+    fn a_device_without_internal_routes_ignores_route_commands() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.apply_command(EngineCommand::SetSourceRoute {
+            channel: 0,
+            route: mooloop_core::MlP8Route {
+                id: 1,
+                source: mooloop_core::MlP8ModSource::Lfo,
+                dest: mooloop_core::MlP8ModDest::VcaLevel,
+                amount: 100.0,
+            },
+        });
+        render.apply_command(EngineCommand::SetSourceRouteAmount {
+            channel: 0,
+            route: 1,
+            amount: 100.0,
+        });
+        assert!(render.strips[0].source_base.internal_routes().is_none());
+    }
+
+    /// Removing a lane returns the route to its authored depth, which is the
+    /// same promise a knob gets. Without it the device would keep whatever
+    /// the lane last resolved.
+    #[test]
+    fn removing_a_route_lane_restores_the_authored_depth() {
+        let (project, route) = mlp8_project_with_route();
+        let target = ParamAddr::source_route(
+            EffectTarget::Channel(0),
+            route,
+            mooloop_core::MLP8_ROUTE_PARAM_AMOUNT,
+        );
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.apply_command(EngineCommand::UpsertAutomationPoint {
+            pattern: 0,
+            channel: 0,
+            target,
+            point: mooloop_core::AutomationPoint::new(1, 0, 1.0),
+        });
+        render.play();
+        render.process_block(128);
+        assert!(!route_amounts(&render, route).is_empty());
+
+        render.apply_command(EngineCommand::RemoveAutomationLane {
+            pattern: 0,
+            channel: 0,
+            target,
+        });
+        render.process_block(128);
+        assert!(
+            route_amounts(&render, route).is_empty(),
+            "a removed lane kept driving the route"
+        );
+        assert_eq!(authored_amount(&render, route), 40.0);
+    }
+
     #[test]
     fn a_lane_drives_a_generator_parameter() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
@@ -5222,14 +5559,22 @@ mod footprint {
         assert_eq!(size_of::<EffectChain>(), 20_544);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
-        // The ML-P8 is 3,176 bytes of it. Its eight voices are 2,896 -- a
+        // The ML-P8 is 4,712 bytes of it. Its eight voices are the bulk -- a
         // voice carries three oscillators, their modulation taps and sync
         // carries, a sub, coloured noise, two envelopes, two filter stages, a
-        // drive follower and the feedback loop's delay. The other 280 are the
-        // device's parameter block growing by the LFO's controls and the
-        // sixteen-slot route table, both held once per node rather than per
-        // voice. Step 04 of `docs/plans/poly-synth-v2/` stores those; step 05
-        // is what reads them, so today this is capacity, not yet sound.
+        // drive follower and the feedback loop's delay.
+        //
+        // Step 04 of `docs/plans/poly-synth-v2/` added 1,536 of it, and where
+        // it went is the point. Just over a thousand is per *voice*: the
+        // thirty-one destination offsets a voice resolves each sample, which
+        // is the price of the modulation landing per voice rather than per
+        // device, and is not reducible without giving that up. The rest is
+        // held once per node -- the LFO, the parameter block's LFO controls
+        // and route list, and the compiled route table with the destination
+        // ranges it clamps through. The compiled rows carry byte indices
+        // rather than words, and the voice clears its offsets by walking the
+        // routes rather than a second list of the destinations they touch;
+        // both were measured here, and together they were 576 bytes.
         // Sampler stretch adds another 160 bytes for its
         // pool pointer, tempo, and per-voice struck pitches; the ~1.6 MB pool
         // itself is allocated only when a sampler asks for stretching.
@@ -5238,55 +5583,58 @@ mod footprint {
         // with. The map itself lives in the slot, off the strip. The last 8
         // are the sampler's transport-edge flag, which is what lets a note
         // auditioned while stopped keep sounding.
-        assert_eq!(size_of::<MlP8>(), 3_176);
+        assert_eq!(size_of::<MlP8>(), 4_712);
         // DS-01 is 6,352, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
         // filter, the rate reducer's hold, four envelopes, the body's three
         // resonators, the burst's schedule, and the eight source values it
-        // presents to its own matrix. The shape stage costs almost nothing on
-        // top -- one high-pass for the whole device and five parameters,
-        // because it is a function of the sample rather than a stage with
-        // state -- and step 07's matrix costs a parameter block that its
-        // eight rows dominate, plus one resolved control set per voice,
-        // because the matrix is per voice and two hits sounding at once have
-        // to be able to disagree about where the filter is. Step 03's envelopes are the
-        // largest share -- an `Ahd` is 48 bytes against `ExpDecay`'s 8, four
-        // of them where there were two -- and they are the largest single
-        // reason DS-01's snare and its hat do not sound like the same
-        // instrument.
-        // `mooloop_dsp::ds01`'s own size test splits that between the pool
-        // and the parameter block. It does not widen `source_base`:
-        // `Ds01Params` is smaller than `MlP8Params`, which is still the
-        // widest `GeneratorParams` variant and therefore still what every
-        // channel pays for.
+        // presents to its own matrix. Its envelopes are the largest share --
+        // an `Ahd` is 48 bytes against `ExpDecay`'s 8, four of them where v1
+        // has two -- and they are the largest single reason DS-01's snare and
+        // its hat do not sound like the same instrument. The shape stage costs
+        // almost nothing on top, being a function of the sample rather than a
+        // stage with state; step 07's matrix costs a parameter block its eight
+        // rows dominate, plus one resolved control set per voice, because the
+        // matrix is per voice and two hits sounding at once have to be able to
+        // disagree about where the filter is.
+        //
+        // `mooloop_dsp::ds01`'s own size test splits that between the pool and
+        // the parameter block. It does not widen `source_base`: `Ds01Params`
+        // is smaller than `MlP8Params`, which is still the widest
+        // `GeneratorParams` variant and therefore still what every channel
+        // pays for.
         assert_eq!(size_of::<Ds01>(), 6_352);
-        // The strip pays the ML-P8's 280 twice: once for the node above, and
-        // once for `source_base`, whose `GeneratorParams` is as wide as its
-        // widest variant and the ML-P8 is that variant.
-        assert_eq!(size_of::<ChannelStrip>(), 38_568);
+        // The strip pays the parameter block twice: once inside the node
+        // above, and once for `source_base`, whose `GeneratorParams` is as
+        // wide as its widest variant and the ML-P8 is that variant.
+        assert_eq!(size_of::<ChannelStrip>(), 40_104);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
+        // Sixteen KiB of the rise is `ParamAddr` growing four bytes to carry
+        // a durable internal-route id, paid once per stored route across the
+        // reserved channel count.
         let fixed = (size_of::<ModRack>() + size_of::<ModulatorRack>()) * MAX_CHANNELS
             + MAX_CHANNELS * size_of::<usize>() * 3;
-        assert_eq!(fixed / 1024, 439);
+        assert_eq!(fixed / 1024, 455);
 
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 57_008);
+        assert_eq!(per_live, 58_544);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
         // it by 41 KiB, which is what a device costs now: linear in the
         // channels a project has rather than in the channels it could address.
         // Slice mode moved it by 6 KiB across sixteen channels, the ML-P8's
-        // LFO and route table another 9, and DS-01 -- the seventh kind -- 99,
-        // of which 24 are the four real envelopes its voice runs, 15 the
-        // body's three resonators, 18 the burst's schedule, and 16 the
-        // matrix's rows plus the per-voice control set they need.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_329);
+        // native modulation another 40 -- 24 of it per-voice offset tables on
+        // sixteen channels, which is what buys modulation that lands per
+        // voice, and 16 of it the wider parameter address, paid once per
+        // reserved channel whether or not anything routes -- and DS-01, the
+        // seventh kind, another 99.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_369);
     }
 }
 

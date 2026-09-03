@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-03
-- Sessions: 38
+- Sessions: 40
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -542,11 +542,32 @@ work session you can recall being part of, and don't stress over precision.
   the case against, and Adam doubted it. He was right. `build.rs` expands
   `ui/main.slint` into a single 39 MB Rust module, so the four minutes and the
   3.4 GB peak that `scripts/cargo-capped` exists to contain are Slint's, and a
-  measured `eframe` probe checks in 1.4s inside 0.2 GB. Then built DS-01, the
-  drum synth whose parameters are descriptor-addressed on day one rather than
-  as a table bolted onto a mode-union: one universal percussion voice, no drum
-  type selector, and a latched-versus-continuous rule published as a contract
-  instead of inherited from wherever the code happened to read a struct.
+  measured `eframe` probe checks in 1.4s inside 0.2 GB.
+  Then finished the ML-P8's step 04, whose LFO and route compiler had landed
+  built but unread. Wiring them in is where the design decisions were: a route
+  amount is authored in percent like every other depth on the device and its
+  offset is applied *before* the curve to cycles, or an amount would mean
+  something different at every point on the knob; the sub follows its source's
+  resolved pitch rather than the authored one; and a route at zero keeps its
+  compiled row, because dropping it is what would force a topology rebuild the
+  moment an automation lane swept it up from silence. Route amounts are
+  addressed by a new `ParamOwner::SourceRoute`, so a durable route id is the
+  address and the device's parameter table stays a description of the
+  instrument rather than a fixed number of route slots.
+  Then wired up Slint's embedded MCP server behind a `mcp` feature and
+  `scripts/mooloop-mcp`, so the running application can be read and driven --
+  element tree, clicks, drags, keys, screenshots -- instead of inferred from
+  the source. The feature carries the element debug info rather than leaving
+  it to `SLINT_EMIT_DEBUG_INFO`, since a build that forgets the variable fails
+  only later, at the first tool call that names an element.
+  Then built DS-01, the drum synth whose parameters are descriptor-addressed on
+  day one rather than as a table bolted onto a mode-union: one universal
+  percussion voice, no drum-type selector, and a latched-versus-continuous rule
+  published as a contract instead of inherited from wherever the code happened
+  to read a struct. Steps 02 through 07 of its plan, which is everything but
+  the face and the kit; its published outlets are blocked on the same
+  device-outlet mechanism ML-P8's step 06 needs, so they wait for it to be
+  built once rather than twice.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

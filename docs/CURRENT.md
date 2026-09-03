@@ -119,6 +119,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Osc, Amp/Filter, and Perf pages expose separate amplitude and filter ADSRs,
   three low-pass filter characters, pre-filter drive, keytracking, a held-note
   priority stack, legato/retrigger and glide modes, and velocity Accent. The
+  ML-P8 face is two pages: the instrument -- SOURCE, the network grid, and
+  VOICE on one screen -- and ML-P8 MOD, which holds the device's own LFO and
+  the list of its internal modulation routes. The name distinguishes it from
+  the frame's MOD button, which opens the channel shelf. The
   drum face keeps family, character, shared shaping, and voice-specific controls
   visible together. Replacing a source does not change the channel's notes or
   mixer state. Closed and open hats share a choke group in the generated
@@ -258,8 +262,8 @@ boundary.
   use the same timed note path as the sampler in realtime and offline renders.
   Their oscillator and envelope types are shared DSP primitives; their voice
   engines are deliberately separate.
-- `EventList` carries fixed-capacity, sample-timed NoteOn, NoteOff, and generic
-  ParamValue events.
+- `EventList` carries fixed-capacity, sample-timed NoteOn, NoteOff, generic
+  ParamValue, and internal-route-amount events.
 - `StereoBus` ownership is centralized in the graph, leaving room for sends,
   groups, sidechains, and buffer taps.
 - Musical time is PPQ 96, which exactly represents common subdivisions through
@@ -496,6 +500,15 @@ land on its own when it starts to matter:
   from its first step.
   `docs/MODULATION_PLAN.md` records the approved design; build order is in
   `docs/plans/buffer-implementation/02-control-and-modulation.md`.
+- The ML-P8 is the one generator with modulation of its own. It owns an
+  audio-rate LFO and a list of internal routes reading six per-voice sources
+  — the LFO, both envelopes, velocity, key, and gate — into thirty-one
+  continuous destinations, resolved per sample as authored base plus offset and
+  clamped through the destination's own descriptor. This is deliberately not
+  the channel shelf: the shelf's sources are per channel, and a polysynth needs
+  values that differ between two notes held at once. A route's amount is
+  automatable through `ParamOwner::SourceRoute`, addressed by the route's
+  durable id rather than by a parameter of the device.
 - Clip automation is per (pattern, channel), lives in the clip that drew it,
   and may address a bus. Two clips automating one destination is not
   prevented; the lowest channel wins at render time.

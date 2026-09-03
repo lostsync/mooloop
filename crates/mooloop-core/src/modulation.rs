@@ -21,6 +21,18 @@ use crate::EffectTarget;
 pub enum ParamOwner {
     /// The channel's generator. Buses have none.
     Source,
+    /// One internal modulation route inside the channel's generator, by the
+    /// route's durable id.
+    ///
+    /// A device whose modulation is part of its patch has values that are
+    /// automatable but are not entries in its parameter table -- a route's
+    /// amount belongs to the route, and the route belongs to the patch. This
+    /// is the address for those: `param` names the field within the route,
+    /// not a descriptor of the device. Reordering or removing a neighbouring
+    /// route cannot move it, because the id is the address.
+    SourceRoute {
+        route: u16,
+    },
     Effect {
         slot: u8,
     },
@@ -50,6 +62,15 @@ impl ParamAddr {
         Self {
             scope,
             owner: ParamOwner::Effect { slot },
+            param,
+        }
+    }
+
+    /// Address one internal route's field inside a channel's generator.
+    pub const fn source_route(scope: EffectTarget, route: u16, param: u32) -> Self {
+        Self {
+            scope,
+            owner: ParamOwner::SourceRoute { route },
             param,
         }
     }
@@ -2149,14 +2170,21 @@ retrigger = true
         // One slot is a module plus its durable identity, and the widest
         // module is the step pattern's sixteen values.
         assert_eq!(size_of::<Option<ModSlot>>(), 76);
-        assert_eq!(size_of::<ModRoute>(), 20);
+        // A route is an address and a depth, and the address grew by four
+        // bytes when `ParamOwner` gained `SourceRoute { route: u16 }`: a
+        // durable route id does not fit in the byte a slot index did. It is
+        // paid once per stored route -- 64 bytes per channel's rack, a
+        // kilobyte across the whole project -- and, crucially, not on the
+        // command ring, which the rack stopped travelling on.
+        assert_eq!(size_of::<ParamAddr>(), 12);
+        assert_eq!(size_of::<ModRoute>(), 24);
         assert_eq!(
             size_of::<ModRack>(),
             MAX_MODULATORS_PER_CHANNEL * size_of::<Option<ModSlot>>()
                 + MAX_MOD_ROUTES_PER_CHANNEL * size_of::<ModRoute>()
                 + size_of::<u32>()
         );
-        assert_eq!(size_of::<ModRack>(), 932);
+        assert_eq!(size_of::<ModRack>(), 996);
 
         // The rack no longer travels, and neither does the ML-P8. That
         // device's parameter block moved this number twice, and the note here

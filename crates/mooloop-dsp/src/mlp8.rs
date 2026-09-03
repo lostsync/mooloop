@@ -24,8 +24,20 @@
 //! runs, still modulates, and still syncs. The one thing that skips an
 //! oscillator is nothing reading it at all, which is decided once per block.
 //!
-//! The filter, the two envelopes, and the voice feedback loop are step 03;
-//! this device currently runs its source mix straight into the VCA.
+//! Step 03 put a voice around that network: two envelopes, a four-mode filter
+//! with keytracking and both velocity depths, and a feedback loop with the
+//! drive inside it.
+//!
+//! Step 04 is the instrument's own modulation, and it is why a complete ML-P8
+//! patch needs nothing from the channel modulation shelf:
+//!
+//! - one global, audio-rate LFO with six waves, of which two are not periodic,
+//!   plus Warp, Slew, and a retrigger policy,
+//! - six per-voice sources — the LFO, both envelopes, velocity, key, and gate
+//!   — reaching a list of continuous destinations through authored routes,
+//! - routes compiled flat, evaluated per sample, and resolved as authored base
+//!   plus offset then clamped through the destination's own descriptor range,
+//!   so the knob keeps meaning what it says.
 
 use crate::bus::{pan_gains, StereoBus};
 use crate::env::Adsr;
@@ -38,8 +50,8 @@ use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::mlp8::{MlP8Routes, MLP8_MAX_ROUTES, MLP8_MOD_DESTS};
 use mooloop_core::{
-    mlp8::xmod_index, MlP8FilterMode, MlP8LfoParams, MlP8LfoWave, MlP8Params,
-    OscWave, SubWave, MLP8_VOICES,
+    mlp8::xmod_index, MlP8FilterMode, MlP8LfoParams, MlP8LfoRetrigger, MlP8LfoWave, MlP8ModDest,
+    MlP8ModSource, MlP8Params, OscWave, SubWave, MLP8_VOICES,
 };
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
@@ -279,46 +291,36 @@ const LP24_CORNER_SCALE: f32 = 1.553_774;
 /// amount of peak in both low-pass modes.
 const LP24_RESONANCE_SHARE: f32 = 0.62;
 
-/// One physical voice. Eight of these exist for the life of the device.
 /// How much of one cycle full Slew rounds off.
 ///
 /// A fraction of the cycle rather than a time in seconds, which is the whole
 /// idea: a sample-and-hold at half Slew is the same wander at 0.2 Hz as at
 /// 20 Hz, so the control survives being automated alongside Rate instead of
 /// meaning something different at every speed.
-// Step 04 builds the LFO and the route compiler; step 05 is what reads
-// them. Allowed by item rather than by file so the day a later step
-// leaves something genuinely unused, the lint still says so.
-#[allow(dead_code)]
 const LFO_SLEW_MAX_CYCLES: f32 = 0.5;
 
 /// The narrowest either half of a warped cycle may become. A pivot that
 /// reaches the edge is a shape with no rising side at all, which is a
 /// division by zero before it is a sound.
-#[allow(dead_code)]
 const LFO_WARP_MIN_SIDE: f32 = 0.02;
 
 /// The chaos pair's frequency ratio. Irrational on purpose: a rational ratio
 /// closes the figure and the "chaos" wave becomes a periodic one.
-#[allow(dead_code)]
 const CHAOS_RATIO: f32 = 0.618_034;
 
 /// How hard each phasor bends the other's rate. Weak coupling lets the pair
 /// phase-lock, which is the failure mode that would quietly turn this back
 /// into a periodic wave, so it is set well past that.
-#[allow(dead_code)]
 const CHAOS_COUPLING: f32 = 0.85;
 
 /// Seed for the sample-and-hold sequence. Fixed, so two renders of the same
 /// events are the same samples.
-#[allow(dead_code)]
 const LFO_SH_SEED: u32 = 0x1d3f_a7c5;
 
 /// ML-P8's own LFO: one global shape, evaluated per sample.
 ///
 /// Global rather than per voice because it is the instrument's clock; the
 /// route amounts are what make it land differently on each voice.
-#[allow(dead_code)]
 struct MlP8Lfo {
     phase: f32,
     /// The current sample-and-hold value, already warped.
@@ -336,7 +338,6 @@ struct MlP8Lfo {
     primed: bool,
 }
 
-#[allow(dead_code)]
 impl MlP8Lfo {
     fn new() -> Self {
         let mut noise = Noise::new(LFO_SH_SEED);
@@ -445,7 +446,6 @@ impl MlP8Lfo {
     }
 }
 
-#[allow(dead_code)]
 fn sin_tau(phase: f32) -> f32 {
     (phase * core::f32::consts::TAU).sin()
 }
@@ -453,7 +453,6 @@ fn sin_tau(phase: f32) -> f32 {
 /// Skew a phase about a moved pivot, so half the cycle is spent on each side
 /// of it. Turns a triangle into a ramp, a pulse into a variable width, and a
 /// sine into a shape that leans.
-#[allow(dead_code)]
 fn warp_phase(phase: f32, warp: f32) -> f32 {
     let warp = warp.clamp(-1.0, 1.0);
     if warp == 0.0 {
@@ -470,7 +469,6 @@ fn warp_phase(phase: f32, warp: f32) -> f32 {
 /// Bias a bipolar value toward the extremes or toward the centre, keeping its
 /// sign and its bounds. This is Warp's meaning for the two waves that have no
 /// phase: positive pushes values out to the rails, negative pulls them in.
-#[allow(dead_code)]
 fn bias(value: f32, warp: f32) -> f32 {
     let warp = warp.clamp(-1.0, 1.0);
     if warp == 0.0 {
@@ -486,7 +484,6 @@ fn bias(value: f32, warp: f32) -> f32 {
 
 /// The four waves that have a phase. All leave zero rising at phase zero, so
 /// a retriggered LFO never steps the sound at the note boundary.
-#[allow(dead_code)]
 fn periodic_shape(phase: f32, wave: MlP8LfoWave) -> f32 {
     match wave {
         MlP8LfoWave::Sine => sin_tau(phase),
@@ -509,36 +506,52 @@ fn periodic_shape(phase: f32, wave: MlP8LfoWave) -> f32 {
 /// No descriptor id, no enum to match on a destination, no lookup: a source
 /// index, a slot index, and the factor to multiply by. Everything that needed
 /// a table was resolved when the topology was compiled.
+///
+/// The two indices are bytes rather than words on purpose. There are six
+/// sources and thirty-one destinations, one node of this device exists on
+/// every live channel, and a `usize` pair per row costs 320 bytes there to
+/// address a range that fits in two.
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 struct CompiledRoute {
-    source: usize,
-    slot: usize,
+    /// The authored route's durable id. Carried so an amount arriving from an
+    /// automation lane can find its row without the topology being rebuilt.
+    id: u16,
+    source: u8,
+    slot: u8,
+    /// The destination's full span, which is what an amount of 100% covers.
+    /// Kept per row so [`CompiledRoutes::set_amount`] needs no descriptor.
+    span: f32,
     scale: f32,
 }
 
 /// A patch's routes, compiled flat.
-#[allow(dead_code)]
 struct CompiledRoutes {
     routes: [CompiledRoute; MLP8_MAX_ROUTES],
     len: usize,
-    /// Which destination slots any route touches, so a voice zeroes and reads
-    /// only those. An unrouted patch does no per-sample work at all.
+    /// Which destination slots any route touches, so a voice reads an offset
+    /// only where one can exist. An unrouted patch does no per-sample work at
+    /// all.
     touched: [bool; MLP8_MOD_DESTS],
+    /// The span each destination clamps into, resolved once here rather than
+    /// looked up per sample. Indexed by slot, like everything else the voice
+    /// reads back.
+    bounds: [(f32, f32); MLP8_MOD_DESTS],
     any: bool,
 }
 
-#[allow(dead_code)]
 impl CompiledRoutes {
     fn new() -> Self {
         Self {
             routes: [CompiledRoute {
+                id: 0,
                 source: 0,
                 slot: 0,
+                span: 0.0,
                 scale: 0.0,
             }; MLP8_MAX_ROUTES],
             len: 0,
             touched: [false; MLP8_MOD_DESTS],
+            bounds: std::array::from_fn(|slot| MlP8ModDest::ALL[slot].range()),
             any: false,
         }
     }
@@ -550,6 +563,11 @@ impl CompiledRoutes {
     /// parameter drain rather than needing a separate prepared-topology
     /// handoff. It is not per block and never per sample: it runs when the
     /// patch's topology changes.
+    ///
+    /// A route at zero amount keeps its row. It costs one multiply by zero,
+    /// and it is what lets an automation lane sweep that amount up from
+    /// silence through [`Self::set_amount`] instead of forcing a rebuild in
+    /// the middle of a block.
     fn compile(&mut self, routes: &MlP8Routes) {
         self.len = 0;
         self.touched = [false; MLP8_MOD_DESTS];
@@ -563,25 +581,70 @@ impl CompiledRoutes {
             if !route.dest.is_legal() {
                 continue;
             }
-            let scale = route.amount.clamp(-1.0, 1.0) * route.dest.full_range();
-            if scale == 0.0 {
-                continue;
-            }
+            let span = route.dest.full_range();
             self.routes[self.len] = CompiledRoute {
-                source: route.source.to_index() as usize,
-                slot,
-                scale,
+                id: route.id,
+                source: route.source.to_index() as u8,
+                slot: slot as u8,
+                span,
+                scale: route_scale(route.amount, span),
             };
             self.len += 1;
             self.touched[slot] = true;
         }
         self.any = self.len > 0;
     }
+
+    /// Move one route's depth, by durable id, leaving the topology alone.
+    ///
+    /// This is the path a route-amount automation lane takes every control
+    /// tick, so it does no allocation, no descriptor lookup, and no work
+    /// proportional to anything but the route count.
+    fn set_amount(&mut self, id: u16, amount: f32) -> bool {
+        for route in &mut self.routes[..self.len] {
+            if route.id == id {
+                route.scale = route_scale(amount, route.span);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Take new depths from a route list of the *same* topology.
+    ///
+    /// The compiled rows are a subsequence of the authored routes, in order,
+    /// so this walks both once rather than searching. The caller has already
+    /// established that the topology matches.
+    fn retune(&mut self, routes: &MlP8Routes) {
+        let mut next = 0usize;
+        for authored in routes.iter() {
+            let Some(row) = self.routes[..self.len].get_mut(next) else {
+                break;
+            };
+            if row.id != authored.id {
+                continue;
+            }
+            row.scale = route_scale(authored.amount, row.span);
+            next += 1;
+        }
+    }
 }
+
+/// A route's authored percent, as the offset one unit of its source produces
+/// in the destination's own units.
+fn route_scale(percent: f32, span: f32) -> f32 {
+    (percent * 0.01).clamp(-1.0, 1.0) * span
+}
+
+/// The per-voice values the routes read, in [`MlP8ModSource::ALL`] order.
+///
+/// An array rather than a struct because a compiled route holds its source as
+/// an index: that is the whole reason the audio path does not match on an
+/// enum per sample.
+type ModSources = [f32; MlP8ModSource::ALL.len()];
 
 /// Dense slot indices the voice reads back. Derived from the same `ALL` order
 /// the UI lists, rather than written out twice.
-#[allow(dead_code)]
 mod slot {
     use mooloop_core::mlp8::{MlP8ModDest, MLP8_MOD_DESTS};
 
@@ -668,10 +731,22 @@ mod slot {
     pub const PAN: usize = find(MlP8ModDest::Pan);
 }
 
+/// One physical voice. Eight of these exist for the life of the device.
 struct Voice {
     active: bool,
+    /// Whether this voice's note is still held.
+    ///
+    /// Distinct from [`Self::active`], which stays true through the release
+    /// tail. This is the `Gate` modulation source, and it is also what the
+    /// LFO's `Chord` retrigger policy asks about: "is a note already down".
+    gate: bool,
     event_id: u64,
     note: u8,
+    /// This voice's note as a bipolar offset from middle C, which is what the
+    /// `Key` source reads. Four octaves either side reaches full depth: that
+    /// spans a piano, so an ordinary keyboard uses the whole control rather
+    /// than the middle third of it.
+    key: f32,
     age: u64,
     /// Stable across the device's life, so a voice's noise sequence and its
     /// later per-slot drift are properties of the slot rather than of the
@@ -710,6 +785,11 @@ struct Voice {
     cutoff: Smoothed,
     drive_amount: Smoothed,
     feedback: Smoothed,
+    /// This voice's summed internal-route offsets, in each destination's own
+    /// units, indexed by [`MlP8ModDest::slot`]. Written once per sample and
+    /// read wherever the destination is used; only the slots a route actually
+    /// touches are ever written or read.
+    mod_offsets: [f32; MLP8_MOD_DESTS],
 }
 
 impl Voice {
@@ -717,8 +797,10 @@ impl Voice {
         let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, sample_rate);
         Self {
             active: false,
+            gate: false,
             event_id: 0,
             note: 0,
+            key: 0.0,
             age: 0,
             slot,
             env: Adsr::new(sample_rate),
@@ -744,6 +826,7 @@ impl Voice {
             cutoff: smoothed(1.0),
             drive_amount: smoothed(0.0),
             feedback: smoothed(0.0),
+            mod_offsets: [0.0; MLP8_MOD_DESTS],
         }
     }
 
@@ -762,6 +845,7 @@ impl Voice {
         self.noise_tap = 0.0;
         self.filter.reset();
         self.drive = PreDrive::new();
+        self.mod_offsets = [0.0; MLP8_MOD_DESTS];
         self.clear_loop();
     }
 
@@ -777,6 +861,61 @@ impl Voice {
         self.feedback_tap = 0.0;
         self.dc_x = 0.0;
         self.dc_y = 0.0;
+    }
+
+    /// Sum this sample's internal routes into the offset table.
+    ///
+    /// Flat, branchless per route, and proportional to the routes a patch has
+    /// rather than to the destination list: no descriptor is consulted, no
+    /// enum is matched, and an unrouted patch returns immediately.
+    fn resolve_routes(&mut self, routes: &CompiledRoutes, sources: &ModSources) {
+        if !routes.any {
+            return;
+        }
+        // Two passes over the routes rather than one over a list of the
+        // destinations they touch. Clearing a shared destination twice is
+        // free; keeping that list was thirty-two bytes on every voice of
+        // every channel to save at most fifteen stores.
+        for route in &routes.routes[..routes.len] {
+            self.mod_offsets[route.slot as usize] = 0.0;
+        }
+        for route in &routes.routes[..routes.len] {
+            self.mod_offsets[route.slot as usize] +=
+                sources[route.source as usize] * route.scale;
+        }
+    }
+
+    /// A phase-modulation amount, resolved before its curve is applied.
+    ///
+    /// The prepared value is returned untouched when nothing routes to this
+    /// amount, so the common case pays one branch and no `powf`.
+    #[inline]
+    fn osc_depth(
+        &self,
+        routes: &CompiledRoutes,
+        slot: usize,
+        percent: f32,
+        prepared: f32,
+    ) -> f32 {
+        if !routes.touched[slot] {
+            return prepared;
+        }
+        route_depth(self.dest(routes, slot, percent))
+    }
+
+    /// One destination, resolved: authored base plus this voice's offsets,
+    /// clamped through the destination's own descriptor range.
+    ///
+    /// The clamp is what keeps a routed value a value the knob could also
+    /// have been set to, so "base plus offset" never means a cutoff past the
+    /// top of its scale or a level above unity.
+    #[inline]
+    fn dest(&self, routes: &CompiledRoutes, slot: usize, base: f32) -> f32 {
+        if !routes.touched[slot] {
+            return base;
+        }
+        let (min, max) = routes.bounds[slot];
+        (base + self.mod_offsets[slot]).clamp(min, max)
     }
 
     fn snap_to(&mut self, params: &MlP8Params, velocity_amp: f32) {
@@ -804,20 +943,42 @@ fn noise_seed(slot: u32) -> u32 {
 /// Built once per range rather than consulted per sample, and it is where the
 /// route topology is decided: an oscillator nothing reads is skipped, an
 /// oscillator that is only a modulator is not.
-struct Prepared {
+struct Prepared<'a> {
+    /// The patch's routes, compiled. Borrowed rather than copied: it is the
+    /// one part of the prepared state that is rebuilt on a topology change
+    /// rather than per render range.
+    routes: &'a CompiledRoutes,
     ratio: [f32; 3],
+    /// The authored pitch offset in semitones, kept apart from the cents so a
+    /// route can move it and still be clamped through the semitone control's
+    /// own range. Only read when something routes to it.
+    semitones: [f32; 3],
+    /// The cents half of the same tuning, as a ratio. Not routable on its own
+    /// — a route reaching pitch reaches Semis, and cents stay the fine offset
+    /// the patch authored.
+    cents_ratio: [f32; 3],
     wave: [OscWave; 3],
     pulse_width: [f32; 3],
     /// `xmod[from][to]`, already in cycles.
     xmod: [[f32; 3]; 3],
+    /// The same amounts as authored percent, for the routed path: the curve
+    /// from percent to cycles has to be applied *after* the offset, or a
+    /// route would move a number that has already been squared.
+    xmod_percent: [[f32; 3]; 3],
     feedback: [f32; 3],
+    feedback_percent: [f32; 3],
     noise_to_osc: [f32; 3],
+    noise_to_osc_percent: [f32; 3],
     sync_master: [Option<usize>; 3],
     osc_needed: [bool; 3],
     noise_needed: bool,
     noise_tilt: f32,
+    noise_color_percent: f32,
     sub_source: usize,
-    sub_ratio: f32,
+    /// How far below its source the sub sits. Kept as the divisor rather than
+    /// as a finished ratio because the sub follows its source's *resolved*
+    /// pitch, which is not known until the routes for that sample are in.
+    sub_divisor: f32,
     sub_wave: OscWave,
     sub_needed: bool,
     color: NoiseColor,
@@ -833,28 +994,35 @@ struct Prepared {
     filter_open: bool,
 }
 
-impl Prepared {
-    fn new(params: &MlP8Params, sample_rate: u32) -> Self {
+impl<'a> Prepared<'a> {
+    fn new(params: &MlP8Params, sample_rate: u32, routes: &'a CompiledRoutes) -> Self {
         let mut ratio = [1.0_f32; 3];
+        let mut semitones = [0.0_f32; 3];
+        let mut cents_ratio = [1.0_f32; 3];
         let mut wave = [OscWave::Saw; 3];
         let mut pulse_width = [0.5_f32; 3];
         for (index, osc) in params.osc.iter().enumerate() {
-            let semis = osc.semitones.clamp(-48.0, 48.0) + osc.cents.clamp(-100.0, 100.0) / 100.0;
-            ratio[index] = (semis / 12.0).exp2();
+            semitones[index] = osc.semitones.clamp(-48.0, 48.0);
+            cents_ratio[index] = (osc.cents.clamp(-100.0, 100.0) / 1200.0).exp2();
+            ratio[index] = (semitones[index] / 12.0).exp2() * cents_ratio[index];
             wave[index] = osc.wave;
             pulse_width[index] = osc.pulse_width;
         }
 
         let mut xmod = [[0.0_f32; 3]; 3];
+        let mut xmod_percent = [[0.0_f32; 3]; 3];
         for (from, row) in xmod.iter_mut().enumerate() {
             for (to, depth) in row.iter_mut().enumerate() {
                 if from != to {
-                    *depth = route_depth(params.xmod[xmod_index(from, to)]);
+                    xmod_percent[from][to] = params.xmod[xmod_index(from, to)];
+                    *depth = route_depth(xmod_percent[from][to]);
                 }
             }
         }
-        let feedback = std::array::from_fn(|n| route_depth(params.osc_feedback[n]));
-        let noise_to_osc = std::array::from_fn(|n| route_depth(params.noise_to_osc[n]));
+        let feedback_percent = params.osc_feedback;
+        let noise_to_osc_percent = params.noise_to_osc;
+        let feedback = std::array::from_fn(|n| route_depth(feedback_percent[n]));
+        let noise_to_osc = std::array::from_fn(|n| route_depth(noise_to_osc_percent[n]));
         let sync_master: [Option<usize>; 3] = std::array::from_fn(|n| {
             // An oscillator syncing to itself is not a topology, it is a
             // stuck phase. The UI excludes it; this makes the DSP agree
@@ -863,8 +1031,18 @@ impl Prepared {
         });
 
         let sub_source = params.sub_source.index();
-        let sub_needed = params.sub_level > 0.0;
-        let audible = |n: usize| params.osc[n].level > 0.0;
+        // A route reaching a source's level means the authored level is no
+        // longer the whole answer, so "nothing reads this" stops being a
+        // question this block can settle. Skipping it would replace whatever
+        // the route was about to do with silence.
+        let routed = |slot: usize| routes.touched[slot];
+        let sub_needed = params.sub_level > 0.0 || routed(slot::SUB_LEVEL);
+        let audible = |n: usize| params.osc[n].level > 0.0 || routed(slot::OSC_LEVEL[n]);
+        // The same for the amounts that decide whether one oscillator reaches
+        // another: an XMOD route can wake a path the knobs left at zero.
+        let modulates = |from: usize, to: usize| {
+            xmod[from][to] != 0.0 || routed(slot::XMOD + xmod_index(from, to))
+        };
 
         // What makes an oscillator live: it is heard, it modulates something,
         // it syncs something, or the sub divides it. Level alone does not
@@ -872,26 +1050,36 @@ impl Prepared {
         // is the point of the device.
         let osc_needed: [bool; 3] = std::array::from_fn(|n| {
             audible(n)
-                || (0..3).any(|to| to != n && xmod[n][to] != 0.0)
+                || (0..3).any(|to| to != n && modulates(n, to))
                 || feedback[n] != 0.0
+                || routed(slot::OSC_FEEDBACK + n)
                 || sync_master.contains(&Some(n))
                 || (sub_needed && sub_source == n)
         });
-        let noise_needed = params.noise_level > 0.0 || noise_to_osc.iter().any(|a| *a != 0.0);
+        let noise_needed = params.noise_level > 0.0
+            || routed(slot::NOISE_LEVEL)
+            || (0..3).any(|n| noise_to_osc[n] != 0.0 || routed(slot::NOISE_TO_OSC + n));
 
         Self {
+            routes,
             ratio,
+            semitones,
+            cents_ratio,
             wave,
             pulse_width,
             xmod,
+            xmod_percent,
             feedback,
+            feedback_percent,
             noise_to_osc,
+            noise_to_osc_percent,
             sync_master,
             osc_needed,
             noise_needed,
             noise_tilt: (params.noise_color * 0.01).clamp(-1.0, 1.0),
+            noise_color_percent: params.noise_color,
             sub_source,
-            sub_ratio: ratio[sub_source] / params.sub_octave.divisor(),
+            sub_divisor: params.sub_octave.divisor(),
             sub_wave: match params.sub_wave {
                 SubWave::Sine => OscWave::Sine,
                 SubWave::Square => OscWave::Pulse,
@@ -906,7 +1094,9 @@ impl Prepared {
             amp_velocity: params.amp_velocity.clamp(0.0, 1.0),
             max_hz: sample_rate as f32 * 0.45,
             // A band-pass or high-pass at the top of its range is not "no
-            // filter", so only the low-pass modes can be skipped.
+            // filter", so only the low-pass modes can be skipped. A route
+            // aimed at any of these is one more thing that can move the
+            // filter, so the whole shortcut stands down.
             filter_open: matches!(params.filter_mode, MlP8FilterMode::Lp12 | MlP8FilterMode::Lp24)
                 && params.filter_cutoff >= FILTER_OPEN
                 && params.filter_resonance <= f32::EPSILON
@@ -914,7 +1104,12 @@ impl Prepared {
                 && params.filter_velocity.abs() <= f32::EPSILON
                 && params.filter_keytrack <= f32::EPSILON
                 && params.drive <= f32::EPSILON
-                && params.voice_feedback.abs() <= f32::EPSILON,
+                && params.voice_feedback.abs() <= f32::EPSILON
+                && !routed(slot::CUTOFF)
+                && !routed(slot::RESONANCE)
+                && !routed(slot::ENV_AMOUNT)
+                && !routed(slot::DRIVE)
+                && !routed(slot::VOICE_FEEDBACK),
         }
     }
 }
@@ -925,6 +1120,12 @@ pub struct MlP8 {
     sample_rate: u32,
     voices: [Voice; MLP8_VOICES],
     next_age: u64,
+    /// The instrument's own LFO. One per device rather than one per voice:
+    /// it is the instrument's clock, and the route amounts are what make it
+    /// land differently on each voice.
+    lfo: MlP8Lfo,
+    /// The authored routes, flattened. Rebuilt only when the topology moves.
+    routes: CompiledRoutes,
 }
 
 impl MlP8 {
@@ -934,13 +1135,28 @@ impl MlP8 {
             sample_rate,
             voices: std::array::from_fn(|slot| Voice::new(slot as u32, sample_rate)),
             next_age: 1,
+            lfo: MlP8Lfo::new(),
+            routes: CompiledRoutes::new(),
         };
+        synth.routes.compile(&synth.params.routes);
         synth.apply_params_to_voices();
         synth
     }
 
     /// Replace the parameter set. Called from the RT command drain.
+    ///
+    /// The route table is rebuilt only when the *topology* moved, and merely
+    /// retuned when the depths did. That matters because this is also the
+    /// path every ordinary knob takes: a cutoff automation lane must not
+    /// rebuild the topology sixteen times a block, and it would if a differing
+    /// depth counted — which it does, the moment a route amount has been
+    /// automated away from what the arriving parameter block still carries.
     pub fn set_params(&mut self, params: MlP8Params) {
+        if self.params.routes.same_topology(&params.routes) {
+            self.routes.retune(&params.routes);
+        } else {
+            self.routes.compile(&params.routes);
+        }
         self.params = params;
         self.apply_params_to_voices();
     }
@@ -956,6 +1172,27 @@ impl MlP8 {
         }
         if let mooloop_core::GeneratorParams::MlP8(params) = params {
             self.set_params(params);
+        }
+    }
+
+    /// Move one internal route's depth, by durable id.
+    ///
+    /// Separate from [`Self::apply_param`] because a route amount is not in
+    /// the device's parameter table: it belongs to the route, and the route's
+    /// id is its address. Writing it here rather than through `set_params`
+    /// is also what keeps the promise that automating a route amount never
+    /// rebuilds the topology.
+    pub fn set_route_amount(&mut self, id: u16, amount: f32) {
+        if self.params.routes.set_amount(id, amount) {
+            // Read back rather than reused: the authored setter clamps, and
+            // the compiled scale has to be the value the patch actually holds.
+            let clamped = self
+                .params
+                .routes
+                .get(id)
+                .map(|route| route.amount)
+                .unwrap_or(amount);
+            self.routes.set_amount(id, clamped);
         }
     }
 
@@ -983,6 +1220,8 @@ impl MlP8 {
             *voice = Voice::new(slot as u32, self.sample_rate);
         }
         self.next_age = 1;
+        self.lfo.reset();
+        self.routes.compile(&self.params.routes);
         self.apply_params_to_voices();
     }
 
@@ -1006,7 +1245,20 @@ impl MlP8 {
             .unwrap_or(0)
     }
 
+    /// Whether any note is currently held. Held, not sounding: a chord whose
+    /// notes are all in release is over as far as the LFO is concerned.
+    fn any_gate_held(&self) -> bool {
+        self.voices.iter().any(|voice| voice.gate)
+    }
+
     fn note_on(&mut self, event_id: u64, note: u8, velocity: u8) {
+        // Asked before the new note takes its slot, because `Chord` means
+        // "the first note of a chord" and this note is not yet one of them.
+        let retrigger_lfo = match self.params.lfo.retrigger {
+            MlP8LfoRetrigger::Free => false,
+            MlP8LfoRetrigger::Chord => !self.any_gate_held(),
+            MlP8LfoRetrigger::Note => true,
+        };
         let index = self.select_voice();
         let velocity_amp = f32::from(velocity) / 127.0;
         let age = self.next_age;
@@ -1016,9 +1268,11 @@ impl MlP8 {
         let stolen = voice.active;
         voice.event_id = event_id;
         voice.note = note;
+        voice.key = key_offset(note);
         voice.age = age;
         voice.target_freq = note_to_freq(note);
         voice.active = true;
+        voice.gate = true;
 
         if !stolen {
             // Fresh slot: no glide from silence, and every piece of network
@@ -1035,6 +1289,9 @@ impl MlP8 {
         voice.velocity_amp.set_target(velocity_amp);
         voice.env.note_on();
         voice.filter_env.note_on();
+        if retrigger_lfo {
+            self.lfo.retrigger();
+        }
     }
 
     fn note_off(&mut self, event_id: u64) {
@@ -1043,6 +1300,7 @@ impl MlP8 {
             .iter_mut()
             .filter(|voice| voice.active && voice.event_id == event_id)
         {
+            voice.gate = false;
             voice.env.release();
             voice.filter_env.release();
         }
@@ -1050,6 +1308,7 @@ impl MlP8 {
 
     fn release_all(&mut self) {
         for voice in &mut self.voices {
+            voice.gate = false;
             if voice.active && !voice.env.is_releasing() {
                 voice.env.release_with(STOP_RELEASE_S);
                 voice.filter_env.release_with(STOP_RELEASE_S);
@@ -1057,17 +1316,27 @@ impl MlP8 {
         }
     }
 
-    fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+    fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize, bpm: f64) {
         if start >= end {
             return;
         }
-        let params = self.params;
-        let sr = self.sample_rate;
-        let prepared = Prepared::new(&params, sr);
+        // Split the borrows by field: the prepared state holds the compiled
+        // routes for the whole range while the voices are being written.
+        let Self {
+            params,
+            sample_rate,
+            voices,
+            lfo,
+            routes,
+            ..
+        } = self;
+        let params = *params;
+        let sr = *sample_rate;
+        let prepared = Prepared::new(&params, sr, routes);
         let glide_coeff = (-1.0 / (params.glide.max(MIN_GLIDE_S) * sr as f32)).exp();
-        let (gain_l, gain_r) = pan_gains(0.0);
+        let (centre_l, centre_r) = pan_gains(0.0);
 
-        for voice in self.voices.iter_mut() {
+        for voice in voices.iter_mut() {
             for (smoothed, osc) in voice.osc_level.iter_mut().zip(params.osc.iter()) {
                 smoothed.set_target(osc.level.clamp(0.0, 1.0));
             }
@@ -1083,7 +1352,13 @@ impl MlP8 {
         }
 
         for frame in start..end {
-            for voice in self.voices.iter_mut() {
+            // Global and free-running: advanced once per sample whether or not
+            // anything is sounding, so a note landing mid-cycle finds the LFO
+            // where the transport says it should be rather than where the last
+            // note left it.
+            let lfo_value = lfo.next_sample(&params.lfo, bpm, sr);
+
+            for voice in voices.iter_mut() {
                 if !voice.active {
                     continue;
                 }
@@ -1091,24 +1366,58 @@ impl MlP8 {
                 voice.filter_env.advance();
                 if voice.env.is_idle() {
                     voice.active = false;
+                    voice.gate = false;
                     voice.clear_loop();
                     continue;
                 }
                 voice.current_freq +=
                     (voice.target_freq - voice.current_freq) * (1.0 - glide_coeff);
                 let velocity = voice.velocity_amp.advance();
+                // In `MlP8ModSource::ALL` order, which is the order a
+                // compiled route's source index means.
+                let sources: ModSources = [
+                    lfo_value,
+                    voice.env.level(),
+                    voice.filter_env.level(),
+                    velocity,
+                    voice.key,
+                    f32::from(u8::from(voice.gate)),
+                ];
+                voice.resolve_routes(routes, &sources);
+
                 let mix = voice.next_sample(&prepared, sr);
                 let shaped = voice.shape(&prepared, mix, velocity, sr);
                 // Velocity at the VCA is a crossfade from "every note the
                 // same" to "every note as played", not a multiply -- at zero
                 // depth a soft note is a full-level note rather than silence.
                 let amp = 1.0 - prepared.amp_velocity * (1.0 - velocity);
-                let sample = shaped * voice.env.level() * amp * VOICE_OUTPUT_REFERENCE;
+                // The voice's own level and position. Both rest at the value
+                // the channel strip already provides -- unity and centre --
+                // so with nothing routed they cost one untaken branch and
+                // change not a sample.
+                let voice_level = voice.dest(routes, slot::VCA_LEVEL, 1.0);
+                let (gain_l, gain_r) = if routes.touched[slot::PAN] {
+                    pan_gains(voice.dest(routes, slot::PAN, 0.0))
+                } else {
+                    (centre_l, centre_r)
+                };
+                let sample =
+                    shaped * voice.env.level() * amp * voice_level * VOICE_OUTPUT_REFERENCE;
                 bus.l[frame] += sample * gain_l;
                 bus.r[frame] += sample * gain_r;
             }
         }
     }
+}
+
+/// A note as a bipolar offset from middle C, which is what the `Key`
+/// modulation source reads.
+///
+/// Full depth four octaves either side: that spans a piano, so an ordinary
+/// keyboard uses the whole control rather than its middle third, and the two
+/// dozen MIDI notes past each end of one simply hold at the rail.
+fn key_offset(note: u8) -> f32 {
+    ((f32::from(note) - 60.0) / 48.0).clamp(-1.0, 1.0)
 }
 
 impl Voice {
@@ -1126,19 +1435,41 @@ impl Voice {
         // silence is "not needed" while its smoother is still on the way
         // there — and skipping it a block early would replace the ramp the
         // smoother exists for with a step.
-        let level: [f32; 3] = std::array::from_fn(|n| self.osc_level[n].advance());
-        let sub_level = self.sub_level.advance();
-        let noise_level = self.noise_level.advance();
+        let routes = prep.routes;
+        let smoothed_level: [f32; 3] = std::array::from_fn(|n| self.osc_level[n].advance());
+        let smoothed_sub = self.sub_level.advance();
+        let smoothed_noise = self.noise_level.advance();
+        let level: [f32; 3] =
+            std::array::from_fn(|n| self.dest(routes, slot::OSC_LEVEL[n], smoothed_level[n]));
+        let sub_level = self.dest(routes, slot::SUB_LEVEL, smoothed_sub);
+        let noise_level = self.dest(routes, slot::NOISE_LEVEL, smoothed_noise);
         let live: [bool; 3] =
             std::array::from_fn(|n| prep.osc_needed[n] || level[n] > LEVEL_EPSILON);
         let sub_live = prep.sub_needed || sub_level > LEVEL_EPSILON;
         let noise_live = prep.noise_needed || noise_level > LEVEL_EPSILON;
 
         let noise = if noise_live {
-            self.noise.next_sample(prep.noise_tilt, &prep.color)
+            let tilt = if routes.touched[slot::NOISE_COLOR] {
+                (self.dest(routes, slot::NOISE_COLOR, prep.noise_color_percent) * 0.01)
+                    .clamp(-1.0, 1.0)
+            } else {
+                prep.noise_tilt
+            };
+            self.noise.next_sample(tilt, &prep.color)
         } else {
             0.0
         };
+
+        // Resolved once for all three, because the sub divides one of them
+        // and has to follow the same answer.
+        let ratio: [f32; 3] = std::array::from_fn(|n| {
+            if routes.touched[slot::OSC_SEMIS[n]] {
+                (self.dest(routes, slot::OSC_SEMIS[n], prep.semitones[n]) / 12.0).exp2()
+                    * prep.cents_ratio[n]
+            } else {
+                prep.ratio[n]
+            }
+        });
 
         let mut value = [0.0_f32; 3];
         let mut wrap = [None; 3];
@@ -1148,19 +1479,40 @@ impl Voice {
             if !live[index] {
                 continue;
             }
-            let mut phase_mod = prep.feedback[index] * self.taps[index]
-                + prep.noise_to_osc[index] * self.noise_tap;
+            // Every amount below is resolved as authored percent plus this
+            // voice's offset, and only *then* mapped through `route_depth`.
+            // Applying the offset to the already-curved value would move a
+            // number that has been squared, so an amount would mean something
+            // different at every point on the knob.
+            let mut phase_mod = self.osc_depth(
+                routes,
+                slot::OSC_FEEDBACK + index,
+                prep.feedback_percent[index],
+                prep.feedback[index],
+            ) * self.taps[index]
+                + self.osc_depth(
+                    routes,
+                    slot::NOISE_TO_OSC + index,
+                    prep.noise_to_osc_percent[index],
+                    prep.noise_to_osc[index],
+                ) * self.noise_tap;
             for source in 0..3 {
                 if source != index {
-                    phase_mod += prep.xmod[source][index] * self.taps[source];
+                    phase_mod += self.osc_depth(
+                        routes,
+                        slot::XMOD + xmod_index(source, index),
+                        prep.xmod_percent[source][index],
+                        prep.xmod[source][index],
+                    ) * self.taps[source];
                 }
             }
             offset[index] = bound_phase(phase_mod);
-            freq[index] = self.current_freq * prep.ratio[index];
+            freq[index] = self.current_freq * ratio[index];
+            let width = self.dest(routes, slot::OSC_WIDTH[index], prep.pulse_width[index]);
             let step = self.oscs[index].next_step(
                 freq[index],
                 prep.wave[index],
-                prep.pulse_width[index],
+                width,
                 offset[index],
                 sample_rate,
             );
@@ -1180,7 +1532,7 @@ impl Voice {
                 frac,
                 freq[index],
                 prep.wave[index],
-                prep.pulse_width[index],
+                self.dest(routes, slot::OSC_WIDTH[index], prep.pulse_width[index]),
                 offset[index],
                 sample_rate,
             );
@@ -1193,7 +1545,11 @@ impl Voice {
         // nothing else: no cross-modulation reaches it, which is what leaves
         // a fundamental standing under a carrier that has been taken apart.
         let sub = if sub_live {
-            let sub_freq = self.current_freq * prep.sub_ratio;
+            // The sub divides its source, so it follows that oscillator's
+            // *resolved* pitch. Reading the authored ratio here would leave
+            // the fundamental behind the moment a route moved the oscillator
+            // it is derived from.
+            let sub_freq = self.current_freq * ratio[prep.sub_source] / prep.sub_divisor;
             let step = self
                 .sub
                 .next_step(sub_freq, prep.sub_wave, 0.5, 0.0, sample_rate);
@@ -1238,9 +1594,13 @@ impl Voice {
     /// limiter after the voice sum would have been the easy version and would
     /// have made the control a volume knob with a ceiling.
     fn shape(&mut self, prep: &Prepared, mix: f32, velocity: f32, sample_rate: u32) -> f32 {
-        let cutoff = self.cutoff.advance();
-        let drive = self.drive_amount.advance();
-        let feedback = self.feedback.advance();
+        let routes = prep.routes;
+        let smoothed_cutoff = self.cutoff.advance();
+        let smoothed_drive = self.drive_amount.advance();
+        let smoothed_feedback = self.feedback.advance();
+        let cutoff = self.dest(routes, slot::CUTOFF, smoothed_cutoff);
+        let drive = self.dest(routes, slot::DRIVE, smoothed_drive);
+        let feedback = self.dest(routes, slot::VOICE_FEEDBACK, smoothed_feedback);
         if prep.filter_open && feedback == 0.0 && drive == 0.0 {
             return mix;
         }
@@ -1262,14 +1622,18 @@ impl Voice {
         };
         // Velocity adds to the envelope's depth rather than scaling it, so a
         // patch with no envelope amount can still be played into the filter.
-        let depth = prep.env_amount + prep.filter_velocity * velocity;
+        // The routed part is the authored Env Amount only: Filter Velocity is
+        // a dedicated playing behaviour, not a route destination.
+        let depth = self.dest(routes, slot::ENV_AMOUNT, prep.env_amount)
+            + prep.filter_velocity * velocity;
         let cutoff_hz =
             (tracked * (self.filter_env.level() * depth * FILTER_ENV_OCTAVES).exp2())
                 .clamp(20.0, prep.max_hz);
 
+        let resonance = self.dest(routes, slot::RESONANCE, prep.resonance);
         let filtered =
             self.filter
-                .next_sample(prep.mode, driven, cutoff_hz, prep.resonance, sample_rate);
+                .next_sample(prep.mode, driven, cutoff_hz, resonance, sample_rate);
 
         // A resonant filter driven asymmetrically walks off centre, and in a
         // loop that offset compounds. One-pole DC blocker on the tap only, so
@@ -1304,17 +1668,20 @@ impl AudioNode for MlP8 {
         let mut pos = 0usize;
         for ev in events_in.iter() {
             let off = (ev.offset as usize).min(frames).max(pos);
-            self.render_range(bus, pos, off);
+            self.render_range(bus, pos, off, ctx.bpm);
             match ev.event {
                 Event::NoteOn { id, note, velocity } => self.note_on(id, note, velocity),
                 Event::NoteOff { id, .. } => self.note_off(id),
                 Event::Choke => self.release_all(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
+                Event::SourceRouteAmount { route, amount } => {
+                    self.set_route_amount(route, amount)
+                }
                 Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
             }
             pos = off;
         }
-        self.render_range(bus, pos, frames);
+        self.render_range(bus, pos, frames, ctx.bpm);
     }
 }
 
@@ -1322,7 +1689,7 @@ impl AudioNode for MlP8 {
 mod tests {
     use super::*;
     use crate::event::TimedEvent;
-    use mooloop_core::mlp8::xmod_index;
+    use mooloop_core::mlp8::{xmod_index, PARAM_FILTER_CUTOFF, PARAM_VOICE_FEEDBACK};
     use mooloop_core::{MlP8FilterMode, SubOctave, SubSource, SyncSource};
 
     const SR: u32 = 48_000;
@@ -1397,6 +1764,635 @@ mod tests {
     /// One saw, everything else off. The instrument's starting point.
     fn init_saw() -> MlP8Params {
         MlP8Params::default()
+    }
+
+    // --- Step 04: the instrument's own modulation -------------------------
+
+    fn dest(id: u32) -> MlP8ModDest {
+        MlP8ModDest::Param { id }
+    }
+
+    /// Author one route and set its depth, panicking rather than silently
+    /// producing an unrouted patch if the destination is not legal.
+    fn route(
+        params: &mut MlP8Params,
+        source: MlP8ModSource,
+        dest: MlP8ModDest,
+        percent: f32,
+    ) -> u16 {
+        let id = params
+            .routes
+            .add(source, dest)
+            .expect("route should be accepted");
+        assert!(params.routes.set_amount(id, percent));
+        id
+    }
+
+    /// A held note rendered as one block, with the events supplied.
+    fn render_with(params: MlP8Params, events: EventList, frames: usize) -> Vec<f32> {
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        synth.process(&ctx(frames), &mut bus, &events, None);
+        bus.l[..frames].to_vec()
+    }
+
+    /// The step's headline claim: a patch that moves, with nothing at all in
+    /// the channel modulation shelf, and three different relationships
+    /// running at once on the same voices.
+    #[test]
+    fn a_patch_moves_on_its_own_state_alone() {
+        let mut base = init_saw();
+        base.osc[1].level = 0.0;
+        base.filter_mode = MlP8FilterMode::Lp12;
+        base.filter_cutoff = 0.5;
+        base.filter_decay = 0.4;
+        base.filter_sustain = 0.2;
+        base.drive = 0.3;
+        let plain = render(base, 60, 8192);
+
+        let mut moving = base;
+        // Filter envelope into cross-modulation, velocity into the voice
+        // feedback loop, and the LFO into cutoff -- the three the plan names.
+        route(
+            &mut moving,
+            MlP8ModSource::FilterEnv,
+            dest(mooloop_core::mlp8::PARAM_XMOD_BASE + xmod_index(1, 0) as u32),
+            70.0,
+        );
+        route(
+            &mut moving,
+            MlP8ModSource::Velocity,
+            dest(PARAM_VOICE_FEEDBACK),
+            40.0,
+        );
+        moving.lfo.rate_hz = 6.0;
+        route(
+            &mut moving,
+            MlP8ModSource::Lfo,
+            dest(PARAM_FILTER_CUTOFF),
+            -35.0,
+        );
+        assert_eq!(moving.routes.len(), 3);
+
+        let modulated = render(moving, 60, 8192);
+        assert!(
+            modulated.iter().all(|s| s.is_finite()),
+            "an internally modulated patch produced a non-finite sample"
+        );
+        assert!(
+            plain
+                .iter()
+                .zip(modulated.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-6),
+            "three simultaneous internal routes changed nothing"
+        );
+
+        // And each one carries its own weight: removing any of the three
+        // leaves a different render.
+        for drop in 0..3 {
+            let mut two = moving;
+            let id = two.routes.iter().nth(drop).unwrap().id;
+            assert!(two.routes.remove(id));
+            let without = render(two, 60, 8192);
+            assert!(
+                modulated
+                    .iter()
+                    .zip(without.iter())
+                    .any(|(a, b)| (a - b).abs() > 1e-6),
+                "route {drop} contributed nothing to the sound"
+            );
+        }
+    }
+
+    /// Per voice, not per device. Two notes played at once with different
+    /// velocities must reach the destination differently, which is the whole
+    /// reason this is not a channel modulation route.
+    #[test]
+    fn velocity_and_envelope_land_per_voice() {
+        let mut params = init_saw();
+        params.amp_velocity = 0.0;
+        params.filter_mode = MlP8FilterMode::Lp12;
+        params.filter_cutoff = 0.25;
+        // Velocity all the way to the voice's own level: with Amp Velocity at
+        // zero, this is the only thing that can make two notes differ.
+        route(
+            &mut params,
+            MlP8ModSource::Velocity,
+            MlP8ModDest::VcaLevel,
+            -100.0,
+        );
+
+        let render_at = |velocity: u8| {
+            let mut events = EventList::empty();
+            events.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id: 1,
+                    note: 60,
+                    velocity,
+                },
+            });
+            render_with(params, events, 4096)
+        };
+        let soft = rms(&render_at(20));
+        let hard = rms(&render_at(127));
+        assert!(
+            soft > hard * 1.5,
+            "velocity did not reach the voice: soft {soft}, hard {hard}"
+        );
+
+        // Both at once, on separate voices. If the device collapsed velocity
+        // to a last-note value, the two would be indistinguishable from two
+        // notes at the same velocity.
+        let chord = |a: u8, b: u8| {
+            let mut events = EventList::empty();
+            events.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id: 1,
+                    note: 60,
+                    velocity: a,
+                },
+            });
+            events.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id: 2,
+                    note: 67,
+                    velocity: b,
+                },
+            });
+            rms(&render_with(params, events, 4096))
+        };
+        assert!(
+            (chord(20, 127) - chord(127, 127)).abs() > 1e-4,
+            "two velocities in one chord resolved to one value"
+        );
+    }
+
+    /// Key is bipolar about middle C, so the same route pushes a low note and
+    /// a high note in opposite directions from the authored centre.
+    #[test]
+    fn key_tracks_bipolar_about_middle_c() {
+        assert_eq!(key_offset(60), 0.0);
+        assert_eq!(key_offset(108), 1.0);
+        assert_eq!(key_offset(12), -1.0);
+        // Past the rails it holds rather than wrapping or growing.
+        assert_eq!(key_offset(127), 1.0);
+        assert_eq!(key_offset(0), -1.0);
+
+        // Onto cutoff rather than the voice level, because a route may duck a
+        // voice but not push it past unity: a destination with room on both
+        // sides of its centre is what shows the sign.
+        let mut params = init_saw();
+        params.amp_velocity = 0.0;
+        params.filter_mode = MlP8FilterMode::Lp12;
+        params.filter_cutoff = 0.45;
+        route(&mut params, MlP8ModSource::Key, dest(PARAM_FILTER_CUTOFF), 100.0);
+
+        // The same pitch each time, so what changes is only where the route
+        // put the cutoff -- read as how much of the saw survived the filter.
+        let brightness = |note: u8| {
+            let signal = render(params, note, 4096);
+            magnitude_at(&signal, note_to_freq(note) * 5.0)
+        };
+        assert!(
+            brightness(84) > brightness(60) * 1.2,
+            "a note above middle C did not open the filter"
+        );
+        assert!(
+            brightness(36) < brightness(60) * 0.8,
+            "a note below middle C did not close the filter"
+        );
+    }
+
+    /// Gate is the held note, not the sounding one: it falls at Note Off
+    /// while the release tail is still running.
+    #[test]
+    fn gate_falls_at_note_off_not_at_silence() {
+        let mut params = init_saw();
+        params.release = 1.0;
+        params.amp_velocity = 0.0;
+        route(&mut params, MlP8ModSource::Gate, MlP8ModDest::VcaLevel, -100.0);
+
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(TimedEvent {
+            offset: 2048,
+            event: Event::NoteOff { id: 1, note: 60 },
+        });
+        let signal = render_with(params, events, 8192);
+
+        // Held, the gate ducks the voice all the way to silence.
+        assert!(
+            rms(&signal[512..2000]) < 1e-6,
+            "the gate did not reach the voice while the note was held"
+        );
+        // Released, the gate is low and the release tail is audible -- which
+        // it would not be if Gate followed the envelope instead of the note.
+        assert!(
+            rms(&signal[2100..3000]) > 1e-3,
+            "the gate did not fall at Note Off"
+        );
+    }
+
+    /// Free, Chord, and Note differ exactly at the Note On boundaries the
+    /// plan names, and nowhere else.
+    #[test]
+    fn the_three_retrigger_policies_differ_at_their_documented_boundaries() {
+        let mut base = init_saw();
+        base.amp_velocity = 0.0;
+        base.lfo.rate_hz = 3.0;
+        base.lfo.wave = MlP8LfoWave::Ramp;
+        route(&mut base, MlP8ModSource::Lfo, MlP8ModDest::VcaLevel, -80.0);
+
+        // A chord: one note, then a second while the first is still held,
+        // then a third after both are released.
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(note_on(2000, 2, 64));
+        events.push(TimedEvent {
+            offset: 4000,
+            event: Event::NoteOff { id: 1, note: 60 },
+        });
+        events.push(TimedEvent {
+            offset: 4000,
+            event: Event::NoteOff { id: 2, note: 64 },
+        });
+        events.push(note_on(6000, 3, 67));
+
+        let at = |retrigger| {
+            let mut params = base;
+            params.lfo.retrigger = retrigger;
+            let mut list = EventList::empty();
+            for event in events.iter() {
+                list.push(*event);
+            }
+            render_with(params, list, 8192)
+        };
+        let free = at(MlP8LfoRetrigger::Free);
+        let chord = at(MlP8LfoRetrigger::Chord);
+        let note = at(MlP8LfoRetrigger::Note);
+
+        // Free never resets, so nothing after the first note matches the
+        // other two.
+        assert!(
+            free.iter()
+                .zip(chord.iter())
+                .skip(6000)
+                .any(|(a, b)| (a - b).abs() > 1e-6),
+            "Free and Chord agreed after a fresh chord started"
+        );
+        // Chord and Note agree up to the second note of the chord: neither
+        // has retriggered since the first Note On.
+        assert!(
+            chord
+                .iter()
+                .zip(note.iter())
+                .take(2000)
+                .all(|(a, b)| (a - b).abs() <= 1e-6),
+            "Chord and Note diverged before the second note arrived"
+        );
+        // And they differ from there, because Note reset on it and Chord did
+        // not.
+        assert!(
+            chord
+                .iter()
+                .zip(note.iter())
+                .skip(2000)
+                .take(1500)
+                .any(|(a, b)| (a - b).abs() > 1e-6),
+            "Note did not reset the LFO inside a chord"
+        );
+        // Chord *does* reset for the third note, which starts a new chord.
+        assert!(
+            free.iter()
+                .zip(chord.iter())
+                .take(2000)
+                .all(|(a, b)| (a - b).abs() <= 1e-6),
+            "Chord reset somewhere the first note had not"
+        );
+    }
+
+    /// Every wave, including the two that are not periodic, is deterministic
+    /// and bounded — over a render long enough for a chaotic recurrence or an
+    /// accumulating phase to escape if it were going to.
+    #[test]
+    fn every_lfo_wave_is_bounded_and_reproducible() {
+        for wave in MlP8LfoWave::ALL {
+            let mut lfo = MlP8Lfo::new();
+            let mut twin = MlP8Lfo::new();
+            let params = MlP8LfoParams {
+                wave,
+                rate_hz: 7.3,
+                warp: 0.6,
+                slew: 0.35,
+                ..MlP8LfoParams::default()
+            };
+            // Sixty seconds at 48 kHz.
+            for index in 0..SR as usize * 60 {
+                let value = lfo.next_sample(&params, 120.0, SR);
+                assert!(
+                    value.is_finite() && (-1.001..=1.001).contains(&value),
+                    "{wave:?} left its range at sample {index}: {value}"
+                );
+                assert_eq!(
+                    value,
+                    twin.next_sample(&params, 120.0, SR),
+                    "{wave:?} did not render identically twice"
+                );
+            }
+        }
+    }
+
+    /// Chaos is not sample-and-hold under another name, and it is not
+    /// periodic: it keeps moving, and it does not repeat inside a window a
+    /// periodic wave at the same rate would repeat many times over.
+    #[test]
+    fn chaos_wanders_rather_than_holding_or_repeating() {
+        let params = MlP8LfoParams {
+            wave: MlP8LfoWave::Chaos,
+            rate_hz: 2.0,
+            ..MlP8LfoParams::default()
+        };
+        let mut lfo = MlP8Lfo::new();
+        let values: Vec<f32> = (0..SR as usize * 8)
+            .map(|_| lfo.next_sample(&params, 120.0, SR))
+            .collect();
+
+        // It never holds still: consecutive samples differ almost everywhere,
+        // which is exactly what a sample-and-hold does not do.
+        let held = values.windows(2).filter(|w| w[0] == w[1]).count();
+        assert!(
+            held * 100 < values.len(),
+            "chaos held its value for {held} of {} samples",
+            values.len()
+        );
+        // And one cycle in is not the same as two cycles in. A rational
+        // frequency ratio would close the figure and make it periodic.
+        let cycle = (SR as f32 / 2.0) as usize;
+        let drift: f32 = values[cycle..cycle * 2]
+            .iter()
+            .zip(values[cycle * 2..cycle * 3].iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
+            / cycle as f32;
+        assert!(drift > 0.05, "chaos repeated its cycle: mean drift {drift}");
+    }
+
+    /// Sample-and-hold is the other half of that pair: it *does* hold, and
+    /// it changes exactly once per cycle.
+    #[test]
+    fn sample_and_hold_steps_once_per_cycle() {
+        let params = MlP8LfoParams {
+            wave: MlP8LfoWave::SampleHold,
+            rate_hz: 10.0,
+            ..MlP8LfoParams::default()
+        };
+        let mut lfo = MlP8Lfo::new();
+        let seconds = 4;
+        let values: Vec<f32> = (0..SR as usize * seconds)
+            .map(|_| lfo.next_sample(&params, 120.0, SR))
+            .collect();
+        let steps = values.windows(2).filter(|w| w[0] != w[1]).count() as i32;
+        // Once per cycle, give or take the boundary: the last wrap lands on
+        // the sample after the window, and two draws in a row could in
+        // principle repeat a value.
+        let cycles = 10 * seconds as i32;
+        assert!(
+            (steps - cycles).abs() <= 1,
+            "sample-and-hold stepped {steps} times in {cycles} cycles"
+        );
+    }
+
+    /// Base plus offset, clamped through the destination's own range. A route
+    /// deep enough to push a control past its end leaves it at the end rather
+    /// than past it.
+    #[test]
+    fn a_route_resolves_as_base_plus_offset_and_clamps() {
+        let mut routes = CompiledRoutes::new();
+        let mut authored = MlP8Routes::default();
+        let cutoff = authored
+            .add(MlP8ModSource::AmpEnv, dest(PARAM_FILTER_CUTOFF))
+            .unwrap();
+        assert!(authored.set_amount(cutoff, 100.0));
+        routes.compile(&authored);
+
+        let mut voice = Voice::new(0, SR);
+        // Cutoff spans 0..1, so 100% of an envelope at full level is +1.0.
+        voice.resolve_routes(&routes, &[0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(voice.mod_offsets[slot::CUTOFF], 1.0);
+        assert_eq!(voice.dest(&routes, slot::CUTOFF, 0.5), 1.0);
+        assert_eq!(voice.dest(&routes, slot::CUTOFF, 0.0), 1.0);
+
+        // Half the envelope is half the offset, and the base still counts.
+        voice.resolve_routes(&routes, &[0.0, 0.5, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(voice.dest(&routes, slot::CUTOFF, 0.25), 0.75);
+
+        // An untouched destination is the base, whatever the table holds.
+        assert_eq!(voice.dest(&routes, slot::DRIVE, 0.4), 0.4);
+    }
+
+    /// Two routes onto one destination add before the clamp, rather than the
+    /// last one winning.
+    #[test]
+    fn routes_sharing_a_destination_sum() {
+        let mut authored = MlP8Routes::default();
+        for source in [MlP8ModSource::AmpEnv, MlP8ModSource::Velocity] {
+            let id = authored.add(source, dest(PARAM_FILTER_CUTOFF)).unwrap();
+            assert!(authored.set_amount(id, 20.0));
+        }
+        let mut routes = CompiledRoutes::new();
+        routes.compile(&authored);
+
+        let mut voice = Voice::new(0, SR);
+        voice.resolve_routes(&routes, &[0.0, 1.0, 0.0, 1.0, 0.0, 0.0]);
+        assert!((voice.mod_offsets[slot::CUTOFF] - 0.4).abs() < 1e-6);
+        assert_eq!(routes.len, 2, "two routes, one destination");
+    }
+
+    /// The route table survives an ordinary knob change: only the routes
+    /// moving rebuilds it.
+    #[test]
+    fn an_ordinary_parameter_change_does_not_rebuild_the_topology() {
+        let mut params = init_saw();
+        let id = route(
+            &mut params,
+            MlP8ModSource::Lfo,
+            dest(PARAM_FILTER_CUTOFF),
+            50.0,
+        );
+        let mut synth = MlP8::new(params, SR);
+        let before = synth.routes.routes[0].scale;
+
+        synth.apply_param(PARAM_FILTER_CUTOFF, 0.3);
+        assert_eq!(synth.routes.len, 1);
+        assert_eq!(synth.routes.routes[0].id, id);
+        assert_eq!(synth.routes.routes[0].scale, before);
+
+        // The amount, on the other hand, moves in place.
+        synth.set_route_amount(id, -50.0);
+        assert_eq!(synth.routes.len, 1);
+        assert_eq!(synth.routes.routes[0].id, id);
+        assert_eq!(synth.routes.routes[0].scale, -before);
+        // And the authored value follows, so a later whole-block install does
+        // not step back to the depth the patch was saved with.
+        assert_eq!(params_amount(&synth.params.routes, id), -50.0);
+    }
+
+    fn params_amount(routes: &MlP8Routes, id: u16) -> f32 {
+        routes.get(id).expect("route should still exist").amount
+    }
+
+    /// A route amount arriving as an event is sample-timed like any other
+    /// automation, and a route sitting at zero is still there to be swept up
+    /// from — which is the thing a compiler that dropped zero rows would have
+    /// broken.
+    #[test]
+    fn a_route_amount_is_sample_timed_and_survives_zero() {
+        let mut params = init_saw();
+        params.amp_velocity = 0.0;
+        params.lfo.rate_hz = 5.0;
+        let id = route(&mut params, MlP8ModSource::Lfo, MlP8ModDest::VcaLevel, 0.0);
+
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(8192);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(TimedEvent {
+            offset: 4096,
+            event: Event::SourceRouteAmount {
+                route: id,
+                amount: -90.0,
+            },
+        });
+        synth.process(&ctx(8192), &mut bus, &events, None);
+
+        let before = rms(&bus.l[512..4000]);
+        let after = rms(&bus.l[4200..8000]);
+        assert!(
+            before > 0.0 && (before - after).abs() > before * 0.1,
+            "a route amount at zero could not be automated up: {before} -> {after}"
+        );
+        // The topology never moved: one row, same id, same destination.
+        assert_eq!(synth.routes.len, 1);
+        assert_eq!(synth.routes.routes[0].id, id);
+    }
+
+    /// An unrouted patch is bit-for-bit what it was before this step existed.
+    #[test]
+    fn an_unrouted_patch_is_untouched_by_the_route_machinery() {
+        let mut params = init_saw();
+        params.osc[1].level = 0.6;
+        params.osc[2].level = 0.4;
+        params.xmod[xmod_index(1, 0)] = 40.0;
+        params.filter_cutoff = 0.4;
+        params.filter_resonance = 0.5;
+        params.drive = 0.2;
+        params.voice_feedback = 0.3;
+        params.sub_level = 0.5;
+        params.noise_level = 0.2;
+        assert!(params.routes.is_empty());
+        let plain = render(params, 60, 4096);
+
+        // The same patch with one route authored at zero depth. Every code
+        // path the routes turn on now runs, and the samples are identical.
+        let mut routed = params;
+        route(&mut routed, MlP8ModSource::Lfo, dest(PARAM_FILTER_CUTOFF), 0.0);
+        let with_zero = render(routed, 60, 4096);
+        assert_eq!(plain, with_zero, "a zero-depth route changed the sound");
+    }
+
+    /// A route to a source's level wakes it: the block-level skip cannot
+    /// decide from the authored level alone once something else can move it.
+    #[test]
+    fn a_route_can_raise_a_source_the_mixer_silenced() {
+        let mut params = init_saw();
+        params.osc[0].level = 0.0;
+        params.amp_velocity = 0.0;
+        route(
+            &mut params,
+            MlP8ModSource::AmpEnv,
+            dest(mooloop_core::mlp8::osc_param(0, mooloop_core::mlp8::OSC_OFFSET_LEVEL)),
+            100.0,
+        );
+        assert!(
+            rms(&render(params, 60, 4096)) > 1e-3,
+            "a route could not raise an oscillator the mixer had silenced"
+        );
+    }
+
+    /// The whole thing, rendered twice in one process and compared. Chaos,
+    /// sample-and-hold, per-voice noise and a feedback loop all at once.
+    #[test]
+    fn a_fully_modulated_patch_renders_identically_twice() {
+        let mut params = init_saw();
+        params.osc[1].level = 0.5;
+        params.noise_level = 0.3;
+        params.filter_cutoff = 0.35;
+        params.filter_resonance = 0.6;
+        params.voice_feedback = 0.4;
+        params.lfo.wave = MlP8LfoWave::Chaos;
+        params.lfo.rate_hz = 9.0;
+        params.lfo.slew = 0.4;
+        params.lfo.warp = 0.5;
+        route(&mut params, MlP8ModSource::Lfo, dest(PARAM_FILTER_CUTOFF), 60.0);
+        route(
+            &mut params,
+            MlP8ModSource::FilterEnv,
+            dest(mooloop_core::mlp8::PARAM_NOISE_COLOR),
+            80.0,
+        );
+        route(&mut params, MlP8ModSource::Key, MlP8ModDest::Pan, 100.0);
+        route(
+            &mut params,
+            MlP8ModSource::Velocity,
+            dest(PARAM_VOICE_FEEDBACK),
+            -50.0,
+        );
+
+        let first = render_chord(params, &[48, 55, 60, 64, 67, 72, 76, 79], 8192);
+        let second = render_chord(params, &[48, 55, 60, 64, 67, 72, 76, 79], 8192);
+        assert_eq!(first, second, "a modulated eight-voice chord drifted");
+        assert!(
+            first.iter().all(|s| s.is_finite()),
+            "a fully modulated chord produced a non-finite sample"
+        );
+    }
+
+    /// Pan is a per-voice destination, so a route on it moves voices in the
+    /// stereo field that the channel strip's own pan could only move together.
+    #[test]
+    fn a_pan_route_separates_voices_across_the_field() {
+        let mut params = init_saw();
+        params.amp_velocity = 0.0;
+        route(&mut params, MlP8ModSource::Key, MlP8ModDest::Pan, 100.0);
+
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(4096);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 36));
+        events.push(note_on(0, 2, 84));
+        synth.process(&ctx(4096), &mut bus, &events, None);
+
+        // Two notes either side of middle C, one pushed left and one right.
+        // Without the route both channels would carry the same sum.
+        let (left, right) = (rms(&bus.l[..4096]), rms(&bus.r[..4096]));
+        assert!(
+            (left - right).abs() < left * 0.2,
+            "a symmetric pair did not stay balanced overall"
+        );
+        let correlation: f32 = bus.l[..4096]
+            .iter()
+            .zip(bus.r[..4096].iter())
+            .map(|(a, b)| a * b)
+            .sum::<f32>()
+            / 4096.0;
+        let energy = rms(&bus.l[..4096]) * rms(&bus.r[..4096]);
+        assert!(
+            correlation < energy * 0.99,
+            "the two channels were identical, so nothing was panned"
+        );
     }
 
     /// The claim the device is built on: Level is a mixer control, not an on

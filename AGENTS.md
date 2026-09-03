@@ -54,8 +54,15 @@ documents.
 
 This project pins Slint `1.17.1`. Before editing `.slint`, `slint::` Rust API,
 or `slint-build`, consult the version-matched documentation:
-`https://releases.slint.dev/1.17.1/docs/slint/`. If the pinned version changes,
-use the matching release URL instead of relying on latest-version knowledge.
+`https://releases.slint.dev/1.17.1/docs/slint/`, and
+`https://docs.rs/i-slint-backend-testing/1.17.1/` for the `ElementHandle` API
+the UI tests and the MCP server both drive. If the pinned version changes, use
+the matching release URL instead of relying on latest-version knowledge.
+
+To see what the real interface does rather than what the source implies, run
+`scripts/mooloop-mcp`: it starts the application with Slint's embedded MCP
+server, whose tools read the live element tree and click, type, drag, and
+screenshot it. `docs/AGENT_OPERATIONS.md` has the details.
 
 Do not reach for `cargo build` to find out whether a `.slint` edit is valid or
 what it looks like. `scripts/slint-sketch` type-checks a scratch `.slint`

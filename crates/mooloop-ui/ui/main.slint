@@ -41,7 +41,7 @@ import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { MlM1DeviceFace } from "mlm1-device.slint";
-import { MlP8DeviceFace } from "mlp8-device.slint";
+import { MlP8DeviceFace, MlP8RouteRow } from "mlp8-device.slint";
 import { PolyDeviceFace } from "poly-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 import { SampleTrace } from "device-displays.slint";
@@ -953,9 +953,11 @@ export component MainWindow inherits Window {
 
 
     // ---- ML-P8 params of the selected channel ----
-    // Which oscillator the ML-P8's left column is editing. Face state; it
-    // is not a device parameter and never reaches the engine.
+    // Which oscillator the ML-P8's left column is editing, and which of its
+    // two pages is showing. Face state; neither is a device parameter and
+    // neither ever reaches the engine.
     in-out property <int> mlp8-source-selected;
+    in-out property <int> mlp8-device-page;
     in-out property <int> mlp8-osc1-wave: 2;
     in-out property <float> mlp8-osc1-semitones;
     in-out property <float> mlp8-osc1-cents;
@@ -1028,6 +1030,38 @@ export component MainWindow inherits Window {
     // Rust resolves it through the descriptor table rather than the face
     // needing a named callback per field.
     callback mlp8-text-committed(int, string);
+
+    // ---- The ML-P8's own modulation ----
+    in-out property <int> mlp8-lfo-wave;
+    in-out property <bool> mlp8-lfo-synced;
+    in-out property <float> mlp8-lfo-rate-hz: 2;
+    in-out property <int> mlp8-lfo-division: 7;
+    in-out property <float> mlp8-lfo-phase;
+    in-out property <float> mlp8-lfo-warp;
+    in-out property <float> mlp8-lfo-slew;
+    in-out property <int> mlp8-lfo-retrigger;
+    callback mlp8-lfo-wave-changed(int);
+    callback mlp8-lfo-sync-changed(bool);
+    callback mlp8-lfo-rate-changed(float);
+    callback mlp8-lfo-division-changed(int);
+    callback mlp8-lfo-phase-changed(float);
+    callback mlp8-lfo-warp-changed(float);
+    callback mlp8-lfo-slew-changed(float);
+    callback mlp8-lfo-retrigger-changed(int);
+    // The authored routes of the selected channel's ML-P8, plus the two
+    // vocabularies their pickers offer. Rust labels both from core's own
+    // lists, so the face holds no second copy of either.
+    in-out property <[MlP8RouteRow]> mlp8-routes;
+    in-out property <[string]> mlp8-route-source-names;
+    in-out property <[string]> mlp8-route-dest-names;
+    in-out property <bool> mlp8-routes-full;
+    in-out property <string> mlp8-routes-status;
+    // Every one of these names a route's durable id, never its row.
+    callback mlp8-route-source-changed(int, int);
+    callback mlp8-route-dest-changed(int, int);
+    callback mlp8-route-amount-changed(int, float);
+    callback mlp8-route-removed(int);
+    callback mlp8-route-added();
 
     // ---- ML-M1 params of the selected channel ----
     in-out property <int> mlm1-osc1-wave: 2;
@@ -2845,6 +2879,33 @@ export component MainWindow inherits Window {
                                                     width: parent.content-width;
                                                     height: parent.height - DeviceRackMetrics.header-height;
                                                     source-selected <=> root.mlp8-source-selected;
+                                                    page <=> root.mlp8-device-page;
+                                                    lfo-wave <=> root.mlp8-lfo-wave;
+                                                    lfo-synced <=> root.mlp8-lfo-synced;
+                                                    lfo-rate-hz <=> root.mlp8-lfo-rate-hz;
+                                                    lfo-division <=> root.mlp8-lfo-division;
+                                                    lfo-phase <=> root.mlp8-lfo-phase;
+                                                    lfo-warp <=> root.mlp8-lfo-warp;
+                                                    lfo-slew <=> root.mlp8-lfo-slew;
+                                                    lfo-retrigger <=> root.mlp8-lfo-retrigger;
+                                                    routes: root.mlp8-routes;
+                                                    route-source-names: root.mlp8-route-source-names;
+                                                    route-dest-names: root.mlp8-route-dest-names;
+                                                    routes-full: root.mlp8-routes-full;
+                                                    routes-status: root.mlp8-routes-status;
+                                                    lfo-wave-changed(v) => { root.mlp8-lfo-wave-changed(v); }
+                                                    lfo-sync-changed(v) => { root.mlp8-lfo-sync-changed(v); }
+                                                    lfo-rate-changed(v) => { root.mlp8-lfo-rate-changed(v); }
+                                                    lfo-division-changed(v) => { root.mlp8-lfo-division-changed(v); }
+                                                    lfo-phase-changed(v) => { root.mlp8-lfo-phase-changed(v); }
+                                                    lfo-warp-changed(v) => { root.mlp8-lfo-warp-changed(v); }
+                                                    lfo-slew-changed(v) => { root.mlp8-lfo-slew-changed(v); }
+                                                    lfo-retrigger-changed(v) => { root.mlp8-lfo-retrigger-changed(v); }
+                                                    route-source-changed(id, v) => { root.mlp8-route-source-changed(id, v); }
+                                                    route-dest-changed(id, v) => { root.mlp8-route-dest-changed(id, v); }
+                                                    route-amount-changed(id, v) => { root.mlp8-route-amount-changed(id, v); }
+                                                    route-removed(id) => { root.mlp8-route-removed(id); }
+                                                    route-added() => { root.mlp8-route-added(); }
                                                     osc1-wave <=> root.mlp8-osc1-wave; osc1-semitones <=> root.mlp8-osc1-semitones; osc1-cents <=> root.mlp8-osc1-cents; osc1-level <=> root.mlp8-osc1-level; osc1-pulse-width <=> root.mlp8-osc1-pulse-width;
                                                     osc2-wave <=> root.mlp8-osc2-wave; osc2-semitones <=> root.mlp8-osc2-semitones; osc2-cents <=> root.mlp8-osc2-cents; osc2-level <=> root.mlp8-osc2-level; osc2-pulse-width <=> root.mlp8-osc2-pulse-width;
                                                     osc3-wave <=> root.mlp8-osc3-wave; osc3-semitones <=> root.mlp8-osc3-semitones; osc3-cents <=> root.mlp8-osc3-cents; osc3-level <=> root.mlp8-osc3-level; osc3-pulse-width <=> root.mlp8-osc3-pulse-width;

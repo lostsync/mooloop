@@ -5,6 +5,13 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+# Compiles Slint's embedded MCP server into the binary and makes `build.rs`
+# emit element debug info, so an agent can inspect and drive the running
+# application. Off by default and never enabled by a release build; see
+# `docs/AGENT_OPERATIONS.md`.
+mcp = ["slint/mcp"]
+
 [dependencies]
 mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
