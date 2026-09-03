@@ -56,16 +56,29 @@
 //!   phase across a level move.
 
 use crate::bus::StereoBus;
-use crate::env::ExpDecay;
+use crate::env::{Ahd, AhdShape};
 use crate::event::{Event, EventList};
 use crate::filter::{soft_ceiling, Svf};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{Noise, Osc};
 use crate::smooth::Smoothed;
 use mooloop_core::{
-    ds01, Ds01NoiseColor, Ds01Params, Ds01Retrigger, OscWave, DS01_MAX_PARTIALS, DS01_VOICES,
-    MAX_CHOKE_GROUP,
+    ds01, Ds01EnvParams, Ds01NoiseColor, Ds01Params, Ds01Retrigger, OscWave, DS01_MAX_PARTIALS,
+    DS01_VOICES, MAX_CHOKE_GROUP,
 };
+
+/// One DS-01 envelope block as the shared envelope's shape.
+fn ahd_shape(env: &Ds01EnvParams) -> AhdShape {
+    AhdShape {
+        attack_s: env.attack,
+        hold_s: env.hold,
+        decay_s: env.decay,
+        curve: env.curve,
+        sustain: env.sustain,
+        release_s: env.release,
+        gate: env.gate,
+    }
+}
 
 /// The voice's absolute output reference, provisional until step 06 settles
 /// the gain contract and the shape stage that goes with it.
@@ -299,9 +312,23 @@ struct Voice {
     active: bool,
     age: u64,
     seed: u32,
+    /// The note event this hit belongs to, so a note-off reaches the voice it
+    /// started rather than every voice playing the same note.
+    event_id: u64,
+    /// Whether this hit is still waiting on a note-off. True only while a
+    /// gated envelope is running, and it is what keeps a written ride from
+    /// being stolen halfway through the note that asked for it.
+    gate_held: bool,
     latched: Latched,
-    amp_env: ExpDecay,
-    pitch_env: ExpDecay,
+    amp_env: Ahd,
+    pitch_env: Ahd,
+    /// The noise layer's own contour, so a snare's rattle can outlive its
+    /// shell tone or stop before it.
+    noise_env: Ahd,
+    /// The one with no other job. Step 07 publishes it as a matrix source;
+    /// it runs now so that when it does, its history is the same one the
+    /// other three have had.
+    mod_env: Ahd,
     /// One oscillator per partial. Unused partials are never stepped.
     tone: [Osc; DS01_MAX_PARTIALS as usize],
     fm: Osc,
@@ -319,9 +346,13 @@ impl Voice {
             active: false,
             age: 0,
             seed,
+            event_id: 0,
+            gate_held: false,
             latched: Latched::default(),
-            amp_env: ExpDecay::new(),
-            pitch_env: ExpDecay::new(),
+            amp_env: Ahd::new(),
+            pitch_env: Ahd::new(),
+            noise_env: Ahd::new(),
+            mod_env: Ahd::new(),
             tone: [Osc::new(); DS01_MAX_PARTIALS as usize],
             fm: Osc::new(),
             noise: NoiseSource::new(seed),
@@ -334,9 +365,13 @@ impl Voice {
     fn reset(&mut self) {
         self.active = false;
         self.age = 0;
+        self.event_id = 0;
+        self.gate_held = false;
         self.latched = Latched::default();
-        self.amp_env = ExpDecay::new();
-        self.pitch_env = ExpDecay::new();
+        self.amp_env.reset();
+        self.pitch_env.reset();
+        self.noise_env.reset();
+        self.mod_env.reset();
         for osc in &mut self.tone {
             osc.reset();
         }
@@ -349,7 +384,14 @@ impl Voice {
 
     /// Start a hit. Every value this reads from `params` is in [`Latched`];
     /// nothing continuous is captured here.
-    fn trigger(&mut self, params: &Ds01Params, note: u8, velocity: u8, sample_rate: u32) {
+    fn trigger(
+        &mut self,
+        params: &Ds01Params,
+        event_id: u64,
+        note: u8,
+        velocity: u8,
+        sample_rate: u32,
+    ) {
         let semitones = f32::from(note.min(127)) - 60.0 + params.tune.clamp(-48.0, 48.0);
         let velocity_unit = f32::from(velocity) / 127.0;
         let amount = params.velocity_amount.clamp(0.0, 1.0);
@@ -359,20 +401,45 @@ impl Voice {
             // loud, at 1 it follows the note as played. v1 could only do the
             // latter.
             velocity_amp: 1.0 - amount + amount * velocity_unit,
-            pitch_depth: params.pitch_depth.clamp(-60.0, 60.0),
+            pitch_depth: params.pitch.depth.clamp(-60.0, 60.0),
             partials: params.tone_partials.clamp(1, DS01_MAX_PARTIALS),
         };
         self.active = true;
+        self.event_id = event_id;
+        self.gate_held =
+            params.amp.gate || params.noise_env.gate || params.mod_env.gate;
         for osc in &mut self.tone {
             osc.reset();
         }
         self.fm.reset();
         self.filter.reset();
         self.hold_phase = 1.0;
-        self.amp_env.set_time(params.amp_decay, sample_rate);
-        self.amp_env.trigger();
-        self.pitch_env.set_time(params.pitch_decay, sample_rate);
-        self.pitch_env.trigger();
+        self.amp_env.trigger(ahd_shape(&params.amp), sample_rate);
+        self.noise_env.trigger(ahd_shape(&params.noise_env), sample_rate);
+        self.mod_env.trigger(ahd_shape(&params.mod_env), sample_rate);
+        // The pitch envelope has no gate half, so hold, sustain and release
+        // are not controls it has rather than controls it ignores.
+        self.pitch_env.trigger(
+            AhdShape {
+                attack_s: params.pitch.attack,
+                hold_s: 0.0,
+                decay_s: params.pitch.decay,
+                curve: params.pitch.curve,
+                sustain: 0.0,
+                release_s: 0.0,
+                gate: false,
+            },
+            sample_rate,
+        );
+    }
+
+    /// Note-off. Only the gated envelopes hear it; a one-shot envelope in the
+    /// same patch keeps ignoring it, which is what keeps a drum a drum.
+    fn note_off(&mut self) {
+        self.amp_env.release();
+        self.noise_env.release();
+        self.mod_env.release();
+        self.gate_held = false;
     }
 
     /// Fade this hit out over `seconds`, as a release on the amplitude
@@ -382,7 +449,10 @@ impl Voice {
         if !self.active {
             return;
         }
-        self.amp_env.set_time(seconds.max(0.001), sample_rate);
+        // The VCA is what a choke has to move, so it is the only envelope
+        // this touches: the other three are inside it.
+        self.amp_env.release_over(seconds, sample_rate);
+        self.gate_held = false;
     }
 
     /// One sample of this voice, pre-level. Mono by design; the channel strip
@@ -394,12 +464,17 @@ impl Voice {
         noise_level: f32,
         sample_rate: u32,
     ) -> f32 {
-        self.amp_env.advance();
-        self.pitch_env.advance();
+        let amp = self.amp_env.tick();
+        let pitch = self.pitch_env.tick();
+        let noise_contour = self.noise_env.tick();
+        // Reaches nothing until step 07 routes it. Running it now is what
+        // makes it the same envelope by then, rather than one that starts
+        // its life already special-cased.
+        self.mod_env.tick();
 
         let swept = c.tone_pitch
             * self.latched.pitch_factor
-            * 2.0_f32.powf(self.latched.pitch_depth * self.pitch_env.level() / 12.0);
+            * 2.0_f32.powf(self.latched.pitch_depth * pitch / 12.0);
 
         // Both layers run whatever their level is. A layer at zero is a mix
         // decision and not a mode: it keeps its phase, so a level returning
@@ -414,8 +489,8 @@ impl Voice {
         // several times full scale, which is what this catches. The device
         // bound below is a different job and is sized differently.
         soft_ceiling(
-            (tone * tone_level + noise * noise_level)
-                * self.amp_env.level()
+            (tone * tone_level + noise * noise_contour * noise_level)
+                * amp
                 * self.latched.velocity_amp,
         )
     }
@@ -570,19 +645,29 @@ impl Ds01 {
         }
     }
 
+    /// A free slot, then the oldest hit that is not being held open, and only
+    /// then the oldest hit at all.
+    ///
+    /// The middle rule is what step 03's gate mode costs: a ride written to
+    /// ring for two bars must not be taken by the hat pattern underneath it.
+    /// It gives way when the pool is genuinely exhausted, because a device
+    /// that refuses to play a note is worse than one that cuts a tail.
     fn select_voice(&self) -> usize {
         if let Some(index) = self.voices.iter().position(|voice| !voice.active) {
             return index;
         }
-        self.voices
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, voice)| voice.age)
-            .map(|(index, _)| index)
-            .unwrap_or(0)
+        let oldest = |held: bool| {
+            self.voices
+                .iter()
+                .enumerate()
+                .filter(|(_, voice)| voice.gate_held == held)
+                .min_by_key(|(_, voice)| voice.age)
+                .map(|(index, _)| index)
+        };
+        oldest(false).or_else(|| oldest(true)).unwrap_or(0)
     }
 
-    fn trigger(&mut self, note: u8, velocity: u8) {
+    fn trigger(&mut self, event_id: u64, note: u8, velocity: u8) {
         // Mono retrigger chokes what this channel is already playing before
         // it allocates, which is what a real 808 does and what a fast hat
         // pattern usually wants. Poly is v1's behaviour and stays the
@@ -597,7 +682,19 @@ impl Ds01 {
         let sr = self.sample_rate;
         let voice = &mut self.voices[index];
         voice.age = age;
-        voice.trigger(&params, note, velocity, sr);
+        voice.trigger(&params, event_id, note, velocity, sr);
+    }
+
+    /// Route a note-off to the hit it started. Voices whose envelopes are all
+    /// one-shot ignore it, which is v1's behaviour and stays the default.
+    fn note_off(&mut self, event_id: u64) {
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|voice| voice.active && voice.event_id == event_id)
+        {
+            voice.note_off();
+        }
     }
 
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
@@ -635,6 +732,7 @@ impl Ds01 {
                 sum += voice.render_sample(&continuous, tone_level, noise_level, sr);
                 if voice.amp_env.is_idle() {
                     voice.active = false;
+                    voice.gate_held = false;
                 }
             }
             let sample = device_bound(sum * level * VOICE_OUTPUT_REFERENCE);
@@ -655,7 +753,7 @@ impl Ds01 {
         let frames = (PREVIEW_SAMPLE_RATE as f32 * PREVIEW_SECONDS) as usize;
 
         let mut node = Self::new(params, PREVIEW_SAMPLE_RATE);
-        node.trigger(60, 127);
+        node.trigger(0, 60, 127);
         let mut bus = StereoBus::with_capacity(frames);
         node.render_range(&mut bus, 0, frames);
 
@@ -704,10 +802,8 @@ impl AudioNode for Ds01 {
             let offset = (ev.offset as usize).min(frames).max(pos);
             self.render_range(bus, pos, offset);
             match ev.event {
-                Event::NoteOn { note, velocity, .. } => self.trigger(note, velocity),
-                // One-shot for now. Step 03's gated envelopes are what give
-                // note-off a meaning here.
-                Event::NoteOff { .. } => {}
+                Event::NoteOn { id, note, velocity } => self.trigger(id, note, velocity),
+                Event::NoteOff { id, .. } => self.note_off(id),
                 Event::Choke => self.choke(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
                 Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
@@ -723,6 +819,7 @@ mod tests {
     use super::*;
     use crate::event::TimedEvent;
     use mooloop_core::gain::{db_to_linear, GENERATOR_OUTPUT_REFERENCE_DBFS};
+    use mooloop_core::{Ds01EnvParams, Ds01PitchEnvParams};
 
     const SR: u32 = 48_000;
 
@@ -799,13 +896,19 @@ mod tests {
         use core::mem::size_of;
         // Six tone oscillators for the partial bank, an FM modulator, the
         // four noise generators' shared state, a state-variable filter, the
-        // rate reducer's held sample, two envelopes, and the latch.
-        assert_eq!(size_of::<Voice>(), 200);
+        // rate reducer's held sample, the latch, and the four envelopes.
+        // Step 03 nearly doubled this: an `Ahd` is 44 bytes against
+        // `ExpDecay`'s 8, and there are four of them where there were two.
+        // That is what a real envelope shape costs, and it is worth paying —
+        // v1's single rate law is the largest single reason its snare and its
+        // hat sound like the same instrument.
+        assert_eq!(size_of::<crate::env::Ahd>(), 44);
+        assert_eq!(size_of::<Voice>(), 368);
         // Eight of those, plus the parameter block and the three device-wide
         // smoothers that the layers share. The pool is 93% of the node.
-        assert_eq!(size_of::<Ds01Params>(), 76);
-        assert_eq!(size_of::<Ds01>(), 1_728);
-        assert_eq!(size_of::<Voice>() * DS01_VOICES, 1_600);
+        assert_eq!(size_of::<Ds01Params>(), 164);
+        assert_eq!(size_of::<Ds01>(), 3_160);
+        assert_eq!(size_of::<Voice>() * DS01_VOICES, 2_944);
     }
 
     #[test]
@@ -903,7 +1006,7 @@ mod tests {
             noise_level: 1.0,
             filter_morph: 0.0,
             filter_cutoff: 18_000.0,
-            amp_decay: 2.0,
+            amp: Ds01EnvParams::one_shot(2.0),
             ..Ds01Params::default()
         };
         let mut node = Ds01::new(params, SR);
@@ -927,8 +1030,11 @@ mod tests {
     #[test]
     fn a_parameter_event_reaches_the_note_on_at_the_same_offset() {
         let long = Ds01Params {
-            pitch_decay: 2.0,
-            amp_decay: 2.0,
+            pitch: Ds01PitchEnvParams {
+                decay: 2.0,
+                ..Ds01PitchEnvParams::default()
+            },
+            amp: Ds01EnvParams::one_shot(2.0),
             ..Ds01Params::default()
         };
         let pitch_of = |events: &EventList| {
@@ -1056,7 +1162,7 @@ mod tests {
                 filter_morph: 0.0,
                 filter_cutoff: 18_000.0,
                 filter_res: 0.0,
-                amp_decay: 4.0,
+                amp: Ds01EnvParams::one_shot(4.0),
                 ..Ds01Params::default()
             };
             rms(&hit(params, 24_000))
@@ -1096,6 +1202,258 @@ mod tests {
         assert!(soft(played) < loud(played) * 0.5);
     }
 
+    /// Attack must not cost the transient. At Attack 0 the hit is at full
+    /// amplitude on its first samples rather than one sample into a ramp.
+    ///
+    /// Measured on the noise layer, which is the one source with energy at
+    /// sample zero: both band-limited oscillator shapes start their cycle at
+    /// or near zero by construction, so a tone layer would be measuring
+    /// PolyBLEP rather than the envelope.
+    #[test]
+    fn a_zero_attack_does_not_soften_the_transient() {
+        let onset = |attack: f32| {
+            let params = Ds01Params {
+                tone_level: 0.0,
+                noise_level: 1.0,
+                filter_morph: 0.0,
+                filter_cutoff: 18_000.0,
+                amp: Ds01EnvParams {
+                    attack,
+                    ..Ds01EnvParams::one_shot(0.24)
+                },
+                ..Ds01Params::default()
+            };
+            let out = hit(params, 4_800);
+            (peak(&out[..8]), peak(&out))
+        };
+
+        let (instant_onset, instant_peak) = onset(0.0);
+        // The first eight samples already reach the loudest the hit gets:
+        // nothing softened them.
+        assert!(
+            instant_onset > instant_peak * 0.5,
+            "a zero attack opened at {instant_onset} against a peak of {instant_peak}"
+        );
+
+        // A ramp that was asked for is still a ramp: ten milliseconds in,
+        // eight samples is 1.6% of the way up.
+        let (ramped_onset, _) = onset(0.01);
+        assert!(
+            ramped_onset < instant_onset * 0.05,
+            "a 10 ms attack opened at {ramped_onset} against {instant_onset}"
+        );
+    }
+
+    /// A gated amplitude envelope rings for the length of a held note and
+    /// then releases. This is the ride cymbal, the held shaker and the
+    /// sustained noise wash — sounds v1 cannot make at all, because its
+    /// note-offs end nothing and its one envelope has no sustain.
+    #[test]
+    fn a_gated_amplitude_envelope_rings_for_the_length_of_a_held_note() {
+        let params = Ds01Params {
+            amp: Ds01EnvParams {
+                decay: 0.05,
+                sustain: 0.6,
+                release: 0.05,
+                gate: true,
+                ..Ds01EnvParams::one_shot(0.05)
+            },
+            ..Ds01Params::default()
+        };
+        let mut node = Ds01::new(params, SR);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60, 127));
+        let held = render(&mut node, SR as usize, &events);
+        // Still sounding a whole second after a hit whose decay is 50 ms.
+        assert!(rms(&held[40_000..]) > 0.01, "the held note stopped on its own");
+        assert!(node.voices.iter().any(|voice| voice.gate_held));
+
+        let mut off = EventList::empty();
+        off.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOff { id: 0, note: 60 },
+        });
+        render(&mut node, SR as usize, &off);
+        assert!(
+            node.voices.iter().all(|voice| !voice.active),
+            "the note-off did not release it"
+        );
+    }
+
+    /// The other half of the same rule: gate is per envelope, so a one-shot
+    /// envelope beside a gated one keeps ignoring note-off.
+    #[test]
+    fn a_one_shot_envelope_beside_a_gated_one_still_ignores_note_off() {
+        let params = Ds01Params {
+            // The noise layer is held; the amplitude envelope is not.
+            noise_level: 1.0,
+            noise_env: Ds01EnvParams {
+                sustain: 0.8,
+                gate: true,
+                ..Ds01EnvParams::one_shot(0.05)
+            },
+            amp: Ds01EnvParams::one_shot(2.0),
+            ..Ds01Params::default()
+        };
+        let mut node = Ds01::new(params, SR);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60, 127));
+        events.push(TimedEvent {
+            offset: 4_800,
+            event: Event::NoteOff { id: 0, note: 60 },
+        });
+        let out = render(&mut node, 24_000, &events);
+        // The amplitude envelope is a 2 s one-shot: the hit is still going
+        // long after the note-off that ended the noise layer.
+        assert!(rms(&out[12_000..]) > 0.001, "a one-shot envelope obeyed note-off");
+        assert!(node.voices.iter().any(|voice| voice.active));
+    }
+
+    /// A voice held open by a gated envelope is not free to steal — a ride
+    /// written to ring must survive the hat pattern underneath it — and it
+    /// gives way once the pool is genuinely exhausted, because a device that
+    /// refuses to play a note is worse than one that cuts a tail.
+    #[test]
+    fn a_held_voice_is_stolen_only_when_the_pool_is_exhausted() {
+        let gated = Ds01Params {
+            amp: Ds01EnvParams {
+                sustain: 0.7,
+                gate: true,
+                ..Ds01EnvParams::one_shot(0.05)
+            },
+            ..Ds01Params::default()
+        };
+        let mut node = Ds01::new(gated, SR);
+        // One held hit, then seven one-shots that fill the rest of the pool.
+        node.trigger(1, 60, 127);
+        node.set_params(Ds01Params {
+            amp: Ds01EnvParams::one_shot(4.0),
+            ..Ds01Params::default()
+        });
+        for id in 2..=DS01_VOICES as u64 {
+            node.trigger(id, 60, 127);
+        }
+        assert!(node.voices.iter().all(|voice| voice.active));
+
+        // The pool is full and the held voice is the oldest. The next hits
+        // take the one-shots instead.
+        for id in 100..107 {
+            node.trigger(id, 60, 127);
+        }
+        assert!(
+            node.voices.iter().any(|voice| voice.event_id == 1),
+            "the held voice was stolen while the pool still had one-shots"
+        );
+
+        // Now every voice is held. It has to give way.
+        for voice in &mut node.voices {
+            voice.gate_held = true;
+        }
+        node.trigger(200, 60, 127);
+        assert!(
+            node.voices.iter().all(|voice| voice.event_id != 1),
+            "a full pool of held voices refused to play a note"
+        );
+    }
+
+    /// The noise envelope shapes the noise layer and nothing else, which is
+    /// what lets a snare's rattle outlive its shell tone or stop before it.
+    #[test]
+    fn the_noise_envelope_shapes_only_the_noise_layer() {
+        let tail = |noise_level: f32, decay: f32| {
+            let params = Ds01Params {
+                tone_level: 0.0,
+                noise_level,
+                noise_env: Ds01EnvParams::one_shot(decay),
+                amp: Ds01EnvParams::one_shot(2.0),
+                ..Ds01Params::default()
+            };
+            rms(&hit(params, 24_000)[12_000..])
+        };
+
+        // The rattle outlives the shell tone, or stops well before it: the
+        // amplitude envelope is a 2 s one-shot in both cases.
+        assert!(
+            tail(1.0, 2.0) > tail(1.0, 0.01) * 20.0,
+            "{} then {}",
+            tail(1.0, 0.01),
+            tail(1.0, 2.0)
+        );
+
+        // And with the layer silent it reaches nothing at all, which is the
+        // "only" half of the claim.
+        assert_eq!(
+            hit(
+                Ds01Params {
+                    noise_level: 0.0,
+                    noise_env: Ds01EnvParams::one_shot(0.01),
+                    ..Ds01Params::default()
+                },
+                12_000
+            ),
+            hit(
+                Ds01Params {
+                    noise_level: 0.0,
+                    noise_env: Ds01EnvParams::one_shot(2.0),
+                    ..Ds01Params::default()
+                },
+                12_000
+            )
+        );
+    }
+
+    /// Every envelope shape, over every layer, terminates and stays bounded.
+    /// The one exception is a gated envelope with a sustain, which is
+    /// supposed to wait — so it is tested with the note-off it is waiting for.
+    #[test]
+    fn every_envelope_shape_makes_sound_and_terminates() {
+        for attack in [0.0, 0.01, 0.5] {
+            for hold in [0.0, 0.05] {
+                for curve in [-1.0, 0.0, 1.0] {
+                    for gate in [false, true] {
+                        let env = Ds01EnvParams {
+                            attack,
+                            hold,
+                            decay: 0.1,
+                            curve,
+                            sustain: 0.5,
+                            release: 0.05,
+                            gate,
+                        };
+                        let params = Ds01Params {
+                            noise_level: 0.6,
+                            amp: env,
+                            noise_env: env,
+                            mod_env: env,
+                            ..Ds01Params::default()
+                        };
+                        let mut node = Ds01::new(params, SR);
+                        let mut events = EventList::empty();
+                        events.push(note_on(0, 60, 127));
+                        let out = render(&mut node, SR as usize, &events);
+                        assert!(out.iter().all(|s| s.is_finite()), "{env:?} went non-finite");
+                        assert!(peak(&out) <= 1.0, "{env:?} peaked at {}", peak(&out));
+                        assert!(peak(&out) > 0.01, "{env:?} made nothing");
+
+                        let mut off = EventList::empty();
+                        off.push(TimedEvent {
+                            offset: 0,
+                            event: Event::NoteOff { id: 0, note: 60 },
+                        });
+                        render(&mut node, SR as usize, &off);
+                        for _ in 0..2 {
+                            render(&mut node, SR as usize, &EventList::empty());
+                        }
+                        assert!(
+                            node.voices.iter().all(|voice| !voice.active),
+                            "{env:?} stranded a voice"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn note_off_does_not_stop_a_hit() {
         let mut node = Ds01::new(Ds01Params::default(), SR);
@@ -1129,7 +1487,7 @@ mod tests {
         let sounding = |retrigger: Ds01Retrigger| {
             let params = Ds01Params {
                 retrigger,
-                amp_decay: 2.0,
+                amp: Ds01EnvParams::one_shot(2.0),
                 ..Ds01Params::default()
             };
             let mut node = Ds01::new(params, SR);
@@ -1146,12 +1504,12 @@ mod tests {
     #[test]
     fn the_voice_pool_steals_the_oldest() {
         let params = Ds01Params {
-            amp_decay: 4.0,
+            amp: Ds01EnvParams::one_shot(4.0),
             ..Ds01Params::default()
         };
         let mut node = Ds01::new(params, SR);
         for _ in 0..DS01_VOICES + 4 {
-            node.trigger(60, 100);
+            node.trigger(0, 60, 100);
         }
         assert!(node.voices.iter().all(|voice| voice.active));
         let mut ages: Vec<u64> = node.voices.iter().map(|voice| voice.age).collect();

@@ -33,7 +33,8 @@ pub use automation::{
 };
 pub use bridge::{EngineCommand, EngineEvent};
 pub use ds01::{
-    Ds01NoiseColor, Ds01Params, Ds01Retrigger, DS01_MAX_PARTIALS, DS01_VOICES,
+    Ds01EnvParams, Ds01NoiseColor, Ds01Params, Ds01PitchEnvParams, Ds01Retrigger,
+    DS01_MAX_PARTIALS, DS01_VOICES,
 };
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};

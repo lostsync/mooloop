@@ -65,11 +65,32 @@ pub const PARAM_FILTER_MORPH: u32 = 23;
 pub const PARAM_FILTER_CUTOFF: u32 = 24;
 pub const PARAM_FILTER_RES: u32 = 25;
 
-/// The amplitude envelope's decay. Step 03 fills in 40, 41 and 43-46 around
-/// it; this id is the one the instrument cannot be heard without.
-pub const PARAM_AMP_DECAY: u32 = 42;
+// One envelope type used four times, so the offsets inside a block are named
+// once. The pitch envelope is the exception and has its own four ids: it has
+// no gate, so hold, sustain and release would be three controls that do
+// nothing, which is exactly what `01-what-ds01-is.md` forbids.
+pub const ENV_OFFSET_ATTACK: u32 = 0;
+pub const ENV_OFFSET_HOLD: u32 = 1;
+pub const ENV_OFFSET_DECAY: u32 = 2;
+pub const ENV_OFFSET_CURVE: u32 = 3;
+pub const ENV_OFFSET_SUSTAIN: u32 = 4;
+pub const ENV_OFFSET_RELEASE: u32 = 5;
+pub const ENV_OFFSET_GATE: u32 = 6;
 
+/// Controls in one gated envelope block.
+pub const ENV_BLOCK: u32 = 7;
+
+pub const PARAM_AMP_ENV_BASE: u32 = 40;
+pub const PARAM_NOISE_ENV_BASE: u32 = 60;
+pub const PARAM_MOD_ENV_BASE: u32 = 70;
+
+/// The amplitude envelope's decay. The id step 02 assigned before the
+/// envelope had a shape, and it keeps it.
+pub const PARAM_AMP_DECAY: u32 = PARAM_AMP_ENV_BASE + ENV_OFFSET_DECAY;
+
+pub const PARAM_PITCH_ATTACK: u32 = 50;
 pub const PARAM_PITCH_DECAY: u32 = 51;
+pub const PARAM_PITCH_CURVE: u32 = 52;
 pub const PARAM_PITCH_DEPTH: u32 = 53;
 
 /// Voice slots. Eight, shared with the v1 drum synth's pool, because a drum
@@ -202,6 +223,38 @@ const fn time_s(id: u32, name: &'static str, min: f32, max: f32, default: f32) -
     }
 }
 
+/// A segment that has to be able to be *zero*, and is therefore linear.
+///
+/// The plan asks for a log taper on Attack and Hold, and `ParamCurve` cannot
+/// give one that includes zero: [`ParamCurve::Exponential`] is a ratio sweep
+/// and its bottom is `min`, which must be positive. Of the two properties,
+/// zero is the one the plan calls non-negotiable — "a drum synth whose attack
+/// cannot be zero is broken" — so it wins, and the taper is left to the
+/// control surface, which is where a taper belongs anyway.
+const fn segment_s(id: u32, name: &'static str, max: f32) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "s",
+        min: 0.0,
+        max,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    }
+}
+
+const fn bipolar(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "",
+        min: -1.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default,
+    }
+}
+
 const fn semitones(
     id: u32,
     name: &'static str,
@@ -305,9 +358,49 @@ const NOISE_DESCRIPTORS: [ParamDescriptor; 6] = [
     unit(PARAM_FILTER_RES, "Reso", 0.1),
 ];
 
-const ENVELOPE_DESCRIPTORS: [ParamDescriptor; 3] = [
-    time_s(PARAM_AMP_DECAY, "Amp decay", 0.002, 4.0, 0.24),
+/// Longest attack or hold. Half a second is already past a drum and into a
+/// swell, which is the point: the top of the range is where the envelope
+/// stops being percussive.
+const SEGMENT_MAX_S: f32 = 0.5;
+
+/// One gated envelope's seven controls.
+///
+/// The same type four times over — three times here and once, without the
+/// gate half, as the pitch envelope. v1 had a single `ExpDecay`: no attack,
+/// no hold, no curve, one rate law. That is the largest single reason its
+/// snare and its hat differ mostly in noise content, and it is what this
+/// block replaces.
+const fn env_block(
+    base: u32,
+    names: [&'static str; ENV_BLOCK as usize],
+    decay_default: f32,
+) -> [ParamDescriptor; ENV_BLOCK as usize] {
+    [
+        segment_s(base + ENV_OFFSET_ATTACK, names[0], SEGMENT_MAX_S),
+        segment_s(base + ENV_OFFSET_HOLD, names[1], SEGMENT_MAX_S),
+        time_s(base + ENV_OFFSET_DECAY, names[2], 0.002, 8.0, decay_default),
+        // -1 logarithmic, 0 exponential (v1's law), +1 linear. One control
+        // shaping the normalized output rather than three integrators, so it
+        // is continuous across zero and costs one latched value a hit.
+        bipolar(base + ENV_OFFSET_CURVE, names[3], 0.0),
+        unit(base + ENV_OFFSET_SUSTAIN, names[4], 0.0),
+        time_s(base + ENV_OFFSET_RELEASE, names[5], 0.002, 4.0, 0.1),
+        stepped(base + ENV_OFFSET_GATE, names[6], 2, 0.0),
+    ]
+}
+
+/// The pitch envelope: attack, decay, curve, and a bipolar depth.
+///
+/// No gate, and therefore no hold, sustain or release. A pitch envelope that
+/// held its excursion for the length of a note would be a transposition, not
+/// a sweep, and the three controls it would take to say so would all be inert
+/// with the gate off.
+const PITCH_DESCRIPTORS: [ParamDescriptor; 4] = [
+    // Attack lets a pitch *rise* into the hit, which is the reverse-swell and
+    // the reversed tom.
+    segment_s(PARAM_PITCH_ATTACK, "Pitch attack", SEGMENT_MAX_S),
     time_s(PARAM_PITCH_DECAY, "Pitch decay", 0.001, 2.0, 0.045),
+    bipolar(PARAM_PITCH_CURVE, "Pitch curve", 0.0),
     // Bipolar and in semitones, which is the one place DS-01 refuses to copy
     // v1. v1 spells the kick sweep as a start frequency and an end frequency,
     // which is why its ranges could not be shared and why the sweep could not
@@ -317,40 +410,98 @@ const ENVELOPE_DESCRIPTORS: [ParamDescriptor; 3] = [
     semitones(PARAM_PITCH_DEPTH, "Pitch depth", -60.0, 60.0, 21.0),
 ];
 
-/// The complete DS-01 table for this step.
-pub static DESCRIPTORS: [ParamDescriptor; 22] = concat(
-    GLOBAL_DESCRIPTORS,
-    TONE_DESCRIPTORS,
-    NOISE_DESCRIPTORS,
-    ENVELOPE_DESCRIPTORS,
+const AMP_DESCRIPTORS: [ParamDescriptor; ENV_BLOCK as usize] = env_block(
+    PARAM_AMP_ENV_BASE,
+    [
+        "Amp attack",
+        "Amp hold",
+        "Amp decay",
+        "Amp curve",
+        "Amp sustain",
+        "Amp release",
+        "Amp gate",
+    ],
+    0.24,
 );
 
-const fn concat(
-    global: [ParamDescriptor; 6],
-    tone: [ParamDescriptor; 7],
-    noise: [ParamDescriptor; 6],
-    envelopes: [ParamDescriptor; 3],
-) -> [ParamDescriptor; 22] {
-    let mut out = [global[0]; 22];
+const NOISE_ENV_DESCRIPTORS: [ParamDescriptor; ENV_BLOCK as usize] = env_block(
+    PARAM_NOISE_ENV_BASE,
+    [
+        "Noise attack",
+        "Noise hold",
+        "Noise decay",
+        "Noise curve",
+        "Noise sustain",
+        "Noise release",
+        "Noise gate",
+    ],
+    0.12,
+);
+
+/// The one with no other job. Step 07 makes it a matrix source; until then it
+/// runs and reaches nothing, which is the honest state of a contour whose
+/// point is that it has no fixed destination.
+const MOD_ENV_DESCRIPTORS: [ParamDescriptor; ENV_BLOCK as usize] = env_block(
+    PARAM_MOD_ENV_BASE,
+    [
+        "Mod attack",
+        "Mod hold",
+        "Mod decay",
+        "Mod curve",
+        "Mod sustain",
+        "Mod release",
+        "Mod gate",
+    ],
+    0.3,
+);
+
+/// The complete DS-01 table for this step.
+pub static DESCRIPTORS: [ParamDescriptor; 44] = concat();
+
+const fn concat() -> [ParamDescriptor; 44] {
+    let mut out = [GLOBAL_DESCRIPTORS[0]; 44];
+    let mut at = 0;
     let mut i = 0;
-    while i < 6 {
-        out[i] = global[i];
+    while i < GLOBAL_DESCRIPTORS.len() {
+        out[at] = GLOBAL_DESCRIPTORS[i];
+        at += 1;
         i += 1;
     }
-    let mut j = 0;
-    while j < 7 {
-        out[6 + j] = tone[j];
-        j += 1;
+    i = 0;
+    while i < TONE_DESCRIPTORS.len() {
+        out[at] = TONE_DESCRIPTORS[i];
+        at += 1;
+        i += 1;
     }
-    let mut k = 0;
-    while k < 6 {
-        out[13 + k] = noise[k];
-        k += 1;
+    i = 0;
+    while i < NOISE_DESCRIPTORS.len() {
+        out[at] = NOISE_DESCRIPTORS[i];
+        at += 1;
+        i += 1;
     }
-    let mut l = 0;
-    while l < 3 {
-        out[19 + l] = envelopes[l];
-        l += 1;
+    i = 0;
+    while i < AMP_DESCRIPTORS.len() {
+        out[at] = AMP_DESCRIPTORS[i];
+        at += 1;
+        i += 1;
+    }
+    i = 0;
+    while i < PITCH_DESCRIPTORS.len() {
+        out[at] = PITCH_DESCRIPTORS[i];
+        at += 1;
+        i += 1;
+    }
+    i = 0;
+    while i < NOISE_ENV_DESCRIPTORS.len() {
+        out[at] = NOISE_ENV_DESCRIPTORS[i];
+        at += 1;
+        i += 1;
+    }
+    i = 0;
+    while i < MOD_ENV_DESCRIPTORS.len() {
+        out[at] = MOD_ENV_DESCRIPTORS[i];
+        at += 1;
+        i += 1;
     }
     out
 }
@@ -358,6 +509,122 @@ const fn concat(
 /// This device's descriptor for `id`, if it has one.
 pub fn descriptor(id: u32) -> Option<&'static ParamDescriptor> {
     DESCRIPTORS.iter().find(|descriptor| descriptor.id == id)
+}
+
+/// One gated attack-hold-decay envelope.
+///
+/// ```text
+///           +---- hold ----+
+///          /|              |\
+///         / |              | \___ decay (curve)
+///   attack                       \_____
+///
+///   gate on:  ... decay falls to sustain, then release at note-off
+/// ```
+///
+/// Every field here is latched at the hit per `01-what-ds01-is.md`: changing
+/// a running envelope's rate steps its output. Because each hit re-latches,
+/// an LFO on a decay time produces a pattern whose hits differ from one
+/// another, which is the musically useful reading.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Ds01EnvParams {
+    /// Seconds to full level. `0` means the first sample is the peak, with no
+    /// ramp and no smoothing — a drum synth whose attack cannot be zero is
+    /// broken.
+    pub attack: f32,
+    /// Seconds flat at the peak. The 909 clap tail and the gated snare.
+    pub hold: f32,
+    pub decay: f32,
+    /// `-1` logarithmic, `0` exponential (v1's law), `+1` linear.
+    pub curve: f32,
+    /// Level the decay falls to while a note is held. Only meaningful with
+    /// [`Self::gate`] on.
+    pub sustain: f32,
+    /// Seconds from the held level to silence at note-off. Only meaningful
+    /// with [`Self::gate`] on.
+    pub release: f32,
+    /// Off is one-shot, matching v1: note-offs end nothing and a hit runs to
+    /// silence. On is what makes a ride that rings for as long as it is
+    /// written, a held shaker, and a sustained noise wash — sounds v1 cannot
+    /// make at all.
+    pub gate: bool,
+}
+
+impl Ds01EnvParams {
+    pub const fn one_shot(decay: f32) -> Self {
+        Self {
+            attack: 0.0,
+            hold: 0.0,
+            decay,
+            curve: 0.0,
+            sustain: 0.0,
+            release: 0.1,
+            gate: false,
+        }
+    }
+}
+
+impl Default for Ds01EnvParams {
+    fn default() -> Self {
+        Self::one_shot(0.24)
+    }
+}
+
+/// The pitch envelope: the same shape, without the gate half.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Ds01PitchEnvParams {
+    pub attack: f32,
+    pub decay: f32,
+    pub curve: f32,
+    /// Bipolar excursion in semitones, around the tone pitch.
+    pub depth: f32,
+}
+
+impl Default for Ds01PitchEnvParams {
+    fn default() -> Self {
+        Self {
+            attack: 0.0,
+            decay: 0.045,
+            curve: 0.0,
+            depth: 21.0,
+        }
+    }
+}
+
+/// Read one control out of a gated envelope block by its offset.
+fn env_get(env: &Ds01EnvParams, offset: u32) -> Option<f32> {
+    Some(match offset {
+        ENV_OFFSET_ATTACK => env.attack,
+        ENV_OFFSET_HOLD => env.hold,
+        ENV_OFFSET_DECAY => env.decay,
+        ENV_OFFSET_CURVE => env.curve,
+        ENV_OFFSET_SUSTAIN => env.sustain,
+        ENV_OFFSET_RELEASE => env.release,
+        ENV_OFFSET_GATE => f32::from(u8::from(env.gate)),
+        _ => return None,
+    })
+}
+
+fn env_set(env: &mut Ds01EnvParams, offset: u32, value: f32) -> bool {
+    match offset {
+        ENV_OFFSET_ATTACK => env.attack = value,
+        ENV_OFFSET_HOLD => env.hold = value,
+        ENV_OFFSET_DECAY => env.decay = value,
+        ENV_OFFSET_CURVE => env.curve = value,
+        ENV_OFFSET_SUSTAIN => env.sustain = value,
+        ENV_OFFSET_RELEASE => env.release = value,
+        ENV_OFFSET_GATE => env.gate = value.round() > 0.0,
+        _ => return false,
+    }
+    true
+}
+
+/// Split an id into its offset inside the envelope block starting at `base`.
+fn env_slot(id: u32, base: u32) -> Option<u32> {
+    let offset = id.checked_sub(base)?;
+    (offset < ENV_BLOCK).then_some(offset)
 }
 
 // --- The parameter set -----------------------------------------------------
@@ -416,13 +683,16 @@ pub struct Ds01Params {
     pub filter_res: f32,
 
     // --- Envelopes ------------------------------------------------------
-    /// Amplitude decay (seconds). Step 03 gives it attack, hold, curve and a
-    /// gate; this is the segment that makes the device audible.
-    pub amp_decay: f32,
-    /// Pitch envelope decay (seconds).
-    pub pitch_decay: f32,
-    /// Bipolar pitch excursion in semitones, around the tone pitch.
-    pub pitch_depth: f32,
+    /// The VCA, always.
+    pub amp: Ds01EnvParams,
+    /// Tone pitch, by a bipolar depth in semitones.
+    pub pitch: Ds01PitchEnvParams,
+    /// The noise layer's own level.
+    pub noise_env: Ds01EnvParams,
+    /// Nothing, by default. A matrix source in step 07, and the difference
+    /// between a hit with one shape and a hit with layers that move against
+    /// each other.
+    pub mod_env: Ds01EnvParams,
 }
 
 impl Default for Ds01Params {
@@ -447,15 +717,25 @@ impl Default for Ds01Params {
             filter_morph: 1.0,
             filter_cutoff: 7_500.0,
             filter_res: 0.1,
-            amp_decay: 0.24,
-            pitch_decay: 0.045,
-            pitch_depth: 21.0,
+            amp: Ds01EnvParams::one_shot(0.24),
+            pitch: Ds01PitchEnvParams::default(),
+            noise_env: Ds01EnvParams::one_shot(0.12),
+            mod_env: Ds01EnvParams::one_shot(0.3),
         }
     }
 }
 
 /// Read one parameter in natural units by wire id.
 pub fn get(p: &Ds01Params, id: u32) -> Option<f32> {
+    if let Some(offset) = env_slot(id, PARAM_AMP_ENV_BASE) {
+        return env_get(&p.amp, offset);
+    }
+    if let Some(offset) = env_slot(id, PARAM_NOISE_ENV_BASE) {
+        return env_get(&p.noise_env, offset);
+    }
+    if let Some(offset) = env_slot(id, PARAM_MOD_ENV_BASE) {
+        return env_get(&p.mod_env, offset);
+    }
     Some(match id {
         PARAM_TUNE => p.tune,
         PARAM_LEVEL => p.level,
@@ -476,9 +756,10 @@ pub fn get(p: &Ds01Params, id: u32) -> Option<f32> {
         PARAM_FILTER_MORPH => p.filter_morph,
         PARAM_FILTER_CUTOFF => p.filter_cutoff,
         PARAM_FILTER_RES => p.filter_res,
-        PARAM_AMP_DECAY => p.amp_decay,
-        PARAM_PITCH_DECAY => p.pitch_decay,
-        PARAM_PITCH_DEPTH => p.pitch_depth,
+        PARAM_PITCH_ATTACK => p.pitch.attack,
+        PARAM_PITCH_DECAY => p.pitch.decay,
+        PARAM_PITCH_CURVE => p.pitch.curve,
+        PARAM_PITCH_DEPTH => p.pitch.depth,
         _ => return None,
     })
 }
@@ -486,6 +767,15 @@ pub fn get(p: &Ds01Params, id: u32) -> Option<f32> {
 /// Write one parameter in natural units by wire id. The caller has already
 /// clamped `value` through the descriptor.
 pub fn set(p: &mut Ds01Params, id: u32, value: f32) -> bool {
+    if let Some(offset) = env_slot(id, PARAM_AMP_ENV_BASE) {
+        return env_set(&mut p.amp, offset, value);
+    }
+    if let Some(offset) = env_slot(id, PARAM_NOISE_ENV_BASE) {
+        return env_set(&mut p.noise_env, offset, value);
+    }
+    if let Some(offset) = env_slot(id, PARAM_MOD_ENV_BASE) {
+        return env_set(&mut p.mod_env, offset, value);
+    }
     match id {
         PARAM_TUNE => p.tune = value,
         PARAM_LEVEL => p.level = value,
@@ -508,9 +798,10 @@ pub fn set(p: &mut Ds01Params, id: u32, value: f32) -> bool {
         PARAM_FILTER_MORPH => p.filter_morph = value,
         PARAM_FILTER_CUTOFF => p.filter_cutoff = value,
         PARAM_FILTER_RES => p.filter_res = value,
-        PARAM_AMP_DECAY => p.amp_decay = value,
-        PARAM_PITCH_DECAY => p.pitch_decay = value,
-        PARAM_PITCH_DEPTH => p.pitch_depth = value,
+        PARAM_PITCH_ATTACK => p.pitch.attack = value,
+        PARAM_PITCH_DECAY => p.pitch.decay = value,
+        PARAM_PITCH_CURVE => p.pitch.curve = value,
+        PARAM_PITCH_DEPTH => p.pitch.depth = value,
         _ => return false,
     }
     true
@@ -529,19 +820,64 @@ mod tests {
         }
     }
 
-    /// This step owns 0-9, 10-19, 20-29, and exactly three ids inside the two
-    /// envelope bands. Anything else would be spending a later step's
-    /// reservation.
+    /// Steps 02 and 03 own 0-29 and the four envelope bands. 30-39 is the
+    /// body resonator, 80 onward is the burst, the shaper and the matrix;
+    /// reaching into either would be spending a later step's reservation.
     #[test]
-    fn every_id_lands_in_a_band_this_step_owns() {
+    fn every_id_lands_in_a_band_these_steps_own() {
         for d in &DESCRIPTORS {
-            let owned = d.id < 30
-                || d.id == PARAM_AMP_DECAY
-                || d.id == PARAM_PITCH_DECAY
-                || d.id == PARAM_PITCH_DEPTH;
-            assert!(owned, "{} ({}) is outside step 02's bands", d.id, d.name);
+            let owned = d.id < 30 || (40..80).contains(&d.id);
+            assert!(owned, "{} ({}) is outside steps 02-03's bands", d.id, d.name);
+            assert!(
+                !(54..60).contains(&d.id),
+                "{} ({}) sits in the pitch band's unused tail",
+                d.id,
+                d.name
+            );
         }
-        assert_eq!(DESCRIPTORS.len(), 22);
+        assert_eq!(DESCRIPTORS.len(), 44);
+    }
+
+    /// The four envelopes are one type used four times, so their blocks have
+    /// to line up: same offsets, same ranges, same curves. A block that
+    /// drifted would be a second envelope design nobody decided on.
+    #[test]
+    fn the_three_gated_envelopes_are_the_same_block() {
+        let offsets_of = |base: u32| {
+            (0..ENV_BLOCK)
+                .map(|offset| {
+                    let d = descriptor(base + offset).expect("every offset has a descriptor");
+                    (d.unit, d.min, d.max, d.curve)
+                })
+                .collect::<Vec<_>>()
+        };
+        let amp = offsets_of(PARAM_AMP_ENV_BASE);
+        assert_eq!(amp, offsets_of(PARAM_NOISE_ENV_BASE));
+        assert_eq!(amp, offsets_of(PARAM_MOD_ENV_BASE));
+    }
+
+    /// The pitch envelope deliberately has no gate, and therefore no hold,
+    /// sustain or release: with the gate off they would be three controls
+    /// that do nothing, which is what this instrument exists not to have.
+    #[test]
+    fn the_pitch_envelope_has_no_gate_half() {
+        for id in [
+            PARAM_PITCH_ATTACK + 1,
+            PARAM_PITCH_DEPTH + 1,
+            PARAM_PITCH_DEPTH + 2,
+        ] {
+            if id == PARAM_PITCH_DECAY || id == PARAM_PITCH_CURVE {
+                continue;
+            }
+            assert!(descriptor(id).is_none(), "id {id} exists");
+        }
+        assert_eq!(
+            DESCRIPTORS
+                .iter()
+                .filter(|d| (50..60).contains(&d.id))
+                .count(),
+            4
+        );
     }
 
     #[test]
@@ -591,6 +927,9 @@ mod tests {
                 PARAM_RETRIGGER,
                 PARAM_TONE_PARTIALS,
                 PARAM_NOISE_COLOR,
+                PARAM_AMP_ENV_BASE + ENV_OFFSET_GATE,
+                PARAM_NOISE_ENV_BASE + ENV_OFFSET_GATE,
+                PARAM_MOD_ENV_BASE + ENV_OFFSET_GATE,
             ]
         );
     }
@@ -599,8 +938,9 @@ mod tests {
     fn an_id_this_step_has_not_assigned_is_neither_read_nor_written() {
         let mut params = Ds01Params::default();
         // 6 is inside the global band but unassigned; 30 belongs to the body
-        // resonator in step 04; 40 to the amplitude envelope in step 03.
-        for id in [6, 30, 40, 100] {
+        // resonator in step 04, 47 to the tail of the amplitude block, 54 to
+        // the tail of the pitch one, and 80 to the burst in step 05.
+        for id in [6, 30, 47, 54, 80] {
             assert_eq!(get(&params, id), None, "id {id} reads");
             assert!(!set(&mut params, id, 1.0), "id {id} writes");
         }

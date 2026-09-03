@@ -1,14 +1,23 @@
 # DS-01 plan status
 
-**Step 02 is in.** The device exists and plays: a new `Ds01` generator kind
+**Steps 02 and 03 are in.** The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
 state-variable filter, the amplitude and pitch envelopes, and the voice pool
 with choke and a Mono retrigger mode. Every one of its parameters is
 descriptor-addressed from the first commit, which is the reason the instrument
-exists. Read `01-what-ds01-is.md`, then work `03` through `09` in order.
+exists.
 
-Four things the doing turned up that the plan could not have known:
+Step 03 replaced its two `ExpDecay`s with four real envelopes: one AHD type
+with a curve and an optional gate, used for the amplitude, the noise layer and
+the mod contour, and once more without its gate half for the pitch. Curve is
+the control that earns the step — logarithmic at -1, v1's exponential law at 0,
+linear at +1 — and gate mode is what makes a ride that rings for as long as it
+is written, sounds v1 cannot make at all.
+
+Read `01-what-ds01-is.md`, then work `04` through `09` in order.
+
+Four things step 02 turned up that the plan could not have known:
 
 - **The event-ordering rule already held, and held on purpose.**
   `EventList::push_ordered` has sorted note-offs, then parameter changes, then
@@ -44,7 +53,32 @@ Four things the doing turned up that the plan could not have known:
   note itself, and the continuous pitch controls a route wants are Tone Pitch
   and Pitch Depth. The curve gives the right answer for the right reason.
 
-The device face is **not** part of step 02. DS-01 is selectable, playable,
+And five from step 03:
+
+- **Attack and Hold are linear, not log.** `ParamCurve::Exponential` is a
+  ratio sweep whose bottom is `min`, so it cannot include zero, and zero is the
+  property the step calls non-negotiable — "a drum synth whose attack cannot be
+  zero is broken". Of the two, zero wins; the taper is left to the control
+  surface, which is where a taper belongs. Adding a fourth curve variant would
+  change how every device in the program normalizes, for one control.
+- **Amp Decay's range moved from step 02's 4 s to the envelope type's 8 s.**
+  Its id is unchanged. Step 03 states one range for the decay of one envelope
+  type, and having the amplitude one be the odd 4 s would mean the three gated
+  blocks were not literally the same block. Nothing had saved a project.
+- **The envelope lives in `env.rs`, not in `ds01.rs`.** It is an envelope, and
+  that file is where the shared ones are. `AhdShape` is its own small type
+  rather than `Ds01EnvParams` so the primitive does not know about the device.
+- **The flat top is Hold plus one sample.** The decay's own first sample is the
+  peak, which is the same property that makes a zero attack cost the transient
+  nothing. Worth stating because it is the kind of off-by-one a later reader
+  would otherwise "fix".
+- **The pitch envelope has no gate half at all** — no hold, sustain, release or
+  gate ids, only 50-53. With the gate off they would be four controls that do
+  nothing, which is exactly what `01-what-ds01-is.md` forbids, and a pitch
+  envelope that held its excursion for the length of a note is a transposition
+  rather than a sweep.
+
+The device face is **not** part of step 02 or 03. DS-01 is selectable, playable,
 automatable and modulatable without one — every parameter is
 descriptor-addressed, so the modulation shelf and the automation lanes reach it
 whether or not a knob exists — and the rack shows a placeholder saying so.
@@ -125,7 +159,7 @@ instrument. Hence DS-01.
 | Step | What it lands |
 | --- | --- |
 | `02-the-voice-and-the-descriptor-table.md` | **In.** The kind, the params, the ids, the tone and noise sources, and descriptor addressing on day one |
-| `03-the-envelopes.md` | Four AHD envelopes with curve and optional gate |
+| `03-the-envelopes.md` | **In.** Four AHD envelopes with curve and optional gate |
 | `04-the-body-resonator.md` | The tuned modal layer — toms, rims, bells, clangs |
 | `05-the-burst.md` | Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | Drive characters, the output stage, the gain contract |
