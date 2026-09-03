@@ -16,6 +16,7 @@ pub mod command;
 pub mod dialogs;
 pub mod document;
 pub mod effects;
+pub mod engine;
 pub mod history;
 pub mod mixer;
 pub mod modulation;
