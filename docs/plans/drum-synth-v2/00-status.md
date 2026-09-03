@@ -278,12 +278,13 @@ frames because every block boundary is a multiple of the control rate. That is
 true of every driver buffer size and of the offline renderer's chunking, but it
 is a condition rather than a guarantee.
 
-## The review pass
+## The review passes
 
-The device was built in one push, so it got a review afterwards. Seven
-defects, two of them silent and serious, all fixed in
-`fix(ds01): seven defects a review pass found`. Three are worth carrying
-forward as things to watch for rather than as history:
+The device was built in one push, so it got a review afterwards — and the face
+and the fixes got a second one, since a fix that moves an architecture is
+exactly where the next bug hides. Thirteen defects between them, all fixed.
+Four are worth carrying forward as things to watch for rather than as
+history:
 
 - **A per-hit destination has to be smoothed per hit.** A route to any of the
   four mix levels was inert, because the levels were smoothed on the device
@@ -299,6 +300,21 @@ forward as things to watch for rather than as history:
   drew the curve control backwards — the fastest decay where the envelope
   produces the slowest — because a power curve was standing in for
   `env::shape`. The real function is three lines.
+- **Two handles at the same value are one handle.** Only the later-declared
+  one can be grabbed, so Pitch Attack was uneditable — it has no knob
+  elsewhere — and every envelope's Attack was unreachable from the default
+  patch, where attack and hold are both zero. The pitch envelope's peak is now
+  one handle carrying both axes, since when its attack ends and how high it
+  got are the x and y of one corner; the rest are held a minimum distance
+  apart when they would coincide.
+
+The second pass also found three things that were offered but could not work:
+a matrix route to Body Level, because the skip that gated the layer read the
+very smoother it gated; and routes to Output HP and Choke Time, which belong
+to the device rather than to a hit and so have nothing per-voice to land on.
+Those two are out of the matrix's destination list now — a channel route still
+reaches them, which is the right level for a device-wide control — and
+`DS01_DESTINATIONS` is 47 rather than 49.
 
 ## What is blocked
 

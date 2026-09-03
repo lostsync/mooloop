@@ -268,6 +268,19 @@ component HitTrace inherits Rectangle {
     }
 }
 
+// The least a handle may be drawn from the one before it, as a fraction of
+// the scope.
+//
+// Two handles at the same value are two dots at the same point, and only the
+// one declared later can be grabbed — which is how Pitch Attack came to be
+// uneditable. An envelope's attack and hold are both zero in the default
+// patch, so this is the ordinary case rather than an edge one. The nudge is
+// a *drawing* minimum: the value it reports is still its own, and it only
+// ever applies where the segment is too short to see anyway.
+global HandleMetrics {
+    out property <float> min-gap: 0.045;
+}
+
 // A draggable envelope handle. Its presence is the claim that the scope is
 // where that envelope is *edited* rather than where it is shown, which is
 // what took the envelope times off the knob rows and what makes the device
@@ -282,9 +295,12 @@ component ScopeHandle inherits Rectangle {
     in property <length> span-width;
     in property <length> span-height;
     in property <color> tint: Theme.accent;
-    // Dragging left and right edits a time; dragging up and down edits a
-    // depth. No handle does both.
-    in property <bool> vertical;
+    // Dragging left and right edits `param`. A handle that also carries
+    // `vertical-param` edits that one up and down — which the pitch
+    // envelope's peak needs, because when its attack ends and how high it got
+    // are the x and the y of the same corner, and two dots at one point means
+    // the lower one cannot be grabbed.
+    in property <int> vertical-param: -1;
     callback dragged(int, float);
     callback edit-started(int);
     callback edit-finished(int);
@@ -304,7 +320,7 @@ component ScopeHandle inherits Rectangle {
         y: -4px;
         width: 17px;
         height: 17px;
-        mouse-cursor: root.vertical ? MouseCursor.ns-resize : MouseCursor.ew-resize;
+        mouse-cursor: root.vertical-param >= 0 ? MouseCursor.move : MouseCursor.ew-resize;
         pointer-event(event) => {
             if (event.button == PointerEventButton.left) {
                 if (event.kind == PointerEventKind.down) { root.edit-started(root.param); }
@@ -313,13 +329,12 @@ component ScopeHandle inherits Rectangle {
         }
         moved => {
             if (self.pressed) {
-                if (root.vertical) {
-                    root.dragged(root.param, clamp(
+                root.dragged(root.param, clamp(
+                    (root.x + 4px + self.mouse-x - self.pressed-x) / root.span-width,
+                    0, 1));
+                if (root.vertical-param >= 0) {
+                    root.dragged(root.vertical-param, clamp(
                         1 - (root.y + 4px + self.mouse-y - self.pressed-y) / root.span-height,
-                        0, 1));
-                } else {
-                    root.dragged(root.param, clamp(
-                        (root.x + 4px + self.mouse-x - self.pressed-x) / root.span-width,
                         0, 1));
                 }
             }
@@ -689,7 +704,11 @@ export component Ds01DeviceFace inherits Rectangle {
                         // this layer, but it is edited in its own column.
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
-                            param: 50; at-x: root.contours[1].attack; at-y: 1 - root.contours[1].height; tint: Theme.warning;
+                            // The pitch envelope's peak: when its attack ends
+                            // and how far it went, which are one corner.
+                            param: 50; vertical-param: 53;
+                            at-x: root.contours[1].attack; at-y: 1 - root.contours[1].height;
+                            tint: Theme.warning;
                             dragged(p, f) => { root.handle-dragged(p, f); }
                             edit-started(p) => { root.edit-started(p); }
                             edit-finished(p) => { root.edit-finished(p); }
@@ -697,14 +716,6 @@ export component Ds01DeviceFace inherits Rectangle {
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
                             param: 51; at-x: root.contours[1].attack + root.contours[1].decay; at-y: 1.0; tint: Theme.warning;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 53; at-x: root.contours[1].attack; at-y: 1 - root.contours[1].height; tint: Theme.warning;
-                            vertical: true;
                             dragged(p, f) => { root.handle-dragged(p, f); }
                             edit-started(p) => { root.edit-started(p); }
                             edit-finished(p) => { root.edit-finished(p); }
@@ -861,14 +872,17 @@ export component Ds01DeviceFace inherits Rectangle {
                         }
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
-                            param: 60; at-x: 0.0; at-y: 1.0; tint: #6ea8d8;
+                            param: 60; at-x: root.contours[2].attack; at-y: 0.0; tint: #6ea8d8;
                             dragged(p, f) => { root.handle-dragged(p, f); }
                             edit-started(p) => { root.edit-started(p); }
                             edit-finished(p) => { root.edit-finished(p); }
                         }
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
-                            param: 61; at-x: root.contours[2].attack; at-y: 0.0; tint: #6ea8d8;
+                            param: 61; at-y: 0.0;
+                            at-x: max(
+                                root.contours[2].attack + root.contours[2].hold,
+                                root.contours[2].attack + HandleMetrics.min-gap); tint: #6ea8d8;
                             dragged(p, f) => { root.handle-dragged(p, f); }
                             edit-started(p) => { root.edit-started(p); }
                             edit-finished(p) => { root.edit-finished(p); }
@@ -1151,14 +1165,17 @@ export component Ds01DeviceFace inherits Rectangle {
                         }
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
-                            param: 40; at-x: 0.0; at-y: 1.0; tint: Theme.accent;
+                            param: 40; at-x: root.contours[0].attack; at-y: 0.0; tint: Theme.accent;
                             dragged(p, f) => { root.handle-dragged(p, f); }
                             edit-started(p) => { root.edit-started(p); }
                             edit-finished(p) => { root.edit-finished(p); }
                         }
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
-                            param: 41; at-x: root.contours[0].attack; at-y: 0.0; tint: Theme.accent;
+                            param: 41; at-y: 0.0;
+                            at-x: max(
+                                root.contours[0].attack + root.contours[0].hold,
+                                root.contours[0].attack + HandleMetrics.min-gap); tint: Theme.accent;
                             dragged(p, f) => { root.handle-dragged(p, f); }
                             edit-started(p) => { root.edit-started(p); }
                             edit-finished(p) => { root.edit-finished(p); }
@@ -1172,14 +1189,17 @@ export component Ds01DeviceFace inherits Rectangle {
                         }
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
-                            param: 70; at-x: 0.0; at-y: 1.0; tint: #a78bfa;
+                            param: 70; at-x: root.contours[3].attack; at-y: 0.0; tint: #a78bfa;
                             dragged(p, f) => { root.handle-dragged(p, f); }
                             edit-started(p) => { root.edit-started(p); }
                             edit-finished(p) => { root.edit-finished(p); }
                         }
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
-                            param: 71; at-x: root.contours[3].attack; at-y: 0.0; tint: #a78bfa;
+                            param: 71; at-y: 0.0;
+                            at-x: max(
+                                root.contours[3].attack + root.contours[3].hold,
+                                root.contours[3].attack + HandleMetrics.min-gap); tint: #a78bfa;
                             dragged(p, f) => { root.handle-dragged(p, f); }
                             edit-started(p) => { root.edit-started(p); }
                             edit-finished(p) => { root.edit-finished(p); }

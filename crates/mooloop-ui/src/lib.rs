@@ -2416,6 +2416,11 @@ fn ds01_format_span(seconds: f32) -> String {
 /// Public because the face is a view of a patch and nothing else: handing it
 /// one is the whole of showing it, which is what lets a snapshot test render
 /// the device without standing up an engine.
+///
+/// Not cheap — it renders a hit through the production voice path — so the
+/// caller decides when it is worth doing. The editor refresh only calls it
+/// for a DS-01 channel, and a knob move goes through `touch_ds01_param` and
+/// the debounce instead.
 pub fn refresh_ds01(window: &MainWindow, params: &Ds01Params) {
     let face = ds01_face_values(params);
     window.set_ds01_values(face.values.as_slice().into());
@@ -4629,7 +4634,14 @@ impl UiState {
         window.set_mlp8_lfo_slew(mlp8.lfo.slew);
         window.set_mlp8_lfo_retrigger(mlp8.lfo.retrigger.to_index());
         refresh_mlp8_routes(window, &mlp8.routes);
-        refresh_ds01(window, &ch.ds01_params);
+        // Only when the face is actually showing. `refresh_ds01` renders a
+        // hit through the production voice path and walks the burst schedule,
+        // and this runs on every editor refresh — a pattern switch, an undo, a
+        // channel select. Doing it for a sampler channel is the per-
+        // interaction work the preview's own debounce exists to avoid.
+        if ch.kind == DeviceKind::Ds01 {
+            refresh_ds01(window, &ch.ds01_params);
+        }
         let mlm1 = ch.mlm1_params;
         window.set_mlm1_osc1_wave(osc_wave_to_int(mlm1.osc[0].wave));
         window.set_mlm1_osc1_semitones(mlm1.osc[0].semitones);

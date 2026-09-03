@@ -142,7 +142,7 @@ pub const DS01_MATRIX_ROWS: usize = 8;
 /// and [`destination_count`] is not a `const fn`;
 /// `the_destination_list_is_every_continuous_parameter` pins the two
 /// together.
-pub const DS01_DESTINATIONS: u8 = 49;
+pub const DS01_DESTINATIONS: u8 = 47;
 
 /// Bit depth at which the reducer is exactly transparent.
 ///
@@ -1054,10 +1054,30 @@ pub fn is_latched(id: u32) -> bool {
 /// Amount, which is how an LFO scales a per-hit relationship without knowing
 /// anything about voices — it is resolved before the block rather than inside
 /// it, so there is no order to depend on.
+///
+/// And [`is_per_device`]'s two are excluded, because this matrix is per voice
+/// and they are not.
 pub fn destinations() -> impl Iterator<Item = &'static ParamDescriptor> {
-    DESCRIPTORS
-        .iter()
-        .filter(|d| d.id < PARAM_MATRIX_BASE && !matches!(d.curve, ParamCurve::Stepped(_)))
+    DESCRIPTORS.iter().filter(|d| {
+        d.id < PARAM_MATRIX_BASE
+            && !matches!(d.curve, ParamCurve::Stepped(_))
+            && !is_per_device(d.id)
+    })
+}
+
+/// Whether this parameter belongs to the device rather than to a hit.
+///
+/// Two do. The output high-pass is one filter for the whole device, and the
+/// choke time is read when a choke happens rather than by a sounding voice —
+/// so a *per-voice* route to either has nothing to land on, and offering one
+/// in the matrix's destination list would be offering a route that silently
+/// does nothing.
+///
+/// A **channel** route still reaches both. Those are resolved before the
+/// block and arrive as ordinary parameter events, which is exactly the level
+/// a device-wide control should be modulated at.
+pub fn is_per_device(id: u32) -> bool {
+    matches!(id, PARAM_CHOKE_TIME | PARAM_OUTPUT_HP)
 }
 
 /// How many destinations there are. The Destination control is a stepped
@@ -1226,6 +1246,15 @@ fn env_set(env: &mut Ds01EnvParams, offset: u32, value: f32) -> bool {
         _ => return false,
     }
     true
+}
+
+/// Which control inside a matrix row an id names, if it names one.
+///
+/// Public because the audio path needs to know whether a parameter event can
+/// have invalidated the resolved destinations, and asking that question
+/// should not mean re-deriving the row arithmetic at the call site.
+pub fn matrix_offset(id: u32) -> Option<u32> {
+    matrix_slot(id).map(|(_, offset)| offset)
 }
 
 /// Split an id into `(row, offset)` when it lands in the matrix.
@@ -1765,6 +1794,17 @@ mod tests {
         assert_eq!(destination_index(PARAM_CHOKE_GROUP), None);
         assert_eq!(destination_index(matrix_param(0, MATRIX_OFFSET_SOURCE)), None);
         assert_eq!(destination_index(matrix_param(1, MATRIX_OFFSET_AMOUNT)), None);
+        // And the two that belong to the device rather than to a hit. A route
+        // offered but unable to land is worse than one not offered.
+        assert_eq!(destination_index(PARAM_OUTPUT_HP), None);
+        assert_eq!(destination_index(PARAM_CHOKE_TIME), None);
+        // They are still ordinary automatable parameters, just not per-voice
+        // ones: a channel route reaches them.
+        assert!(descriptor(PARAM_OUTPUT_HP).is_some());
+        assert!(!matches!(
+            descriptor(PARAM_CHOKE_TIME).unwrap().curve,
+            ParamCurve::Stepped(_)
+        ));
     }
 
     /// `01-what-ds01-is.md`'s two tables, restated as one function and

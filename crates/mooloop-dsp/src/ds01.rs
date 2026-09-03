@@ -1295,9 +1295,20 @@ impl Ds01 {
         let Some(descriptor) = ds01::descriptor(id) else {
             return;
         };
-        let mut params = self.params;
-        if ds01::set(&mut params, id, descriptor.clamp_natural(value)) {
-            self.set_params(params);
+        if !ds01::set(&mut self.params, id, descriptor.clamp_natural(value)) {
+            return;
+        }
+        self.params.choke_group = self.params.choke_group.min(MAX_CHOKE_GROUP);
+        // Re-resolving the matrix means eight searches of a ninety-two entry
+        // table, and this runs per control-rate event on the audio thread.
+        // Only a row's own destination selector can invalidate the cache, and
+        // that is a structural edit rather than something an automation lane
+        // sweeps.
+        if matches!(
+            ds01::matrix_offset(id),
+            Some(ds01::MATRIX_OFFSET_DEST)
+        ) {
+            self.matrix_dests = resolve_dests(&self.params);
         }
     }
 
@@ -1437,18 +1448,6 @@ impl Ds01 {
             return;
         }
 
-        // The body is skipped only when its level is zero *and* every
-        // sounding voice's smoother has arrived — ML-P8's lesson about
-        // level-gated skipping, written down in advance: a knob reaching zero
-        // does not mean the ramp has, and skipping early replaces it with a
-        // step. The resonators are cleared while skipped, so a level
-        // returning from zero starts from the next strike rather than
-        // resuming a frozen ring.
-        let body_live = self.params.body_level > 0.0
-            || self
-                .voices
-                .iter()
-                .any(|voice| voice.active && voice.body_level.value() > 0.0);
         // A route to a continuous destination is resolved per voice per
         // tick, which is the whole reason DS-01 has a matrix the channel rack
         // cannot substitute for: two hits sounding at once have to be able to
@@ -1477,12 +1476,36 @@ impl Ds01 {
             } else {
                 continuous
             };
-            let voice_continuous = &self.voice_continuous[index];
-            voice.aim_levels(voice_continuous, false);
+            voice.aim_levels(&self.voice_continuous[index], false);
+        }
+
+        // The body is skipped only when its level is zero *and* every
+        // sounding voice's smoother has arrived — ML-P8's lesson about
+        // level-gated skipping, written down in advance: a knob reaching zero
+        // does not mean the ramp has, and skipping early replaces it with a
+        // step. The resonators are cleared while skipped, so a level
+        // returning from zero starts from the next strike rather than
+        // resuming a frozen ring.
+        //
+        // Decided *after* the matrix has resolved, and from the resolved
+        // target rather than from the smoother: the smoother is only advanced
+        // while the layer is live, so reading it here would be asking a
+        // question whose answer this decision had already fixed — a route
+        // from a live source could never lift the body off a zero knob.
+        let body_live = self.params.body_level > 0.0
+            || self.voices.iter().enumerate().any(|(index, voice)| {
+                voice.active
+                    && (voice.body_level.value() > 0.0
+                        || self.voice_continuous[index].body_level > 0.0)
+            });
+        for (index, voice) in self.voices.iter_mut().enumerate() {
+            if !voice.active {
+                continue;
+            }
             if body_live {
                 voice.body.prepare(
-                    voice_continuous.body_pitch * voice.latched.pitch_factor,
-                    voice_continuous,
+                    self.voice_continuous[index].body_pitch * voice.latched.pitch_factor,
+                    &self.voice_continuous[index],
                     sr,
                 );
             } else {
