@@ -174,15 +174,35 @@ component Contour inherits Rectangle {
     in property <bool> filled: true;
     private property <int> steps: 160;
 
+    // `env::shape`, not an approximation of it. A power curve was standing in
+    // for it and had the two ends the wrong way round: it drew the *fastest*
+    // decay at curve -1, where the envelope produces the slowest. A display
+    // that contradicts what is heard is worse than no display, and the real
+    // function is three lines.
+    pure function shaped(u: float) -> float {
+        if (u <= 0) { return 0; }
+        if (u >= 1) { return 1; }
+        // `(e^(A*u) - 1) / (e^A - 1)` with `A = DECAY_TAIL_CONSTANTS`: the
+        // exponential law, which is where curve 0 sits.
+        let exponential = (pow(2.718281828, 9.21034 * u) - 1) / 9999.0;
+        if (root.shape.curve >= 0) {
+            // Toward linear.
+            return exponential + (u - exponential) * root.shape.curve;
+        }
+        // Toward logarithmic: the exponential reflected through the diagonal,
+        // a tail that stays audible for most of its length and then stops.
+        let logarithmic = 1 - (pow(2.718281828, 9.21034 * (1 - u)) - 1) / 9999.0;
+        return exponential + (logarithmic - exponential) * -root.shape.curve;
+    }
+
     pure function level-at(x: float) -> float {
-        if (x < root.shape.attack) { return x / max(0.0001, root.shape.attack); }
+        if (x < root.shape.attack) {
+            return root.shaped(x / max(0.0001, root.shape.attack));
+        }
         if (x < root.shape.attack + root.shape.hold) { return 1.0; }
         let t = (x - root.shape.attack - root.shape.hold) / max(0.0001, root.shape.decay);
         if (t >= 1) { return root.shape.sustain; }
-        let shaped = pow(1 - t, root.shape.curve >= 0
-            ? 2.8 - root.shape.curve * 1.8
-            : 2.8 - root.shape.curve * 3.2);
-        return root.shape.sustain + (1 - root.shape.sustain) * shaped;
+        return root.shape.sustain + (1 - root.shape.sustain) * root.shaped(1 - t);
     }
 
     for index in root.shape.active ? root.steps : 0 : Rectangle {

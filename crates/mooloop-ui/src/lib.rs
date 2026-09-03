@@ -2328,13 +2328,21 @@ fn ds01_face_values(params: &Ds01Params) -> Ds01FaceValues {
 /// supposed to reach.
 fn ds01_span_seconds(p: &Ds01Params) -> f32 {
     let env = |e: &mooloop_core::Ds01EnvParams| e.attack + e.hold + e.decay;
-    env(&p.amp)
+    let longest = env(&p.amp)
         .max(env(&p.noise_env))
         .max(env(&p.mod_env))
         .max(p.pitch.attack + p.pitch.decay)
         .max(p.body_decay)
-        .max(0.02)
+        .max(0.02);
+    // Headroom past the longest contour, so the handle that ends it is not
+    // pinned to the right edge. Without it the longest envelope in a patch
+    // sits at fraction 1.0 and can only ever be dragged shorter — which is
+    // the one envelope a musician is most likely to be lengthening.
+    longest * SPAN_HEADROOM
 }
+
+/// How much of a scope sits past the longest contour in the patch.
+const SPAN_HEADROOM: f32 = 1.25;
 
 fn ds01_contour(
     attack: f32,

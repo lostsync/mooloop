@@ -5584,7 +5584,7 @@ mod footprint {
         // are the sampler's transport-edge flag, which is what lets a note
         // auditioned while stopped keep sounding.
         assert_eq!(size_of::<MlP8>(), 4_712);
-        // DS-01 is 6,352, and almost all of it is the eight-voice pool: a
+        // DS-01 is 6,816, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
         // filter, the rate reducer's hold, four envelopes, the body's three
@@ -5604,11 +5604,11 @@ mod footprint {
         // is smaller than `MlP8Params`, which is still the widest
         // `GeneratorParams` variant and therefore still what every channel
         // pays for.
-        assert_eq!(size_of::<Ds01>(), 6_352);
+        assert_eq!(size_of::<Ds01>(), 6_816);
         // The strip pays the parameter block twice: once inside the node
         // above, and once for `source_base`, whose `GeneratorParams` is as
         // wide as its widest variant and the ML-P8 is that variant.
-        assert_eq!(size_of::<ChannelStrip>(), 40_104);
+        assert_eq!(size_of::<ChannelStrip>(), 40_568);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -5622,7 +5622,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 58_544);
+        assert_eq!(per_live, 59_008);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -5633,8 +5633,8 @@ mod footprint {
         // sixteen channels, which is what buys modulation that lands per
         // voice, and 16 of it the wider parameter address, paid once per
         // reserved channel whether or not anything routes -- and DS-01, the
-        // seventh kind, another 99.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_369);
+        // seventh kind, another 106.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_377);
     }
 }
 

@@ -1862,6 +1862,31 @@ fn check_mlp8(doctor: &mut Doctor, who: &str, params: &mut MlP8Params) {
 /// unmodulatable. A parameter DS-01 gains in a later step is range-checked
 /// the day it is added, with nothing to remember.
 fn check_ds01(doctor: &mut Doctor, who: &str, params: &mut Ds01Params) {
+    // A row's destination is a parameter id, and the descriptor sweep below
+    // cannot see a bad one: reading it goes through the destination list,
+    // which reports an unknown id as the first entry rather than as a fault.
+    // A file pointing a row at a stepped control would otherwise survive
+    // repair and then be modulated at the trigger, which is exactly what the
+    // eligibility rule exists to prevent.
+    for (index, route) in params.matrix.iter_mut().enumerate() {
+        if ds01::destination_index(route.dest).is_some() {
+            continue;
+        }
+        let fallback = ds01::destination_at(0).map(|d| d.id).unwrap_or(route.dest);
+        if doctor.correct(
+            "channel.ds01.route",
+            who,
+            format!(
+                "modulation row {}'s destination is parameter {}, which cannot be modulated",
+                index + 1,
+                route.dest
+            ),
+            format!("switch the row off and point it at parameter {fallback}"),
+        ) {
+            route.dest = fallback;
+            route.source = mooloop_core::Ds01ModSource::None;
+        }
+    }
     for descriptor in ds01::DESCRIPTORS.iter() {
         let Some(stored) = ds01::get(params, descriptor.id) else {
             continue;

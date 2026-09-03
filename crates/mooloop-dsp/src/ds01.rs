@@ -330,6 +330,14 @@ struct Continuous {
     body_decay: f32,
     body_damping: f32,
     body_excite: f32,
+    // The four mix levels. They live here rather than on the node because
+    // they are continuous destinations like everything else here: a route to
+    // a level has to land per voice, and a device-wide smoother cannot let
+    // two hits disagree about one.
+    tone_level: f32,
+    noise_level: f32,
+    body_level: f32,
+    level: f32,
     drive: f32,
     character: Ds01Character,
     bias: f32,
@@ -357,6 +365,10 @@ impl Continuous {
             body_decay: p.body_decay.max(0.001),
             body_damping: p.body_damping.clamp(0.0, 1.0),
             body_excite: p.body_excite.clamp(0.0, 1.0),
+            tone_level: p.tone_level.clamp(0.0, 1.0),
+            noise_level: p.noise_level.clamp(0.0, 1.0),
+            body_level: p.body_level.clamp(0.0, 1.0),
+            level: p.level.clamp(0.0, 1.0),
             drive: p.drive.clamp(0.0, 1.0),
             character: p.character,
             bias: p.bias.clamp(0.0, 1.0),
@@ -885,6 +897,18 @@ struct Voice {
     /// elapsed.
     held_noise: f32,
     hold_phase: f32,
+    /// The four mix levels, smoothed per voice.
+    ///
+    /// Per voice rather than per device because they are matrix destinations:
+    /// a route from this hit's velocity to this hit's level is the sort of
+    /// thing the whole matrix exists for, and one device-wide smoother cannot
+    /// let two hits disagree about a level. A knob move still gets its ramp —
+    /// every sounding voice ramps the same way — which is what the smoothing
+    /// was for in the first place.
+    tone_level: Smoothed,
+    noise_level: Smoothed,
+    body_level: Smoothed,
+    level: Smoothed,
 }
 
 impl Voice {
@@ -910,6 +934,10 @@ impl Voice {
             sources: Sources::default(),
             held_noise: 0.0,
             hold_phase: 1.0,
+            tone_level: Smoothed::new(0.0, SMOOTHING_S, sample_rate),
+            noise_level: Smoothed::new(0.0, SMOOTHING_S, sample_rate),
+            body_level: Smoothed::new(0.0, SMOOTHING_S, sample_rate),
+            level: Smoothed::new(0.0, SMOOTHING_S, sample_rate),
         }
     }
 
@@ -934,6 +962,24 @@ impl Voice {
         self.sources = Sources::default();
         self.held_noise = 0.0;
         self.hold_phase = 1.0;
+    }
+
+    /// Aim this voice's levels at what its own matrix resolved this tick.
+    fn aim_levels(&mut self, c: &Continuous, snap: bool) {
+        for (smoothed, target) in [
+            (&mut self.tone_level, c.tone_level),
+            (&mut self.noise_level, c.noise_level),
+            (&mut self.body_level, c.body_level),
+            (&mut self.level, c.level),
+        ] {
+            if snap {
+                // A fresh hit starts where its levels are, not where the last
+                // hit on this slot left them.
+                smoothed.reset_to(target);
+            } else {
+                smoothed.set_target(target);
+            }
+        }
     }
 
     /// Start a hit. Every value this reads from `params` is in [`Latched`];
@@ -972,7 +1018,13 @@ impl Voice {
         // still be ringing, which is what makes a fast pattern on a bell
         // build rather than restart. The burst leans on the same property
         // across the impulses of one hit.
-        self.body.strike(1.0);
+        // Struck after the schedule has decided what the first impulse's
+        // level is. Ahead of it the strike is 1.0 while `Burst::start` is
+        // still normalizing a rising Level Step down from its loudest
+        // impulse, which hits the resonators up to a hundred times harder
+        // than the burst it belongs to.
+        self.burst.start(params, sample_rate);
+        self.body.strike(self.burst.level);
         // The pitch envelope has no gate half, so hold, sustain and release
         // are not controls it has rather than controls it ignores.
         self.shapes = BurstShapes {
@@ -992,7 +1044,6 @@ impl Voice {
         self.noise_env.trigger(self.shapes.noise, sample_rate);
         self.mod_env.trigger(ahd_shape(&params.mod_env), sample_rate);
         self.pitch_env.trigger(self.shapes.pitch, sample_rate);
-        self.burst.start(params, sample_rate);
     }
 
     /// Re-read the four live sources. Called once per control tick, beside
@@ -1035,14 +1086,11 @@ impl Voice {
 
     /// One sample of this voice, pre-level. Mono by design; the channel strip
     /// places it in the stereo field, as it does for every other generator.
-    fn render_sample(
-        &mut self,
-        c: &Continuous,
-        tone_level: f32,
-        noise_level: f32,
-        body_level: f32,
-        sample_rate: u32,
-    ) -> f32 {
+    fn render_sample(&mut self, c: &Continuous, body_live: bool, sample_rate: u32) -> f32 {
+        let tone_level = self.tone_level.advance();
+        let noise_level = self.noise_level.advance();
+        let body_level = if body_live { self.body_level.advance() } else { 0.0 };
+        let level = self.level.advance();
         // The schedule runs first, so an impulse's own sample is the one the
         // re-fired envelopes produce rather than the one after it. The mod
         // envelope is deliberately not re-fired: it is the contour with no
@@ -1104,7 +1152,7 @@ impl Voice {
                 * amp
                 * self.latched.velocity_amp,
         );
-        shape_stage(vca, c.drive, c.character, c.bias, c.bit_step)
+        shape_stage(vca, c.drive, c.character, c.bias, c.bit_step) * level
     }
 
     fn render_tone(&mut self, c: &Continuous, swept_hz: f32, sample_rate: u32) -> f32 {
@@ -1199,10 +1247,6 @@ pub struct Ds01 {
     sample_rate: u32,
     voices: [Voice; DS01_VOICES],
     next_age: u64,
-    tone_level: Smoothed,
-    noise_level: Smoothed,
-    body_level: Smoothed,
-    level: Smoothed,
     /// One high-pass for the device, not one per voice: it is the output
     /// stage, and the DC that Bias creates sums like everything else.
     output_hp: OnePoleHp,
@@ -1229,10 +1273,6 @@ impl Ds01 {
                 Voice::new(SEED.wrapping_add(index as u32), sample_rate)
             }),
             next_age: 1,
-            tone_level: Smoothed::new(params.tone_level, SMOOTHING_S, sample_rate),
-            noise_level: Smoothed::new(params.noise_level, SMOOTHING_S, sample_rate),
-            body_level: Smoothed::new(params.body_level, SMOOTHING_S, sample_rate),
-            level: Smoothed::new(params.level, SMOOTHING_S, sample_rate),
             output_hp: OnePoleHp::new(),
             matrix_dests: resolve_dests(&params),
             hit_count: 0,
@@ -1272,10 +1312,6 @@ impl Ds01 {
         }
         self.next_age = 1;
         self.hit_count = 0;
-        self.tone_level.reset_to(self.params.tone_level);
-        self.noise_level.reset_to(self.params.noise_level);
-        self.body_level.reset_to(self.params.body_level);
-        self.level.reset_to(self.params.level);
         self.output_hp.reset();
     }
 
@@ -1342,6 +1378,15 @@ impl Ds01 {
         voice.age = age;
         voice.trigger(&params, event_id, note, velocity, sr);
         voice.sources = sources;
+        // Snapped rather than ramped: a hit starts at the levels the patch
+        // has now, not wherever the last hit on this slot left them.
+        let continuous = Continuous::new(&apply_matrix(
+            &self.params,
+            &self.matrix_dests,
+            &sources,
+            false,
+        ));
+        voice.aim_levels(&continuous, true);
     }
 
     /// Route a note-off to the hit it started. Voices whose envelopes are all
@@ -1381,36 +1426,29 @@ impl Ds01 {
         // re-aimed, then every sample in the tick runs against them.
         let continuous = Continuous::new(&self.params);
         self.output_hp.set_cutoff(continuous.output_hp, self.sample_rate);
-        self.tone_level
-            .set_target(self.params.tone_level.clamp(0.0, 1.0));
-        self.noise_level
-            .set_target(self.params.noise_level.clamp(0.0, 1.0));
-        self.body_level
-            .set_target(self.params.body_level.clamp(0.0, 1.0));
-        self.level.set_target(self.params.level.clamp(0.0, 1.0));
 
         let sr = self.sample_rate;
         if !self.voices.iter().any(|voice| voice.active) {
-            // Nothing is sounding, but the smoothers still have to travel:
-            // otherwise a level moved during silence would jump at the next
-            // hit instead of already being there.
-            self.tone_level.advance_by(end - start);
-            self.noise_level.advance_by(end - start);
-            self.body_level.advance_by(end - start);
-            self.level.advance_by(end - start);
             // Nothing is feeding it, so the high-pass starts the next hit
             // from rest rather than from a state left over from the last one.
+            // The levels need no travelling here: they live on the voices,
+            // and a voice snaps its own to the patch when it is triggered.
             self.output_hp.reset();
             return;
         }
 
-        // The body is skipped only when its level is zero *and* its smoother
-        // has arrived — ML-P8's lesson about level-gated skipping, written
-        // down in advance: a knob reaching zero does not mean the ramp has,
-        // and skipping early replaces it with a step. The resonators are
-        // cleared while skipped, so a level returning from zero starts from
-        // the next strike rather than resuming a frozen ring.
-        let body_live = self.body_level.value() > 0.0 || self.params.body_level > 0.0;
+        // The body is skipped only when its level is zero *and* every
+        // sounding voice's smoother has arrived — ML-P8's lesson about
+        // level-gated skipping, written down in advance: a knob reaching zero
+        // does not mean the ramp has, and skipping early replaces it with a
+        // step. The resonators are cleared while skipped, so a level
+        // returning from zero starts from the next strike rather than
+        // resuming a frozen ring.
+        let body_live = self.params.body_level > 0.0
+            || self
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.body_level.value() > 0.0);
         // A route to a continuous destination is resolved per voice per
         // tick, which is the whole reason DS-01 has a matrix the channel rack
         // cannot substitute for: two hits sounding at once have to be able to
@@ -1440,6 +1478,7 @@ impl Ds01 {
                 continuous
             };
             let voice_continuous = &self.voice_continuous[index];
+            voice.aim_levels(voice_continuous, false);
             if body_live {
                 voice.body.prepare(
                     voice_continuous.body_pitch * voice.latched.pitch_factor,
@@ -1453,29 +1492,19 @@ impl Ds01 {
 
         let voice_continuous = &self.voice_continuous;
         for frame in start..end {
-            let tone_level = self.tone_level.advance();
-            let noise_level = self.noise_level.advance();
-            let body_level = self.body_level.advance();
-            let level = self.level.advance();
             let mut sum = 0.0;
             for (index, voice) in self.voices.iter_mut().enumerate() {
                 if !voice.active {
                     continue;
                 }
-                let body_level = if body_live { body_level } else { 0.0 };
-                sum += voice.render_sample(
-                    &voice_continuous[index],
-                    tone_level,
-                    noise_level,
-                    body_level,
-                    sr,
-                );
+                sum += voice.render_sample(&voice_continuous[index], body_live, sr);
                 if voice.amp_env.is_idle() && !voice.burst_pending() {
                     voice.active = false;
                     voice.gate_held = false;
                 }
             }
-            let sample = device_bound(self.output_hp.next_sample(sum) * level * VOICE_OUTPUT_REFERENCE);
+            let sample =
+                device_bound(self.output_hp.next_sample(sum) * VOICE_OUTPUT_REFERENCE);
             bus.l[frame] += sample;
             bus.r[frame] += sample;
         }
@@ -1491,13 +1520,17 @@ impl Ds01 {
         let mut burst = Burst::default();
         burst.start(&params, sample_rate);
         let mut offsets = vec![0.0];
-        let limit = (DS01_BURST_MAX_S * sample_rate as f32) as usize + sample_rate as usize;
+        // Stop at the last impulse rather than at the end of its gap: the
+        // schedule sets a countdown for an impulse that will never come, so
+        // waiting for it to reach zero waits for the bound instead — a
+        // quarter of a million iterations, on the UI thread, per refresh.
+        let limit = (DS01_BURST_MAX_S * sample_rate as f32) as usize;
         for frame in 0..limit {
+            if burst.remaining == 0 {
+                break;
+            }
             if burst.tick(sample_rate) {
                 offsets.push(frame as f32 / sample_rate as f32);
-            }
-            if burst.remaining == 0 && burst.countdown == 0 {
-                break;
             }
         }
         offsets
@@ -1695,14 +1728,16 @@ mod tests {
         assert_eq!(size_of::<Body>(), 116);
         assert_eq!(size_of::<Burst>(), 36);
         assert_eq!(size_of::<Sources>(), 32);
-        assert_eq!(size_of::<Voice>(), 656);
+        assert_eq!(size_of::<Voice>(), 704);
         // Eight of those, plus the parameter block — which the matrix's
-        // eight rows dominate — the four device-wide smoothers the layers
-        // share, and one resolved control set per voice, because the matrix
-        // is per voice and two hits have to be able to disagree.
+        // eight rows dominate — and one resolved control set per voice,
+        // because the matrix is per voice and two hits have to be able to
+        // disagree. The four mix levels are smoothed on the voice for the
+        // same reason: a route to a level has to land per hit, which one
+        // device-wide smoother cannot do.
         assert_eq!(size_of::<Ds01Params>(), 352);
-        assert_eq!(size_of::<Ds01>(), 6_352);
-        assert_eq!(size_of::<Voice>() * DS01_VOICES, 5_248);
+        assert_eq!(size_of::<Ds01>(), 6_816);
+        assert_eq!(size_of::<Voice>() * DS01_VOICES, 5_632);
     }
 
     #[test]
@@ -2901,6 +2936,11 @@ mod tests {
             tone_level: 1.0,
             noise_level: 0.0,
             level: 0.4,
+            // Velocity reaches the sound only through the row under test.
+            // Left at its default it also scales the VCA, and a route that
+            // pulls a level down would be measured against an amplitude that
+            // the same velocity pushed up.
+            velocity_amount: 0.0,
             amp: Ds01EnvParams::one_shot(1.0),
             pitch: Ds01PitchEnvParams {
                 depth: 0.0,
@@ -2951,6 +2991,109 @@ mod tests {
         assert!(
             worst < 1.0e-5,
             "the two hits did not keep their own velocities: worst {worst}"
+        );
+    }
+
+    /// A route to a mix level lands, and lands per voice.
+    ///
+    /// It did not: the four levels were smoothed on the device while the
+    /// matrix resolved per voice, so a route to one was silently inert — and
+    /// `PARAM_LEVEL` is the default destination of every row, so the first
+    /// route anyone made was the one that did nothing.
+    #[test]
+    fn a_route_to_a_level_lands_per_voice() {
+        let params = routed(Ds01ModSource::Velocity, ds01::PARAM_TONE_LEVEL, -0.8);
+        let at = |velocity: u8| {
+            let mut node = Ds01::new(params, SR);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 60, velocity));
+            render(&mut node, 12_000, &events)
+        };
+        let soft = at(20);
+        let loud = at(127);
+        assert!(
+            peak(&loud) < peak(&soft) * 0.7,
+            "the route did not reach the level: {} then {}",
+            peak(&soft),
+            peak(&loud)
+        );
+
+        // And per voice: two hits at once keep their own levels, which one
+        // device-wide smoother could not give them.
+        let mut node = Ds01::new(params, SR);
+        let mut events = EventList::empty();
+        events.push_ordered(note_on(0, 60, 20));
+        events.push_ordered(note_on(0, 60, 127));
+        let both = render(&mut node, 12_000, &events);
+        let worst = both
+            .iter()
+            .zip(soft.iter().zip(loud.iter()))
+            .fold(0.0_f32, |worst, (sum, (a, b))| worst.max((sum - (a + b)).abs()));
+        assert!(worst < 1.0e-5, "the two hits shared a level: worst {worst}");
+    }
+
+    /// The body is struck at the impulse's own level, including the first
+    /// one.
+    ///
+    /// It was struck at 1.0 before the schedule had normalized a rising Level
+    /// Step down from its loudest impulse, so the first strike could be a
+    /// hundred times harder than the burst it belonged to — which inverted
+    /// the shape the control was asking for.
+    #[test]
+    fn a_rising_level_step_does_not_invert_at_the_first_impulse() {
+        let params = Ds01Params {
+            tone_level: 0.0,
+            noise_level: 0.0,
+            body_level: 0.6,
+            body_decay: 0.05,
+            burst_repeats: 4,
+            burst_spacing: 0.05,
+            burst_level_step: 1.0,
+            amp: Ds01EnvParams::one_shot(1.0),
+            ..Ds01Params::default()
+        };
+        let out = hit(params, 24_000);
+        let window = 0.05 * SR as f32;
+        let per_impulse: Vec<f32> = (0..4)
+            .map(|index| {
+                let start = (index as f32 * window) as usize;
+                peak(&out[start..start + window as usize])
+            })
+            .collect();
+        assert!(
+            per_impulse[0] < per_impulse[3],
+            "a rising step started loudest: {per_impulse:?}"
+        );
+    }
+
+    /// A transport stop chokes on every stopped block, and a choke longer
+    /// than one block used to restart its fade each time — so the voice never
+    /// freed and the device never took its silent path again.
+    #[test]
+    fn a_repeated_choke_frees_the_voice() {
+        let params = Ds01Params {
+            choke_time: 0.4,
+            amp: Ds01EnvParams::one_shot(4.0),
+            ..Ds01Params::default()
+        };
+        let mut node = Ds01::new(params, SR);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60, 127));
+        render(&mut node, 256, &events);
+
+        let mut stopped = ctx(256);
+        stopped.playing = false;
+        let mut bus = StereoBus::with_capacity(256);
+        for _ in 0..200 {
+            bus.clear(256);
+            node.process(&stopped, &mut bus, &EventList::empty(), None);
+            if node.voices.iter().all(|voice| !voice.active) {
+                break;
+            }
+        }
+        assert!(
+            node.voices.iter().all(|voice| !voice.active),
+            "a 400 ms choke never finished across 200 blocks"
         );
     }
 

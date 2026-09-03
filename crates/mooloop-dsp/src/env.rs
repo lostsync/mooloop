@@ -436,11 +436,21 @@ impl Ahd {
     /// is: a release applied to the envelope, rather than a coefficient
     /// stamped over it, so the envelope's own shape does not have to
     /// special-case being cut short.
+    /// Idempotent: asking for the release that is already running leaves it
+    /// running. That matters because a transport stop chokes on *every* block
+    /// while it is stopped, and restarting the fade each time would reset its
+    /// progress — a choke longer than the block period would then never
+    /// finish and its voice would never free. v1's coefficient-stamping choke
+    /// had that property for free; a release with a phase has to be given it.
     pub fn release_over(&mut self, seconds: f32, sample_rate: u32) {
         if self.stage == AhdStage::Idle {
             return;
         }
-        self.release_rate = segment_rate(seconds, sample_rate);
+        let rate = segment_rate(seconds, sample_rate);
+        if self.stage == AhdStage::Release && (self.release_rate - rate).abs() <= f32::EPSILON {
+            return;
+        }
+        self.release_rate = rate;
         self.begin_release();
     }
 
@@ -830,6 +840,34 @@ mod tests {
     /// Sustain is the only stage without an end of its own, and it needs both
     /// a gate and a sustain worth holding. Every other combination of every
     /// segment terminates, which is what stops a voice from being stranded.
+    /// A choke repeated every block still finishes. A transport stop asks for
+    /// one on each stopped block, and a fade that restarted each time would
+    /// never reach the end of itself.
+    #[test]
+    fn a_repeated_choke_still_completes() {
+        let mut env = Ahd::new();
+        env.trigger(
+            AhdShape {
+                decay_s: 4.0,
+                ..AhdShape::default()
+            },
+            SR,
+        );
+        // Half a second of choking in 256-frame blocks, against a 400 ms
+        // fade: the fade is longer than a block, which is the case that
+        // breaks if the release restarts.
+        let mut blocks = 0;
+        while !env.is_idle() && blocks < 200 {
+            env.release_over(0.4, SR);
+            for _ in 0..256 {
+                env.tick();
+            }
+            blocks += 1;
+        }
+        assert!(env.is_idle(), "the choke never finished in {blocks} blocks");
+        assert!(blocks < 100, "it took {blocks} blocks, far past the fade");
+    }
+
     #[test]
     fn every_shape_without_a_held_gate_terminates() {
         for attack_s in [0.0, 0.01, 0.5] {
