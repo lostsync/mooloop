@@ -1,6 +1,11 @@
 # Session layer extraction — plan status
 
-Not started. Written 2026-09-02, out of `docs/ARCHITECTURE_REVIEW.md`.
+Step 01 done, 2026-09-03. Written 2026-09-02, out of
+`docs/ARCHITECTURE_REVIEW.md`.
+
+`crates/mooloop-session` exists and `crates/mooloop-ui/src/lib.rs` is down from
+14,157 lines to 13,674. The line counts quoted below are the ones the plan was
+written against and are left as written; `UiState::new` has not been touched.
 
 ## The decision
 
@@ -94,7 +99,7 @@ and projection; the tests that become possible.
 
 | Step | What it does | Risk |
 | --- | --- | --- |
-| `01` | Create the crate; move the toolkit-free free functions and `history.rs` | Very low — pure moves |
+| `01` | Create the crate; move the toolkit-free free functions and `history.rs` | Very low — pure moves — **done** |
 | `02` | Move the plain data types | Low |
 | `03` | Split `UiState` into `Session` plus view-side models | Medium |
 | `04` | Break up `UiState::new`; hoist closure bodies onto `Session` | High — the bulk of the work |
@@ -121,3 +126,31 @@ it. The line count moving is large but the transformation is repetitive —
 closure body becomes named method, closure becomes two lines calling it. It
 does not need to be finished in one sitting, and the intermediate states are
 all shippable, which is the reason for this ordering.
+
+## Progress
+
+### 01 — done, 2026-09-03
+
+`crates/mooloop-session` has no `slint` in its manifest or its dependency tree,
+and carries five modules: `history`, `audio_file`, `sample`, `browser`, and
+`dialogs`. Everything moved verbatim; the only edits were visibility, import
+paths, and the module each function landed in.
+
+Two departures from the step document, both small:
+
+- **`LoadedSample` came across early.** It is listed in step 02's table, but
+  `load_sample_at_path` returns it, so step 01 could not move that function
+  without it. It lives in `session::sample` beside its constructor.
+- **`is_playable_sample` went to `browser` rather than `sample`.** Its own
+  doc comment says it decides what the tree shows; `sample_files_in_directory`
+  calls `audio_file::is_supported_extension` directly and never wanted it.
+
+Six tests moved with the code and now run under `cargo test -p
+mooloop-session` (11 passing, 1 ignored behind ffmpeg). The two browser-tree
+tests stayed in `mooloop-ui` because they assert on `BrowserRow`, which is a
+Slint type.
+
+`Cargo.lock` grew by 300 lines that have nothing to do with this change: adding
+a workspace member forces a re-resolve, and `i-slint-backend-testing`'s
+optional dependencies got recorded that had been absent. No version moved and
+nothing new compiles — `cargo tree -i prost` finds no path to any of it.

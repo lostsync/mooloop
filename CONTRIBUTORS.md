@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-03
-- Sessions: 40
+- Sessions: 41
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -568,6 +568,9 @@ work session you can recall being part of, and don't stress over precision.
   the face and the kit; its published outlets are blocked on the same
   device-outlet mechanism ML-P8's step 06 needs, so they wait for it to be
   built once rather than twice.
+  Then started `docs/plans/session-layer-extraction/`: created `mooloop-session`
+  and moved the already-toolkit-free code into it, so the live application
+  model has somewhere to live that the compiler keeps `slint` out of.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

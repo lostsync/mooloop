@@ -7,16 +7,13 @@
 //! via commands. The engine keeps its own pre-allocated copy.
 
 mod actions;
-mod audio_file;
 mod gestures;
-mod history;
 mod meter;
 mod mockup;
 mod settings;
 
 slint::include_modules!();
 
-use history::{Entry as HistoryEntry, History};
 use meter::MeterBallistics;
 use mooloop_core::gain::{db_to_linear, linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::log::Level;
@@ -66,6 +63,18 @@ use mooloop_engine::{
 use mooloop_project::{
     AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetSummary,
     SaveReport,
+};
+use mooloop_session::audio_file;
+use mooloop_session::browser::{browser_display_name, has_playable_descendant, scan_browser_dir};
+use mooloop_session::dialogs::{
+    confirm_via_zenity, pick_bundle_via_zenity, pick_export_via_zenity, pick_sample_via_zenity,
+    pick_save_via_zenity, pick_song_via_zenity,
+};
+use mooloop_session::history::{Entry as HistoryEntry, History};
+use mooloop_session::sample::{
+    adjacent_sample, inspect_sample, load_sample_at_path, sample_description, sample_duration,
+    sample_files_in_directory, sample_index, tune_label, waveform_peaks, waveform_peaks_windowed,
+    LoadedSample, SampleInspection,
 };
 pub use mockup::{load_mockup_layout, wire_mockup};
 use settings::{AppearanceSettings, ThemePalette, ThemeScheme, UiSettings};
@@ -722,13 +731,6 @@ impl ChannelState {
         self.notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
         event
     }
-}
-
-struct LoadedSample {
-    path: PathBuf,
-    sample: Arc<SampleData>,
-    can_previous: bool,
-    can_next: bool,
 }
 
 /// Result of a background sample load, delivered to the pump.
@@ -13088,162 +13090,6 @@ fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem> {
     Ok(ResolvedDocument { report, samples })
 }
 
-fn zenity_path(mut command: std::process::Command) -> Option<PathBuf> {
-    let output = command.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!value.is_empty()).then(|| PathBuf::from(value))
-}
-
-fn pick_bundle_via_zenity(title: &str) -> Option<PathBuf> {
-    let mut command = std::process::Command::new("zenity");
-    command
-        .arg("--file-selection")
-        .arg("--directory")
-        .arg(format!("--title={title}"));
-    zenity_path(command)
-}
-
-fn pick_song_via_zenity(title: &str) -> Option<PathBuf> {
-    let mut command = std::process::Command::new("zenity");
-    command
-        .arg("--file-selection")
-        .arg(format!("--title={title}"))
-        .arg("--file-filter=Mooloop songs | *.mooloop manifest.toml");
-    zenity_path(command).map(normalize_song_selection)
-}
-
-fn normalize_song_selection(path: PathBuf) -> PathBuf {
-    let is_legacy_manifest = path
-        .file_name()
-        .is_some_and(|name| name == mooloop_project::MANIFEST_FILE)
-        && path
-            .parent()
-            .and_then(Path::extension)
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("mooloop"));
-    if is_legacy_manifest {
-        path.parent()
-            .expect("manifest selection has a parent")
-            .into()
-    } else {
-        path
-    }
-}
-
-fn pick_save_via_zenity(title: &str, suggested: &str) -> Option<PathBuf> {
-    let mut command = std::process::Command::new("zenity");
-    command
-        .arg("--file-selection")
-        .arg("--save")
-        .arg("--confirm-overwrite")
-        .arg(format!("--title={title}"))
-        .arg(format!("--filename={suggested}"));
-    zenity_path(command)
-}
-
-fn pick_export_via_zenity(extension: &str) -> Option<PathBuf> {
-    let mut command = std::process::Command::new("zenity");
-    command
-        .arg("--file-selection")
-        .arg("--save")
-        .arg("--confirm-overwrite")
-        .arg("--title=Export audio")
-        .arg(format!("--filename=mooloop-export.{extension}"))
-        .arg(format!("--file-filter=*.{extension}"));
-    let mut path = zenity_path(command)?;
-    if path
-        .extension()
-        .and_then(|value| value.to_str())
-        .is_none_or(|value| !value.eq_ignore_ascii_case(extension))
-    {
-        path.set_extension(extension);
-    }
-    Some(path)
-}
-
-fn confirm_via_zenity(question: &str) -> bool {
-    std::process::Command::new("zenity")
-        .arg("--question")
-        .arg(format!("--text={question}"))
-        .arg("--ok-label=Continue")
-        .arg("--cancel-label=Cancel")
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-/// Spawn zenity to pick a supported audio file. Returns `None` if cancelled
-/// or unavailable.
-fn pick_sample_via_zenity() -> Option<PathBuf> {
-    let patterns = audio_file::SUPPORTED_EXTENSIONS
-        .iter()
-        .flat_map(|extension| {
-            [
-                format!("*.{extension}"),
-                format!("*.{}", extension.to_uppercase()),
-            ]
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let out = std::process::Command::new("zenity")
-        .arg("--file-selection")
-        .arg(format!("--file-filter=Audio samples | {patterns}"))
-        .arg("--title=Load sample")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if path.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(path))
-    }
-}
-
-fn sample_files_in_directory(path: &Path) -> Result<Vec<PathBuf>, String> {
-    let directory = path
-        .parent()
-        .ok_or_else(|| "sample path has no parent directory".to_string())?;
-    let mut files = std::fs::read_dir(directory)
-        .map_err(|e| format!("could not read sample directory: {e}"))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|entry| entry.is_file() && audio_file::is_supported_extension(entry))
-        .collect::<Vec<_>>();
-    files.sort_by_cached_key(|entry| {
-        entry
-            .file_name()
-            .map(|name| name.to_string_lossy().to_lowercase())
-            .unwrap_or_default()
-    });
-    Ok(files)
-}
-
-fn sample_index(path: &Path, files: &[PathBuf]) -> Option<usize> {
-    files
-        .iter()
-        .position(|candidate| candidate == path)
-        .or_else(|| {
-            let name = path.file_name()?;
-            files
-                .iter()
-                .position(|candidate| candidate.file_name() == Some(name))
-        })
-}
-
-fn adjacent_sample(path: &Path, direction: isize) -> Result<Option<PathBuf>, String> {
-    let files = sample_files_in_directory(path)?;
-    let Some(index) = sample_index(path, &files) else {
-        return Ok(None);
-    };
-    let next = index as isize + direction;
-    Ok((next >= 0)
-        .then(|| files.get(next as usize).cloned())
-        .flatten())
-}
-
 /// Hand one channel's audio and slice map to the engine.
 ///
 /// The *published* buffer, not the source: after a commit the engine plays
@@ -13259,18 +13105,6 @@ fn publish_channel_audio(handle: &EngineHandle, index: usize, channel: &ChannelS
     } else {
         handle.load_slices(index, Arc::new(channel.slices.clone()));
     }
-}
-
-fn load_sample_at_path(path: &Path) -> Result<LoadedSample, String> {
-    let files = sample_files_in_directory(path)?;
-    let index = sample_index(path, &files);
-    let sample = audio_file::decode(path)?.sample;
-    Ok(LoadedSample {
-        path: path.to_path_buf(),
-        sample,
-        can_previous: index.is_some_and(|index| index > 0),
-        can_next: index.is_some_and(|index| index + 1 < files.len()),
-    })
 }
 
 /// Publish a finished background load to `channel`: hand the decoded sample
@@ -13346,157 +13180,6 @@ fn spawn_browser_sample_load(
     });
 }
 
-fn waveform_peaks(sample: &SampleData, max_bins: usize) -> Vec<f32> {
-    peaks_from_frames(&sample.frames, max_bins)
-}
-
-/// Like `waveform_peaks`, but bins only the frames in `[start_frame,
-/// end_frame)`. Used to re-derive real detail for whatever range the
-/// waveform view is zoomed/scrolled to, rather than just stretching the
-/// full-sample overview's fixed bins.
-fn waveform_peaks_windowed(
-    sample: &SampleData,
-    max_bins: usize,
-    start_frame: usize,
-    end_frame: usize,
-) -> Vec<f32> {
-    let len = sample.frames.len();
-    let start = start_frame.min(len);
-    let end = end_frame.clamp(start, len);
-    peaks_from_frames(&sample.frames[start..end], max_bins)
-}
-
-fn peaks_from_frames(frames: &[[f32; 2]], max_bins: usize) -> Vec<f32> {
-    if frames.is_empty() || max_bins == 0 {
-        return Vec::new();
-    }
-    let bins = max_bins.min(frames.len());
-    let mut peaks = (0..bins)
-        .map(|bin| {
-            let start = bin * frames.len() / bins;
-            let end = ((bin + 1) * frames.len() / bins).max(start + 1);
-            frames[start..end]
-                .iter()
-                .map(|frame| frame[0].abs().max(frame[1].abs()))
-                .fold(0.0f32, f32::max)
-        })
-        .collect::<Vec<_>>();
-    let peak = peaks.iter().copied().fold(0.0f32, f32::max);
-    if peak > 0.0 {
-        for value in &mut peaks {
-            *value /= peak;
-        }
-    }
-    peaks
-}
-
-fn sample_description(sample: &SampleData) -> String {
-    let seconds = f64::from(sample_duration(sample));
-    format!("{seconds:.3} s  |  {} Hz  |  stereo", sample.sample_rate)
-}
-
-fn sample_duration(sample: &SampleData) -> f32 {
-    sample.len() as f32 / sample.sample_rate.max(1) as f32
-}
-
-const NOTE_NAMES: [&str; 12] = [
-    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-];
-
-/// Nearest note name for a (possibly fractional) MIDI note number. A4 = 69.
-fn midi_to_note_name(midi: f64) -> String {
-    let rounded = midi.round().clamp(0.0, 127.0) as i64;
-    let name = NOTE_NAMES[rounded.rem_euclid(12) as usize];
-    let octave = rounded / 12 - 1;
-    format!("{name}{octave}")
-}
-
-fn midi_to_frequency_hz(midi: f64) -> f32 {
-    (440.0 * 2f64.powf((midi - 69.0) / 12.0)) as f32
-}
-
-/// The note name and frequency the sampler's root note actually plays at
-/// once coarse/fine tuning are applied — the musically meaningful readout
-/// for the Coarse/Fine knob pair, since "+3 st / +40 ct" alone doesn't say
-/// what pitch that is.
-fn tune_label(params: SamplerParams) -> String {
-    let midi = f64::from(params.root_note)
-        + f64::from(params.tune_semitones)
-        + f64::from(params.tune_cents) / 100.0;
-    format!(
-        "{} · {:.1} Hz",
-        midi_to_note_name(midi),
-        midi_to_frequency_hz(midi)
-    )
-}
-
-/// Extensions the browser treats as playable. The decoder decides what we
-/// can actually open; this predicate decides what the tree shows.
-fn is_playable_sample(path: &Path) -> bool {
-    audio_file::is_supported_extension(path)
-}
-
-/// Whether `path` contains a playable sample anywhere below it. Folders
-/// without one are dead weight in the tree, so the browser hides them;
-/// the recursion is bounded because symlink cycles terminate at `MAX_DEPTH`.
-fn has_playable_descendant(path: &Path, depth: usize) -> bool {
-    const MAX_DEPTH: usize = 16;
-    if depth > MAX_DEPTH {
-        return false;
-    }
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let child = entry.path();
-        if is_playable_sample(&child) {
-            return true;
-        }
-        if child.is_dir() && has_playable_descendant(&child, depth + 1) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Entries of `path` the sample browser shows: subdirectories first, then
-/// playable sample files, each case-insensitively sorted by name. Hidden
-/// entries are skipped, and an unreadable directory simply lists as empty.
-fn scan_browser_dir(path: &Path) -> Vec<(bool, PathBuf)> {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return Vec::new();
-    };
-    let mut dirs = Vec::new();
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let child = entry.path();
-        let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.starts_with('.') {
-            continue;
-        }
-        if child.is_dir() {
-            dirs.push(child);
-        } else if is_playable_sample(&child) {
-            files.push(child);
-        }
-    }
-    let by_lower_name = |child: &PathBuf| {
-        child
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_lowercase()
-    };
-    dirs.sort_by_key(&by_lower_name);
-    files.sort_by_key(by_lower_name);
-    dirs.into_iter()
-        .map(|child| (true, child))
-        .chain(files.into_iter().map(|child| (false, child)))
-        .collect()
-}
-
 /// Flattens the browser's folder hierarchy into visible rows: each location
 /// that can play something, then recursively the children of every expanded
 /// folder. Folders whose whole subtree is unplayable are hidden.
@@ -13546,12 +13229,6 @@ fn push_browser_rows(
     }
 }
 
-fn browser_display_name(path: &Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned())
-}
-
 /// Rebuilds the visible tree from the session's locations and expansion set.
 fn refresh_browser(st: &UiState) {
     st.browser_rows.set_vec(build_browser_rows(
@@ -13560,51 +13237,10 @@ fn refresh_browser(st: &UiState) {
     ));
 }
 
-/// Bins for the info pane's waveform. The pane is a couple of inches wide;
-/// more bins would be sub-pixel detail.
-const BROWSER_INFO_BINS: usize = 128;
-
-/// Everything the sidebar's info pane shows about one inspected file, plus
-/// the decoded sample itself for the preview voice.
-struct SampleInspection {
-    name: String,
-    stats: String,
-    peaks: Vec<f32>,
-    sample: Arc<SampleData>,
-}
-
-/// Decodes a sample once for the pane's waveform, source stats, and preview
-/// voice.
-fn inspect_sample(path: &Path) -> Result<SampleInspection, String> {
-    let decoded = audio_file::decode(path)?;
-    let sample = decoded.sample;
-    let channels = match decoded.source_channels {
-        1 => "mono".to_owned(),
-        2 => "stereo".to_owned(),
-        other => format!("{other}ch"),
-    };
-    let format = decoded.bits_per_sample.map_or_else(
-        || decoded.codec_name.to_uppercase(),
-        |bits| format!("{bits}-bit {}", decoded.codec_name),
-    );
-    let stats = format!(
-        "{} Hz · {} · {}\n{} frames · {:.2} s",
-        sample.sample_rate,
-        format,
-        channels,
-        sample.frames.len(),
-        sample_duration(&sample)
-    );
-    Ok(SampleInspection {
-        name: browser_display_name(path),
-        stats,
-        peaks: waveform_peaks(&sample, BROWSER_INFO_BINS),
-        sample,
-    })
-}
-
 #[cfg(test)]
 mod tests {
+    use mooloop_session::browser::is_playable_sample;
+
     #[test]
     fn modulation_uses_two_rack_units() {
         assert_eq!(effect_kind_units(EffectKind::Modulation), 2);
@@ -13901,45 +13537,6 @@ mod tests {
     }
 
     #[test]
-    fn inspect_sample_reports_header_stats_and_peaks() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("tone.wav");
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: 44_100,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
-        for index in 0..4_410 {
-            writer.write_sample(((index % 100) * 200) as i16).unwrap();
-        }
-        writer.finalize().unwrap();
-
-        let inspection = inspect_sample(&path).unwrap();
-        assert_eq!(inspection.name, "tone.wav");
-        assert!(
-            inspection.stats.contains("44100 Hz"),
-            "{}",
-            inspection.stats
-        );
-        assert!(
-            inspection.stats.contains("16-bit"),
-            "{}",
-            inspection.stats
-        );
-        assert!(inspection.stats.contains("mono"), "{}", inspection.stats);
-        assert_eq!(inspection.sample.frames.len(), 4_410);
-        assert_eq!(inspection.peaks.len(), BROWSER_INFO_BINS);
-        assert!(inspection.peaks.iter().any(|peak| *peak > 0.0));
-
-        // Anything the decoder cannot open never reaches the pane.
-        let text = temp.path().join("noise.wav");
-        std::fs::write(&text, b"definitely not RIFF").unwrap();
-        assert!(inspect_sample(&text).is_err());
-    }
-
-    #[test]
     fn copied_channel_names_are_readable_and_unique() {
         let mut project = Project::default();
         project.channels[0].setup.channel.name = "Kick".into();
@@ -14053,74 +13650,6 @@ mod tests {
     }
 
     #[test]
-    fn decodes_16bit_stereo_wav() {
-        let path = std::env::temp_dir().join("mooloop_decode_test_16bit.wav");
-        let spec = hound::WavSpec {
-            channels: 2,
-            sample_rate: 44_100,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
-        for i in 0..1000i32 {
-            let v = ((i % 100) * 300 - 15_000) as i16;
-            writer.write_sample(v).unwrap();
-            writer.write_sample(v).unwrap();
-        }
-        writer.finalize().unwrap();
-
-        let data = audio_file::decode(&path).unwrap().sample;
-        assert_eq!(data.sample_rate, 44_100);
-        assert_eq!(data.len(), 1000);
-        assert!(data.frames.iter().any(|f| f[0] != 0.0));
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn rejects_garbage_file() {
-        let path = std::env::temp_dir().join("mooloop_decode_test_garbage.wav");
-        std::fs::write(&path, b"not a wav at all").unwrap();
-        assert!(audio_file::decode(&path).is_err());
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn waveform_peaks_are_normalized_and_bounded() {
-        let sample = SampleData {
-            frames: vec![[0.0, 0.0], [0.25, -0.5], [1.0, -0.75], [0.1, 0.2]],
-            sample_rate: 48_000,
-            root_note: 60,
-        };
-
-        let peaks = waveform_peaks(&sample, 2);
-
-        assert_eq!(peaks, vec![0.5, 1.0]);
-    }
-
-    #[test]
-    fn adjacent_sample_walks_mixed_formats_without_wrapping() {
-        let directory = std::env::temp_dir().join(format!(
-            "mooloop_sample_browser_test_{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
-        let a = directory.join("a-kick.wav");
-        let b = directory.join("B-snare.FLAC");
-        let c = directory.join("c-hat.mp3");
-        for path in [&a, &b, &c] {
-            std::fs::write(path, []).unwrap();
-        }
-        std::fs::write(directory.join("ignore.txt"), []).unwrap();
-
-        assert_eq!(adjacent_sample(&a, -1).unwrap(), None);
-        assert_eq!(adjacent_sample(&a, 1).unwrap(), Some(b.clone()));
-        assert_eq!(adjacent_sample(&b, 1).unwrap(), Some(c.clone()));
-        assert_eq!(adjacent_sample(&c, 1).unwrap(), None);
-
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
     fn saved_bundle_sample_paths_replace_external_paths() {
         let mut channel = ChannelState::new(0);
         channel.sample_path = Some(PathBuf::from("/samples/source.wav"));
@@ -14142,15 +13671,4 @@ mod tests {
         assert!(channel.sample_embedded);
     }
 
-    #[test]
-    fn song_selection_accepts_new_files_and_legacy_manifests() {
-        let file = PathBuf::from("/songs/beat.mooloop");
-        assert_eq!(normalize_song_selection(file.clone()), file);
-
-        let legacy_manifest = PathBuf::from("/songs/old.mooloop/manifest.toml");
-        assert_eq!(
-            normalize_song_selection(legacy_manifest),
-            PathBuf::from("/songs/old.mooloop")
-        );
-    }
 }

@@ -17,6 +17,7 @@ mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
 mooloop-engine = { workspace = true }
 mooloop-project = { workspace = true }
+mooloop-session = { workspace = true }
 slint = { workspace = true }
 symphonia = {
     version = "0.6.1",

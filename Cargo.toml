@@ -5,6 +5,7 @@ members = [
     "crates/mooloop-dsp",
     "crates/mooloop-engine",
     "crates/mooloop-project",
+    "crates/mooloop-session",
     "crates/mooloop-ui",
     "crates/mooloop-app",
     "spikes/time-stretch",
@@ -22,6 +23,7 @@ mooloop-core = { path = "crates/mooloop-core" }
 mooloop-dsp = { path = "crates/mooloop-dsp" }
 mooloop-engine = { path = "crates/mooloop-engine" }
 mooloop-project = { path = "crates/mooloop-project" }
+mooloop-session = { path = "crates/mooloop-session" }
 mooloop-ui = { path = "crates/mooloop-ui" }
 
 slint = "1.17"

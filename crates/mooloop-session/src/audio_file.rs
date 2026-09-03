@@ -17,17 +17,17 @@ use symphonia::core::meta::MetadataOptions;
 
 /// Extensions offered by the picker and sample browser. Symphonia still
 /// probes file contents; this list is only the user-facing discovery policy.
-pub(crate) const SUPPORTED_EXTENSIONS: [&str; 7] =
+pub const SUPPORTED_EXTENSIONS: [&str; 7] =
     ["wav", "aif", "aiff", "mp3", "flac", "ogg", "oga"];
 
-pub(crate) struct DecodedAudioFile {
-    pub(crate) sample: Arc<SampleData>,
-    pub(crate) source_channels: usize,
-    pub(crate) bits_per_sample: Option<u32>,
-    pub(crate) codec_name: &'static str,
+pub struct DecodedAudioFile {
+    pub sample: Arc<SampleData>,
+    pub source_channels: usize,
+    pub bits_per_sample: Option<u32>,
+    pub codec_name: &'static str,
 }
 
-pub(crate) fn is_supported_extension(path: &Path) -> bool {
+pub fn is_supported_extension(path: &Path) -> bool {
     path.extension().is_some_and(|extension| {
         SUPPORTED_EXTENSIONS
             .iter()
@@ -39,7 +39,7 @@ pub(crate) fn is_supported_extension(path: &Path) -> bool {
 /// representation. Multichannel sources retain their first two channels;
 /// mono sources are duplicated to both sides, matching the historical WAV
 /// loader's behavior.
-pub(crate) fn decode(path: &Path) -> Result<DecodedAudioFile, String> {
+pub fn decode(path: &Path) -> Result<DecodedAudioFile, String> {
     let file = File::open(path).map_err(|error| format!("could not open sample: {error}"))?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();

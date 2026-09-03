@@ -1,0 +1,24 @@
+[package]
+name = "mooloop-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Deliberately no `slint`. This crate is the live application model, and the
+# compiler is what keeps a view type from leaking into it -- see
+# `docs/plans/session-layer-extraction/00-status.md`.
+[dependencies]
+mooloop-core = { workspace = true }
+mooloop-dsp = { workspace = true }
+mooloop-engine = { workspace = true }
+mooloop-project = { workspace = true }
+symphonia = {
+    version = "0.6.1",
+    default-features = false,
+    features = ["aiff", "flac", "mp3", "ogg", "opt-simd", "pcm", "vorbis", "wav"]
+}
+
+[dev-dependencies]
+hound = "3"
+tempfile = "3"
