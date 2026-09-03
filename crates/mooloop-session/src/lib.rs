@@ -24,6 +24,7 @@ pub mod project;
 pub mod rack;
 pub mod roll;
 pub mod sample;
+pub mod sampler;
 pub mod session;
 pub mod steps;
 pub mod transport;

@@ -32,7 +32,7 @@ use mooloop_core::{
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamCurve, ParamDescriptor, ParamOwner, PointId,
     Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
-    PlayMode, SampleCommit, SamplerParams, SliceMap, SnareCharacter, StretchMode,
+    PlayMode, SamplerParams, SliceMap, SnareCharacter, StretchMode,
     VoiceMode, MAX_SLICES,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
     MAX_CHANNELS, MAX_MODULATORS_PER_CHANNEL,
@@ -76,6 +76,7 @@ use mooloop_session::roll::NoteEdit;
 use mooloop_session::project::{
     fresh_starter_seed, normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
 };
+use mooloop_session::sampler::{commit_is_stale, refresh_sample_view, slice_fractions, SliceEdit};
 use mooloop_session::sample::{
     adjacent_sample, inspect_sample, load_sample_at_path, sample_description, sample_duration,
     tune_label, waveform_peaks, waveform_peaks_windowed,
@@ -890,51 +891,6 @@ impl SampleMarker {
     }
 }
 
-/// Resolve one marker onto a zero crossing, returning the fraction to store
-/// and what happened, or `None` when there is no sample to search.
-///
-/// Runs entirely on the UI thread against decoded frames the control side
-/// already owns. Nothing here is reachable from `process()`.
-/// Resolve a proposed slice boundary onto a zero crossing.
-///
-/// Slice boundaries need this more than the trim markers do, not less: a
-/// slice cut out of the middle of a break can end at full amplitude, and the
-/// voice is deactivated outright when it reaches its end rather than faded.
-/// A boundary on a crossing is what keeps that from clicking on every note.
-///
-/// Penned in by the playback region rather than by neighbouring markers: two
-/// slices may sit as close together as the user likes, and the map refuses a
-/// collision itself.
-fn snap_slice_frame(params: &SamplerParams, sample: &SampleData, frame: usize) -> usize {
-    let len = sample.frames.len();
-    if len < 2 {
-        return frame;
-    }
-    let last = len - 1;
-    let bounds = frame_from_fraction(params.start, len).min(last)
-        ..=frame_from_fraction(params.end, len).min(last);
-    let window = snap_window_frames(DEFAULT_SNAP_WINDOW_MS, sample.sample_rate);
-    snap_to_zero_crossing(&sample.frames, frame.min(last), window, bounds).resolved
-}
-
-/// Re-derive everything the editor shows about a channel's audio.
-///
-/// Committing and reverting swap the published buffer underneath the view,
-/// and the waveform, the readout, and the duration all describe that buffer
-/// rather than the source. Kept in one place so a commit cannot update two of
-/// the three.
-fn refresh_sample_view(channel: &mut ChannelState) {
-    let Some(sample) = channel.published_sample().cloned() else {
-        channel.waveform.clear();
-        channel.sample_description.clear();
-        channel.sample_duration = 0.0;
-        return;
-    };
-    channel.waveform = waveform_peaks(&sample, WAVEFORM_BINS);
-    channel.sample_description = sample_description(&sample);
-    channel.sample_duration = sample_duration(&sample);
-}
-
 /// A channel's audio, on its way to the pump.
 ///
 /// Neither half can ride the command ring: `EngineCommand` is `Copy` and
@@ -960,81 +916,6 @@ fn publish_channel_audio_to(tx: &ChannelAudioSender, channel: usize, state: &Cha
         sample: state.published_sample().cloned(),
         slices: (!state.slices.is_empty()).then(|| Arc::new(state.slices.clone())),
     });
-}
-
-/// Turn a normalized position from the face into a frame of the published
-/// buffer, snapped to a zero crossing when AUTO is on.
-fn resolve_slice_frame(channel: &ChannelState, position: f32, snap: bool) -> Option<u32> {
-    let sample = channel.published_sample()?;
-    let len = sample.frames.len();
-    if len == 0 {
-        return None;
-    }
-    let frame = frame_from_fraction(position.clamp(0.0, 1.0), len);
-    let frame = if snap {
-        snap_slice_frame(&channel.params, sample, frame)
-    } else {
-        frame
-    };
-    Some(frame as u32)
-}
-
-/// Whether a commit no longer describes what the stretch controls say.
-///
-/// Two ways to drift. A bar-synced commit goes stale when the project tempo
-/// moves, because the ratio it baked was derived from that tempo; that is
-/// re-derived through the sampler's own `effective_ratio` rather than by
-/// storing the tempo, so this asks the same question the commit answered.
-/// Any commit goes stale when the mode, the free speed, or -- in `Grain` --
-/// the grain size is edited after the bake: those knobs still read as the
-/// patch's stretch settings while the audio was rendered under other ones.
-/// Reported and offered a re-bake, never acted on by itself: re-rendering a
-/// loop under someone without being asked is worse than telling them.
-fn commit_is_stale(channel: &ChannelState, commit: &SampleCommit, bpm: f64) -> bool {
-    let params = channel.params;
-    if commit.mode != params.stretch_mode {
-        return true;
-    }
-    if params.stretch_mode == StretchMode::Grain && commit.grain != params.stretch_grain {
-        return true;
-    }
-    if !params.stretch_sync {
-        return (commit.ratio - params.stretch_ratio).abs() > 1.0e-3;
-    }
-    let Some(source) = channel.sample_data.as_ref() else {
-        return false;
-    };
-    let params = SamplerParams {
-        start: commit.source_start,
-        end: commit.source_end,
-        loop_start: commit.source_loop_start,
-        loop_end: commit.source_loop_end,
-        ..channel.params
-    };
-    let now = mooloop_dsp::Sampler::effective_ratio(
-        params,
-        source.frames.len(),
-        source.sample_rate,
-        bpm,
-        1.0,
-    );
-    (now - f64::from(commit.ratio)).abs() > 1.0e-3
-}
-
-/// The slice boundaries of the selected channel, as fractions for the face.
-fn slice_fractions(channel: &ChannelState) -> Vec<f32> {
-    let len = channel
-        .published_sample()
-        .map_or(0, |sample| sample.frames.len());
-    if len == 0 {
-        return Vec::new();
-    }
-    channel
-        .slices
-        .markers()
-        .iter()
-        .map(|marker| fraction_from_frame(marker.frame as usize, len))
-        .collect()
 }
 
 fn snap_marker(
@@ -2356,6 +2237,13 @@ impl UiState {
     /// after an edit (like a multi-note delete) that can touch notes spread
     /// across many steps, where refreshing one step at a time would miss
     /// the rest.
+    /// Hands the selected channel's audio and slice map to the engine.
+    fn publish_selected_audio(&self, tx: &ChannelAudioSender) {
+        if let Some(channel) = self.session.channels.get(self.session.selected) {
+            publish_channel_audio_to(tx, self.session.selected, channel);
+        }
+    }
+
     /// Re-draws one device-rack row from the slot behind it.
     fn refresh_effect_row(&self, slot: usize) {
         if let Some(effect) = self.session.effect_chain().and_then(|chain| chain.get(slot)) {
@@ -7241,25 +7129,20 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return;
-                    };
-                    let Some(frame) = resolve_slice_frame(channel, position, window.get_snap_to_zero())
-                    else {
-                        return;
-                    };
-                    if channel.slices.add(frame).is_none() {
-                        window.set_status_message(
-                            format!("No slice added: {MAX_SLICES} is the limit, or one is already there")
-                                .into(),
-                        );
-                        return;
+                    match st.session.add_slice(position, window.get_snap_to_zero()) {
+                        SliceEdit::Ignored => return,
+                        SliceEdit::Refused => {
+                            window.set_status_message(
+                                format!("No slice added: {MAX_SLICES} is the limit, or one is already there")
+                                    .into(),
+                            );
+                            return;
+                        }
+                        SliceEdit::Changed(markers) => {
+                            st.slice_model.set_vec(markers);
+                        }
                     }
-                    publish_channel_audio_to(&audio_out, ch, channel);
-                    let markers = slice_fractions(channel);
-                    st.slice_model.set_vec(markers);
-                    st.session.dirty = true;
+                    st.publish_selected_audio(&audio_out);
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slice added");
             });
@@ -7275,33 +7158,11 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                    let Some(markers) = st.session.move_slice(index, position) else {
                         return;
                     };
-                    // By id, not by position: a drag past a neighbour
-                    // reorders the map, and the next move frame still means
-                    // the marker under the pointer.
-                    let Some(id) = channel
-                        .slices
-                        .get(index.max(0) as usize)
-                        .map(|marker| marker.id)
-                    else {
-                        return;
-                    };
-                    // Not snapped while dragging: a marker that jumps to a
-                    // crossing under the pointer fights the drag. The AUTO
-                    // snap lands it on release, below.
-                    let Some(frame) = resolve_slice_frame(channel, position, false) else {
-                        return;
-                    };
-                    if !channel.slices.move_to(id, frame) {
-                        return;
-                    }
-                    publish_channel_audio_to(&audio_out, ch, channel);
-                    let markers = slice_fractions(channel);
                     st.slice_model.set_vec(markers);
-                    st.session.dirty = true;
+                    st.publish_selected_audio(&audio_out);
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slice moved");
             });
@@ -7317,22 +7178,11 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                    let Some(markers) = st.session.remove_slice(index) else {
                         return;
                     };
-                    let Some(id) = channel
-                        .slices
-                        .get(index.max(0) as usize)
-                        .map(|marker| marker.id)
-                    else {
-                        return;
-                    };
-                    channel.slices.remove(id);
-                    publish_channel_audio_to(&audio_out, ch, channel);
-                    let markers = slice_fractions(channel);
                     st.slice_model.set_vec(markers);
-                    st.session.dirty = true;
+                    st.publish_selected_audio(&audio_out);
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slice removed");
             });
@@ -7348,53 +7198,15 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return;
-                    };
-                    let Some(sample) = channel.published_sample().cloned() else {
+                    let Some(markers) = st.session.divide_slices(count, window.get_snap_to_zero()) else {
                         window.set_status_message("No sample to slice".into());
                         return;
                     };
-                    let len = sample.frames.len();
-                    let start = frame_from_fraction(channel.params.start, len) as u32;
-                    let end = frame_from_fraction(channel.params.end, len) as u32;
-                    channel
-                        .slices
-                        .divide_evenly(count.max(1) as usize, start, end);
-                    // Grid divisions land wherever the arithmetic puts them,
-                    // which is as likely to be mid-waveform as a hand-placed
-                    // marker is. Snapping them is the same reason the trim
-                    // markers snap, multiplied by the slice count.
-                    if window.get_snap_to_zero() {
-                        let params = channel.params;
-                        let snapped: Vec<mooloop_core::SliceMarker> = channel
-                            .slices
-                            .markers()
-                            .iter()
-                            .map(|marker| mooloop_core::SliceMarker {
-                                id: marker.id,
-                                frame: snap_slice_frame(&params, &sample, marker.frame as usize)
-                                    as u32,
-                            })
-                            .collect();
-                        channel.slices.rebuild(snapped);
-                    }
-                    publish_channel_audio_to(&audio_out, ch, channel);
-                    let markers = slice_fractions(channel);
                     st.slice_model.set_vec(markers);
-                    st.session.dirty = true;
-                    window.set_status_message(
-                        format!("Divided into {} slices", count.max(1)).into(),
-                    );
+                    st.publish_selected_audio(&audio_out);
+                    window.set_status_message(format!("Divided into {} slices", count.max(1)).into());
                 }
-                record_project_history(
-                    &commands,
-                    before,
-                    &history_state,
-                    &window,
-                    "Slices divided",
-                );
+                record_project_history(&commands, before, &history_state, &window, "Slices divided");
             });
         }
         {
@@ -7408,22 +7220,13 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                    let Some(markers) = st.session.clear_slices() else {
                         return;
                     };
-                    channel.slices.clear();
-                    publish_channel_audio_to(&audio_out, ch, channel);
-                    st.slice_model.set_vec(Vec::new());
-                    st.session.dirty = true;
+                    st.slice_model.set_vec(markers);
+                    st.publish_selected_audio(&audio_out);
                 }
-                record_project_history(
-                    &commands,
-                    before,
-                    &history_state,
-                    &window,
-                    "Slices cleared",
-                );
+                record_project_history(&commands, before, &history_state, &window, "Slices cleared");
             });
         }
         {
