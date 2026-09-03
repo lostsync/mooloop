@@ -246,6 +246,30 @@ controls reach; whether they sound *good* is exactly what step 09 is for, and
 a patch that turns out wrong is a finding about a range or a curve rather than
 a case to delete.
 
+## Step 02's acceptance, through the assembled program
+
+Three of step 02's acceptance criteria are only true of the whole program
+rather than of the device against its own `process`, and they now have tests
+in `mooloop_engine::ds01_tests`:
+
+- **It plays from a pattern**, through the sequencer, the strip and the master.
+- **A channel LFO on Filter Cutoff sweeps a hat pattern.** The step calls this
+  the case the whole plan exists for, and it is asserted through the real
+  modulation rack — an LFO installed in a slot, a route added to a `ParamAddr`
+  — rather than by calling the device. v1's drum synth cannot be reached this
+  way at all, which is the difference DS-01 was built to make.
+- **It renders identically offline and live.** That claim has one mechanical
+  meaning: an offline render and a realtime callback differ in exactly one
+  thing DS-01 can see, the block size. The same project at 128 frames and at
+  1024 is sample-for-sample identical, with and without an automation lane on
+  Tone Pitch.
+
+The last one rests on a condition worth naming: DS-01 walks its own control
+tick from the start of each block, so the grid only lands on the same absolute
+frames because every block boundary is a multiple of the control rate. That is
+true of every driver buffer size and of the offline renderer's chunking, but it
+is a condition rather than a guarantee.
+
 ## The review pass
 
 The device was built in one push, so it got a review afterwards. Seven

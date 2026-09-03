@@ -36,6 +36,8 @@ mod sequencer;
 mod transport;
 
 #[cfg(test)]
+mod ds01_tests;
+#[cfg(test)]
 mod gain_structure_tests;
 
 use graph::{AsyncClient, Graph};
