@@ -31,7 +31,7 @@ use mooloop_core::{
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamCurve, ParamDescriptor, ParamOwner, PointId,
-    Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
+    Project, ProjectChannel, RetriggerMode, SampleReference,
     PlayMode, SamplerParams, SnareCharacter, StretchMode,
     VoiceMode, MAX_SLICES,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
@@ -8789,80 +8789,12 @@ impl AppUi {
                 let mut forwarded = 0usize;
                 let mut document_title_needs_refresh = false;
                 while let Ok(message) = pending_rx.try_recv() {
+                    if autodrive_verbose {
+                        if let PendingEngineMessage::Command(cmd) = &message {
+                            eprintln!("autodrive cmd: {cmd:?}");
+                        }
+                    }
                     match message {
-                        PendingEngineMessage::Command(cmd) => {
-                            if !matches!(
-                                cmd,
-                                EngineCommand::Play | EngineCommand::Pause | EngineCommand::Stop
-                            ) {
-                                let mut state = st.borrow_mut();
-                                document_title_needs_refresh |= !state.session.dirty;
-                                state.session.dirty = true;
-                                state.session.revision = state.session.revision.wrapping_add(1);
-                            }
-                            if autodrive_verbose {
-                                eprintln!("autodrive cmd: {cmd:?}");
-                            }
-                            handle.send(cmd);
-                            forwarded += 1;
-                        }
-                        PendingEngineMessage::PreviewGain(gain) => {
-                            handle.set_preview_gain(gain);
-                            forwarded += 1;
-                        }
-                        PendingEngineMessage::ResizeBuffers { bpm } => {
-                            // Each replacement allocates its ring on this UI
-                            // pump thread. The ordered realtime queue then
-                            // swaps the ready node at a block boundary.
-                            let buffers: Vec<_> = {
-                                let state = st.borrow();
-                                state
-                                    .session.channels
-                                    .iter()
-                                    .enumerate()
-                                    .flat_map(|(channel, state)| {
-                                        state.effects.iter().enumerate().filter_map(
-                                            move |(slot, effect)| {
-                                                effect.params.buffer().copied().map(|params| {
-                                                    (EffectTarget::Channel(channel as u8), slot as u8, params)
-                                                })
-                                            },
-                                        )
-                                    })
-                                    .chain(state.session.buses.iter().enumerate().flat_map(|(bus, state)| {
-                                        state.effects.iter().enumerate().filter_map(
-                                            move |(slot, effect)| {
-                                                effect.params.buffer().copied().map(|params| {
-                                                    (EffectTarget::Bus(bus as u8), slot as u8, params)
-                                                })
-                                            },
-                                        )
-                                    }))
-                                    .collect()
-                            };
-                            for (target, slot, params) in buffers {
-                                let _ = handle.replace_buffer(target, slot, params, params, bpm);
-                            }
-                        }
-                        PendingEngineMessage::AddChannel { channel, source } => {
-                            {
-                                let mut state = st.borrow_mut();
-                                document_title_needs_refresh |= !state.session.dirty;
-                                state.session.dirty = true;
-                                state.session.revision = state.session.revision.wrapping_add(1);
-                            }
-                            handle.add_channel(channel, source);
-                        }
-                        PendingEngineMessage::Structural(cmd) => {
-                            // Any structural change is an unsaved edit.
-                            {
-                                let mut state = st.borrow_mut();
-                                document_title_needs_refresh |= !state.session.dirty;
-                                state.session.dirty = true;
-                                state.session.revision = state.session.revision.wrapping_add(1);
-                            }
-                            handle.send_structural(cmd);
-                        }
                         PendingEngineMessage::ProjectEdit(edit) => {
                             let Some(window) = weak.upgrade() else { return };
                             if edit.history.is_some() {
@@ -8896,13 +8828,6 @@ impl AppUi {
                                 sync_command_availability(&window, &commands.borrow());
                             }
                         }
-                        PendingEngineMessage::Telemetry(action) => match action {
-                            TelemetryAction::SetEffectSpectrumEnabled {
-                                target,
-                                slot,
-                                enabled,
-                            } => handle.set_effect_spectrum_enabled(target, slot, enabled),
-                        },
                         PendingEngineMessage::Audio(action) => {
                             let Some(window) = weak.upgrade() else { return };
                             match action {
@@ -8990,6 +8915,14 @@ impl AppUi {
                                 }
                             }
                         }
+                        // Everything else needs only the handle.
+                        message => {
+                            forwarded += 1;
+                            document_title_needs_refresh |= st
+                                .borrow_mut()
+                                .session
+                                .apply_engine_message(&mut handle, message);
+                        }
                     }
                 }
                 if document_title_needs_refresh {
@@ -9009,24 +8942,14 @@ impl AppUi {
                         } => {
                             w.set_beat_in_bar(beat_in_bar as i32);
                             w.set_playing(playing);
-                            let st = st.borrow();
-                            let length = st.session.pattern_lengths[st.session.current_pattern] as u64;
-                            let ticks_per_step = (Ppq::DEFAULT.ticks_per_beat() / 4) as u64;
-                            let ticks_per_beat = Ppq::DEFAULT.ticks_per_beat() as u64;
-                            w.set_current_step(((tick / ticks_per_step) % length) as i32);
-                            let position_ticks = if st.session.song_mode {
-                                let song_length = u64::from(st.session.song_length_ticks());
-                                let song_position = tick % song_length;
-                                w.set_playlist_position_ticks(song_position as i32);
-                                song_position
-                            } else {
-                                tick % (length * ticks_per_step)
-                            };
-                            let ticks_per_bar = u64::from(TICKS_PER_BAR);
-                            let tick_in_bar = position_ticks % ticks_per_bar;
-                            w.set_position_bar((position_ticks / ticks_per_bar) as i32 + 1);
-                            w.set_position_beat((tick_in_bar / ticks_per_beat) as i32 + 1);
-                            w.set_position_tick((tick_in_bar % ticks_per_beat) as i32);
+                            let position = st.borrow().session.transport_position(tick);
+                            w.set_current_step(position.step);
+                            if let Some(ticks) = position.playlist_ticks {
+                                w.set_playlist_position_ticks(ticks);
+                            }
+                            w.set_position_bar(position.bar);
+                            w.set_position_beat(position.beat);
+                            w.set_position_tick(position.tick);
                         }
                         EngineEvent::Metering { peak_l, peak_r } => {
                             block_peak_l = block_peak_l.max(peak_l.max(0.0));
