@@ -218,6 +218,56 @@ And four from step 07:
   without knowing anything about voices — because it is resolved before the
   block rather than inside it, so there is no order to depend on.
 
+## Evidence for step 09, which has not started
+
+Step 09 is the listening pass and needs ears. Its central claim does not:
+**one architecture reaches every drum type, from the controls rather than from
+hand-tuning.** `one_architecture_reaches_a_kit` in `mooloop_dsp::ds01` answers
+that mechanically. Thirteen patches — sub, kit and DnB kicks, tight and deep
+snares, rimshot, clap, tom, closed and open hats, cowbell, clave, zap — each
+sounds, stays bounded, ends, and is a different sound from every other, and
+between them they span more than eight times in length and four times in
+brightness.
+
+Two of the plan's own structural claims are tested beside it:
+
+- **The toms are one patch at three tunings.** Its ring is the same length at
+  every tuning while its pitch tracks, which is what deriving the resonator
+  from a decay *time* rather than a Q buys. If that had failed it would have
+  been a step 04 bug found here.
+- **A ghost hit is a different sound, not a quieter one.** Velocity routed to
+  amp decay and filter cutoff makes the quiet hit shorter *and* duller as well
+  as softer. `09-the-kit.md` calls this the acceptance case for the whole
+  instrument, and it is built from two ordinary matrix rows.
+
+**These are not the factory bank.** They are patches reached by reasoning
+about the architecture, and nobody has heard them. Their job is to say the
+controls reach; whether they sound *good* is exactly what step 09 is for, and
+a patch that turns out wrong is a finding about a range or a curve rather than
+a case to delete.
+
+## The review pass
+
+The device was built in one push, so it got a review afterwards. Seven
+defects, two of them silent and serious, all fixed in
+`fix(ds01): seven defects a review pass found`. Three are worth carrying
+forward as things to watch for rather than as history:
+
+- **A per-hit destination has to be smoothed per hit.** A route to any of the
+  four mix levels was inert, because the levels were smoothed on the device
+  while the matrix resolved per voice — and `PARAM_LEVEL` is every row's
+  default destination, so the first route anyone made was the one that did
+  nothing. Anything else that gains a smoother needs the same question asked
+  of it.
+- **A release with a phase is not idempotent, and a choke is repeated.**
+  Transport stop chokes on every stopped block; restarting the fade each time
+  meant one longer than the block period never finished. v1's coefficient
+  stamping had that property for free.
+- **A display that approximates its own DSP will contradict it.** The scopes
+  drew the curve control backwards — the fastest decay where the envelope
+  produces the slowest — because a power curve was standing in for
+  `env::shape`. The real function is three lines.
+
 ## What is blocked
 
 **Step 07's published outlets are not built.** Both halves need infrastructure

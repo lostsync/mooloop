@@ -3465,6 +3465,351 @@ mod tests {
         assert!(long.last().copied().unwrap_or(0.0) <= DS01_BURST_MAX_S, "{long:?}");
     }
 
+    /// Roughly where a sound sits in the spectrum: the mean sample-to-sample
+    /// change against its level, which rises with frequency. A proxy for a
+    /// spectral centroid, and enough to say a hat is brighter than a kick.
+    fn brightness(samples: &[f32]) -> f32 {
+        let level = rms(samples);
+        if level <= 0.0 {
+            return 0.0;
+        }
+        let difference: Vec<f32> = samples.windows(2).map(|w| w[1] - w[0]).collect();
+        rms(&difference) / level
+    }
+
+    fn env(decay: f32) -> Ds01EnvParams {
+        Ds01EnvParams::one_shot(decay)
+    }
+
+    /// The end-state test from `01-what-ds01-is.md`, made concrete.
+    ///
+    /// **These are not the factory bank.** Step 09 is the listening pass, and
+    /// nobody has listened yet; these are patches reached by reasoning about
+    /// the architecture, and their job here is to answer the question the
+    /// plan says matters most — whether the *controls reach*, or whether the
+    /// range would depend on hand-tuning. If one of these turns out to sound
+    /// wrong, that is a finding for step 09 about a range or a curve, not a
+    /// reason to delete the case.
+    fn kit() -> Vec<(&'static str, Ds01Params)> {
+        let base = Ds01Params::default();
+        vec![
+            (
+                "sub kick",
+                Ds01Params {
+                    tone_pitch: 45.0,
+                    pitch: Ds01PitchEnvParams { attack: 0.0, decay: 0.06, curve: 0.0, depth: 24.0 },
+                    amp: env(0.6),
+                    ..base
+                },
+            ),
+            (
+                "kit kick",
+                Ds01Params {
+                    noise_level: 0.35,
+                    filter_cutoff: 3_000.0,
+                    noise_env: env(0.008),
+                    ..base
+                },
+            ),
+            (
+                "dnb kick",
+                Ds01Params {
+                    drive: 0.8,
+                    character: Ds01Character::Fold,
+                    pitch: Ds01PitchEnvParams { attack: 0.0, decay: 0.03, curve: 0.0, depth: 30.0 },
+                    amp: env(0.35),
+                    ..base
+                },
+            ),
+            (
+                "tight snare",
+                Ds01Params {
+                    tone_pitch: 190.0,
+                    noise_level: 0.8,
+                    filter_morph: 0.5,
+                    filter_cutoff: 2_500.0,
+                    filter_res: 0.3,
+                    amp: env(0.12),
+                    noise_env: env(0.09),
+                    pitch: Ds01PitchEnvParams { depth: 8.0, ..base.pitch },
+                    ..base
+                },
+            ),
+            (
+                "deep snare",
+                Ds01Params {
+                    tone_pitch: 160.0,
+                    noise_level: 0.7,
+                    filter_morph: 0.5,
+                    filter_cutoff: 1_800.0,
+                    body_level: 0.4,
+                    body_pitch: 180.0,
+                    amp: env(0.25),
+                    noise_env: env(0.2),
+                    ..base
+                },
+            ),
+            (
+                "rimshot",
+                Ds01Params {
+                    tone_level: 0.2,
+                    noise_level: 0.2,
+                    body_level: 1.0,
+                    body_ratio: 0.9,
+                    body_pitch: 420.0,
+                    body_decay: 0.08,
+                    amp: env(0.06),
+                    ..base
+                },
+            ),
+            (
+                "clap",
+                Ds01Params {
+                    tone_level: 0.0,
+                    noise_level: 1.0,
+                    filter_morph: 0.5,
+                    filter_cutoff: 1_200.0,
+                    burst_repeats: 4,
+                    burst_spacing: 0.011,
+                    burst_spread: -0.6,
+                    burst_level_step: -0.3,
+                    amp: env(0.25),
+                    noise_env: env(0.02),
+                    ..base
+                },
+            ),
+            (
+                "tom",
+                Ds01Params {
+                    tone_level: 0.5,
+                    tone_pitch: 150.0,
+                    body_level: 0.9,
+                    body_pitch: 150.0,
+                    body_decay: 0.5,
+                    pitch: Ds01PitchEnvParams { depth: 8.0, ..base.pitch },
+                    amp: env(0.5),
+                    ..base
+                },
+            ),
+            (
+                "closed hat",
+                Ds01Params {
+                    tone_pitch: 320.0,
+                    tone_wave: 1.0,
+                    tone_partials: 6,
+                    tone_spread: 1.0,
+                    noise_level: 0.6,
+                    noise_color: Ds01NoiseColor::Metal,
+                    filter_cutoff: 8_000.0,
+                    amp: env(0.05),
+                    noise_env: env(0.04),
+                    pitch: Ds01PitchEnvParams { depth: 0.0, ..base.pitch },
+                    ..base
+                },
+            ),
+            (
+                "open hat",
+                Ds01Params {
+                    tone_pitch: 320.0,
+                    tone_wave: 1.0,
+                    tone_partials: 6,
+                    tone_spread: 1.0,
+                    noise_level: 0.6,
+                    noise_color: Ds01NoiseColor::Metal,
+                    filter_cutoff: 8_000.0,
+                    choke_group: 1,
+                    amp: env(0.5),
+                    noise_env: env(0.45),
+                    pitch: Ds01PitchEnvParams { depth: 0.0, ..base.pitch },
+                    ..base
+                },
+            ),
+            (
+                "cowbell",
+                Ds01Params {
+                    tone_pitch: 540.0,
+                    tone_wave: 1.0,
+                    tone_partials: 2,
+                    tone_spread: 0.55,
+                    body_level: 0.5,
+                    body_ratio: 0.6,
+                    body_pitch: 540.0,
+                    body_decay: 0.25,
+                    amp: env(0.28),
+                    pitch: Ds01PitchEnvParams { depth: 0.0, ..base.pitch },
+                    ..base
+                },
+            ),
+            (
+                "clave",
+                Ds01Params {
+                    tone_level: 0.0,
+                    body_level: 1.0,
+                    body_ratio: 0.85,
+                    body_pitch: 1_200.0,
+                    body_decay: 0.05,
+                    amp: env(0.05),
+                    ..base
+                },
+            ),
+            (
+                "zap",
+                Ds01Params {
+                    tone_pitch: 200.0,
+                    tone_wave: 0.6,
+                    pitch: Ds01PitchEnvParams {
+                        attack: 0.0,
+                        decay: 0.08,
+                        curve: 0.0,
+                        depth: -48.0,
+                    },
+                    amp: env(0.12),
+                    ..base
+                },
+            ),
+        ]
+    }
+
+    /// One universal voice, and the range comes from the controls reaching
+    /// rather than from each sound being a code path. Every patch sounds,
+    /// stays bounded, ends, and is a different sound from every other.
+    #[test]
+    fn one_architecture_reaches_a_kit() {
+        let mut rendered = Vec::new();
+        for (name, params) in kit() {
+            let mut node = Ds01::new(params, SR);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 60, 127));
+            let out = render(&mut node, SR as usize, &events);
+
+            assert!(out.iter().all(|s| s.is_finite()), "{name} went non-finite");
+            assert!(peak(&out) <= 1.0, "{name} peaked at {}", peak(&out));
+            assert!(peak(&out) > 0.02, "{name} is inaudible at {}", peak(&out));
+
+            for _ in 0..5 {
+                render(&mut node, SR as usize, &EventList::empty());
+            }
+            assert!(
+                node.voices.iter().all(|voice| !voice.active),
+                "{name} stranded a voice"
+            );
+            rendered.push((name, out));
+        }
+
+        for (index, (name, out)) in rendered.iter().enumerate() {
+            for (other_name, other) in &rendered[index + 1..] {
+                assert_ne!(out, other, "{name} and {other_name} are the same sound");
+            }
+        }
+
+        // And the range is a range: the kit spans an order of magnitude in
+        // both length and brightness, which is the claim the architecture is
+        // making.
+        let decays: Vec<f32> = rendered.iter().map(|(_, out)| decay_time_s(out)).collect();
+        let brights: Vec<f32> = rendered.iter().map(|(_, out)| brightness(out)).collect();
+        let span = |values: &[f32]| {
+            let low = values.iter().copied().fold(f32::INFINITY, f32::min);
+            let high = values.iter().copied().fold(0.0_f32, f32::max);
+            high / low.max(1.0e-6)
+        };
+        assert!(span(&decays) > 8.0, "the kit's lengths span {}", span(&decays));
+        assert!(
+            span(&brights) > 4.0,
+            "the kit's brightnesses span {}",
+            span(&brights)
+        );
+    }
+
+    /// The toms are one patch at three tunings, not three authored sounds. If
+    /// tuning two octaves stopped it sounding like the same drum, Body Pitch
+    /// tracking or the resonator's decay derivation would be wrong — and that
+    /// would be a step 04 bug found here.
+    #[test]
+    fn one_tom_patch_tunes_across_a_range() {
+        let tom = kit()
+            .into_iter()
+            .find(|(name, _)| *name == "tom")
+            .expect("the kit has a tom")
+            .1;
+        let at = |note: u8| {
+            let mut node = Ds01::new(tom, SR);
+            let mut events = EventList::empty();
+            events.push(note_on(0, note, 127));
+            render(&mut node, SR as usize, &events)
+        };
+        let low = at(36);
+        let mid = at(48);
+        let high = at(60);
+
+        // Same drum: it rings for the same length at every tuning, which is
+        // what deriving the resonator from a decay time rather than a Q buys.
+        let lengths = [decay_time_s(&low), decay_time_s(&mid), decay_time_s(&high)];
+        let spread = lengths.iter().copied().fold(0.0_f32, f32::max)
+            / lengths.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(spread < 1.4, "the tom's length moved with its tuning: {lengths:?}");
+
+        // Different note: an octave up is about twice the rate.
+        let rates = [
+            upward_crossings(&low[480..12_000]),
+            upward_crossings(&mid[480..12_000]),
+            upward_crossings(&high[480..12_000]),
+        ];
+        assert!(rates[1] > rates[0], "{rates:?}");
+        assert!(rates[2] > rates[1], "{rates:?}");
+    }
+
+    /// The acceptance case for the whole instrument: a quiet hit that is
+    /// audibly a *different* sound — shorter and duller — rather than the
+    /// same sound turned down. If this were not straightforward to build from
+    /// the matrix, step 07's source set would be wrong.
+    #[test]
+    fn a_ghost_hit_is_a_different_sound_not_a_quieter_one() {
+        let mut ghost = kit()
+            .into_iter()
+            .find(|(name, _)| *name == "tight snare")
+            .expect("the kit has a snare")
+            .1;
+        ghost.matrix[0] = mooloop_core::Ds01Route {
+            source: Ds01ModSource::Velocity,
+            dest: ds01::PARAM_AMP_DECAY,
+            amount: 0.35,
+            curve: 0.0,
+        };
+        ghost.matrix[1] = mooloop_core::Ds01Route {
+            source: Ds01ModSource::Velocity,
+            dest: ds01::PARAM_FILTER_CUTOFF,
+            amount: 0.35,
+            curve: 0.0,
+        };
+        // The route carries velocity now, so the plain control steps aside.
+        ghost.velocity_amount = 0.4;
+        ghost.amp = env(0.05);
+        ghost.filter_cutoff = 900.0;
+
+        let at = |velocity: u8| {
+            let mut node = Ds01::new(ghost, SR);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 60, velocity));
+            render(&mut node, 24_000, &events)
+        };
+        let quiet = at(35);
+        let hard = at(127);
+
+        assert!(
+            decay_time_s(&quiet) < decay_time_s(&hard) * 0.75,
+            "the ghost is not shorter: {} against {}",
+            decay_time_s(&quiet),
+            decay_time_s(&hard)
+        );
+        assert!(
+            brightness(&quiet) < brightness(&hard) * 0.9,
+            "the ghost is not duller: {} against {}",
+            brightness(&quiet),
+            brightness(&hard)
+        );
+        assert!(peak(&quiet) < peak(&hard), "the ghost is not softer");
+    }
+
     #[test]
     fn preview_renders_through_the_production_voice() {
         let plain = Ds01::preview_waveform(Ds01Params::default(), 96, 0.3);
