@@ -716,13 +716,68 @@ pub struct MlP8Route {
 /// audio thread never grows a container. Empty slots are `None` rather than
 /// placeholder rows, so a saved patch carries the routes it has and no more.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(into = "MlP8RoutesRepr", from = "MlP8RoutesRepr")]
 pub struct MlP8Routes {
     routes: [Option<MlP8Route>; MLP8_MAX_ROUTES],
     /// Next durable id. Monotonic within a patch so a removed route's id is
     /// never handed to a different route later, which would silently
     /// re-point an automation lane.
     next_id: u16,
+}
+
+/// What a patch writes: the routes it actually has, not sixteen slots most of
+/// which are empty.
+///
+/// The in-memory form is a fixed array because the audio thread may not
+/// allocate, but that is a runtime concern and not a file format. Serializing
+/// it directly also does not merely look wasteful -- TOML has no
+/// representation for a `None` element, so the derived form could not save an
+/// ML-P8 at all.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct MlP8RoutesRepr {
+    routes: Vec<MlP8Route>,
+    next_id: u16,
+}
+
+impl Default for MlP8RoutesRepr {
+    fn default() -> Self {
+        Self {
+            routes: Vec::new(),
+            next_id: 1,
+        }
+    }
+}
+
+impl From<MlP8Routes> for MlP8RoutesRepr {
+    fn from(value: MlP8Routes) -> Self {
+        Self {
+            routes: value.iter().copied().collect(),
+            next_id: value.next_id,
+        }
+    }
+}
+
+impl From<MlP8RoutesRepr> for MlP8Routes {
+    fn from(value: MlP8RoutesRepr) -> Self {
+        let mut routes = [None; MLP8_MAX_ROUTES];
+        for (slot, route) in routes
+            .iter_mut()
+            .zip(value.routes.into_iter().take(MLP8_MAX_ROUTES))
+        {
+            *slot = Some(route);
+        }
+        // A file whose `next_id` does not clear the ids it also carries would
+        // hand a live route's id to the next one added, which is exactly the
+        // silent re-pointing the durable id exists to prevent. Trust the
+        // routes over the counter.
+        let highest = routes.iter().flatten().map(|route| route.id).max();
+        let next_id = match highest {
+            Some(highest) => value.next_id.max(highest.saturating_add(1)),
+            None => value.next_id.max(1),
+        };
+        Self { routes, next_id }
+    }
 }
 
 impl Default for MlP8Routes {

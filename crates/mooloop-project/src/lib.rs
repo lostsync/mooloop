@@ -89,7 +89,7 @@ pub enum LoadedDocument {
     Song(Project),
     Kit(Kit),
     Channel(Box<ChannelSetup>),
-    Generator(ChannelSource),
+    Generator(Box<ChannelSource>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -730,7 +730,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             let envelope: Envelope<ChannelSource> = toml::from_str(&manifest)?;
             validate_envelope(&envelope, "generator")?;
             (
-                LoadedDocument::Generator(envelope.document),
+                LoadedDocument::Generator(Box::new(envelope.document)),
                 envelope.asset_mode,
             )
         }
@@ -1907,7 +1907,7 @@ id = "default_kick"
             save_generator_preset(&path, &source, info.clone(), AssetMode::Embedded).unwrap();
             let loaded = load_bundle(&path).unwrap();
             assert!(loaded.warnings.is_empty());
-            assert_eq!(loaded.document, LoadedDocument::Generator(source));
+            assert_eq!(loaded.document, LoadedDocument::Generator(Box::new(source)));
 
             let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
             let header: Header = toml::from_str(&manifest).unwrap();

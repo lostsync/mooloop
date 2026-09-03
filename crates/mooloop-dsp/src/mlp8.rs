@@ -38,7 +38,7 @@ use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::mlp8::{MlP8Routes, MLP8_MAX_ROUTES, MLP8_MOD_DESTS};
 use mooloop_core::{
-    mlp8::xmod_index, MlP8FilterMode, MlP8LfoParams, MlP8LfoRetrigger, MlP8LfoWave, MlP8Params,
+    mlp8::xmod_index, MlP8FilterMode, MlP8LfoParams, MlP8LfoWave, MlP8Params,
     OscWave, SubWave, MLP8_VOICES,
 };
 
@@ -286,30 +286,39 @@ const LP24_RESONANCE_SHARE: f32 = 0.62;
 /// idea: a sample-and-hold at half Slew is the same wander at 0.2 Hz as at
 /// 20 Hz, so the control survives being automated alongside Rate instead of
 /// meaning something different at every speed.
+// Step 04 builds the LFO and the route compiler; step 05 is what reads
+// them. Allowed by item rather than by file so the day a later step
+// leaves something genuinely unused, the lint still says so.
+#[allow(dead_code)]
 const LFO_SLEW_MAX_CYCLES: f32 = 0.5;
 
 /// The narrowest either half of a warped cycle may become. A pivot that
 /// reaches the edge is a shape with no rising side at all, which is a
 /// division by zero before it is a sound.
+#[allow(dead_code)]
 const LFO_WARP_MIN_SIDE: f32 = 0.02;
 
 /// The chaos pair's frequency ratio. Irrational on purpose: a rational ratio
 /// closes the figure and the "chaos" wave becomes a periodic one.
+#[allow(dead_code)]
 const CHAOS_RATIO: f32 = 0.618_034;
 
 /// How hard each phasor bends the other's rate. Weak coupling lets the pair
 /// phase-lock, which is the failure mode that would quietly turn this back
 /// into a periodic wave, so it is set well past that.
+#[allow(dead_code)]
 const CHAOS_COUPLING: f32 = 0.85;
 
 /// Seed for the sample-and-hold sequence. Fixed, so two renders of the same
 /// events are the same samples.
+#[allow(dead_code)]
 const LFO_SH_SEED: u32 = 0x1d3f_a7c5;
 
 /// ML-P8's own LFO: one global shape, evaluated per sample.
 ///
 /// Global rather than per voice because it is the instrument's clock; the
 /// route amounts are what make it land differently on each voice.
+#[allow(dead_code)]
 struct MlP8Lfo {
     phase: f32,
     /// The current sample-and-hold value, already warped.
@@ -327,6 +336,7 @@ struct MlP8Lfo {
     primed: bool,
 }
 
+#[allow(dead_code)]
 impl MlP8Lfo {
     fn new() -> Self {
         let mut noise = Noise::new(LFO_SH_SEED);
@@ -435,6 +445,7 @@ impl MlP8Lfo {
     }
 }
 
+#[allow(dead_code)]
 fn sin_tau(phase: f32) -> f32 {
     (phase * core::f32::consts::TAU).sin()
 }
@@ -442,6 +453,7 @@ fn sin_tau(phase: f32) -> f32 {
 /// Skew a phase about a moved pivot, so half the cycle is spent on each side
 /// of it. Turns a triangle into a ramp, a pulse into a variable width, and a
 /// sine into a shape that leans.
+#[allow(dead_code)]
 fn warp_phase(phase: f32, warp: f32) -> f32 {
     let warp = warp.clamp(-1.0, 1.0);
     if warp == 0.0 {
@@ -458,6 +470,7 @@ fn warp_phase(phase: f32, warp: f32) -> f32 {
 /// Bias a bipolar value toward the extremes or toward the centre, keeping its
 /// sign and its bounds. This is Warp's meaning for the two waves that have no
 /// phase: positive pushes values out to the rails, negative pulls them in.
+#[allow(dead_code)]
 fn bias(value: f32, warp: f32) -> f32 {
     let warp = warp.clamp(-1.0, 1.0);
     if warp == 0.0 {
@@ -473,6 +486,7 @@ fn bias(value: f32, warp: f32) -> f32 {
 
 /// The four waves that have a phase. All leave zero rising at phase zero, so
 /// a retriggered LFO never steps the sound at the note boundary.
+#[allow(dead_code)]
 fn periodic_shape(phase: f32, wave: MlP8LfoWave) -> f32 {
     match wave {
         MlP8LfoWave::Sine => sin_tau(phase),
@@ -496,6 +510,7 @@ fn periodic_shape(phase: f32, wave: MlP8LfoWave) -> f32 {
 /// index, a slot index, and the factor to multiply by. Everything that needed
 /// a table was resolved when the topology was compiled.
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct CompiledRoute {
     source: usize,
     slot: usize,
@@ -503,6 +518,7 @@ struct CompiledRoute {
 }
 
 /// A patch's routes, compiled flat.
+#[allow(dead_code)]
 struct CompiledRoutes {
     routes: [CompiledRoute; MLP8_MAX_ROUTES],
     len: usize,
@@ -512,6 +528,7 @@ struct CompiledRoutes {
     any: bool,
 }
 
+#[allow(dead_code)]
 impl CompiledRoutes {
     fn new() -> Self {
         Self {
@@ -564,6 +581,7 @@ impl CompiledRoutes {
 
 /// Dense slot indices the voice reads back. Derived from the same `ALL` order
 /// the UI lists, rather than written out twice.
+#[allow(dead_code)]
 mod slot {
     use mooloop_core::mlp8::{MlP8ModDest, MLP8_MOD_DESTS};
 
@@ -828,10 +846,10 @@ impl Prepared {
         }
 
         let mut xmod = [[0.0_f32; 3]; 3];
-        for from in 0..3 {
-            for to in 0..3 {
+        for (from, row) in xmod.iter_mut().enumerate() {
+            for (to, depth) in row.iter_mut().enumerate() {
                 if from != to {
-                    xmod[from][to] = route_depth(params.xmod[xmod_index(from, to)]);
+                    *depth = route_depth(params.xmod[xmod_index(from, to)]);
                 }
             }
         }
@@ -856,7 +874,7 @@ impl Prepared {
             audible(n)
                 || (0..3).any(|to| to != n && xmod[n][to] != 0.0)
                 || feedback[n] != 0.0
-                || sync_master.iter().any(|m| *m == Some(n))
+                || sync_master.contains(&Some(n))
                 || (sub_needed && sub_source == n)
         });
         let noise_needed = params.noise_level > 0.0 || noise_to_osc.iter().any(|a| *a != 0.0);

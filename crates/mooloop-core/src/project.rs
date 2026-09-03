@@ -83,6 +83,11 @@ pub struct PolySynthState {
 }
 
 /// Tagged now so later synth variants can join the v1 envelope additively.
+// Every variant here is one synth's state block, and the ML-P8 is simply the
+// newest and widest; the next synth will be wider still. Boxing whichever
+// variant currently happens to be largest buys a size ratio at the cost of a
+// pointer chase, and hands the same choice back on every synth added after.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "state", rename_all = "snake_case")]
 pub enum ChannelSource {

@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-02
-- Sessions: 34
+- Sessions: 35
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -395,7 +395,13 @@ work session you can recall being part of, and don't stress over precision.
   pins the property rather than the number. It made the UI smaller too --
   addressing controls by descriptor id instead of by field path deleted a
   closure-per-control macro and got the knobs the same clamping the typed
-  values already had.
+  values already had. Landing step 04 on `main` turned up one thing the
+  branch's own doc comment had already promised and the derive had not
+  delivered: `MlP8Routes` said a saved patch carries the routes it has and no
+  more, while serializing all sixteen slots -- and TOML cannot write a `None`
+  element, so no ML-P8 patch could be saved at all. It writes the occupied
+  routes now, and trusts them over a `next_id` that disagrees, because a
+  counter that has fallen behind is how a durable id gets handed out twice.
   Investigated the `spike/sampler-time-stretch` spike (#32),
   found its "build vs. buy" conclusion under-argued, and merged it to `main`
   once Adam decided to own the build regardless. Built the sampler's #13

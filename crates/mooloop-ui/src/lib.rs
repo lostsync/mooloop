@@ -11387,7 +11387,7 @@ impl AppUi {
                                     let mut project = current;
                                     let selected = project.selected_channel as usize;
                                     project.channels[selected].setup.channel.kind = source.kind();
-                                    project.channels[selected].setup.source = source;
+                                    project.channels[selected].setup.source = *source;
                                     let mut samples = current_samples;
                                     samples[selected] = loaded_samples.into_iter().next().flatten();
                                     Some((project, samples, false))

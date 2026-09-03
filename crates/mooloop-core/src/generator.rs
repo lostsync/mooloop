@@ -638,6 +638,10 @@ fn lfo_set(lfo: &mut LfoParams, id: u32, value: f32) -> bool {
 /// `EffectParams`, and it exists for the same reason: one type the engine can
 /// hold as the authoritative base while the device holds only the resolved
 /// value it was last sent.
+// This type is `Copy` and is the value shuttle for parameter changes, so
+// boxing the large variant is not available: it would both drop `Copy` and
+// put an allocation on a path that exists to avoid one.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GeneratorParams {
     Sampler(SamplerParams),
