@@ -8917,7 +8917,14 @@ impl AppUi {
                         }
                         // Everything else needs only the handle.
                         message => {
-                            forwarded += 1;
+                            // The self-test counts what reaches the realtime
+                            // ring, which is the POD commands and the preview
+                            // gain -- not the structural edits beside them.
+                            forwarded += usize::from(matches!(
+                                message,
+                                PendingEngineMessage::Command(_)
+                                    | PendingEngineMessage::PreviewGain(_)
+                            ));
                             document_title_needs_refresh |= st
                                 .borrow_mut()
                                 .session
