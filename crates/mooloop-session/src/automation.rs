@@ -34,6 +34,11 @@ impl Session {
             .automation_destinations()
             .get(usize::try_from(index).ok()?)
             .map(|(target, _, _)| *target)?;
+        self.open_automation_lane_at(target)
+    }
+
+    /// Opens the lane for `target`, by address rather than by picker position.
+    pub fn open_automation_lane_at(&mut self, target: ParamAddr) -> Option<EngineCommand> {
         self.automation_target.set(Some(target));
         self.automation_selected_point.set(None);
         let (pattern, channel) = (self.current_pattern, self.selected);
