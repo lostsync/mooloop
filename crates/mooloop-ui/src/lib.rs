@@ -19,7 +19,7 @@ use mooloop_core::gain::{linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::log::Level;
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
-    compile_bus_graph, snap_bars_to_power_of_two, sanitize_route, would_create_cycle,
+    snap_bars_to_power_of_two,
     BufferDuration, BufferEvent, BusSetup,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
@@ -35,7 +35,7 @@ use mooloop_core::{
     PlayMode, SampleCommit, SamplerParams, SliceMap, SnareCharacter, StretchMode,
     VoiceMode, MAX_SLICES,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
-    MAX_CHANNELS, MAX_LINEAR_GAIN, MAX_MODULATORS_PER_CHANNEL,
+    MAX_CHANNELS, MAX_MODULATORS_PER_CHANNEL,
     MAX_MOD_ROUTES_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
     MAX_SAMPLER_VOICES, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
@@ -5990,13 +5990,8 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_selected(move |bus| {
-                let Ok(bus) = u8::try_from(bus) else { return };
-                {
-                    let mut guard = st.borrow_mut();
-                    if bus as usize >= guard.session.buses.len() {
-                        return;
-                    }
-                    guard.session.effect_target = EffectTarget::Bus(bus);
+                if st.borrow_mut().session.select_bus(bus).is_none() {
+                    return;
                 }
                 let guard = st.borrow();
                 guard.sync_mixer_selection();
@@ -6012,23 +6007,15 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_muted(move |bus| {
-                let Ok(index) = usize::try_from(bus) else {
-                    return;
-                };
                 let mut guard = st.borrow_mut();
-                let Some(setup) = guard.session.buses.get_mut(index) else {
+                let Some(command) = guard.session.toggle_bus_mute(bus) else {
                     return;
                 };
-                setup.bus.muted = !setup.bus.muted;
-                let muted = setup.bus.muted;
-                guard.sync_mixer_strip(index);
+                guard.sync_mixer_strip(bus as usize);
                 if let Some(w) = weak.upgrade() {
                     guard.sync_bus_editor(&w);
                 }
-                let _ = tx.send(EngineCommand::SetBusMuted {
-                    bus: index as u8,
-                    muted,
-                });
+                let _ = tx.send(command);
             });
         }
 
@@ -6037,21 +6024,13 @@ impl AppUi {
             let st = state.clone();
             window.on_eq_analyzer_changed(move |slot, enabled| {
                 let mut st = st.borrow_mut();
-                let target = st.session.effect_target;
-                let slot = slot as usize;
-                let Some(effect) = st.session.effect_chain_mut().and_then(|chain| chain.get_mut(slot))
-                else {
+                let Some((target, slot)) = st.session.set_eq_analyzer(slot, enabled) else {
                     return;
                 };
-                let mooloop_core::EffectParams::Eq(params) = &mut effect.params else {
-                    return;
-                };
-                params.analyzer_enabled = enabled;
-                let row = effect_slot_row(effect);
-                st.effect_slot_model.set_row_data(slot, row);
+                st.refresh_effect_row(slot as usize);
                 let _ = telemetry.send(TelemetryAction::SetEffectSpectrumEnabled {
                     target,
-                    slot: slot as u8,
+                    slot,
                     enabled,
                 });
             });
@@ -6062,26 +6041,15 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_volume_changed(move |bus, volume| {
-                let Ok(index) = usize::try_from(bus) else {
-                    return;
-                };
-                // The bus fader's throw reaches +6 dB and the engine's
-                // output stage accepts +12, same as a channel's: clamping
-                // here at unity left the top of every bus fader dead.
-                let volume = volume.clamp(0.0, MAX_LINEAR_GAIN);
                 let mut guard = st.borrow_mut();
-                let Some(setup) = guard.session.buses.get_mut(index) else {
+                let Some(command) = guard.session.set_bus_volume(bus, volume) else {
                     return;
                 };
-                setup.bus.volume = volume;
-                guard.sync_mixer_strip(index);
+                guard.sync_mixer_strip(bus as usize);
                 if let Some(w) = weak.upgrade() {
                     guard.sync_bus_editor(&w);
                 }
-                let _ = tx.send(EngineCommand::SetBusVolume {
-                    bus: index as u8,
-                    volume,
-                });
+                let _ = tx.send(command);
             });
         }
 
@@ -6090,23 +6058,15 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_pan_changed(move |bus, pan| {
-                let Ok(index) = usize::try_from(bus) else {
-                    return;
-                };
-                let pan = pan.clamp(-1.0, 1.0);
                 let mut guard = st.borrow_mut();
-                let Some(setup) = guard.session.buses.get_mut(index) else {
+                let Some(command) = guard.session.set_bus_pan(bus, pan) else {
                     return;
                 };
-                setup.bus.pan = pan;
-                guard.sync_mixer_strip(index);
+                guard.sync_mixer_strip(bus as usize);
                 if let Some(w) = weak.upgrade() {
                     guard.sync_bus_editor(&w);
                 }
-                let _ = tx.send(EngineCommand::SetBusPan {
-                    bus: index as u8,
-                    pan,
-                });
+                let _ = tx.send(command);
             });
         }
 
@@ -6115,39 +6075,28 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_output_changed(move |bus, output| {
-                let (Ok(index), Ok(output)) = (usize::try_from(bus), u8::try_from(output)) else {
-                    return;
-                };
-                let output = sanitize_route(index as u8, output);
                 let mut guard = st.borrow_mut();
-                if guard.session.buses.get(index).is_none() {
-                    return;
-                }
-                // The picker greys out looping destinations, but this is the
-                // boundary the engine's schedule rests on, so refuse here too
-                // rather than shipping a graph that cannot be sorted.
-                if would_create_cycle(&guard.session.buses, index as u8, output) {
-                    if let Some(w) = weak.upgrade() {
-                        let name = guard.session.buses[output as usize].bus.name.clone();
-                        w.set_status_message(
-                            format!("{name} already feeds this bus - routing would loop").into(),
-                        );
+                match guard.session.set_bus_output(bus, output) {
+                    Some(Ok(command)) => {
+                        // Every strip's legal destinations move when an edge does.
+                        if let Some(w) = weak.upgrade() {
+                            guard.sync_mixer(&w);
+                        }
+                        let _ = tx.send(command);
                     }
-                    return;
+                    Some(Err(refused)) => {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_status_message(
+                                format!(
+                                    "{} already feeds this bus - routing would loop",
+                                    refused.feeder
+                                )
+                                .into(),
+                            );
+                        }
+                    }
+                    None => {}
                 }
-                let previous = std::mem::replace(&mut guard.session.buses[index].bus.output, output);
-                let Some(graph) = compile_bus_graph(&guard.session.buses) else {
-                    // Unreachable given the check above. Restore the visible
-                    // graph rather than letting UI and audio generations
-                    // diverge.
-                    guard.session.buses[index].bus.output = previous;
-                    return;
-                };
-                // Every strip's legal destinations move when an edge does.
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_mixer(&w);
-                }
-                let _ = tx.send(EngineCommand::InstallBusGraph { graph });
             });
         }
 
