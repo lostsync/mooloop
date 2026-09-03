@@ -1106,7 +1106,10 @@ impl AudioNode for Sampler {
                 Event::NoteOff { id, .. } => self.release_note(id),
                 Event::Choke => self.choke(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
-                Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
+                Event::SourceRouteAmount { .. }
+                | Event::Buffer(_)
+                | Event::BufferRelease
+                | Event::BufferScrub { .. } => {}
             }
             pos = off;
         }

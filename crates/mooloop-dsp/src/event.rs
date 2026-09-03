@@ -34,6 +34,19 @@ pub enum Event {
         id: u32,
         value: f32,
     },
+    /// A depth inside one of the generator's own modulation routes, by the
+    /// route's durable id.
+    ///
+    /// Separate from [`Self::ParamValue`] because it is not a parameter: a
+    /// device whose modulation is part of its patch has automatable values
+    /// that belong to a route rather than to the device's table, and giving
+    /// them a `u32` id would mean carving a permanent block out of that table
+    /// for a route capacity that is deliberately provisional. Nodes with no
+    /// internal routes ignore it.
+    SourceRouteAmount {
+        route: u16,
+        amount: f32,
+    },
     /// Atomic retained-audio edit for a buffer insert.
     Buffer(BufferEvent),
     /// End of a gated retained-audio edit — the note-off half of an event
@@ -127,6 +140,7 @@ fn event_sort_key(event: &TimedEvent) -> (u32, u8) {
     let priority = match event.event {
         Event::NoteOff { .. } | Event::Choke => 0,
         Event::ParamValue { .. }
+        | Event::SourceRouteAmount { .. }
         | Event::Buffer(_)
         | Event::BufferRelease
         | Event::BufferScrub { .. } => 1,

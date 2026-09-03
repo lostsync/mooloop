@@ -391,6 +391,7 @@ impl AudioNode for DrumSynth {
                 Event::NoteOff { .. } => {}
                 Event::Choke => self.choke(),
                 Event::ParamValue { .. }
+                | Event::SourceRouteAmount { .. }
                 | Event::Buffer(_)
                 | Event::BufferRelease
                 | Event::BufferScrub { .. } => {}

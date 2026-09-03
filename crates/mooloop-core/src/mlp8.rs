@@ -677,6 +677,22 @@ impl MlP8ModDest {
         }
     }
 
+    /// The span a resolved base-plus-offset is clamped into.
+    ///
+    /// The same descriptor mapping the authored knob obeys, so a route can
+    /// only ever move a destination somewhere the knob could also have been
+    /// put. Paired with [`Self::full_range`], which is its width.
+    pub fn range(self) -> (f32, f32) {
+        match self {
+            Self::Param { id } => match descriptor(id) {
+                Some(d) => (d.min, d.max),
+                None => (0.0, 0.0),
+            },
+            Self::VcaLevel => (0.0, 1.0),
+            Self::Pan => (-1.0, 1.0),
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Param { id } => match descriptor(id) {
@@ -705,8 +721,10 @@ pub struct MlP8Route {
     pub id: u16,
     pub source: MlP8ModSource,
     pub dest: MlP8ModDest,
-    /// Signed depth, `[-1, 1]`, as a fraction of the destination's full
-    /// range.
+    /// Signed depth in percent, `[-100, 100]`, of the destination's full
+    /// range. Percent rather than a `[-1, 1]` fraction because every other
+    /// depth on this device is authored in percent, and because that is the
+    /// number its automation lane and its readout both have to agree on.
     pub amount: f32,
 }
 
@@ -843,7 +861,7 @@ impl MlP8Routes {
     pub fn set_amount(&mut self, id: u16, amount: f32) -> bool {
         for route in self.routes.iter_mut().flatten() {
             if route.id == id {
-                route.amount = amount.clamp(-1.0, 1.0);
+                route.amount = amount.clamp(MOD_PERCENT_MIN, MOD_PERCENT_MAX);
                 return true;
             }
         }
@@ -883,6 +901,30 @@ const fn percent(id: u32, name: &'static str) -> ParamDescriptor {
         curve: ParamCurve::Linear,
         default: 0.0,
     }
+}
+
+/// A route's signed amount, addressed inside the route rather than in the
+/// device's parameter table.
+///
+/// The route's durable id is the address; this is the field within it. Kept as
+/// a named constant rather than a bare `0` so a second per-route value later
+/// is an addition here instead of a re-interpretation of every saved lane.
+pub const MLP8_ROUTE_PARAM_AMOUNT: u32 = 0;
+
+/// What an internal route exposes to automation and to the UI.
+///
+/// A route deliberately does *not* consume ids from [`DESCRIPTORS`]. Sixteen
+/// routes times their fields would be a permanent block of the device's own id
+/// space spent on a capacity number the plan calls provisional, and every
+/// route would then have to keep the slot it was authored in forever. The
+/// route's identity carries the address instead.
+pub static ROUTE_DESCRIPTORS: [ParamDescriptor; 1] =
+    [percent(MLP8_ROUTE_PARAM_AMOUNT, "Amount")];
+
+pub fn route_descriptor(param: u32) -> Option<&'static ParamDescriptor> {
+    ROUTE_DESCRIPTORS
+        .iter()
+        .find(|descriptor| descriptor.id == param)
 }
 
 const fn osc_descriptors(n: u32, wave_name: &'static str) -> [ParamDescriptor; 5] {
@@ -1536,10 +1578,37 @@ mod tests {
         let id = routes
             .add(MlP8ModSource::FilterEnv, MlP8ModDest::Param { id: PARAM_XMOD_BASE })
             .unwrap();
-        assert!(routes.set_amount(id, -3.0));
-        assert_eq!(routes.get(id).unwrap().amount, -1.0);
-        assert!(routes.set_amount(id, 0.25));
-        assert_eq!(routes.get(id).unwrap().amount, 0.25);
+        assert!(routes.set_amount(id, -300.0));
+        assert_eq!(routes.get(id).unwrap().amount, -100.0);
+        assert!(routes.set_amount(id, 25.0));
+        assert_eq!(routes.get(id).unwrap().amount, 25.0);
+    }
+
+    #[test]
+    fn a_route_amount_is_addressed_by_its_own_descriptor() {
+        // The amount is automated through the route's durable id, so it needs
+        // a descriptor of its own -- and exactly one, because a route has
+        // exactly one continuous value.
+        assert!(route_descriptor(MLP8_ROUTE_PARAM_AMOUNT).is_some());
+        assert_eq!(ROUTE_DESCRIPTORS.len(), 1);
+        let descriptor = route_descriptor(MLP8_ROUTE_PARAM_AMOUNT).unwrap();
+        assert_eq!((descriptor.min, descriptor.max), (-100.0, 100.0));
+        // Nothing else answers: an address whose param is not a route field
+        // must miss rather than land on the amount by default.
+        assert!(route_descriptor(MLP8_ROUTE_PARAM_AMOUNT + 1).is_none());
+    }
+
+    #[test]
+    fn every_destination_reports_the_span_it_clamps_to() {
+        for dest in MlP8ModDest::ALL {
+            let (min, max) = dest.range();
+            assert!(min < max, "{dest:?} has an empty span");
+            assert_eq!(
+                max - min,
+                dest.full_range(),
+                "{dest:?} clamps to a different span than an amount of 100% covers"
+            );
+        }
     }
 
     #[test]

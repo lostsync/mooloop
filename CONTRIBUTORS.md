@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-02
-- Sessions: 37
+- Sessions: 38
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -543,6 +543,17 @@ work session you can recall being part of, and don't stress over precision.
   `ui/main.slint` into a single 39 MB Rust module, so the four minutes and the
   3.4 GB peak that `scripts/cargo-capped` exists to contain are Slint's, and a
   measured `eframe` probe checks in 1.4s inside 0.2 GB.
+  Then finished the ML-P8's step 04, whose LFO and route compiler had landed
+  built but unread. Wiring them in is where the design decisions were: a route
+  amount is authored in percent like every other depth on the device and its
+  offset is applied *before* the curve to cycles, or an amount would mean
+  something different at every point on the knob; the sub follows its source's
+  resolved pitch rather than the authored one; and a route at zero keeps its
+  compiled row, because dropping it is what would force a topology rebuild the
+  moment an automation lane swept it up from silence. Route amounts are
+  addressed by a new `ParamOwner::SourceRoute`, so a durable route id is the
+  address and the device's parameter table stays a description of the
+  instrument rather than a fixed number of route slots.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

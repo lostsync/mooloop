@@ -21,6 +21,18 @@ use crate::EffectTarget;
 pub enum ParamOwner {
     /// The channel's generator. Buses have none.
     Source,
+    /// One internal modulation route inside the channel's generator, by the
+    /// route's durable id.
+    ///
+    /// A device whose modulation is part of its patch has values that are
+    /// automatable but are not entries in its parameter table -- a route's
+    /// amount belongs to the route, and the route belongs to the patch. This
+    /// is the address for those: `param` names the field within the route,
+    /// not a descriptor of the device. Reordering or removing a neighbouring
+    /// route cannot move it, because the id is the address.
+    SourceRoute {
+        route: u16,
+    },
     Effect {
         slot: u8,
     },
@@ -50,6 +62,15 @@ impl ParamAddr {
         Self {
             scope,
             owner: ParamOwner::Effect { slot },
+            param,
+        }
+    }
+
+    /// Address one internal route's field inside a channel's generator.
+    pub const fn source_route(scope: EffectTarget, route: u16, param: u32) -> Self {
+        Self {
+            scope,
+            owner: ParamOwner::SourceRoute { route },
             param,
         }
     }
