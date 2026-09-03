@@ -1,6 +1,6 @@
 # DS-01 plan status
 
-**Steps 02, 03 and 04 are in.** The device exists and plays: a new `Ds01` generator kind
+**Steps 02 through 05 are in.** The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
 state-variable filter, the amplitude and pitch envelopes, and the voice pool
@@ -21,7 +21,13 @@ equivalent of, and Ratio is the whole design in one control — harmonic at 0, s
 the layer reads as a tom or a conga, and the ideal circular membrane's modes at
 1, where it stops having a pitch and starts having a material.
 
-Read `01-what-ds01-is.md`, then work `05` through `09` in order.
+Step 05 added the burst: one trigger, up to eight impulses, one voice. This is
+how DS-01 makes a clap — three or four bursts a few milliseconds apart followed
+by a longer one, which no amount of envelope shaping reaches from a single hit
+— and once the mechanism exists it is also a flam, a drag, a buzz roll and a
+machine-gun fill.
+
+Read `01-what-ds01-is.md`, then work `06` through `09` in order.
 
 Four things step 02 turned up that the plan could not have known:
 
@@ -114,7 +120,29 @@ And five from step 04:
   level returning from zero starts from the next strike instead of resuming a
   ring that was frozen mid-decay.
 
-The device face is **not** part of steps 02 through 04. DS-01 is selectable, playable,
+And four from step 05:
+
+- **Level Step scales the strike, not the output.** It is a strike force, so
+  it scales what each impulse excites. Scaling the voice's output instead would
+  step the body's ring every time a later impulse changed the level, which is a
+  click in a tail that is supposed to carry across the burst — the one thing
+  the step says a burst must do.
+- **The level sequence is normalized so its loudest impulse is the reference
+  one.** A falling step then fades from a full first hit and a rising one
+  builds *to* a full last hit rather than past it, so Level Step shapes a burst
+  without making it louder than the single hit it replaces. Without that, a
+  positive step at eight repeats is a burst that ends 18 dB up.
+- **The bound is on the schedule's total, not on one gap.** Eight individually
+  legal gaps still add up: a decelerating eight-impulse burst at the top of
+  Spacing would place its last hit a minute after its first. The burst ends at
+  the impulse that would take the whole schedule past `DS01_BURST_MAX_S`.
+- **The mod envelope is not re-fired by an impulse.** The other three are, from
+  their current level so impulses add rather than cut each other off. The mod
+  contour is the one with no fixed job, and a shape spanning the whole burst is
+  more use than eight copies of a short one — which is also what makes it worth
+  routing to Burst Index's neighbours in step 07.
+
+The device face is **not** part of steps 02 through 05. DS-01 is selectable, playable,
 automatable and modulatable without one — every parameter is
 descriptor-addressed, so the modulation shelf and the automation lanes reach it
 whether or not a knob exists — and the rack shows a placeholder saying so.
@@ -197,7 +225,7 @@ instrument. Hence DS-01.
 | `02-the-voice-and-the-descriptor-table.md` | **In.** The kind, the params, the ids, the tone and noise sources, and descriptor addressing on day one |
 | `03-the-envelopes.md` | **In.** Four AHD envelopes with curve and optional gate |
 | `04-the-body-resonator.md` | **In.** The tuned modal layer — toms, rims, bells, clangs |
-| `05-the-burst.md` | Multi-impulse triggering: clap, flam, roll, buzz |
+| `05-the-burst.md` | **In.** Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | Drive characters, the output stage, the gain contract |
 | `07-internal-modulation-and-outlets.md` | DS-01's own matrix and its published outlets |
 | `08-the-face.md` | The device face, with rendered concepts in `mockups/` |

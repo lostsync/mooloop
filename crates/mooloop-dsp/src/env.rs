@@ -330,6 +330,10 @@ pub struct Ahd {
     /// Level the release started from, so a release is a fade of whatever was
     /// sounding rather than a jump to a stage's own shape.
     release_from: f32,
+    /// Level the attack starts from. Zero for an ordinary trigger; whatever
+    /// was already sounding for a [`Self::retrigger`], so a second impulse
+    /// landing on a live tail adds to it instead of cutting it off.
+    attack_floor: f32,
 }
 
 impl Ahd {
@@ -347,6 +351,7 @@ impl Ahd {
             sustain: 0.0,
             gate: false,
             release_from: 0.0,
+            attack_floor: 0.0,
         }
     }
 
@@ -365,11 +370,28 @@ impl Ahd {
         self.release_rate = segment_rate(shape.release_s, sample_rate);
         self.phase = 0.0;
         self.held = 0;
+        self.attack_floor = 0.0;
         if self.attack_rate >= 1.0 {
             self.start_hold();
         } else {
             self.stage = AhdStage::Attack;
             self.level = 0.0;
+        }
+    }
+
+    /// Start the shape again without dropping below where it already is.
+    ///
+    /// What a burst's second and later impulses do: re-firing from zero would
+    /// make each impulse cut the one before it, and a clap is impulses that
+    /// overlap. With no attack this is [`Self::trigger`], since the level
+    /// jumps to the peak either way; with one, the attack rises from the tail
+    /// it landed on rather than from silence.
+    pub fn retrigger(&mut self, shape: AhdShape, sample_rate: u32) {
+        let floor = self.level;
+        self.trigger(shape, sample_rate);
+        if self.stage == AhdStage::Attack {
+            self.attack_floor = floor.clamp(0.0, 1.0);
+            self.level = self.attack_floor;
         }
     }
 
@@ -466,7 +488,8 @@ impl Ahd {
                 if self.phase >= 1.0 {
                     self.start_hold();
                 } else {
-                    self.level = shape(self.phase, self.curve);
+                    self.level = self.attack_floor
+                        + (1.0 - self.attack_floor) * shape(self.phase, self.curve);
                 }
             }
             AhdStage::Hold => {
@@ -718,6 +741,37 @@ mod tests {
         };
         assert_eq!(flat_samples(0.0), 1);
         assert_eq!(flat_samples(0.02), (0.02 * SR as f32) as usize + 1);
+    }
+
+    /// A retrigger never drops the level, which is what makes a burst's
+    /// impulses add rather than cut each other off.
+    #[test]
+    fn a_retrigger_does_not_dip_below_what_was_sounding() {
+        for attack_s in [0.0, 0.02] {
+            let shape = AhdShape {
+                attack_s,
+                decay_s: 0.5,
+                ..AhdShape::default()
+            };
+            let mut env = Ahd::new();
+            env.trigger(shape, SR);
+            for _ in 0..(0.1 * SR as f32) as usize {
+                env.tick();
+            }
+            let before = env.level();
+            assert!(before > 0.0);
+            env.retrigger(shape, SR);
+            assert!(
+                env.tick() >= before,
+                "an impulse at {attack_s} s attack cut a live tail from {before}"
+            );
+            // And it still climbs from there rather than sticking.
+            let mut peak = 0.0_f32;
+            for _ in 0..(0.05 * SR as f32) as usize {
+                peak = peak.max(env.tick());
+            }
+            assert!(peak > before);
+        }
     }
 
     #[test]

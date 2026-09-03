@@ -64,7 +64,8 @@ use crate::osc::{Noise, Osc};
 use crate::smooth::Smoothed;
 use mooloop_core::{
     body_mode_ratio, ds01, Ds01EnvParams, Ds01NoiseColor, Ds01Params, Ds01Retrigger, OscWave,
-    DS01_BODY_MODES, DS01_MAX_PARTIALS, DS01_VOICES, MAX_CHOKE_GROUP,
+    DS01_BODY_MODES, DS01_BURST_MAX_S, DS01_MAX_PARTIALS, DS01_MAX_REPEATS, DS01_VOICES,
+    MAX_CHOKE_GROUP,
 };
 
 /// One DS-01 envelope block as the shared envelope's shape.
@@ -394,9 +395,12 @@ struct Body {
     /// silencing is a ramp so a sweep through the top of the range is not a
     /// click.
     audible: [Smoothed; DS01_BODY_MODES],
-    /// Samples of unit impulse left to inject. Step 05's burst is what
-    /// re-arms this mid-hit.
+    /// Samples of impulse left to inject. Step 05's burst is what re-arms
+    /// this mid-hit.
     impulse: u32,
+    /// How hard the pending impulse strikes, which is the burst's own level
+    /// for the impulse that armed it.
+    strike_level: f32,
 }
 
 impl Body {
@@ -405,6 +409,7 @@ impl Body {
             modes: [Resonator::default(); DS01_BODY_MODES],
             audible: [Smoothed::new(0.0, SMOOTHING_S, sample_rate); DS01_BODY_MODES],
             impulse: 0,
+            strike_level: 1.0,
         }
     }
 
@@ -413,6 +418,14 @@ impl Body {
             mode.reset();
         }
         self.impulse = 0;
+        self.strike_level = 1.0;
+    }
+
+    /// Arm a strike of `level`. Deliberately does not clear the resonators:
+    /// the object being struck may still be ringing.
+    fn strike(&mut self, level: f32) {
+        self.impulse = 1;
+        self.strike_level = level;
     }
 
     /// Recompute every mode for this control tick.
@@ -435,7 +448,7 @@ impl Body {
     fn tick(&mut self, excite: f32, noise: f32) -> f32 {
         let strike = if self.impulse > 0 {
             self.impulse -= 1;
-            1.0
+            self.strike_level
         } else {
             0.0
         };
@@ -447,6 +460,136 @@ impl Body {
         }
         sum
     }
+}
+
+/// How far Spread bends the gaps, in octaves of gap ratio at each end. At
+/// `-1` every gap is half the one before it and at `+1` twice, which covers
+/// the buzz roll and the drag without the schedule needing a second control.
+const SPREAD_OCTAVES: f32 = 1.0;
+
+/// How far Level Step moves each impulse, in octaves of amplitude ratio.
+const LEVEL_STEP_OCTAVES: f32 = 1.0;
+
+/// One trigger's impulse schedule, latched at the hit.
+///
+/// One voice, not one voice per impulse, for three reasons the plan names: an
+/// eight-repeat burst does not consume the whole pool; the body resonator
+/// keeps ringing *across* the impulses instead of being restarted, which is
+/// what makes a burst a clap rather than four claps; and the impulse index is
+/// available as a per-impulse modulation source, which step 07 publishes as
+/// Burst Index.
+#[derive(Clone, Copy, Debug, Default)]
+struct Burst {
+    /// Impulses still to fire after the current one.
+    remaining: u8,
+    /// Samples until the next impulse.
+    countdown: u32,
+    /// Gap to the next impulse, in samples, before this impulse's scaling.
+    gap: f32,
+    /// What the gap is multiplied by at each impulse. Below one accelerates.
+    gap_ratio: f32,
+    /// Amplitude of the impulse now sounding.
+    level: f32,
+    level_ratio: f32,
+    /// Pitch offset of the impulse now sounding, in semitones.
+    pitch: f32,
+    pitch_step: f32,
+    /// Which impulse is sounding, and how many there are, for Burst Index.
+    index: u8,
+    /// Read by [`Self::position`], which step 07 routes. Kept here rather
+    /// than added there because the schedule is what knows it.
+    #[allow(dead_code)]
+    total: u8,
+    /// Samples the schedule has committed to so far, against
+    /// [`DS01_BURST_MAX_S`].
+    elapsed: f32,
+}
+
+impl Burst {
+    fn start(&mut self, params: &Ds01Params, sample_rate: u32) {
+        let total = params.burst_repeats.clamp(1, DS01_MAX_REPEATS);
+        let gap_ratio = 2.0_f32.powf(params.burst_spread.clamp(-1.0, 1.0) * SPREAD_OCTAVES);
+        let level_ratio =
+            2.0_f32.powf(params.burst_level_step.clamp(-1.0, 1.0) * LEVEL_STEP_OCTAVES);
+        // Normalized so the loudest impulse is the reference one, whichever
+        // it is. A negative step then fades from a full first hit, and a
+        // positive one builds *to* a full last hit rather than past it — so
+        // Level Step shapes a burst without making it louder than the single
+        // hit it replaces.
+        let loudest = level_ratio.powi(i32::from(total) - 1).max(1.0);
+
+        *self = Self {
+            remaining: total - 1,
+            countdown: (params.burst_spacing.max(0.0) * sample_rate as f32) as u32,
+            gap: params.burst_spacing.max(0.0) * sample_rate as f32,
+            gap_ratio,
+            level: 1.0 / loudest,
+            level_ratio,
+            pitch: 0.0,
+            pitch_step: params.burst_pitch_step.clamp(-24.0, 24.0),
+            index: 0,
+            total,
+            elapsed: params.burst_spacing.max(0.0) * sample_rate as f32,
+        };
+    }
+
+    /// Advance the schedule one sample. `true` when this sample is an impulse.
+    fn tick(&mut self, sample_rate: u32) -> bool {
+        if self.remaining == 0 {
+            return false;
+        }
+        if self.countdown > 0 {
+            self.countdown -= 1;
+            return false;
+        }
+        self.remaining -= 1;
+        self.index += 1;
+        self.level *= self.level_ratio;
+        self.pitch += self.pitch_step;
+        self.gap *= self.gap_ratio;
+        // The schedule may shape a hit; it may not extend a voice's lifetime
+        // indefinitely. A decelerating eight-impulse burst at the top of
+        // Spacing would otherwise place its last hit a minute after its
+        // first, so the burst ends at the impulse that would take the whole
+        // schedule past the bound. The bound is on the total rather than on
+        // one gap, because eight legal gaps still add up.
+        if self.elapsed + self.gap > DS01_BURST_MAX_S * sample_rate as f32 {
+            self.remaining = 0;
+        } else {
+            self.elapsed += self.gap;
+        }
+        self.countdown = self.gap as u32;
+        true
+    }
+
+    /// Where this impulse sits in the burst, `0` at the first and `1` at the
+    /// last. Constant within an impulse, and `0` throughout at Repeats 1.
+    ///
+    /// Step 07 publishes this as the Burst Index matrix source. It is written
+    /// and tested here because the schedule is what knows it, and because the
+    /// contract — what a burst's *shape* looks like to a route — belongs
+    /// beside the schedule that produces it rather than beside the matrix
+    /// that reads it.
+    #[allow(dead_code)]
+    fn position(&self) -> f32 {
+        if self.total <= 1 {
+            0.0
+        } else {
+            f32::from(self.index) / f32::from(self.total - 1)
+        }
+    }
+}
+
+/// The three envelope shapes a burst's later impulses re-fire.
+///
+/// Latched with the rest of the schedule: an envelope time that moved
+/// mid-burst would give one hit two shapes, which is the same reason
+/// `01-what-ds01-is.md` latches them at the trigger in the first place.
+#[derive(Clone, Copy, Debug, Default)]
+struct BurstShapes {
+    amp: AhdShape,
+    noise: AhdShape,
+    pitch: AhdShape,
 }
 
 /// One independently enveloped hit.
@@ -477,6 +620,10 @@ struct Voice {
     noise: NoiseSource,
     filter: Svf,
     body: Body,
+    burst: Burst,
+    /// The shapes the burst re-fires the envelopes with, latched at the hit
+    /// alongside everything else the schedule decided.
+    shapes: BurstShapes,
     /// Rate-reducer state: the held sample and the fraction of a held period
     /// elapsed.
     held_noise: f32,
@@ -501,6 +648,8 @@ impl Voice {
             noise: NoiseSource::new(seed),
             filter: Svf::new(),
             body: Body::new(sample_rate),
+            burst: Burst::default(),
+            shapes: BurstShapes::default(),
             held_noise: 0.0,
             hold_phase: 1.0,
         }
@@ -523,6 +672,7 @@ impl Voice {
         self.noise.reset(self.seed);
         self.filter.reset();
         self.body.reset();
+        self.burst = Burst::default();
         self.held_noise = 0.0;
         self.hold_phase = 1.0;
     }
@@ -561,16 +711,15 @@ impl Voice {
         self.hold_phase = 1.0;
         // The resonators are *not* cleared: a hit strikes an object that may
         // still be ringing, which is what makes a fast pattern on a bell
-        // build rather than restart. Step 05's burst leans on the same
-        // property across the impulses of one hit.
-        self.body.impulse = 1;
-        self.amp_env.trigger(ahd_shape(&params.amp), sample_rate);
-        self.noise_env.trigger(ahd_shape(&params.noise_env), sample_rate);
-        self.mod_env.trigger(ahd_shape(&params.mod_env), sample_rate);
+        // build rather than restart. The burst leans on the same property
+        // across the impulses of one hit.
+        self.body.strike(1.0);
         // The pitch envelope has no gate half, so hold, sustain and release
         // are not controls it has rather than controls it ignores.
-        self.pitch_env.trigger(
-            AhdShape {
+        self.shapes = BurstShapes {
+            amp: ahd_shape(&params.amp),
+            noise: ahd_shape(&params.noise_env),
+            pitch: AhdShape {
                 attack_s: params.pitch.attack,
                 hold_s: 0.0,
                 decay_s: params.pitch.decay,
@@ -579,8 +728,18 @@ impl Voice {
                 release_s: 0.0,
                 gate: false,
             },
-            sample_rate,
-        );
+        };
+        self.amp_env.trigger(self.shapes.amp, sample_rate);
+        self.noise_env.trigger(self.shapes.noise, sample_rate);
+        self.mod_env.trigger(ahd_shape(&params.mod_env), sample_rate);
+        self.pitch_env.trigger(self.shapes.pitch, sample_rate);
+        self.burst.start(params, sample_rate);
+    }
+
+    /// Whether this hit still has impulses to fire. A voice is not free while
+    /// it does, even if its amplitude envelope has run out between them.
+    fn burst_pending(&self) -> bool {
+        self.burst.remaining > 0
     }
 
     /// Note-off. Only the gated envelopes hear it; a one-shot envelope in the
@@ -615,6 +774,21 @@ impl Voice {
         body_level: f32,
         sample_rate: u32,
     ) -> f32 {
+        // The schedule runs first, so an impulse's own sample is the one the
+        // re-fired envelopes produce rather than the one after it. The mod
+        // envelope is deliberately not re-fired: it is the contour with no
+        // fixed job, and a burst-wide shape is more use than eight copies of
+        // a short one.
+        if self.burst.tick(sample_rate) {
+            self.amp_env.retrigger(self.shapes.amp, sample_rate);
+            self.noise_env.retrigger(self.shapes.noise, sample_rate);
+            self.pitch_env.retrigger(self.shapes.pitch, sample_rate);
+            // Struck again without clearing: the resonators ring *across* the
+            // impulses, which is what makes a burst a clap rather than four
+            // claps.
+            self.body.strike(self.burst.level);
+        }
+
         let amp = self.amp_env.tick();
         let pitch = self.pitch_env.tick();
         let noise_contour = self.noise_env.tick();
@@ -625,7 +799,7 @@ impl Voice {
 
         let swept = c.tone_pitch
             * self.latched.pitch_factor
-            * 2.0_f32.powf(self.latched.pitch_depth * pitch / 12.0);
+            * 2.0_f32.powf((self.latched.pitch_depth * pitch + self.burst.pitch) / 12.0);
 
         // Both layers run whatever their level is. A layer at zero is a mix
         // decision and not a mode: it keeps its phase, so a level returning
@@ -634,18 +808,25 @@ impl Voice {
         let tone = self.render_tone(c, swept, sample_rate);
 
         let noise = self.render_noise(c, swept, sample_rate);
-        // The body is struck by the noise layer's *pre-level* signal, per
+        // The burst's level is a *strike force*, so it scales what each
+        // impulse excites rather than the voice's output. Scaling the output
+        // would step the body's ring every time a later impulse changed the
+        // level, which is a click in a tail that is supposed to carry across
+        // the burst.
+        let struck = self.burst.level;
+        // The body is driven by the noise layer's *pre-level* signal, per
         // `01-what-ds01-is.md`: a layer at zero level still exists at its
         // pre-level tap, so a patch can drive the resonators with noise
         // nobody hears directly.
-        let body = self.body.tick(c.body_excite, noise);
+        let body = self.body.tick(c.body_excite, noise * struck);
 
         // The voice's own guard, before any level scales it: a state-variable
         // filter at full resonance is linear and will happily hand back
         // several times full scale, which is what this catches. The device
         // bound below is a different job and is sized differently.
         soft_ceiling(
-            (tone * tone_level + noise * noise_contour * noise_level + body * body_level)
+            ((tone * tone_level + noise * noise_contour * noise_level) * struck
+                + body * body_level)
                 * amp
                 * self.latched.velocity_amp,
         )
@@ -911,7 +1092,7 @@ impl Ds01 {
             for voice in self.voices.iter_mut().filter(|voice| voice.active) {
                 let body_level = if body_live { body_level } else { 0.0 };
                 sum += voice.render_sample(&continuous, tone_level, noise_level, body_level, sr);
-                if voice.amp_env.is_idle() {
+                if voice.amp_env.is_idle() && !voice.burst_pending() {
                     voice.active = false;
                     voice.gate_held = false;
                 }
@@ -1084,16 +1265,18 @@ mod tests {
         // `ExpDecay`'s 8, and there are four of them where there were two.
         // That is what a real envelope shape costs, and it is worth paying —
         // v1's single rate law is the largest single reason its snare and its
-        // hat sound like the same instrument. Step 04 added 112 more: three
-        // resonators, their smoothed Nyquist mutes, and the impulse counter.
-        assert_eq!(size_of::<crate::env::Ahd>(), 44);
-        assert_eq!(size_of::<Body>(), 112);
-        assert_eq!(size_of::<Voice>(), 480);
+        // hat sound like the same instrument. Step 04 added the body's 116,
+        // and step 05 the burst's schedule plus the three envelope shapes it
+        // re-fires.
+        assert_eq!(size_of::<crate::env::Ahd>(), 48);
+        assert_eq!(size_of::<Body>(), 116);
+        assert_eq!(size_of::<Burst>(), 36);
+        assert_eq!(size_of::<Voice>(), 624);
         // Eight of those, plus the parameter block and the four device-wide
-        // smoothers the layers share. The pool is 94% of the node.
-        assert_eq!(size_of::<Ds01Params>(), 188);
-        assert_eq!(size_of::<Ds01>(), 4_088);
-        assert_eq!(size_of::<Voice>() * DS01_VOICES, 3_840);
+        // smoothers the layers share. The pool is 95% of the node.
+        assert_eq!(size_of::<Ds01Params>(), 208);
+        assert_eq!(size_of::<Ds01>(), 5_264);
+        assert_eq!(size_of::<Voice>() * DS01_VOICES, 4_992);
     }
 
     #[test]
@@ -1812,6 +1995,269 @@ mod tests {
             ..quiet
         };
         assert_eq!(hit(quiet, 12_000), hit(fiddled, 12_000));
+    }
+
+    /// A patch whose every impulse is a short broadband burst, so the
+    /// schedule is visible in the output as separate onsets.
+    fn burst_patch(repeats: u8, spread: f32, level_step: f32, pitch_step: f32) -> Ds01Params {
+        Ds01Params {
+            tone_level: 0.0,
+            noise_level: 1.0,
+            filter_morph: 0.0,
+            filter_cutoff: 18_000.0,
+            burst_repeats: repeats,
+            burst_spacing: 0.02,
+            burst_spread: spread,
+            burst_level_step: level_step,
+            burst_pitch_step: pitch_step,
+            amp: Ds01EnvParams::one_shot(0.006),
+            noise_env: Ds01EnvParams::one_shot(0.006),
+            ..Ds01Params::default()
+        }
+    }
+
+    /// Sample index of each rising edge in a block-wise envelope of `samples`.
+    fn onsets(samples: &[f32]) -> Vec<usize> {
+        const BLOCK: usize = 32;
+        let floor = peak(samples) * 0.1;
+        let mut found = Vec::new();
+        let mut was_above = false;
+        for (index, block) in samples.chunks(BLOCK).enumerate() {
+            let above = peak(block) > floor;
+            if above && !was_above {
+                found.push(index * BLOCK);
+            }
+            was_above = above;
+        }
+        found
+    }
+
+    /// Repeats 1 is an ordinary hit: the other four burst controls are live
+    /// the moment it moves and reach nothing before that.
+    #[test]
+    fn repeats_of_one_is_an_ordinary_hit() {
+        let plain = Ds01Params::default();
+        let fiddled = Ds01Params {
+            burst_spacing: 0.5,
+            burst_spread: -1.0,
+            burst_level_step: -1.0,
+            burst_pitch_step: 24.0,
+            ..plain
+        };
+        assert_eq!(hit(plain, 24_000), hit(fiddled, 24_000));
+        assert_eq!(onsets(&hit(burst_patch(1, 0.0, 0.0, 0.0), 24_000)).len(), 1);
+    }
+
+    /// One trigger, several impulses, evenly spaced at Spread 0 — which is
+    /// the machine-gun end of the control.
+    #[test]
+    fn a_burst_fires_its_impulses_on_the_schedule() {
+        let out = hit(burst_patch(4, 0.0, 0.0, 0.0), 24_000);
+        let times = onsets(&out);
+        assert_eq!(times.len(), 4, "found {times:?}");
+        let spacing = (0.02 * SR as f32) as usize;
+        for pair in times.windows(2) {
+            let gap = pair[1] - pair[0];
+            assert!(
+                gap.abs_diff(spacing) < 64,
+                "a 20 ms gap came out {gap} samples: {times:?}"
+            );
+        }
+    }
+
+    /// Negative Spread accelerates — each gap shorter than the last, which is
+    /// the clap and the buzz roll. Positive decelerates, which is a drag.
+    #[test]
+    fn spread_accelerates_and_decelerates_the_gaps() {
+        let gaps = |spread: f32| {
+            let times = onsets(&hit(burst_patch(4, spread, 0.0, 0.0), 48_000));
+            assert_eq!(times.len(), 4, "spread {spread} gave {times:?}");
+            times.windows(2).map(|p| p[1] - p[0]).collect::<Vec<_>>()
+        };
+        let accelerating = gaps(-1.0);
+        assert!(
+            accelerating.windows(2).all(|p| p[1] < p[0]),
+            "not accelerating: {accelerating:?}"
+        );
+        let decelerating = gaps(1.0);
+        assert!(
+            decelerating.windows(2).all(|p| p[1] > p[0]),
+            "not decelerating: {decelerating:?}"
+        );
+    }
+
+    /// Level Step shapes a burst without making it louder than the single hit
+    /// it replaces: the sequence is normalized so its loudest impulse is the
+    /// reference one, whichever end of the control it sits at.
+    #[test]
+    fn level_step_shapes_a_burst_without_raising_its_peak() {
+        let single = peak(&hit(burst_patch(1, 0.0, 0.0, 0.0), 24_000));
+        for step in [-1.0, -0.5, 0.5, 1.0] {
+            let out = hit(burst_patch(4, 0.0, step, 0.0), 24_000);
+            assert!(
+                peak(&out) <= single * 1.05,
+                "level step {step} peaked at {} against a single hit's {single}",
+                peak(&out)
+            );
+        }
+
+        // And it is a shape, not a no-op: a falling step is loud first and a
+        // rising one is loud last.
+        let falling = hit(burst_patch(4, 0.0, -1.0, 0.0), 24_000);
+        let rising = hit(burst_patch(4, 0.0, 1.0, 0.0), 24_000);
+        assert!(peak(&falling[..2_400]) > peak(&falling[2_400..4_800]));
+        assert!(peak(&rising[..2_400]) < peak(&rising[2_400..4_800]));
+    }
+
+    /// Pitch Step moves each impulse, cumulatively: a fill that climbs, or a
+    /// tom roll that falls.
+    #[test]
+    fn pitch_step_moves_each_impulse() {
+        let params = Ds01Params {
+            tone_level: 1.0,
+            noise_level: 0.0,
+            burst_repeats: 4,
+            burst_spacing: 0.05,
+            burst_pitch_step: 12.0,
+            pitch: Ds01PitchEnvParams {
+                depth: 0.0,
+                ..Ds01PitchEnvParams::default()
+            },
+            amp: Ds01EnvParams::one_shot(0.04),
+            ..Ds01Params::default()
+        };
+        let out = hit(params, 24_000);
+        let per_impulse: Vec<usize> = (0..4)
+            .map(|index| {
+                let start = index * (0.05 * SR as f32) as usize;
+                upward_crossings(&out[start..start + 1_200])
+            })
+            .collect();
+        assert!(
+            per_impulse.windows(2).all(|p| p[1] > p[0]),
+            "an octave a step gave {per_impulse:?}"
+        );
+    }
+
+    /// An eight-repeat burst is one voice, not eight. That is what keeps a
+    /// roll from consuming the whole pool, and it is why the body resonator
+    /// can ring across the impulses at all.
+    #[test]
+    fn an_eight_repeat_burst_uses_one_voice() {
+        let mut node = Ds01::new(burst_patch(DS01_MAX_REPEATS, 0.0, 0.0, 0.0), SR);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60, 127));
+        // A hundred milliseconds in, the schedule still owes four impulses,
+        // so this is measured while the burst is live rather than after it.
+        let out = render(&mut node, 4_800, &events);
+        assert_eq!(onsets(&out).len(), 5);
+        assert_eq!(node.voices.iter().filter(|voice| voice.active).count(), 1);
+    }
+
+    /// The resonators ring *across* the impulses rather than being restarted,
+    /// which is what makes a burst a clap rather than four claps: four
+    /// strikes into one object leave more energy in it than one strike does.
+    #[test]
+    fn the_body_rings_across_a_burst() {
+        let energy = |repeats: u8| {
+            let params = Ds01Params {
+                burst_repeats: repeats,
+                burst_spacing: 0.02,
+                // Well under the voice's own ceiling, so this measures the
+                // resonator rather than the bound above it.
+                body_level: 0.25,
+                ..body_only(220.0, 0.0, 1.0, 0.0)
+            };
+            let out = hit(params, 24_000);
+            out.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>()
+        };
+
+        // Total energy is the discriminator, not the tail's level. A
+        // resonator cleared at each strike ends up holding about one
+        // strike's worth however many it was given — three truncated 20 ms
+        // fragments plus one full tail, which measures at roughly 1.06x — so
+        // anything well above that is the ring carrying across.
+        //
+        // It is 1.65x rather than 4x because the resonator is linear and the
+        // strikes land at unrelated phases of its cycle, so they partly
+        // cancel. That is the same reason a flam on a bell sounds like a flam
+        // and not like one hit four times as hard.
+        let one = energy(1);
+        let four = energy(4);
+        assert!(
+            four > one * 1.4,
+            "four strikes left {four} of energy against one strike's {one}"
+        );
+    }
+
+    /// Burst Index: 0 at the first impulse, 1 at the last, constant within an
+    /// impulse, and 0 throughout at Repeats 1. Step 07 publishes it as a
+    /// matrix source — a shape across a flam or a roll, which is consistent
+    /// displacement rather than the randomness the taste brief rules out —
+    /// and the contract is testable before anything routes it.
+    #[test]
+    fn burst_index_runs_from_zero_to_one_across_the_impulses() {
+        let mut burst = Burst::default();
+        burst.start(
+            &Ds01Params {
+                burst_repeats: 4,
+                burst_spacing: 0.01,
+                ..Ds01Params::default()
+            },
+            SR,
+        );
+
+        let mut seen = vec![burst.position()];
+        for _ in 0..(0.06 * SR as f32) as usize {
+            if burst.tick(SR) {
+                seen.push(burst.position());
+            }
+        }
+        assert_eq!(seen.len(), 4, "{seen:?}");
+        for (index, position) in seen.iter().enumerate() {
+            let want = index as f32 / 3.0;
+            assert!((position - want).abs() < 1.0e-6, "{seen:?}");
+        }
+
+        burst.start(&Ds01Params::default(), SR);
+        for _ in 0..4_800 {
+            assert!(!burst.tick(SR), "an ordinary hit fired a second impulse");
+            assert_eq!(burst.position(), 0.0);
+        }
+    }
+
+    /// A voice is not free while it still owes impulses, even if its
+    /// amplitude envelope ran out between them — and every configuration
+    /// still ends. The schedule may shape a hit; it may not extend a voice's
+    /// lifetime indefinitely.
+    #[test]
+    fn every_burst_configuration_terminates() {
+        for repeats in [1, 4, DS01_MAX_REPEATS] {
+            for spread in [-1.0, 0.0, 1.0] {
+                for spacing in [0.001, 0.5] {
+                    let params = Ds01Params {
+                        burst_spacing: spacing,
+                        ..burst_patch(repeats, spread, -1.0, 0.0)
+                    };
+                    let mut node = Ds01::new(params, SR);
+                    let mut events = EventList::empty();
+                    events.push(note_on(0, 60, 127));
+                    let out = render(&mut node, SR as usize, &events);
+                    assert!(out.iter().all(|s| s.is_finite()));
+                    assert!(peak(&out) <= 1.0);
+
+                    // `DS01_BURST_MAX_S` bounds the schedule, so five seconds
+                    // covers the longest of them plus its tail.
+                    for _ in 0..5 {
+                        render(&mut node, SR as usize, &EventList::empty());
+                    }
+                    assert!(
+                        node.voices.iter().all(|voice| !voice.active),
+                        "repeats {repeats}, spread {spread}, spacing {spacing} stranded a voice"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -87,6 +87,12 @@ pub const ENV_OFFSET_GATE: u32 = 6;
 /// Controls in one gated envelope block.
 pub const ENV_BLOCK: u32 = 7;
 
+pub const PARAM_BURST_REPEATS: u32 = 80;
+pub const PARAM_BURST_SPACING: u32 = 81;
+pub const PARAM_BURST_SPREAD: u32 = 82;
+pub const PARAM_BURST_LEVEL_STEP: u32 = 83;
+pub const PARAM_BURST_PITCH_STEP: u32 = 84;
+
 pub const PARAM_AMP_ENV_BASE: u32 = 40;
 pub const PARAM_NOISE_ENV_BASE: u32 = 60;
 pub const PARAM_MOD_ENV_BASE: u32 = 70;
@@ -107,6 +113,17 @@ pub const DS01_VOICES: usize = crate::MAX_DRUM_VOICES as usize;
 
 /// Most partials the tone bank can run.
 pub const DS01_MAX_PARTIALS: u8 = 6;
+
+/// Most impulses one trigger can fire.
+pub const DS01_MAX_REPEATS: u8 = 8;
+
+/// Longest a burst's schedule may run, in seconds.
+///
+/// A bound on a voice's lifetime rather than a musical limit: at the top of
+/// every control a decelerating eight-impulse burst would otherwise schedule
+/// its last hit a minute after the first. Impulses past this are dropped, so
+/// the schedule can shape a hit but cannot extend it indefinitely.
+pub const DS01_BURST_MAX_S: f32 = 4.0;
 
 /// Tuned resonators in the body layer.
 pub const DS01_BODY_MODES: usize = 3;
@@ -411,6 +428,42 @@ const BODY_DESCRIPTORS: [ParamDescriptor; 6] = [
     unit(PARAM_BODY_EXCITE, "Excite", 0.0),
 ];
 
+/// One trigger, several impulses: the clap, and the control most likely to
+/// produce something nobody planned.
+///
+/// A clap is not a snare with a longer noise tail. It is three or four noise
+/// bursts a few milliseconds apart followed by a longer one, and no amount of
+/// envelope shaping reaches it from a single hit. Once the mechanism exists
+/// it is also a flam, a drag, a buzz roll, a stutter and a machine-gun fill.
+///
+/// Repeats 1 is an ordinary hit and is the default, so the section looks
+/// inert and is not: every other control has an effect the moment Repeats
+/// moves, and Repeats itself is a destination worth having.
+const BURST_DESCRIPTORS: [ParamDescriptor; 5] = [
+    ParamDescriptor {
+        id: PARAM_BURST_REPEATS,
+        name: "Repeats",
+        unit: "",
+        min: 1.0,
+        max: DS01_MAX_REPEATS as f32,
+        curve: ParamCurve::Stepped(DS01_MAX_REPEATS),
+        default: 1.0,
+    },
+    // Milliseconds, and they stay milliseconds. Tempo-syncing this would make
+    // a clap change shape when the project tempo changed, which is wrong: a
+    // burst is one event's internal structure, not a placement decision.
+    time_s(PARAM_BURST_SPACING, "Spacing", 0.001, 0.5, 0.012),
+    // Negative accelerates — each gap shorter than the last, which is the
+    // clap and the buzz roll. Positive decelerates, which is a drag. Zero is
+    // even, which is a machine-gun.
+    bipolar(PARAM_BURST_SPREAD, "Spread", 0.0),
+    // Per impulse and cumulative. Negative is the natural clap and flam
+    // shape; positive is a build that arrives on the last impulse.
+    bipolar(PARAM_BURST_LEVEL_STEP, "Level step", 0.0),
+    // A fill that climbs, or a tom roll that falls.
+    semitones(PARAM_BURST_PITCH_STEP, "Pitch step", -24.0, 24.0, 0.0),
+];
+
 /// Longest attack or hold. Half a second is already past a drum and into a
 /// swell, which is the point: the top of the range is where the envelope
 /// stops being percussive.
@@ -509,10 +562,10 @@ const MOD_ENV_DESCRIPTORS: [ParamDescriptor; ENV_BLOCK as usize] = env_block(
 );
 
 /// The complete DS-01 table for this step.
-pub static DESCRIPTORS: [ParamDescriptor; 50] = concat();
+pub static DESCRIPTORS: [ParamDescriptor; 55] = concat();
 
-const fn concat() -> [ParamDescriptor; 50] {
-    let mut out = [GLOBAL_DESCRIPTORS[0]; 50];
+const fn concat() -> [ParamDescriptor; 55] {
+    let mut out = [GLOBAL_DESCRIPTORS[0]; 55];
     let mut at = 0;
     let mut i = 0;
     while i < GLOBAL_DESCRIPTORS.len() {
@@ -559,6 +612,12 @@ const fn concat() -> [ParamDescriptor; 50] {
     i = 0;
     while i < MOD_ENV_DESCRIPTORS.len() {
         out[at] = MOD_ENV_DESCRIPTORS[i];
+        at += 1;
+        i += 1;
+    }
+    i = 0;
+    while i < BURST_DESCRIPTORS.len() {
+        out[at] = BURST_DESCRIPTORS[i];
         at += 1;
         i += 1;
     }
@@ -757,6 +816,20 @@ pub struct Ds01Params {
     /// layer's post-filter signal at `1`.
     pub body_excite: f32,
 
+    // --- Burst ----------------------------------------------------------
+    /// Impulses one trigger fires, `1..=DS01_MAX_REPEATS`. `1` is an
+    /// ordinary hit.
+    pub burst_repeats: u8,
+    /// Gap to the second impulse, in seconds. Later gaps follow
+    /// [`Self::burst_spread`].
+    pub burst_spacing: f32,
+    /// Bipolar. Negative accelerates, positive decelerates, zero is even.
+    pub burst_spread: f32,
+    /// Bipolar, applied per impulse and cumulatively.
+    pub burst_level_step: f32,
+    /// Bipolar semitones, applied per impulse and cumulatively.
+    pub burst_pitch_step: f32,
+
     // --- Envelopes ------------------------------------------------------
     /// The VCA, always.
     pub amp: Ds01EnvParams,
@@ -798,6 +871,11 @@ impl Default for Ds01Params {
             body_decay: 0.4,
             body_damping: 0.3,
             body_excite: 0.0,
+            burst_repeats: 1,
+            burst_spacing: 0.012,
+            burst_spread: 0.0,
+            burst_level_step: 0.0,
+            burst_pitch_step: 0.0,
             amp: Ds01EnvParams::one_shot(0.24),
             pitch: Ds01PitchEnvParams::default(),
             noise_env: Ds01EnvParams::one_shot(0.12),
@@ -843,6 +921,11 @@ pub fn get(p: &Ds01Params, id: u32) -> Option<f32> {
         PARAM_BODY_DECAY => p.body_decay,
         PARAM_BODY_DAMPING => p.body_damping,
         PARAM_BODY_EXCITE => p.body_excite,
+        PARAM_BURST_REPEATS => f32::from(p.burst_repeats),
+        PARAM_BURST_SPACING => p.burst_spacing,
+        PARAM_BURST_SPREAD => p.burst_spread,
+        PARAM_BURST_LEVEL_STEP => p.burst_level_step,
+        PARAM_BURST_PITCH_STEP => p.burst_pitch_step,
         PARAM_PITCH_ATTACK => p.pitch.attack,
         PARAM_PITCH_DECAY => p.pitch.decay,
         PARAM_PITCH_CURVE => p.pitch.curve,
@@ -891,6 +974,13 @@ pub fn set(p: &mut Ds01Params, id: u32, value: f32) -> bool {
         PARAM_BODY_DECAY => p.body_decay = value,
         PARAM_BODY_DAMPING => p.body_damping = value,
         PARAM_BODY_EXCITE => p.body_excite = value,
+        PARAM_BURST_REPEATS => {
+            p.burst_repeats = value.round().clamp(1.0, DS01_MAX_REPEATS as f32) as u8
+        }
+        PARAM_BURST_SPACING => p.burst_spacing = value,
+        PARAM_BURST_SPREAD => p.burst_spread = value,
+        PARAM_BURST_LEVEL_STEP => p.burst_level_step = value,
+        PARAM_BURST_PITCH_STEP => p.burst_pitch_step = value,
         PARAM_PITCH_ATTACK => p.pitch.attack = value,
         PARAM_PITCH_DECAY => p.pitch.decay = value,
         PARAM_PITCH_CURVE => p.pitch.curve = value,
@@ -913,14 +1003,14 @@ mod tests {
         }
     }
 
-    /// Steps 02 through 04 own 0-39 and the four envelope bands. 80 onward is
-    /// the burst, the shaper and the matrix; reaching into any of those would
-    /// be spending a later step's reservation.
+    /// Steps 02 through 05 own 0-39, the four envelope bands, and the burst.
+    /// 90 onward is the shaper and the matrix; reaching into either would be
+    /// spending a later step's reservation.
     #[test]
     fn every_id_lands_in_a_band_these_steps_own() {
         for d in &DESCRIPTORS {
-            let owned = d.id < 40 || (40..80).contains(&d.id);
-            assert!(owned, "{} ({}) is outside steps 02-04's bands", d.id, d.name);
+            let owned = d.id < 40 || (40..90).contains(&d.id);
+            assert!(owned, "{} ({}) is outside steps 02-05's bands", d.id, d.name);
             assert!(
                 !(54..60).contains(&d.id),
                 "{} ({}) sits in the pitch band's unused tail",
@@ -928,7 +1018,7 @@ mod tests {
                 d.name
             );
         }
-        assert_eq!(DESCRIPTORS.len(), 50);
+        assert_eq!(DESCRIPTORS.len(), 55);
     }
 
     /// The four envelopes are one type used four times, so their blocks have
@@ -1023,6 +1113,7 @@ mod tests {
                 PARAM_AMP_ENV_BASE + ENV_OFFSET_GATE,
                 PARAM_NOISE_ENV_BASE + ENV_OFFSET_GATE,
                 PARAM_MOD_ENV_BASE + ENV_OFFSET_GATE,
+                PARAM_BURST_REPEATS,
             ]
         );
     }
@@ -1032,8 +1123,8 @@ mod tests {
         let mut params = Ds01Params::default();
         // 6 is inside the global band but unassigned; 36 is the tail of the
         // body one, 47 the tail of the amplitude block, 54 the tail of the
-        // pitch one, and 80 the burst in step 05.
-        for id in [6, 36, 47, 54, 80] {
+        // pitch one, 85 the tail of the burst, and 90 the shaper in step 06.
+        for id in [6, 36, 47, 54, 85, 90] {
             assert_eq!(get(&params, id), None, "id {id} reads");
             assert!(!set(&mut params, id, 1.0), "id {id} writes");
         }
