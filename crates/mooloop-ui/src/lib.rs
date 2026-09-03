@@ -4767,7 +4767,8 @@ impl AppUi {
                 }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Notes duplicated");
-                anchor_copy as i32
+                // The grid reads -1 as "carry on holding what you had".
+                anchor_copy.map_or(-1, |id| id as i32)
             });
         }
         {

@@ -297,9 +297,14 @@ impl Session {
     /// Copies the selection over itself and moves the selection to the copies.
     ///
     /// They land exactly on the originals, so the drag that triggered this
-    /// continues on the duplicate with no visible jump. Returns the copy of
-    /// the note that was grabbed, so the drag knows what it is now holding.
-    pub fn duplicate_selection(&mut self, anchor_id: NoteId) -> Option<(NoteId, NoteEdit)> {
+    /// continues on the duplicate with no visible jump. The first half of the
+    /// answer is the copy of the note that was grabbed, so the drag knows what
+    /// it is now holding -- `None` when the grabbed note was not among the
+    /// originals, which is not a reason to withhold the copies that were made.
+    pub fn duplicate_selection(
+        &mut self,
+        anchor_id: NoteId,
+    ) -> Option<(Option<NoteId>, NoteEdit)> {
         let (channel, pattern) = self.roll();
         let originals: Vec<NoteEvent> = self.channels[channel].notes[pattern]
             .iter()
@@ -328,7 +333,7 @@ impl Session {
             commands: copies.iter().map(|note| self.upsert(*note)).collect(),
             cells: None,
         };
-        Some((anchor_copy?, edit))
+        Some((anchor_copy, edit))
     }
 
     /// Resizes the selection so the grabbed note ends up `duration` long.
@@ -836,6 +841,33 @@ mod tests {
             vec![120, 124, 127],
             "the chord flattened onto the top note instead of stopping as one"
         );
+    }
+
+    /// The copies are made whether or not the grabbed note was among them.
+    /// Withholding them because the anchor was stale would leave the session
+    /// holding notes the engine had never been told about.
+    #[test]
+    fn duplicating_reports_the_copies_even_when_the_anchor_is_stale() {
+        let (mut session, ids) = chord_session();
+
+        let (anchor_copy, edit) = session
+            .duplicate_selection(ids[0])
+            .expect("the selection is not empty");
+        assert!(anchor_copy.is_some());
+        assert_eq!(edit.notes, 3);
+        assert_eq!(session.channels[0].notes[0].len(), 6);
+
+        // An id that is not in the pattern at all, with a live selection.
+        let (anchor_copy, edit) = session
+            .duplicate_selection(9_999)
+            .expect("the selection is still not empty");
+        assert_eq!(anchor_copy, None);
+        assert_eq!(
+            edit.notes, 3,
+            "the copies were withheld because the anchor was stale"
+        );
+        assert_eq!(session.channels[0].notes[0].len(), 9);
+        assert_eq!(edit.commands.len(), 3);
     }
 
     /// Grabbing a note outside the selection acts on that note alone.
