@@ -19,7 +19,7 @@ use mooloop_core::gain::{db_to_linear, linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::log::Level;
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
-    compile_bus_graph, snap_bars_to_power_of_two, default_buses, sanitize_route, would_create_cycle,
+    compile_bus_graph, snap_bars_to_power_of_two, sanitize_route, would_create_cycle,
     AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind, EffectParams,
     insert_effect, move_effect, remove_effect,
@@ -31,7 +31,7 @@ use mooloop_core::{
     ds01, Ds01Params,
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
-    ParamCurve, ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId,
+    ParamCurve, ParamDescriptor, ParamOwner, PointId,
     Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
     PlayMode, SampleCommit, SamplerParams, SliceMap, SnareCharacter, StretchMode,
     VoiceMode, MAX_SLICES,
@@ -42,8 +42,8 @@ use mooloop_core::{
     MOD_STEP_MAX_STEPS,
     MAX_SAMPLER_VOICES, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
     MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
-    MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
-    MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SWING_PERCENT, MIN_SWING_PERCENT, STRIP_DESCRIPTORS,
+    MAX_PATTERNS, MAX_PLAYLIST_BARS,
+    MAX_POLY_VOICES, STRIP_DESCRIPTORS,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
@@ -95,7 +95,7 @@ use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode,
     VecModel,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -2392,14 +2392,6 @@ impl UiState {
     /// remains millisecond-only: the resulting values take its normal
     /// sample-timed parameter path, so all delays move at the next block
     /// without allocating or rebuilding their rings.
-    /// Retunes every tempo-synced delay and re-draws the rack. The retune is
-    /// the session's; the redraw is this layer's.
-    fn update_tempo_synced_delay_times(&mut self, bpm: f64) -> Vec<(EffectTarget, u8, f32)> {
-        let changes = self.session.update_tempo_synced_delay_times(bpm);
-        self.sync_effects();
-        changes
-    }
-
     /// Rebuild the edited chain's rows. The model itself is installed on the
     /// window once; this refreshes its contents after structural changes
     /// (add/remove/reorder) and after the rack is pointed somewhere else.
@@ -3478,40 +3470,10 @@ impl AppUi {
         let state = Rc::new(RefCell::new(UiState {
             session: Session {
                 channels: vec![first],
-                slice_audition: None,
-                modulation_shelf_open: false,
-                modulation_selected_slot: Cell::new(None),
-                modulation_armed_slot: Cell::new(None),
-                modulation_outputs: Cell::new([0.0; MAX_MODULATORS_PER_CHANNEL]),
-                modulation_ui_channel: Cell::new(None),
-                modulation_edit_before: None,
-                modulation_edit_changed: false,
-                browser_locations: Vec::new(),
-                browser_expanded: HashSet::new(),
                 default_waveform,
                 default_sample_description,
                 default_sample_duration,
-                buses: default_buses(),
-                pattern_lengths: vec![DEFAULT_STEPS as usize],
-                pattern_names: vec![String::new()],
-                playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
-                song_mode: false,
-                current_pattern: 0,
-                selected: 0,
-                effect_target: EffectTarget::Channel(0),
-                selected_note_id: None,
-                selected_note_ids: HashSet::new(),
-                marquee_base: None,
-                scale_base: None,
-                automation_target: Cell::new(None),
-                automation_selected_point: Cell::new(None),
-                bundle_path: None,
-                dirty: false,
-                revision: 0,
-                source_revision: 0,
-                generator_presets: Vec::new(),
-                channel_presets: Vec::new(),
-                pending_preset_save: None,
+                ..Session::default()
             },
             rows: rows_model,
             step_models: vec![step_model],
@@ -4649,16 +4611,11 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_playback_mode_changed(move |song_mode| {
-                st.borrow_mut().session.song_mode = song_mode;
+                let command = st.borrow_mut().session.set_playback_mode(song_mode);
                 if let Some(window) = weak.upgrade() {
                     window.set_song_mode(song_mode);
                 }
-                let mode = if song_mode {
-                    PlaybackMode::Song
-                } else {
-                    PlaybackMode::Pattern
-                };
-                let _ = tx.send(EngineCommand::SetPlaybackMode(mode));
+                let _ = tx.send(command);
             });
         }
         {
@@ -4667,24 +4624,17 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_bpm_changed(move |bpm| {
                 let bpm = bpm as f64;
-                // Preserve stream order: the transport adopts the tempo
-                // first, then every synced delay receives its resolved ms
-                // value before any beat-relative buffer replacement.
-                let _ = tx.send(EngineCommand::SetTempo(bpm));
-                let changes = {
+                // The session returns these already ordered: tempo first,
+                // then every synced delay's resolved ms value, before any
+                // beat-relative buffer replacement.
+                let commands = {
                     let mut state = st.borrow_mut();
-                    let changes = state.update_tempo_synced_delay_times(bpm);
-                    state.session.dirty = true;
-                    state.session.revision = state.session.revision.wrapping_add(1);
-                    changes
+                    let commands = state.session.set_tempo(bpm);
+                    state.sync_effects();
+                    commands
                 };
-                for (target, slot, time_ms) in changes {
-                    let _ = tx.send(EngineCommand::SetEffectParam {
-                        target,
-                        slot,
-                        id: mooloop_core::DELAY_PARAM_TIME_MS,
-                        value: time_ms,
-                    });
+                for command in commands {
+                    let _ = tx.send(command);
                 }
                 let _ = tx.resize_buffers(bpm);
                 if let Some(window) = weak.upgrade() {
@@ -4709,12 +4659,8 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_swing_changed(move |percent| {
-                let percent =
-                    percent.clamp(MIN_SWING_PERCENT.into(), MAX_SWING_PERCENT.into()) as u8;
-                let _ = tx.send(EngineCommand::SetSwing(percent));
                 let mut st = st.borrow_mut();
-                st.session.dirty = true;
-                st.session.revision = st.session.revision.wrapping_add(1);
+                let _ = tx.send(st.session.set_swing(percent));
                 if let Some(window) = weak.upgrade() {
                     st.update_document_title(&window);
                 }
@@ -4747,18 +4693,11 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_pattern_selected(move |p| {
-                let count = st.borrow().session.pattern_lengths.len();
-                if p < 0 || p as usize >= count {
+                let Some(p) = st.borrow_mut().session.select_pattern(p) else {
                     return;
-                }
-                let p = p as usize;
+                };
                 log_debug!("ui", "pattern {p} selected");
-                {
-                    let mut st = st.borrow_mut();
-                    st.session.current_pattern = p;
-                    st.session.select_note(None);
-                    st.show_pattern(p);
-                }
+                st.borrow().show_pattern(p);
                 if let Some(w) = weak.upgrade() {
                     w.set_current_pattern(p as i32);
                     let st = st.borrow();
@@ -4782,18 +4721,9 @@ impl AppUi {
                     return;
                 }
                 let mut st = st.borrow_mut();
-                if st.session.pattern_lengths.len() >= MAX_PATTERNS {
+                let Some(pattern) = st.session.add_pattern() else {
                     return;
-                }
-                let pattern = st.session.pattern_lengths.len();
-                st.session.pattern_lengths.push(DEFAULT_STEPS as usize);
-                st.session.pattern_names.push(String::new());
-                for channel in &mut st.session.channels {
-                    channel.notes.push(Vec::new());
-                    channel.automation.push(Vec::new());
-                }
-                st.session.current_pattern = pattern;
-                st.session.select_note(None);
+                };
                 st.show_pattern(pattern);
                 if let Some(window) = weak.upgrade() {
                     window.set_pattern_count(st.session.pattern_lengths.len() as i32);
@@ -4814,12 +4744,10 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_pattern_renamed(move |index, name| {
-                let index = index as usize;
                 let mut st = st.borrow_mut();
-                if index >= st.session.pattern_names.len() {
+                if !st.session.rename_pattern(index as usize, &name) {
                     return;
                 }
-                st.session.pattern_names[index] = name.trim().to_string();
                 if let Some(window) = weak.upgrade() {
                     st.sync_pattern_menu(&window);
                 }
@@ -4833,36 +4761,19 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_pattern_length_changed(move |length| {
-                let length = length.clamp(1, MAX_PATTERN_STEPS as i32) as usize;
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                if st.session.pattern_lengths[pattern] == length {
+                let Some(applied) = st.session.set_pattern_length(length) else {
                     return;
-                }
-                st.session.pattern_lengths[pattern] = length;
-                let length_ticks = length as u32 * TICKS_PER_STEP;
-                let notes = &st.session.channels[st.session.selected].notes[pattern];
-                let out_of_range: Vec<NoteId> = st
-                    .session.selected_note_ids
-                    .iter()
-                    .copied()
-                    .filter(|id| {
-                        notes
-                            .iter()
-                            .find(|note| note.id == *id)
-                            .is_none_or(|note| note.start_tick >= length_ticks)
-                    })
-                    .collect();
-                st.session.prune_note_selection(&out_of_range);
-                st.show_pattern(pattern);
+                };
+                st.show_pattern(applied.pattern);
                 if let Some(w) = weak.upgrade() {
-                    w.set_pattern_length(length as i32);
+                    w.set_pattern_length(applied.length as i32);
                     st.refresh_note_editor(&w);
                     st.sync_playlist(&w);
                 }
                 let _ = tx.send(EngineCommand::SetPatternLength {
-                    pattern: pattern as u8,
-                    length_steps: length as u16,
+                    pattern: applied.pattern as u8,
+                    length_steps: applied.length as u16,
                 });
             });
         }
@@ -4875,38 +4786,15 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_playlist_placement_added(move |pattern, start_tick| {
                 let mut st = st.borrow_mut();
-                if pattern < 0 || pattern as usize >= st.session.pattern_lengths.len() {
+                let Some(placement) = st.session.add_playlist_placement(pattern, start_tick) else {
                     return;
-                }
-                let pattern = pattern as usize;
-                let start_tick = start_tick.max(0) as u32;
-                if start_tick >= MAX_PLAYLIST_TICKS || st.session.playlist.len() >= MAX_PLAYLIST_PLACEMENTS
-                {
-                    return;
-                }
-                let end_tick =
-                    start_tick.saturating_add(st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP);
-                let overlaps = st.session.playlist.iter().any(|placement| {
-                    if placement.pattern as usize != pattern {
-                        return false;
-                    }
-                    let existing_end = placement
-                        .start_tick
-                        .saturating_add(st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP);
-                    start_tick < existing_end && placement.start_tick < end_tick
-                });
-                if overlaps {
-                    return;
-                }
-                let placement = PatternPlacement::new(pattern as u8, start_tick);
-                st.session.playlist.push(placement);
-                st.session.playlist.sort_unstable();
+                };
                 if let Some(window) = weak.upgrade() {
                     st.sync_playlist(&window);
                 }
                 let _ = tx.send(EngineCommand::SetPlaylistPlacement {
-                    pattern: pattern as u8,
-                    start_tick,
+                    pattern: placement.pattern,
+                    start_tick: placement.start_tick,
                     on: true,
                 });
             });
@@ -4917,18 +4805,9 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_playlist_placement_removed(move |pattern, tick| {
                 let mut st = st.borrow_mut();
-                if pattern < 0 || pattern as usize >= st.session.pattern_lengths.len() {
-                    return;
-                }
-                let pattern = pattern as usize;
-                let tick = tick.max(0) as u32;
-                let Some(placement) = st.session.placement_covering(pattern, tick) else {
+                let Some(placement) = st.session.remove_playlist_placement(pattern, tick) else {
                     return;
                 };
-                let Some(index) = st.session.playlist.iter().position(|item| *item == placement) else {
-                    return;
-                };
-                st.session.playlist.remove(index);
                 if let Some(window) = weak.upgrade() {
                     st.sync_playlist(&window);
                 }

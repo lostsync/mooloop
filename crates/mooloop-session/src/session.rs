@@ -12,7 +12,8 @@ use crate::notes::ScaleBase;
 use crate::project::ProjectSnapshot;
 use crate::values::descriptor_slots;
 use mooloop_core::{
-    compile_bus_graph, sanitize_route, would_create_cycle, MASTER_BUS, MAX_BUSES,
+    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, DEFAULT_STEPS,
+    MASTER_BUS, MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
     retarget_lanes, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelSetup,
     ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
     EffectParams, EffectSlotState, EffectTarget, MlM1Params, MlM1State, MlP8Params, MlP8State,
@@ -117,6 +118,51 @@ pub struct Session {
     pub generator_presets: Vec<PresetSummary>,
     pub channel_presets: Vec<PresetSummary>,
     pub pending_preset_save: Option<PresetSaveTarget>,
+}
+
+
+impl Default for Session {
+    /// The session the application holds before any document is installed:
+    /// one empty sampler channel, one pattern, the default bus bank.
+    fn default() -> Self {
+        Self {
+            channels: vec![ChannelState::new(0)],
+            automation_target: Cell::new(None),
+            automation_selected_point: Cell::new(None),
+            slice_audition: None,
+            modulation_shelf_open: false,
+            modulation_selected_slot: Cell::new(None),
+            modulation_armed_slot: Cell::new(None),
+            modulation_outputs: Cell::new([0.0; MAX_MODULATORS_PER_CHANNEL]),
+            modulation_ui_channel: Cell::new(None),
+            modulation_edit_before: None,
+            modulation_edit_changed: false,
+            browser_locations: Vec::new(),
+            browser_expanded: HashSet::new(),
+            default_waveform: Vec::new(),
+            default_sample_description: String::new(),
+            default_sample_duration: 0.0,
+            buses: default_buses(),
+            pattern_lengths: vec![DEFAULT_STEPS as usize],
+            pattern_names: vec![String::new()],
+            playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
+            song_mode: false,
+            current_pattern: 0,
+            selected: 0,
+            effect_target: EffectTarget::Channel(0),
+            selected_note_id: None,
+            selected_note_ids: HashSet::new(),
+            marquee_base: None,
+            scale_base: None,
+            bundle_path: None,
+            dirty: false,
+            revision: 0,
+            source_revision: 0,
+            generator_presets: Vec::new(),
+            channel_presets: Vec::new(),
+            pending_preset_save: None,
+        }
+    }
 }
 
 /// Bins the stored channel waveform is reduced to. A fixed overview; the
