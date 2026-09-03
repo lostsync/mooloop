@@ -19,22 +19,21 @@ use mooloop_core::gain::{db_to_linear, linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::log::Level;
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
-    compile_bus_graph, snap_bars_to_power_of_two, default_buses, sanitize_route, strip_descriptor, would_create_cycle,
-    AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup, Channel, ChannelSetup,
-    ChannelSource, DeviceKind, DrumMode, DrumSynthParams, DrumSynthState, EffectKind, EffectParams,
-    insert_effect, move_effect, remove_effect, retarget_lanes, SlotRemap,
+    compile_bus_graph, snap_bars_to_power_of_two, default_buses, sanitize_route, would_create_cycle,
+    AutomationLane, AutomationPoint, BufferDuration, BufferEvent, BusSetup,
+    DeviceKind, DrumMode, DrumSynthParams, EffectKind, EffectParams,
+    insert_effect, move_effect, remove_effect,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
-    KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
-    ModPolarity, ModRack, ModRandomTrigger, ModRoute, ModStepTrigger,
-    ModulatorKind, ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State,
-    ds01, Ds01Params, Ds01State, MlP8Params, MlP8State,
+    KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
+    ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
+    ModulatorKind, ModulatorParams,
+    ds01, Ds01Params,
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamCurve, ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId,
-    PolySynthParams,
-    PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
-    PlayMode, SampleCommit, SamplerParams, SamplerState, SliceMap, SnareCharacter, StretchMode,
+    Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
+    PlayMode, SampleCommit, SamplerParams, SliceMap, SnareCharacter, StretchMode,
     VoiceMode, MAX_SLICES,
     DEFAULT_NOTE_DURATION_TICKS,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_BUSES,
@@ -81,11 +80,12 @@ use mooloop_session::project::{
 };
 use mooloop_session::sample::{
     adjacent_sample, inspect_sample, load_sample_at_path, sample_description, sample_duration,
-    sample_files_in_directory, sample_index, tune_label, waveform_peaks, waveform_peaks_windowed,
+    tune_label, waveform_peaks, waveform_peaks_windowed,
     LoadResult, LoadedSample, SampleInspection,
 };
+use mooloop_session::session::{ArmedRoute, PresetSaveTarget, Session, WAVEFORM_BINS};
 use mooloop_session::values::{
-    format_bars, measured_loop_bars, parse_typed_value, stretch_bars_from_norm,
+    descriptor_slots, format_bars, measured_loop_bars, parse_typed_value, stretch_bars_from_norm,
     stretch_bars_to_norm, stretch_grain_from_norm, stretch_grain_to_norm, stretch_ratio_from_norm,
     stretch_ratio_to_norm,
 };
@@ -238,7 +238,6 @@ impl PreviewSender {
 /// Fixed JACK buffer size choices offered by the segmented control on the
 /// Audio preferences page. Index-addressed to match `SegmentedControl`.
 const JACK_BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
-const WAVEFORM_BINS: usize = 256;
 const DRUM_PREVIEW_BINS: usize = 144;
 
 /// Bins in DS-01's rendered hit. Wider than v1's because its scope is wider:
@@ -487,33 +486,6 @@ fn sync_audio_status(handle: &EngineHandle, window: &MainWindow) {
     );
 }
 
-/// UI-side state for one channel. `notes` is the pattern bank.
-/// Coerce a loaded bus bank to the fixed size the engine preallocates,
-/// padding a short one and repairing any routing an older or hand-edited file
-/// left illegal. Everything downstream can then index the bank directly.
-///
-/// Per-edge nonsense is fixed first, then the graph as a whole: a file whose
-/// routing contains a loop is flattened to everything-to-master rather than
-/// rejected, matching what the engine does with the same file.
-fn normalized_buses(buses: &[BusSetup]) -> Vec<BusSetup> {
-    let mut normalized: Vec<BusSetup> = (0..MAX_BUSES)
-        .map(|index| match buses.get(index) {
-            Some(setup) => {
-                let mut setup = setup.clone();
-                setup.bus.output = sanitize_route(index as u8, setup.bus.output);
-                setup
-            }
-            None => BusSetup::new(index),
-        })
-        .collect();
-    if compile_bus_graph(&normalized).is_none() {
-        for setup in &mut normalized {
-            setup.bus.output = MASTER_BUS;
-        }
-    }
-    normalized
-}
-
 fn apply_pane(window: &MainWindow, pane: Pane) {
     match pane {
         Pane::Steps => window.set_mixer_visible(false),
@@ -546,11 +518,11 @@ fn snapshot_channel_clipboard(
 }
 
 fn project_snapshot(state: &UiState, window: &MainWindow) -> ProjectSnapshot {
-    let mut project = state.project_snapshot(window.get_bpm(), window.get_swing_percent());
+    let mut project = state.session.project_snapshot(window.get_bpm(), window.get_swing_percent());
     normalize_project_pattern_banks(&mut project);
     ProjectSnapshot {
         project,
-        samples: state.sample_snapshots(),
+        samples: state.session.sample_snapshots(),
     }
 }
 
@@ -696,15 +668,15 @@ fn selection_including(
     pattern: usize,
     anchor: NoteId,
 ) -> HashSet<NoteId> {
-    let live: HashSet<NoteId> = state.channels[channel].notes[pattern]
+    let live: HashSet<NoteId> = state.session.channels[channel].notes[pattern]
         .iter()
         .map(|note| note.id)
         .collect();
-    if !state.selected_note_ids.contains(&anchor) {
+    if !state.session.selected_note_ids.contains(&anchor) {
         return HashSet::from([anchor]);
     }
     let mut acting: HashSet<NoteId> = state
-        .selected_note_ids
+        .session.selected_note_ids
         .intersection(&live)
         .copied()
         .collect();
@@ -1523,14 +1495,6 @@ fn lfo_wave_to_int(wave: LfoWave) -> i32 {
 
 /// Length of an id-indexed parameter array. Ids are dense and small in
 /// practice, but a gap costs one unused entry rather than a wrong lookup.
-fn descriptor_slots(descriptors: &[ParamDescriptor]) -> usize {
-    descriptors
-        .iter()
-        .map(|descriptor| descriptor.id as usize + 1)
-        .max()
-        .unwrap_or(0)
-}
-
 /// Which parameters accept modulation, indexed by descriptor id. The policy
 /// lives in `ModDestinationDescriptor`, so a device opts a control in or out
 /// through its own descriptor rather than through a UI special case. An id
@@ -2056,35 +2020,19 @@ fn note_cell(note: NoteEvent, selected_ids: &HashSet<NoteId>) -> NoteCell {
 
 /// Shared UI state handed to the callback closures.
 struct UiState {
-    channels: Vec<ChannelState>,
+    /// Everything the application would still be if the window went away.
+    session: Session,
     rows: Rc<VecModel<ChannelRow>>,
     step_models: Vec<Rc<VecModel<StepCell>>>,
     note_model: Rc<VecModel<NoteCell>>,
     automation_point_model: Rc<VecModel<AutomationPointCell>>,
     automation_target_model: Rc<VecModel<AutomationTargetRow>>,
-    /// Destination shown in the piano roll's variable lane. `None` means the
-    /// lane is open but empty-handed, which is the state a fresh project is
-    /// in; it is not the same as the lane being hidden.
-    /// A `Cell` so `refresh_automation` can run from the shared `&self`
-    /// editor refresh: reconciling a destination whose device was removed is
-    /// part of drawing the lane, not a separate edit.
-    automation_target: Cell<Option<ParamAddr>>,
-    /// Point last created or dragged. Drives the highlight and the header
-    /// readout; a drag re-reads it by id, so reordering the model underneath
-    /// an in-flight drag is harmless.
-    automation_selected_point: Cell<Option<PointId>>,
     playlist_model: Rc<VecModel<PlaylistClip>>,
     waveform_model: Rc<VecModel<f32>>,
     /// Slice boundaries of the selected channel, normalized against the
     /// published buffer so they ride the same `to-view` zoom the waveform and
     /// every other marker already go through.
     slice_model: Rc<VecModel<f32>>,
-    /// The channel and note of the slice a handle is currently holding down,
-    /// so its release goes to exactly the note that was struck. Kept rather
-    /// than re-derived from the handle's index on the way up: a drag past a
-    /// neighbour reorders the map underneath the handle, and the index it
-    /// releases with is then a different slice's.
-    slice_audition: Option<(u8, u8)>,
     /// Normalized position of every currently active sampler voice on the
     /// selected channel, refreshed each pump tick. Empty when idle, when a
     /// different device kind is selected, or while editing a bus.
@@ -2095,502 +2043,33 @@ struct UiState {
     /// show a collection, not four vacant bays.
     modulation_source_model: Rc<VecModel<ModulationSourceRow>>,
     modulation_route_model: Rc<VecModel<ModulationRouteRow>>,
-    modulation_shelf_open: bool,
-    /// Source whose editor is open in the shelf. Selection is intentionally
-    /// separate from assignment: looking at an LFO must not hijack knob
-    /// gestures throughout the rack.
-    modulation_selected_slot: Cell<Option<u8>>,
-    modulation_armed_slot: Cell<Option<u8>>,
-    /// The selected channel's latest modulator outputs, refreshed from the
-    /// engine on the pump tick. Held here rather than recomputed per knob
-    /// so one read of the audio thread's cells feeds every destination.
-    modulation_outputs: Cell<[f32; MAX_MODULATORS_PER_CHANNEL]>,
-    /// Channel that owns the transient selection/assignment state. Changing
-    /// channels clears both even when the new channel happens to occupy the
-    /// same runtime slot.
-    modulation_ui_channel: Cell<Option<usize>>,
-    /// Snapshot captured at the start of a direct knob gesture. Intermediate
-    /// control updates still reach audio immediately, while one release
-    /// becomes one undoable route edit.
-    modulation_edit_before: Option<ProjectSnapshot>,
-    modulation_edit_changed: bool,
     mixer_strip_model: Rc<VecModel<MixerStripRow>>,
     /// Flattened sample-browser tree, rebuilt whenever locations or folder
     /// expansion change.
     browser_rows: Rc<VecModel<BrowserRow>>,
-    /// Sample-browser folders in display order, mirroring the persisted
-    /// settings for this session.
-    browser_locations: Vec<PathBuf>,
-    /// Folders currently expanded, by path, so a refresh survives reordering.
-    browser_expanded: HashSet<PathBuf>,
-    default_waveform: Vec<f32>,
-    default_sample_description: String,
-    default_sample_duration: f32,
-    /// Mirror of the project's bus bank, master first. Always `MAX_BUSES`
-    /// long, matching the engine's preallocated bank.
-    buses: Vec<BusSetup>,
-    pattern_lengths: Vec<usize>,
-    pattern_names: Vec<String>,
-    playlist: Vec<PatternPlacement>,
-    song_mode: bool,
-    current_pattern: usize,
-    selected: usize,
-    /// Which effect chain the device rack edits. Selecting a channel in the
-    /// step grid points it at that channel; selecting a strip in the mixer
-    /// points it at a bus. `selected` stays put either way, because the piano
-    /// roll, the step grid, and the sampler all still mean a channel.
-    effect_target: EffectTarget,
-    selected_note_id: Option<NoteId>,
-    /// The full multi-selection, driving highlight and bulk delete. Always a
-    /// superset of `selected_note_id` when non-empty; the precision editor
-    /// (`refresh_selected_note_controls`) only shows fields when this has
-    /// settled on exactly one member, since it edits one note, not a group.
-    selected_note_ids: HashSet<NoteId>,
-    /// The selection a marquee started from, plus how it should combine with
-    /// what the band catches. `None` when no band is in flight.
-    marquee_base: Option<(i32, HashSet<NoteId>)>,
-    /// The selection's geometry when a scale drag started, plus the tick it
-    /// scales about. Every frame is applied to this rather than to the live
-    /// notes, so repeated scaling does not compound its own rounding.
-    scale_base: Option<ScaleBase>,
-    bundle_path: Option<PathBuf>,
-    dirty: bool,
-    revision: u64,
-    source_revision: u64,
-    generator_presets: Vec<PresetSummary>,
-    channel_presets: Vec<PresetSummary>,
-    pending_preset_save: Option<PresetSaveTarget>,
-}
-
-#[derive(Clone, Copy)]
-enum PresetSaveTarget {
-    Generator,
-    Channel,
 }
 
 impl UiState {
-    fn reset_channel_source(&mut self, index: usize, kind: DeviceKind) {
-        let Some(channel) = self.channels.get_mut(index) else {
-            return;
-        };
-        self.source_revision = self.source_revision.wrapping_add(1);
-        channel.kind = kind;
-        channel.name = match kind {
-            DeviceKind::Sampler => format!("Sampler {}", index + 1),
-            DeviceKind::DrumSynth => format!("Drum {}", index + 1),
-            DeviceKind::MonoSynth => format!("Mono {}", index + 1),
-            DeviceKind::PolySynth => format!("Poly {}", index + 1),
-            DeviceKind::MlM1 => format!("ML-M1 {}", index + 1),
-            DeviceKind::MlP8 => format!("ML-P8 {}", index + 1),
-            DeviceKind::Ds01 => format!("DS-01 {}", index + 1),
-        };
-        match kind {
-            DeviceKind::Sampler => {
-                channel.params = SamplerParams::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::DrumSynth => {
-                channel.drum_params = DrumSynthParams::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::MlM1 => {
-                channel.mlm1_params = MlM1Params::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::Ds01 => {
-                channel.ds01_params = Ds01Params::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::MlP8 => {
-                channel.mlp8_params = MlP8Params::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::MonoSynth => {
-                channel.mono_params = MonoSynthParams::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::PolySynth => {
-                channel.poly_params = PolySynthParams::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-        }
-    }
-
-    fn project_snapshot(&self, bpm: i32, swing_percent: i32) -> Project {
-        let channels = self
-            .channels
-            .iter()
-            .map(|channel| {
-                let source = match channel.kind {
-                    DeviceKind::Sampler => {
-                        let sample = channel
-                            .sample_path
-                            .as_ref()
-                            .map(|path| SampleReference::File {
-                                path: path.clone(),
-                                embedded: channel.sample_embedded,
-                            })
-                            .unwrap_or_default();
-                        ChannelSource::Sampler(SamplerState {
-                            params: channel.params,
-                            sample,
-                            slices: channel.slices.clone(),
-                            commit: channel.commit.clone(),
-                        })
-                    }
-                    DeviceKind::DrumSynth => ChannelSource::DrumSynth(DrumSynthState {
-                        params: channel.drum_params,
-                    }),
-                    DeviceKind::MonoSynth => ChannelSource::MonoSynth(MonoSynthState {
-                        params: channel.mono_params,
-                    }),
-                    DeviceKind::PolySynth => ChannelSource::PolySynth(PolySynthState {
-                        params: channel.poly_params,
-                    }),
-                    DeviceKind::MlM1 => ChannelSource::MlM1(MlM1State {
-                        params: channel.mlm1_params,
-                    }),
-                    DeviceKind::MlP8 => ChannelSource::MlP8(MlP8State {
-                        params: channel.mlp8_params,
-                    }),
-                    DeviceKind::Ds01 => ChannelSource::Ds01(Ds01State {
-                        params: channel.ds01_params,
-                    }),
-                };
-                ProjectChannel {
-                    setup: ChannelSetup {
-                        channel: Channel {
-                            name: channel.name.clone(),
-                            kind: channel.kind,
-                            muted: channel.muted,
-                            volume: channel.volume,
-                            pan: channel.pan,
-                            bus: channel.bus,
-                        },
-                        source,
-                        effects: channel.effects.clone(),
-                        modulation: channel.modulation,
-                    },
-                    notes: channel.notes.clone(),
-                    automation: channel.automation.clone(),
-                    next_note_id: channel.next_note_id,
-                }
-            })
-            .collect();
-        Project {
-            bpm: bpm.clamp(1, 999) as u16,
-            swing_percent: swing_percent.clamp(MIN_SWING_PERCENT.into(), MAX_SWING_PERCENT.into())
-                as u8,
-            ppq: 96,
-            beats_per_bar: 4,
-            playback_mode: if self.song_mode {
-                PlaybackMode::Song
-            } else {
-                PlaybackMode::Pattern
-            },
-            current_pattern: self.current_pattern as u16,
-            selected_channel: self.selected as u8,
-            channels,
-            buses: self.buses.clone(),
-            pattern_lengths: self
-                .pattern_lengths
-                .iter()
-                .map(|length| *length as u16)
-                .collect(),
-            playlist: self.playlist.clone(),
-        }
-    }
-
-    fn sample_snapshots(&self) -> Vec<Option<Arc<SampleData>>> {
-        self.channels
-            .iter()
-            .map(|channel| {
-                (channel.kind == DeviceKind::Sampler)
-                    .then(|| channel.sample_data.clone())
-                    .flatten()
-            })
-            .collect()
-    }
-
     fn replace_project(
         &mut self,
         project: &Project,
         samples: &[Option<Arc<SampleData>>],
         window: &MainWindow,
     ) {
-        self.source_revision = self.source_revision.wrapping_add(1);
-        let channels = project
-            .channels
-            .iter()
-            .enumerate()
-            .map(|(index, project_channel)| {
-                let setup = &project_channel.setup;
-                // One accessor a kind rather than one tuple arm a kind: the
-                // shape was a five-tuple whose every arm restated the four
-                // defaults it was not, which is a line of edit per synth per
-                // synth added.
-                let source = &setup.source;
-                let sampler = source.sampler_state();
-                let drum_params = source.drum_synth_state().map(|s| s.params).unwrap_or_default();
-                let mono_params = source.mono_synth_state().map(|s| s.params).unwrap_or_default();
-                let poly_params = source.poly_synth_state().map(|s| s.params).unwrap_or_default();
-                let mlm1_params = source.mlm1_state().map(|s| s.params).unwrap_or_default();
-                let mlp8_params = source.mlp8_state().map(|s| s.params).unwrap_or_default();
-                let ds01_params = source.ds01_state().map(|s| s.params).unwrap_or_default();
-                let sample = sampler
-                    .is_some()
-                    .then(|| samples.get(index).cloned().flatten())
-                    .flatten();
-                let (sample_path, embedded) = match sampler.map(|state| &state.sample) {
-                    Some(SampleReference::File { path, embedded }) => {
-                        (Some(path.clone()), *embedded)
-                    }
-                    Some(SampleReference::Builtin { .. } | SampleReference::Empty) | None => {
-                        (None, false)
-                    }
-                };
-                // Only a legacy `Builtin` reference (a project saved before
-                // the sampler stopped auto-loading a kick) substitutes the
-                // cached default sample; `Empty` means genuinely no sample.
-                let is_builtin = matches!(
-                    sampler.map(|state| &state.sample),
-                    Some(SampleReference::Builtin { .. })
-                );
-                let missing = sample_path.is_some() && sample.is_none();
-                let sample_name = if sampler.is_some() {
-                    sample_path
-                        .as_ref()
-                        .and_then(|path| path.file_name())
-                        .and_then(|name| name.to_str())
-                        .map(str::to_string)
-                        .unwrap_or_else(|| {
-                            if is_builtin {
-                                "default kick".to_string()
-                            } else {
-                                String::new()
-                            }
-                        })
-                } else {
-                    String::new()
-                };
-                // A committed stretch is re-rendered rather than reloaded:
-                // the spec is length-determined, so the buffer that comes
-                // back is the one that was baked, and the project never had
-                // to carry the audio.
-                //
-                // Only when it has to, though. Undo and every other project
-                // edit reinstall the whole document through here, and a
-                // commit is a couple of hundred milliseconds of rendering per
-                // channel -- paid on the UI thread, so it is a visible stall.
-                // A buffer already in hand, baked from the same source under
-                // the same spec, is the same buffer.
-                let commit = sampler.and_then(|state| state.commit.clone());
-                let committed = commit.as_ref().zip(sample.as_ref()).and_then(
-                    |(commit, source)| {
-                        let held = self.channels.get(index).filter(|held| {
-                            held.commit.as_ref() == Some(commit)
-                                && held
-                                    .sample_data
-                                    .as_ref()
-                                    .is_some_and(|held| Arc::ptr_eq(held, source))
-                        });
-                        held.and_then(|held| held.committed_sample.clone())
-                            .or_else(|| mooloop_dsp::commit::rerender_commit(source, commit))
-                    },
-                );
-                let published = committed.as_ref().or(sample.as_ref());
-                let waveform = published
-                    .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))
-                    .unwrap_or_else(|| {
-                        if is_builtin {
-                            self.default_waveform.clone()
-                        } else {
-                            Vec::new()
-                        }
-                    });
-                let description = published
-                    .map(|sample| sample_description(sample))
-                    .unwrap_or_else(|| {
-                        if missing {
-                            "Missing sample - load an audio file to relink".into()
-                        } else if is_builtin {
-                            self.default_sample_description.clone()
-                        } else {
-                            String::new()
-                        }
-                    });
-                let duration = published
-                    .map(|sample| sample_duration(sample))
-                    .unwrap_or_else(|| {
-                        if missing {
-                            0.0
-                        } else if is_builtin {
-                            self.default_sample_duration
-                        } else {
-                            0.0
-                        }
-                    });
-                let (can_previous, can_next) = sample_path
-                    .as_ref()
-                    .and_then(|path| {
-                        sample_files_in_directory(path)
-                            .ok()
-                            .map(|files| (path, files))
-                    })
-                    .map(|(path, files)| {
-                        let index = sample_index(path, &files);
-                        (
-                            index.is_some_and(|index| index > 0),
-                            index.is_some_and(|index| index + 1 < files.len()),
-                        )
-                    })
-                    .unwrap_or((false, false));
-                ChannelState {
-                    name: setup.channel.name.clone(),
-                    kind: setup.channel.kind,
-                    muted: setup.channel.muted,
-                    volume: setup.channel.volume,
-                    pan: setup.channel.pan,
-                    params: sampler.map(|state| state.params).unwrap_or_default(),
-                    drum_params,
-                    mono_params,
-                    poly_params,
-                    mlm1_params,
-                    mlp8_params,
-                    ds01_params,
-                    sample_name,
-                    sample_description: description,
-                    sample_duration: duration,
-                    sample_path,
-                    sample_embedded: embedded,
-                    sample_data: sample,
-                    committed_sample: committed,
-                    commit,
-                    slices: sampler.map(|state| state.slices.clone()).unwrap_or_default(),
-                    waveform,
-                    can_previous_sample: can_previous,
-                    can_next_sample: can_next,
-                    notes: project_channel.notes.clone(),
-                    automation: project_channel.automation.clone(),
-                    next_note_id: project_channel.next_note_id,
-                    effects: setup.effects.clone(),
-                    modulation: setup.modulation,
-                    bus: setup.channel.bus,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        self.buses = normalized_buses(&project.buses);
-        self.pattern_lengths = project
-            .pattern_lengths
-            .iter()
-            .map(|length| *length as usize)
-            .collect();
-        self.pattern_names = vec![String::new(); self.pattern_lengths.len()];
-        self.playlist = project.playlist.clone();
-        self.song_mode = project.playback_mode == PlaybackMode::Song;
-        self.current_pattern = project.current_pattern as usize;
-        self.selected = project.selected_channel as usize;
-        // Modulation source selection and assignment are session gestures,
-        // never document state. A newly loaded project must start unarmed
-        // even if it selects the same channel index as the previous one.
-        self.modulation_ui_channel.set(None);
-        // A load points the device rack back at a channel; the bus the
-        // previous document had open means nothing in this one.
-        self.effect_target = EffectTarget::Channel(project.selected_channel);
-        self.selected_note_id = None;
-        self.selected_note_ids.clear();
-        self.channels = channels;
+        self.session.replace_project(project, samples);
         self.step_models = self
-            .channels
+            .session.channels
             .iter()
             .map(|channel| {
                 Rc::new(VecModel::from(
-                    (0..self.pattern_lengths[self.current_pattern])
-                        .map(|step| rack_cell(&channel.notes[self.current_pattern], step))
+                    (0..self.session.pattern_lengths[self.session.current_pattern])
+                        .map(|step| rack_cell(&channel.notes[self.session.current_pattern], step))
                         .collect::<Vec<_>>(),
                 ))
             })
             .collect();
         let rows: Vec<ChannelRow> = self
-            .channels
+            .session.channels
             .iter()
             .enumerate()
             .map(|(index, channel)| ChannelRow {
@@ -2598,7 +2077,7 @@ impl UiState {
                 muted: channel.muted,
                 volume_db: linear_to_db(channel.volume),
                 pan: channel.pan,
-                selected: index == self.selected,
+                selected: index == self.session.selected,
                 bus: channel.bus as i32,
                 steps: ModelRc::from(self.step_models[index].clone()),
             })
@@ -2606,11 +2085,11 @@ impl UiState {
         self.rows.set_vec(rows);
         window.set_bpm(project.bpm.into());
         window.set_swing_percent(project.swing_percent.into());
-        window.set_song_mode(self.song_mode);
-        window.set_current_pattern(self.current_pattern as i32);
-        window.set_pattern_count(self.pattern_lengths.len() as i32);
-        window.set_pattern_length(self.pattern_lengths[self.current_pattern] as i32);
-        window.set_selected_channel(self.selected as i32);
+        window.set_song_mode(self.session.song_mode);
+        window.set_current_pattern(self.session.current_pattern as i32);
+        window.set_pattern_count(self.session.pattern_lengths.len() as i32);
+        window.set_pattern_length(self.session.pattern_lengths[self.session.current_pattern] as i32);
+        window.set_selected_channel(self.session.selected as i32);
         self.sync_row_flags();
         self.sync_mixer(window);
         self.sync_playlist(window);
@@ -2619,13 +2098,13 @@ impl UiState {
 
     fn update_document_title(&self, window: &MainWindow) {
         let name = self
-            .bundle_path
+            .session.bundle_path
             .as_ref()
             .and_then(|path| path.file_stem())
             .and_then(|name| name.to_str())
             .unwrap_or("Untitled");
         window.set_document_title(
-            if self.dirty {
+            if self.session.dirty {
                 format!("{name} * - mooloop")
             } else {
                 format!("{name} - mooloop")
@@ -2635,9 +2114,9 @@ impl UiState {
     }
     /// Push the selected/muted flags of every row to the rack model.
     fn sync_row_flags(&self) {
-        for (i, ch) in self.channels.iter().enumerate() {
+        for (i, ch) in self.session.channels.iter().enumerate() {
             if let Some(mut row) = self.rows.row_data(i) {
-                row.selected = i == self.selected;
+                row.selected = i == self.session.selected;
                 row.muted = ch.muted;
                 row.volume_db = linear_to_db(ch.volume);
                 row.pan = ch.pan;
@@ -2650,8 +2129,8 @@ impl UiState {
 
     /// Rebuild every channel's step model from `pattern`.
     fn show_pattern(&self, pattern: usize) {
-        let length = self.pattern_lengths[pattern];
-        for (i, ch) in self.channels.iter().enumerate() {
+        let length = self.session.pattern_lengths[pattern];
+        for (i, ch) in self.session.channels.iter().enumerate() {
             let cells: Vec<StepCell> = (0..length)
                 .map(|step| rack_cell(&ch.notes[pattern], step))
                 .collect();
@@ -2660,7 +2139,7 @@ impl UiState {
     }
 
     fn refresh_rack_cell(&self, channel: usize, step: usize) {
-        let notes = &self.channels[channel].notes[self.current_pattern];
+        let notes = &self.session.channels[channel].notes[self.session.current_pattern];
         self.step_models[channel].set_row_data(step, rack_cell(notes, step));
     }
 
@@ -2668,7 +2147,7 @@ impl UiState {
     /// window. An empty name falls back to `Pattern N` in the menu.
     fn sync_pattern_menu(&self, window: &MainWindow) {
         let options: Vec<slint::SharedString> = self
-            .pattern_names
+            .session.pattern_names
             .iter()
             .enumerate()
             .map(|(i, name)| {
@@ -2682,8 +2161,8 @@ impl UiState {
             .collect();
         window.set_pattern_menu_options(ModelRc::from(Rc::new(VecModel::from(options))));
         let current = self
-            .pattern_names
-            .get(self.current_pattern)
+            .session.pattern_names
+            .get(self.session.current_pattern)
             .cloned()
             .unwrap_or_default();
         window.set_current_pattern_name(current.into());
@@ -2691,7 +2170,7 @@ impl UiState {
 
     fn sync_generator_preset_menu(&self, window: &MainWindow) {
         let options: Vec<slint::SharedString> = self
-            .generator_presets
+            .session.generator_presets
             .iter()
             .map(preset_menu_label)
             .collect();
@@ -2700,35 +2179,16 @@ impl UiState {
 
     fn sync_channel_preset_menu(&self, window: &MainWindow) {
         let options: Vec<slint::SharedString> =
-            self.channel_presets.iter().map(preset_menu_label).collect();
+            self.session.channel_presets.iter().map(preset_menu_label).collect();
         window.set_channel_preset_options(ModelRc::from(Rc::new(VecModel::from(options))));
-    }
-
-    fn song_length_ticks(&self) -> u32 {
-        let content_end = self
-            .playlist
-            .iter()
-            .filter_map(|placement| {
-                self.pattern_lengths
-                    .get(placement.pattern as usize)
-                    .map(|steps| {
-                        placement
-                            .start_tick
-                            .saturating_add(*steps as u32 * TICKS_PER_STEP)
-                    })
-            })
-            .max()
-            .unwrap_or(TICKS_PER_BAR)
-            .max(TICKS_PER_BAR);
-        content_end.div_ceil(TICKS_PER_BAR) * TICKS_PER_BAR
     }
 
     fn sync_playlist(&self, window: &MainWindow) {
         let clips: Vec<PlaylistClip> = self
-            .playlist
+            .session.playlist
             .iter()
             .filter_map(|placement| {
-                self.pattern_lengths
+                self.session.pattern_lengths
                     .get(placement.pattern as usize)
                     .map(|length| PlaylistClip {
                         pattern: placement.pattern as i32,
@@ -2738,156 +2198,24 @@ impl UiState {
             })
             .collect();
         self.playlist_model.set_vec(clips);
-        let song_length = self.song_length_ticks();
+        let song_length = self.session.song_length_ticks();
         window.set_playlist_song_length_ticks(song_length as i32);
         window.set_playlist_bars(song_length.div_ceil(TICKS_PER_BAR).max(MAX_PLAYLIST_BARS) as i32);
     }
 
-    fn placement_covering(&self, pattern: usize, tick: u32) -> Option<PatternPlacement> {
-        self.playlist.iter().copied().find(|placement| {
-            if placement.pattern as usize != pattern {
-                return false;
-            }
-            let length = self.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-            tick >= placement.start_tick && tick < placement.start_tick.saturating_add(length)
-        })
-    }
-
     fn refresh_note_editor(&self, window: &MainWindow) {
-        let Some(channel) = self.channels.get(self.selected) else {
+        let Some(channel) = self.session.channels.get(self.session.selected) else {
             return;
         };
-        let length_ticks = self.pattern_lengths[self.current_pattern] as u32 * TICKS_PER_STEP;
-        let cells: Vec<NoteCell> = channel.notes[self.current_pattern]
+        let length_ticks = self.session.pattern_lengths[self.session.current_pattern] as u32 * TICKS_PER_STEP;
+        let cells: Vec<NoteCell> = channel.notes[self.session.current_pattern]
             .iter()
             .copied()
             .filter(|note| note.start_tick < length_ticks)
-            .map(|note| note_cell(note, &self.selected_note_ids))
+            .map(|note| note_cell(note, &self.session.selected_note_ids))
             .collect();
         self.note_model.set_vec(cells);
         self.refresh_selected_note_controls(window);
-    }
-
-    /// Every destination the selected clip can address: the channel's own
-    /// effect chain plus every bus's, because a clip's automation is allowed
-    /// to reach the buses its channel feeds into.
-    ///
-    /// Generators are deliberately absent. They ship whole parameter structs
-    /// rather than descriptor-addressed params, so there is nothing to name
-    /// yet (`docs/plans/buffer-implementation/02-control-and-modulation.md`,
-    /// build order step 2).
-    fn automation_destinations(&self) -> Vec<(ParamAddr, String, &'static ParamDescriptor)> {
-        let mut rows = Vec::new();
-        let channel = EffectTarget::Channel(self.selected as u8);
-        if let Some(state) = self.channels.get(self.selected) {
-            // The generator first: it is the top of the signal path, and it is
-            // what most channels have instead of an effect chain.
-            let generator = state.generator_params();
-            let device = state.name.clone();
-            for descriptor in generator.kind().descriptors() {
-                rows.push((
-                    ParamAddr {
-                        scope: channel,
-                        owner: ParamOwner::Source,
-                        param: descriptor.id,
-                    },
-                    device.clone(),
-                    descriptor,
-                ));
-            }
-            for (slot, effect) in state.effects.iter().enumerate() {
-                let kind = effect.kind();
-                let device = format!("{} {}", kind.label(), slot + 1);
-                for descriptor in kind.descriptors() {
-                    rows.push((
-                        ParamAddr::effect(channel, slot as u8, descriptor.id),
-                        device.clone(),
-                        descriptor,
-                    ));
-                }
-            }
-        }
-        for (index, bus) in self.buses.iter().enumerate() {
-            for (slot, effect) in bus.effects.iter().enumerate() {
-                let kind = effect.kind();
-                let device = format!("{} · {} {}", bus.bus.name, kind.label(), slot + 1);
-                for descriptor in kind.descriptors() {
-                    rows.push((
-                        ParamAddr::effect(
-                            EffectTarget::Bus(index as u8),
-                            slot as u8,
-                            descriptor.id,
-                        ),
-                        device.clone(),
-                        descriptor,
-                    ));
-                }
-            }
-        }
-        rows
-    }
-
-    fn automation_lanes(&self) -> Option<&Vec<AutomationLane>> {
-        self.channels
-            .get(self.selected)?
-            .automation
-            .get(self.current_pattern)
-    }
-
-    fn automation_lane(&self) -> Option<&AutomationLane> {
-        let target = self.automation_target.get()?;
-        self.automation_lanes()?
-            .iter()
-            .find(|lane| lane.target == target)
-    }
-
-    fn automation_lane_mut(&mut self) -> Option<&mut AutomationLane> {
-        let target = self.automation_target.get()?;
-        let pattern = self.current_pattern;
-        self.channels
-            .get_mut(self.selected)?
-            .automation
-            .get_mut(pattern)?
-            .iter_mut()
-            .find(|lane| lane.target == target)
-    }
-
-    /// Descriptor for the currently shown lane, used to turn normalized
-    /// breakpoints back into the natural units the readout displays.
-    fn automation_descriptor(&self) -> Option<&'static ParamDescriptor> {
-        let target = self.automation_target.get()?;
-        match target.owner {
-            ParamOwner::Source => {
-                let EffectTarget::Channel(channel) = target.scope else {
-                    return None;
-                };
-                self.channels
-                    .get(channel as usize)?
-                    .generator_params()
-                    .kind()
-                    .descriptor(target.param)
-            }
-            // A route amount is not in the device's table; its descriptor
-            // belongs to the route.
-            ParamOwner::SourceRoute { .. } => {
-                let EffectTarget::Channel(channel) = target.scope else {
-                    return None;
-                };
-                self.channels
-                    .get(channel as usize)?
-                    .generator_params()
-                    .kind()
-                    .route_descriptor(target.param)
-            }
-            ParamOwner::Effect { slot } => {
-                let effects = match target.scope {
-                    EffectTarget::Channel(channel) => &self.channels.get(channel as usize)?.effects,
-                    EffectTarget::Bus(bus) => &self.buses.get(bus as usize)?.effects,
-                };
-                effects.get(slot as usize)?.kind().descriptor(target.param)
-            }
-            ParamOwner::Modulator { .. } | ParamOwner::Strip => None,
-        }
     }
 
     /// Rebuilds the lane picker, the drawn curve, and the header label.
@@ -2897,16 +2225,16 @@ impl UiState {
     /// alternative -- silently deleting the automation -- loses work when a
     /// device is removed and re-added.
     fn refresh_automation(&self, window: &MainWindow) {
-        let destinations = self.automation_destinations();
+        let destinations = self.session.automation_destinations();
         if self
-            .automation_target
+            .session.automation_target
             .get()
             .is_some_and(|target| !destinations.iter().any(|(addr, _, _)| *addr == target))
         {
-            self.automation_target.set(None);
+            self.session.automation_target.set(None);
         }
         let open: HashSet<ParamAddr> = self
-            .automation_lanes()
+            .session.automation_lanes()
             .map(|lanes| lanes.iter().map(|lane| lane.target).collect())
             .unwrap_or_default();
 
@@ -2921,14 +2249,14 @@ impl UiState {
                     device: device.as_str().into(),
                     starts_group,
                     open: open.contains(address),
-                    current: self.automation_target.get() == Some(*address),
+                    current: self.session.automation_target.get() == Some(*address),
                 }
             })
             .collect();
         self.automation_target_model.set_vec(rows);
 
         let label = self
-            .automation_target
+            .session.automation_target
             .get()
             .and_then(|target| {
                 destinations
@@ -2942,10 +2270,10 @@ impl UiState {
     }
 
     fn refresh_automation_points(&self, window: &MainWindow) {
-        let length_ticks = self.pattern_lengths[self.current_pattern] as u32 * TICKS_PER_STEP;
-        let selected = self.automation_selected_point.get();
+        let length_ticks = self.session.pattern_lengths[self.session.current_pattern] as u32 * TICKS_PER_STEP;
+        let selected = self.session.automation_selected_point.get();
         let cells: Vec<AutomationPointCell> = self
-            .automation_lane()
+            .session.automation_lane()
             .map(|lane| {
                 lane.points()
                     .iter()
@@ -2962,12 +2290,12 @@ impl UiState {
         self.automation_point_model.set_vec(cells);
 
         let readout = self
-            .automation_selected_point
+            .session.automation_selected_point
             .get()
             .and_then(|id| {
-                let lane = self.automation_lane()?;
+                let lane = self.session.automation_lane()?;
                 let point = lane.points().iter().find(|point| point.id == id)?;
-                let descriptor = self.automation_descriptor()?;
+                let descriptor = self.session.automation_descriptor()?;
                 Some(format_param_value(descriptor, point.value))
             })
             .unwrap_or_default();
@@ -2981,15 +2309,15 @@ impl UiState {
     /// frame's geometry is a binding, and a callback there would be re-run
     /// on every layout pass rather than when the selection actually changes.
     fn refresh_selection_bounds(&self, window: &MainWindow) {
-        let Some(channel) = self.channels.get(self.selected) else {
+        let Some(channel) = self.session.channels.get(self.session.selected) else {
             return;
         };
         let mut count = 0;
         let (mut start, mut end) = (u32::MAX, 0u32);
         let (mut low, mut high) = (u8::MAX, 0u8);
-        for note in channel.notes[self.current_pattern]
+        for note in channel.notes[self.session.current_pattern]
             .iter()
-            .filter(|note| self.selected_note_ids.contains(&note.id))
+            .filter(|note| self.session.selected_note_ids.contains(&note.id))
         {
             count += 1;
             start = start.min(note.start_tick);
@@ -3005,9 +2333,9 @@ impl UiState {
         }
         // One length across the whole selection reads as that length; a
         // mixed selection says so rather than picking a winner.
-        let mut lengths = channel.notes[self.current_pattern]
+        let mut lengths = channel.notes[self.session.current_pattern]
             .iter()
-            .filter(|note| self.selected_note_ids.contains(&note.id))
+            .filter(|note| self.session.selected_note_ids.contains(&note.id))
             .map(|note| note.duration_ticks);
         let first = lengths.next().unwrap_or(0);
         if lengths.all(|length| length == first) {
@@ -3025,18 +2353,18 @@ impl UiState {
 
     fn refresh_selected_note_controls(&self, window: &MainWindow) {
         window.set_has_selected_note(false);
-        window.set_has_note_selection(!self.selected_note_ids.is_empty());
+        window.set_has_note_selection(!self.session.selected_note_ids.is_empty());
         self.refresh_selection_bounds(window);
         // The precision editor shows one note's fields; once the selection
         // is a group (Shift-click, Select All) there is no single note left
         // to show them for.
-        if self.selected_note_ids.len() > 1 {
+        if self.session.selected_note_ids.len() > 1 {
             return;
         }
-        let Some(id) = self.selected_note_id else {
+        let Some(id) = self.session.selected_note_id else {
             return;
         };
-        let Some(note) = self.channels[self.selected].notes[self.current_pattern]
+        let Some(note) = self.session.channels[self.session.selected].notes[self.session.current_pattern]
             .iter()
             .find(|note| note.id == id)
         else {
@@ -3048,150 +2376,26 @@ impl UiState {
         window.set_selected_velocity(note.velocity as i32);
     }
 
-    /// Replaces the whole note selection with exactly one note (or clears it
-    /// when `id` is `None`). Every single-note interaction -- rack step
-    /// edits, a plain piano-roll click, create/move/resize/velocity -- goes
-    /// through this, so a Shift-click or Select All selection never lingers
-    /// once the user touches a single note through any other gesture.
-    fn select_note(&mut self, id: Option<NoteId>) {
-        self.selected_note_id = id;
-        self.selected_note_ids.clear();
-        self.selected_note_ids.extend(id);
-    }
-
-    /// Adds or removes one note from the selection (Shift/Ctrl-click).
-    fn toggle_note_selection(&mut self, id: NoteId) {
-        if !self.selected_note_ids.remove(&id) {
-            self.selected_note_ids.insert(id);
-        }
-        self.selected_note_id = (self.selected_note_ids.len() == 1)
-            .then(|| *self.selected_note_ids.iter().next().unwrap());
-    }
-
-    /// Selects every note in `channel`'s current pattern (Ctrl+A).
-    fn select_all_notes(&mut self, channel: usize) {
-        let pattern = self.current_pattern;
-        let length_ticks = self.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-        self.selected_note_ids = self.channels[channel].notes[pattern]
-            .iter()
-            .filter(|note| note.start_tick < length_ticks)
-            .map(|note| note.id)
-            .collect();
-        self.selected_note_id = (self.selected_note_ids.len() == 1)
-            .then(|| *self.selected_note_ids.iter().next().unwrap());
-    }
-
-    /// Drops ids that no longer exist from the selection, e.g. after a batch
-    /// removal elsewhere in the rack or piano roll.
-    /// Drops one note from the selection, leaving the rest alone. The
-    /// subtract-from-selection role needs this to be idempotent: dragging a
-    /// remove-marquee back and forth over a note must not re-add it, which a
-    /// toggle would.
-    fn remove_note_from_selection(&mut self, id: NoteId) {
-        self.selected_note_ids.remove(&id);
-        self.selected_note_id = (self.selected_note_ids.len() == 1)
-            .then(|| *self.selected_note_ids.iter().next().unwrap());
-    }
-
-    fn prune_note_selection(&mut self, removed: &[NoteId]) {
-        self.selected_note_ids.retain(|id| !removed.contains(id));
-        if self
-            .selected_note_id
-            .is_some_and(|id| removed.contains(&id))
-        {
-            self.selected_note_id = None;
-        }
-    }
-
     /// Recomputes every step cell for `channel`'s current pattern. Used
     /// after an edit (like a multi-note delete) that can touch notes spread
     /// across many steps, where refreshing one step at a time would miss
     /// the rest.
     fn refresh_rack_row(&self, channel: usize) {
-        let notes = &self.channels[channel].notes[self.current_pattern];
-        let cells: Vec<StepCell> = (0..self.pattern_lengths[self.current_pattern])
+        let notes = &self.session.channels[channel].notes[self.session.current_pattern];
+        let cells: Vec<StepCell> = (0..self.session.pattern_lengths[self.session.current_pattern])
             .map(|step| rack_cell(notes, step))
             .collect();
         self.step_models[channel].set_vec(cells);
-    }
-
-    /// The chain the device rack is currently editing, channel or bus.
-    fn effect_chain(&self) -> Option<&Vec<EffectSlotState>> {
-        match self.effect_target {
-            EffectTarget::Channel(index) => self.channels.get(index as usize).map(|c| &c.effects),
-            EffectTarget::Bus(index) => self.buses.get(index as usize).map(|b| &b.effects),
-        }
-    }
-
-    fn effect_chain_mut(&mut self) -> Option<&mut Vec<EffectSlotState>> {
-        match self.effect_target {
-            EffectTarget::Channel(index) => self
-                .channels
-                .get_mut(index as usize)
-                .map(|c| &mut c.effects),
-            EffectTarget::Bus(index) => self.buses.get_mut(index as usize).map(|b| &mut b.effects),
-        }
-    }
-
-    /// Run one chain edit's permutation over everything on this side that
-    /// names a slot in `target`'s chain: the channel's routes, every lane in
-    /// every pattern, and the lane the editor is showing. The engine runs the
-    /// same table for the same command, which is what keeps a route meaning
-    /// the same knob on both sides after the rack is reordered.
-    fn retarget_effect_slots(&mut self, target: EffectTarget, remap: &SlotRemap) {
-        let channels: &mut [ChannelState] = match target {
-            EffectTarget::Channel(channel) => match self.channels.get_mut(channel as usize) {
-                Some(channel) => std::slice::from_mut(channel),
-                None => &mut [],
-            },
-            // A bus chain can be automated from any channel's clip.
-            EffectTarget::Bus(_) => &mut self.channels,
-        };
-        for channel in channels {
-            channel.modulation.retarget_effect_slots(target, remap);
-            for lanes in &mut channel.automation {
-                retarget_lanes(lanes, target, remap);
-            }
-        }
-        self.automation_target.set(
-            self.automation_target
-                .get()
-                .and_then(|shown| remap.address(target, shown)),
-        );
     }
 
     /// Resolve every tempo-synced delay to the new transport BPM. The engine
     /// remains millisecond-only: the resulting values take its normal
     /// sample-timed parameter path, so all delays move at the next block
     /// without allocating or rebuilding their rings.
+    /// Retunes every tempo-synced delay and re-draws the rack. The retune is
+    /// the session's; the redraw is this layer's.
     fn update_tempo_synced_delay_times(&mut self, bpm: f64) -> Vec<(EffectTarget, u8, f32)> {
-        let mut changes = Vec::new();
-        for (channel, state) in self.channels.iter_mut().enumerate() {
-            for (slot, effect) in state.effects.iter_mut().enumerate() {
-                let EffectParams::Delay(params) = &mut effect.params else {
-                    continue;
-                };
-                if params.tempo_sync {
-                    params.time_ms = params.time_division.time_ms(bpm);
-                    changes.push((
-                        EffectTarget::Channel(channel as u8),
-                        slot as u8,
-                        params.time_ms,
-                    ));
-                }
-            }
-        }
-        for (bus, state) in self.buses.iter_mut().enumerate() {
-            for (slot, effect) in state.effects.iter_mut().enumerate() {
-                let EffectParams::Delay(params) = &mut effect.params else {
-                    continue;
-                };
-                if params.tempo_sync {
-                    params.time_ms = params.time_division.time_ms(bpm);
-                    changes.push((EffectTarget::Bus(bus as u8), slot as u8, params.time_ms));
-                }
-            }
-        }
+        let changes = self.session.update_tempo_synced_delay_times(bpm);
         self.sync_effects();
         changes
     }
@@ -3200,13 +2404,13 @@ impl UiState {
     /// window once; this refreshes its contents after structural changes
     /// (add/remove/reorder) and after the rack is pointed somewhere else.
     fn sync_effects(&self) {
-        let armed = self.modulation_armed_slot.get();
-        let rows: Vec<EffectSlotRow> = match self.effect_target {
+        let armed = self.session.modulation_armed_slot.get();
+        let rows: Vec<EffectSlotRow> = match self.session.effect_target {
             // Modulation state belongs to the selected channel, so an insert
             // rack pointed at a bus -- or at another channel -- renders its
             // rows without overlays rather than borrowing this channel's.
-            EffectTarget::Channel(channel) if channel as usize == self.selected => self
-                .channels
+            EffectTarget::Channel(channel) if channel as usize == self.session.selected => self
+                .session.channels
                 .get(channel as usize)
                 .map(|state| {
                     state
@@ -3245,7 +2449,7 @@ impl UiState {
                 })
                 .unwrap_or_default(),
             _ => self
-                .effect_chain()
+                .session.effect_chain()
                 .map(|effects| effects.iter().map(effect_slot_row).collect())
                 .unwrap_or_default(),
         };
@@ -3264,13 +2468,10 @@ impl UiState {
         descriptors: &[ParamDescriptor],
         address: impl Fn(u32) -> ParamAddr,
     ) -> ModelRc<f32> {
-        let mut depths = vec![0.0; descriptor_slots(descriptors)];
-        for descriptor in descriptors {
-            depths[descriptor.id as usize] = armed.map_or(0.0, |slot| {
-                self.modulation_depth_for(slot, address(descriptor.id))
-            });
-        }
-        depths.as_slice().into()
+        self.session
+            .destination_depths(armed, descriptors, address)
+            .as_slice()
+            .into()
     }
 
     /// What the running modulators are adding to each described parameter
@@ -3284,89 +2485,10 @@ impl UiState {
         descriptors: &[ParamDescriptor],
         address: impl Fn(u32) -> ParamAddr,
     ) -> ModelRc<f32> {
-        let mut offsets = vec![0.0; descriptor_slots(descriptors)];
-        let Some(channel) = self.channels.get(self.selected) else {
-            return offsets.as_slice().into();
-        };
-        let outputs = self.modulation_outputs.get();
-        for descriptor in descriptors {
-            let policy = ModDestinationDescriptor::for_param(descriptor);
-            offsets[descriptor.id as usize] =
-                channel
-                    .modulation
-                    .offset_for(address(descriptor.id), &outputs, &policy);
-        }
-        offsets.as_slice().into()
-    }
-
-    fn modulation_depth_for(&self, source_slot: u8, destination: ParamAddr) -> f32 {
-        self.channels
-            .get(self.selected)
-            .and_then(|channel| {
-                channel.modulation.routes.iter().flatten().find(|route| {
-                    route.source_slot == source_slot && route.destination == destination
-                })
-            })
-            .map_or(0.0, |route| route.depth)
-    }
-
-    fn modulation_envelope_mut(&mut self, slot: usize) -> Option<&mut ModEnvelopeParams> {
-        let selected = self.selected;
-        let params = self
-            .channels
-            .get_mut(selected)?
-            .modulation
-            .params_mut(slot)?;
-        match params {
-            ModulatorParams::Envelope(envelope) => Some(envelope),
-            _ => None,
-        }
-    }
-
-    /// The modulation shelf may address only the selected channel's own
-    /// generator, inserts, and strip. Buses and another channel's controls
-    /// stay deliberately outside this pass even though `ParamAddr` can name
-    /// them, matching the per-channel routing policy.
-    fn channel_modulation_destination(
-        &self,
-        address: ParamAddr,
-    ) -> Option<(String, &'static ParamDescriptor)> {
-        let EffectTarget::Channel(channel) = address.scope else {
-            return None;
-        };
-        if channel as usize != self.selected {
-            return None;
-        }
-        let state = self.channels.get(self.selected)?;
-        match address.owner {
-            ParamOwner::Source => state
-                .generator_params()
-                .kind()
-                .descriptor(address.param)
-                .map(|descriptor| (state.name.clone(), descriptor)),
-            ParamOwner::Effect { slot } => state
-                .effects
-                .get(slot as usize)
-                .and_then(|effect| effect.kind().descriptor(address.param))
-                .map(|descriptor| {
-                    (
-                        format!(
-                            "{} {}",
-                            state.effects[slot as usize].kind().label(),
-                            slot + 1
-                        ),
-                        descriptor,
-                    )
-                }),
-            ParamOwner::Strip => strip_descriptor(address.param)
-                .map(|descriptor| ("Channel strip".to_string(), descriptor)),
-            // Modulators are sources in this first UI pass, not destinations.
-            // An instrument's own routes are not channel destinations either:
-            // the shelf reaches a device's controls, and a route amount
-            // belongs to the patch's internal modulation rather than to the
-            // device's control surface.
-            ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
-        }
+        self.session
+            .destination_offsets(descriptors, address)
+            .as_slice()
+            .into()
     }
 
     /// Push the current live modulation offsets onto the generator face and
@@ -3374,14 +2496,14 @@ impl UiState {
     /// offsets: rebuilding the rows here would fight the meter and spectrum
     /// updates landing on the same models.
     fn refresh_modulation_offsets(&self, window: &MainWindow) {
-        let scope = EffectTarget::Channel(self.selected as u8);
-        let Some(channel) = self.channels.get(self.selected) else {
+        let scope = EffectTarget::Channel(self.session.selected as u8);
+        let Some(channel) = self.session.channels.get(self.session.selected) else {
             return;
         };
         // Each grid tile's meter, touched in place: rebuilding the source
         // rows on the pump tick would fight selection and the add menu for
         // the same reason the effect rows are updated field-wise here.
-        let outputs = self.modulation_outputs.get();
+        let outputs = self.session.modulation_outputs.get();
         for index in 0..self.modulation_source_model.row_count() {
             let Some(mut row) = self.modulation_source_model.row_data(index) else {
                 continue;
@@ -3405,7 +2527,7 @@ impl UiState {
         ));
         // The insert rack only carries this channel's overlays when it is
         // pointed at this channel, exactly as `sync_effects` decides.
-        if self.effect_target != scope {
+        if self.session.effect_target != scope {
             return;
         }
         for (slot, effect) in channel.effects.iter().enumerate() {
@@ -3424,39 +2546,39 @@ impl UiState {
     /// Selection and assignment are transient UI state: project reloads and
     /// channel changes never leave an invisible armed slot behind.
     fn refresh_modulation(&self, window: &MainWindow) {
-        if self.modulation_ui_channel.get() != Some(self.selected) {
-            self.modulation_ui_channel.set(Some(self.selected));
-            self.modulation_selected_slot.set(None);
-            self.modulation_armed_slot.set(None);
+        if self.session.modulation_ui_channel.get() != Some(self.session.selected) {
+            self.session.modulation_ui_channel.set(Some(self.session.selected));
+            self.session.modulation_selected_slot.set(None);
+            self.session.modulation_armed_slot.set(None);
         }
-        let Some(channel) = self.channels.get(self.selected) else {
+        let Some(channel) = self.session.channels.get(self.session.selected) else {
             self.modulation_source_model.set_vec(Vec::new());
             self.modulation_route_model.set_vec(Vec::new());
-            self.modulation_selected_slot.set(None);
-            self.modulation_armed_slot.set(None);
+            self.session.modulation_selected_slot.set(None);
+            self.session.modulation_armed_slot.set(None);
             window.set_modulation_selected_slot(-1);
             window.set_modulation_armed_slot(-1);
             return;
         };
 
-        let selected = self.modulation_selected_slot.get().filter(|slot| {
+        let selected = self.session.modulation_selected_slot.get().filter(|slot| {
             channel
                 .modulation
                 .slots
                 .get(*slot as usize)
                 .is_some_and(Option::is_some)
         });
-        let armed = self.modulation_armed_slot.get().filter(|slot| {
+        let armed = self.session.modulation_armed_slot.get().filter(|slot| {
             channel
                 .modulation
                 .slots
                 .get(*slot as usize)
                 .is_some_and(Option::is_some)
         });
-        self.modulation_selected_slot.set(selected);
-        self.modulation_armed_slot.set(armed);
+        self.session.modulation_selected_slot.set(selected);
+        self.session.modulation_armed_slot.set(armed);
         let bpm = f64::from(window.get_bpm().max(1));
-        let outputs = self.modulation_outputs.get();
+        let outputs = self.session.modulation_outputs.get();
         let sources: Vec<ModulationSourceRow> = channel
             .modulation
             .slots
@@ -3554,7 +2676,7 @@ impl UiState {
                         },
                     );
                 let (destination, allowed) = self
-                    .channel_modulation_destination(route.destination)
+                    .session.channel_modulation_destination(route.destination)
                     .map(|(device, descriptor)| {
                         (
                             format!("{source_name} → {device} · {}", descriptor.name),
@@ -3591,7 +2713,7 @@ impl UiState {
             .collect();
         self.modulation_source_model.set_vec(sources);
         self.modulation_route_model.set_vec(routes);
-        window.set_modulation_shelf_open(self.modulation_shelf_open);
+        window.set_modulation_shelf_open(self.session.modulation_shelf_open);
         window.set_modulation_selected_slot(selected.map_or(-1, i32::from));
         window.set_modulation_armed_slot(armed.map_or(-1, i32::from));
         window.set_modulation_max_sources(MAX_MODULATORS_PER_CHANNEL as i32);
@@ -3658,7 +2780,7 @@ impl UiState {
             lfo.smoothing_seconds / selected_lfo_cycle_seconds
         }));
         let input_channels: Vec<slint::SharedString> = self
-            .channels
+            .session.channels
             .iter()
             .enumerate()
             .map(|(index, channel)| format!("{} · {}", index + 1, channel.name).into())
@@ -3666,7 +2788,7 @@ impl UiState {
         window
             .set_modulation_input_channels(ModelRc::from(Rc::new(VecModel::from(input_channels))));
         window.set_modulation_selected_envelope_input_channel(
-            selected_envelope.map_or(self.selected as i32, |env| i32::from(env.input_channel)),
+            selected_envelope.map_or(self.session.selected as i32, |env| i32::from(env.input_channel)),
         );
         window.set_modulation_selected_envelope_preview_attack(selected_envelope.map_or(
             0.0,
@@ -3702,7 +2824,7 @@ impl UiState {
         // Every described generator and strip parameter carries its own
         // overlay depth and legality, so which controls can be routed is
         // decided by descriptor metadata rather than by the UI naming them.
-        let scope = EffectTarget::Channel(self.selected as u8);
+        let scope = EffectTarget::Channel(self.session.selected as u8);
         let generator = channel.generator_params().kind();
         window.set_source_modulation_depths(self.destination_depths(
             armed,
@@ -3757,13 +2879,13 @@ impl UiState {
         tx: &EngineCommandSender,
         command: impl FnOnce(u8) -> EngineCommand,
     ) {
-        let channel = self.selected;
-        if self.channels.get(channel).is_none() {
+        let channel = self.session.selected;
+        if self.session.channels.get(channel).is_none() {
             return;
         }
         let _ = tx.send(command(channel as u8));
-        self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
+        self.session.dirty = true;
+        self.session.revision = self.session.revision.wrapping_add(1);
         self.update_document_title(window);
         self.refresh_modulation(window);
     }
@@ -3777,7 +2899,7 @@ impl UiState {
         tx: &EngineCommandSender,
         slot: usize,
     ) {
-        let Some(rack) = self.channels.get(self.selected).map(|channel| channel.modulation) else {
+        let Some(rack) = self.session.channels.get(self.session.selected).map(|channel| channel.modulation) else {
             return;
         };
         let (Some(source), Some(params)) = (rack.source_id(slot), rack.params(slot)) else {
@@ -3792,19 +2914,9 @@ impl UiState {
     }
 
     fn begin_modulation_edit(&mut self, window: &MainWindow) {
-        if self.modulation_edit_before.is_none() {
-            self.modulation_edit_before = Some(project_snapshot(self, window));
-            self.modulation_edit_changed = false;
-        }
-    }
-
-    fn finish_modulation_edit(&mut self) -> Option<ProjectSnapshot> {
-        let before = self.modulation_edit_before.take();
-        let changed = std::mem::replace(&mut self.modulation_edit_changed, false);
-        if changed {
-            before
-        } else {
-            None
+        if self.session.modulation_edit_before.is_none() {
+            let snapshot = project_snapshot(self, window);
+            self.session.begin_modulation_edit(snapshot);
         }
     }
 
@@ -3812,6 +2924,10 @@ impl UiState {
     /// base parameter is deliberately absent from this mutation: a normal
     /// knob drag in armed mode moves only the depth, and the renderer keeps
     /// resolving the same authored base underneath it.
+    /// Points the armed modulation source at `destination`.
+    ///
+    /// The rack edit is the session's; refusing out loud when the matrix is
+    /// full, and sending the route on, are this layer's.
     fn set_armed_modulation_depth(
         &mut self,
         window: &MainWindow,
@@ -3819,90 +2935,42 @@ impl UiState {
         destination: ParamAddr,
         depth: f32,
     ) -> bool {
-        let Some(source_slot) = self.modulation_armed_slot.get() else {
-            return false;
-        };
-        let Some((_, descriptor)) = self.channel_modulation_destination(destination) else {
-            return false;
-        };
-        let policy = ModDestinationDescriptor::for_param(descriptor);
-        if !policy.allowed {
-            return false;
+        match self.session.arm_modulation_route(destination, depth) {
+            ArmedRoute::Unchanged => false,
+            ArmedRoute::Full => {
+                // An assignment gesture that does nothing at all reads as a
+                // broken knob, so say why.
+                window.set_status_message(
+                    format!(
+                        "This channel already has its {MAX_MOD_ROUTES_PER_CHANNEL} modulation \
+                         assignments; remove one to add another"
+                    )
+                    .as_str()
+                    .into(),
+                );
+                false
+            }
+            ArmedRoute::Added(route) => {
+                self.send_modulation(window, tx, |channel| EngineCommand::SetModRoute {
+                    channel,
+                    route,
+                });
+                true
+            }
         }
-        let depth = policy.clamp_depth(depth);
-        let Some(channel) = self.channels.get_mut(self.selected) else {
-            return false;
-        };
-        let default_polarity = match channel.modulation.params(source_slot as usize) {
-            // Sources that only ever swing one way default to a unipolar
-            // route, so their resting value is the destination's base.
-            Some(ModulatorParams::Envelope(_)) => ModPolarity::Unipolar,
-            Some(ModulatorParams::Random(random)) if !random.bipolar => ModPolarity::Unipolar,
-            _ => policy.default_polarity,
-        };
-        let current = channel
-            .modulation
-            .routes
-            .iter()
-            .flatten()
-            .find(|route| route.source_slot == source_slot && route.destination == destination)
-            .map(|route| route.depth);
-        if current.is_some_and(|current| (current - depth).abs() < f32::EPSILON) {
-            return false;
-        }
-        let Some(index) = channel.modulation.add_route(ModRoute::to_slot(
-            source_slot,
-            destination,
-            depth,
-            default_polarity,
-        )) else {
-            // The armed slot was checked above, so the only way the rack
-            // refuses is a full matrix. Say so: an assignment gesture that
-            // does nothing at all reads as a broken knob.
-            window.set_status_message(
-                format!(
-                    "This channel already has its {MAX_MOD_ROUTES_PER_CHANNEL} modulation \
-                     assignments; remove one to add another"
-                )
-                .as_str()
-                .into(),
-            );
-            return false;
-        };
-        // The rack stamped the durable source id on the way in; that stamped
-        // row is what travels, so the engine resolves the route against the
-        // module the gesture meant rather than against a slot number.
-        let Some(route) = channel.modulation.routes[index] else {
-            return false;
-        };
-        self.modulation_edit_changed = true;
-        self.send_modulation(window, tx, |channel| EngineCommand::SetModRoute {
-            channel,
-            route,
-        });
-        true
-    }
-
-    /// Sequencer channels feeding `bus` directly. Buses routed into it are not
-    /// counted: the number answers "what lands here", not "what reaches here".
-    fn bus_feed_count(&self, bus: usize) -> usize {
-        self.channels
-            .iter()
-            .filter(|channel| channel.bus as usize == bus)
-            .count()
     }
 
     /// Rebuild every mixer strip and the shared name list. Called after a load
     /// or any change that moves channels between buses.
     fn sync_mixer(&self, window: &MainWindow) {
         let names: Vec<slint::SharedString> = self
-            .buses
+            .session.buses
             .iter()
             .map(|setup| setup.bus.name.as_str().into())
             .collect();
         window.set_bus_names(ModelRc::from(Rc::new(VecModel::from(names))));
         let strips: Vec<MixerStripRow> = self
-            .buses
+            .session.buses
             .iter()
             .enumerate()
             .map(|(index, setup)| self.mixer_strip_row(index, setup))
@@ -3915,12 +2983,9 @@ impl UiState {
     /// the schedule it is sent, so refusing a loop is this side's job; the
     /// mask lets the picker show *why* rather than silently declining.
     fn allowed_destinations(&self, bus: usize) -> ModelRc<bool> {
-        let flags: Vec<bool> = (0..self.buses.len())
-            .map(|candidate| {
-                candidate != bus && !would_create_cycle(&self.buses, bus as u8, candidate as u8)
-            })
-            .collect();
-        ModelRc::from(Rc::new(VecModel::from(flags)))
+        ModelRc::from(Rc::new(VecModel::from(
+            self.session.allowed_destinations(bus),
+        )))
     }
 
     fn mixer_strip_row(&self, index: usize, setup: &BusSetup) -> MixerStripRow {
@@ -3930,9 +2995,9 @@ impl UiState {
             volume: setup.bus.volume,
             pan: setup.bus.pan,
             output: setup.bus.output as i32,
-            selected: self.effect_target == EffectTarget::Bus(index as u8),
+            selected: self.session.effect_target == EffectTarget::Bus(index as u8),
             is_master: index == MASTER_BUS as usize,
-            feed_count: self.bus_feed_count(index) as i32,
+            feed_count: self.session.bus_feed_count(index) as i32,
             allowed: self.allowed_destinations(index),
             // Levels are owned by the metering timer, which writes them in
             // place; rebuilding a row must not stamp them back to silence.
@@ -3951,7 +3016,7 @@ impl UiState {
 
     /// Refresh one strip's controls without disturbing the rest.
     fn sync_mixer_strip(&self, index: usize) {
-        let Some(setup) = self.buses.get(index) else {
+        let Some(setup) = self.session.buses.get(index) else {
             return;
         };
         self.mixer_strip_model
@@ -3962,7 +3027,7 @@ impl UiState {
     fn sync_mixer_selection(&self) {
         for index in 0..self.mixer_strip_model.row_count() {
             if let Some(mut row) = self.mixer_strip_model.row_data(index) {
-                row.selected = self.effect_target == EffectTarget::Bus(index as u8);
+                row.selected = self.session.effect_target == EffectTarget::Bus(index as u8);
                 self.mixer_strip_model.set_row_data(index, row);
             }
         }
@@ -3971,12 +3036,12 @@ impl UiState {
     /// Mirror the edited bus onto the device rack's head face. When a channel
     /// is being edited this only clears the flag; the source face takes over.
     fn sync_bus_editor(&self, window: &MainWindow) {
-        let EffectTarget::Bus(index) = self.effect_target else {
+        let EffectTarget::Bus(index) = self.session.effect_target else {
             window.set_editing_bus(false);
             return;
         };
         let index = index as usize;
-        let Some(setup) = self.buses.get(index) else {
+        let Some(setup) = self.session.buses.get(index) else {
             window.set_editing_bus(false);
             return;
         };
@@ -3988,13 +3053,13 @@ impl UiState {
         window.set_editing_bus_volume(setup.bus.volume);
         window.set_editing_bus_pan(setup.bus.pan);
         window.set_editing_bus_output(setup.bus.output as i32);
-        window.set_editing_bus_feed_count(self.bus_feed_count(index) as i32);
+        window.set_editing_bus_feed_count(self.session.bus_feed_count(index) as i32);
         window.set_editing_bus_allowed(self.allowed_destinations(index));
     }
 
     /// Refresh the bottom editor's properties from `selected`.
     fn refresh_editor(&self, window: &MainWindow) {
-        let Some(ch) = self.channels.get(self.selected) else {
+        let Some(ch) = self.session.channels.get(self.session.selected) else {
             return;
         };
         let p = &ch.params;
@@ -4411,55 +3476,57 @@ impl AppUi {
         window.set_pattern_count(1);
 
         let state = Rc::new(RefCell::new(UiState {
-            channels: vec![first],
+            session: Session {
+                channels: vec![first],
+                slice_audition: None,
+                modulation_shelf_open: false,
+                modulation_selected_slot: Cell::new(None),
+                modulation_armed_slot: Cell::new(None),
+                modulation_outputs: Cell::new([0.0; MAX_MODULATORS_PER_CHANNEL]),
+                modulation_ui_channel: Cell::new(None),
+                modulation_edit_before: None,
+                modulation_edit_changed: false,
+                browser_locations: Vec::new(),
+                browser_expanded: HashSet::new(),
+                default_waveform,
+                default_sample_description,
+                default_sample_duration,
+                buses: default_buses(),
+                pattern_lengths: vec![DEFAULT_STEPS as usize],
+                pattern_names: vec![String::new()],
+                playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
+                song_mode: false,
+                current_pattern: 0,
+                selected: 0,
+                effect_target: EffectTarget::Channel(0),
+                selected_note_id: None,
+                selected_note_ids: HashSet::new(),
+                marquee_base: None,
+                scale_base: None,
+                automation_target: Cell::new(None),
+                automation_selected_point: Cell::new(None),
+                bundle_path: None,
+                dirty: false,
+                revision: 0,
+                source_revision: 0,
+                generator_presets: Vec::new(),
+                channel_presets: Vec::new(),
+                pending_preset_save: None,
+            },
             rows: rows_model,
             step_models: vec![step_model],
             note_model,
             playlist_model,
             waveform_model,
             slice_model,
-            slice_audition: None,
             playhead_model,
             effect_slot_model,
             modulation_source_model,
             modulation_route_model,
-            modulation_shelf_open: false,
-            modulation_selected_slot: Cell::new(None),
-            modulation_armed_slot: Cell::new(None),
-            modulation_outputs: Cell::new([0.0; MAX_MODULATORS_PER_CHANNEL]),
-            modulation_ui_channel: Cell::new(None),
-            modulation_edit_before: None,
-            modulation_edit_changed: false,
             mixer_strip_model,
             browser_rows: browser_row_model,
-            browser_locations: Vec::new(),
-            browser_expanded: HashSet::new(),
-            default_waveform,
-            default_sample_description,
-            default_sample_duration,
-            buses: default_buses(),
-            pattern_lengths: vec![DEFAULT_STEPS as usize],
-            pattern_names: vec![String::new()],
-            playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
-            song_mode: false,
-            current_pattern: 0,
-            selected: 0,
-            effect_target: EffectTarget::Channel(0),
-            selected_note_id: None,
-            selected_note_ids: HashSet::new(),
-            marquee_base: None,
-            scale_base: None,
             automation_point_model,
             automation_target_model,
-            automation_target: Cell::new(None),
-            automation_selected_point: Cell::new(None),
-            bundle_path: None,
-            dirty: false,
-            revision: 0,
-            source_revision: 0,
-            generator_presets: Vec::new(),
-            channel_presets: Vec::new(),
-            pending_preset_save: None,
         }));
         let starter = Project::starter_kit(fresh_starter_seed());
         let starter_samples = vec![None; starter.channels.len()];
@@ -4486,7 +3553,7 @@ impl AppUi {
             window.on_quit_requested(move || {
                 // Same guard as Open Song: unsaved work must be confirmed
                 // away, and the zenity round-trip must not block the UI.
-                let dirty = st.borrow().dirty;
+                let dirty = st.borrow().session.dirty;
                 std::thread::spawn(move || {
                     if dirty && !confirm_via_zenity("Discard unsaved song changes and quit?") {
                         return;
@@ -4502,7 +3569,7 @@ impl AppUi {
             let tx = document_tx.clone();
             let weak = window.as_weak();
             window.on_new_song(move || {
-                let dirty = st.borrow().dirty;
+                let dirty = st.borrow().session.dirty;
                 if let Some(window) = weak.upgrade() {
                     window.set_document_busy(true);
                     window.set_status_message("Creating new song...".into());
@@ -4525,7 +3592,7 @@ impl AppUi {
             let tx = document_tx.clone();
             let weak = window.as_weak();
             window.on_open_song(move || {
-                let dirty = st.borrow().dirty;
+                let dirty = st.borrow().session.dirty;
                 if let Some(window) = weak.upgrade() {
                     window.set_document_busy(true);
                     window.set_status_message("Opening song...".into());
@@ -4568,14 +3635,14 @@ impl AppUi {
                 // one of the ways a song reached disk in a shape it could not
                 // be read back from.
                 let project = project_snapshot(&st.borrow(), &window).project;
-                let revision = st.borrow().revision;
+                let revision = st.borrow().session.revision;
                 let mode = if window.get_embed_assets() {
                     AssetMode::Embedded
                 } else {
                     AssetMode::Referenced
                 };
                 let current = (!save_as)
-                    .then(|| st.borrow().bundle_path.clone())
+                    .then(|| st.borrow().session.bundle_path.clone())
                     .flatten();
                 window.set_document_busy(true);
                 window.set_status_message("Saving song...".into());
@@ -4668,7 +3735,7 @@ impl AppUi {
                 };
                 let snapshot = st
                     .borrow()
-                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
+                    .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
                 let kit = Kit {
                     channels: snapshot
                         .channels
@@ -4710,7 +3777,7 @@ impl AppUi {
                 };
                 let snapshot = st
                     .borrow()
-                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
+                    .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
                 let channel = snapshot.channels[snapshot.selected_channel as usize]
                     .setup
                     .clone();
@@ -4790,9 +3857,9 @@ impl AppUi {
                 let Some(path) = ({
                     let st = st.borrow();
                     let presets = if generator {
-                        &st.generator_presets
+                        &st.session.generator_presets
                     } else {
-                        &st.channel_presets
+                        &st.session.channel_presets
                     };
                     presets
                         .get(index as usize)
@@ -4839,7 +3906,7 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             let callback = move || {
-                st.borrow_mut().pending_preset_save = Some(if generator {
+                st.borrow_mut().session.pending_preset_save = Some(if generator {
                     PresetSaveTarget::Generator
                 } else {
                     PresetSaveTarget::Channel
@@ -4860,7 +3927,7 @@ impl AppUi {
         {
             let st = state.clone();
             window.on_save_preset_cancelled(move || {
-                st.borrow_mut().pending_preset_save = None;
+                st.borrow_mut().session.pending_preset_save = None;
             });
         }
         {
@@ -4875,12 +3942,12 @@ impl AppUi {
                 if name.is_empty() {
                     return;
                 }
-                let Some(target) = st.borrow_mut().pending_preset_save.take() else {
+                let Some(target) = st.borrow_mut().session.pending_preset_save.take() else {
                     return;
                 };
                 let snapshot = st
                     .borrow()
-                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
+                    .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
                 let selected = snapshot.channels[snapshot.selected_channel as usize]
                     .setup
                     .clone();
@@ -4950,13 +4017,13 @@ impl AppUi {
                 };
                 let project = st
                     .borrow()
-                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
-                let samples = st.borrow().sample_snapshots();
-                let scope = if st.borrow().song_mode {
+                    .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
+                let samples = st.borrow().session.sample_snapshots();
+                let scope = if st.borrow().session.song_mode {
                     RenderScope::Song
                 } else {
                     RenderScope::Pattern {
-                        index: st.borrow().current_pattern,
+                        index: st.borrow().session.current_pattern,
                     }
                 };
                 let format = match format {
@@ -5003,7 +4070,7 @@ impl AppUi {
         {
             let st = state.clone();
             window.window().on_close_requested(move || {
-                if st.borrow().dirty && !confirm_via_zenity("Quit without saving this song?") {
+                if st.borrow().session.dirty && !confirm_via_zenity("Quit without saving this song?") {
                     CloseRequestResponse::KeepWindowShown
                 } else {
                     CloseRequestResponse::HideWindow
@@ -5045,8 +4112,8 @@ impl AppUi {
             // The browser opens with every top-level location expanded: the
             // point of the sidebar is seeing samples without extra clicks.
             let mut st = state.borrow_mut();
-            st.browser_locations = settings.browser.locations.clone();
-            st.browser_expanded = st.browser_locations.iter().cloned().collect();
+            st.session.browser_locations = settings.browser.locations.clone();
+            st.session.browser_expanded = st.session.browser_locations.iter().cloned().collect();
             refresh_browser(&st);
         }
 
@@ -5582,7 +4649,7 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_playback_mode_changed(move |song_mode| {
-                st.borrow_mut().song_mode = song_mode;
+                st.borrow_mut().session.song_mode = song_mode;
                 if let Some(window) = weak.upgrade() {
                     window.set_song_mode(song_mode);
                 }
@@ -5607,8 +4674,8 @@ impl AppUi {
                 let changes = {
                     let mut state = st.borrow_mut();
                     let changes = state.update_tempo_synced_delay_times(bpm);
-                    state.dirty = true;
-                    state.revision = state.revision.wrapping_add(1);
+                    state.session.dirty = true;
+                    state.session.revision = state.session.revision.wrapping_add(1);
                     changes
                 };
                 for (target, slot, time_ms) in changes {
@@ -5626,7 +4693,7 @@ impl AppUi {
                     // A bar-synced bake was measured against the tempo, so
                     // its stale badge follows the tempo rather than waiting
                     // for the next full editor refresh.
-                    if let Some(channel) = st.channels.get(st.selected) {
+                    if let Some(channel) = st.session.channels.get(st.session.selected) {
                         window.set_commit_stale(
                             channel
                                 .commit
@@ -5646,8 +4713,8 @@ impl AppUi {
                     percent.clamp(MIN_SWING_PERCENT.into(), MAX_SWING_PERCENT.into()) as u8;
                 let _ = tx.send(EngineCommand::SetSwing(percent));
                 let mut st = st.borrow_mut();
-                st.dirty = true;
-                st.revision = st.revision.wrapping_add(1);
+                st.session.dirty = true;
+                st.session.revision = st.session.revision.wrapping_add(1);
                 if let Some(window) = weak.upgrade() {
                     st.update_document_title(&window);
                 }
@@ -5680,7 +4747,7 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_pattern_selected(move |p| {
-                let count = st.borrow().pattern_lengths.len();
+                let count = st.borrow().session.pattern_lengths.len();
                 if p < 0 || p as usize >= count {
                     return;
                 }
@@ -5688,14 +4755,14 @@ impl AppUi {
                 log_debug!("ui", "pattern {p} selected");
                 {
                     let mut st = st.borrow_mut();
-                    st.current_pattern = p;
-                    st.select_note(None);
+                    st.session.current_pattern = p;
+                    st.session.select_note(None);
                     st.show_pattern(p);
                 }
                 if let Some(w) = weak.upgrade() {
                     w.set_current_pattern(p as i32);
                     let st = st.borrow();
-                    w.set_pattern_length(st.pattern_lengths[p] as i32);
+                    w.set_pattern_length(st.session.pattern_lengths[p] as i32);
                     st.refresh_editor(&w);
                     st.sync_pattern_menu(&w);
                 }
@@ -5715,21 +4782,21 @@ impl AppUi {
                     return;
                 }
                 let mut st = st.borrow_mut();
-                if st.pattern_lengths.len() >= MAX_PATTERNS {
+                if st.session.pattern_lengths.len() >= MAX_PATTERNS {
                     return;
                 }
-                let pattern = st.pattern_lengths.len();
-                st.pattern_lengths.push(DEFAULT_STEPS as usize);
-                st.pattern_names.push(String::new());
-                for channel in &mut st.channels {
+                let pattern = st.session.pattern_lengths.len();
+                st.session.pattern_lengths.push(DEFAULT_STEPS as usize);
+                st.session.pattern_names.push(String::new());
+                for channel in &mut st.session.channels {
                     channel.notes.push(Vec::new());
                     channel.automation.push(Vec::new());
                 }
-                st.current_pattern = pattern;
-                st.select_note(None);
+                st.session.current_pattern = pattern;
+                st.session.select_note(None);
                 st.show_pattern(pattern);
                 if let Some(window) = weak.upgrade() {
-                    window.set_pattern_count(st.pattern_lengths.len() as i32);
+                    window.set_pattern_count(st.session.pattern_lengths.len() as i32);
                     window.set_current_pattern(pattern as i32);
                     window.set_pattern_length(DEFAULT_STEPS as i32);
                     st.refresh_editor(&window);
@@ -5749,10 +4816,10 @@ impl AppUi {
             window.on_pattern_renamed(move |index, name| {
                 let index = index as usize;
                 let mut st = st.borrow_mut();
-                if index >= st.pattern_names.len() {
+                if index >= st.session.pattern_names.len() {
                     return;
                 }
-                st.pattern_names[index] = name.trim().to_string();
+                st.session.pattern_names[index] = name.trim().to_string();
                 if let Some(window) = weak.upgrade() {
                     st.sync_pattern_menu(&window);
                 }
@@ -5768,15 +4835,15 @@ impl AppUi {
             window.on_pattern_length_changed(move |length| {
                 let length = length.clamp(1, MAX_PATTERN_STEPS as i32) as usize;
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                if st.pattern_lengths[pattern] == length {
+                let pattern = st.session.current_pattern;
+                if st.session.pattern_lengths[pattern] == length {
                     return;
                 }
-                st.pattern_lengths[pattern] = length;
+                st.session.pattern_lengths[pattern] = length;
                 let length_ticks = length as u32 * TICKS_PER_STEP;
-                let notes = &st.channels[st.selected].notes[pattern];
+                let notes = &st.session.channels[st.session.selected].notes[pattern];
                 let out_of_range: Vec<NoteId> = st
-                    .selected_note_ids
+                    .session.selected_note_ids
                     .iter()
                     .copied()
                     .filter(|id| {
@@ -5786,7 +4853,7 @@ impl AppUi {
                             .is_none_or(|note| note.start_tick >= length_ticks)
                     })
                     .collect();
-                st.prune_note_selection(&out_of_range);
+                st.session.prune_note_selection(&out_of_range);
                 st.show_pattern(pattern);
                 if let Some(w) = weak.upgrade() {
                     w.set_pattern_length(length as i32);
@@ -5808,32 +4875,32 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_playlist_placement_added(move |pattern, start_tick| {
                 let mut st = st.borrow_mut();
-                if pattern < 0 || pattern as usize >= st.pattern_lengths.len() {
+                if pattern < 0 || pattern as usize >= st.session.pattern_lengths.len() {
                     return;
                 }
                 let pattern = pattern as usize;
                 let start_tick = start_tick.max(0) as u32;
-                if start_tick >= MAX_PLAYLIST_TICKS || st.playlist.len() >= MAX_PLAYLIST_PLACEMENTS
+                if start_tick >= MAX_PLAYLIST_TICKS || st.session.playlist.len() >= MAX_PLAYLIST_PLACEMENTS
                 {
                     return;
                 }
                 let end_tick =
-                    start_tick.saturating_add(st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP);
-                let overlaps = st.playlist.iter().any(|placement| {
+                    start_tick.saturating_add(st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP);
+                let overlaps = st.session.playlist.iter().any(|placement| {
                     if placement.pattern as usize != pattern {
                         return false;
                     }
                     let existing_end = placement
                         .start_tick
-                        .saturating_add(st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP);
+                        .saturating_add(st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP);
                     start_tick < existing_end && placement.start_tick < end_tick
                 });
                 if overlaps {
                     return;
                 }
                 let placement = PatternPlacement::new(pattern as u8, start_tick);
-                st.playlist.push(placement);
-                st.playlist.sort_unstable();
+                st.session.playlist.push(placement);
+                st.session.playlist.sort_unstable();
                 if let Some(window) = weak.upgrade() {
                     st.sync_playlist(&window);
                 }
@@ -5850,18 +4917,18 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_playlist_placement_removed(move |pattern, tick| {
                 let mut st = st.borrow_mut();
-                if pattern < 0 || pattern as usize >= st.pattern_lengths.len() {
+                if pattern < 0 || pattern as usize >= st.session.pattern_lengths.len() {
                     return;
                 }
                 let pattern = pattern as usize;
                 let tick = tick.max(0) as u32;
-                let Some(placement) = st.placement_covering(pattern, tick) else {
+                let Some(placement) = st.session.placement_covering(pattern, tick) else {
                     return;
                 };
-                let Some(index) = st.playlist.iter().position(|item| *item == placement) else {
+                let Some(index) = st.session.playlist.iter().position(|item| *item == placement) else {
                     return;
                 };
-                st.playlist.remove(index);
+                st.session.playlist.remove(index);
                 if let Some(window) = weak.upgrade() {
                     st.sync_playlist(&window);
                 }
@@ -5883,26 +4950,26 @@ impl AppUi {
             window.on_step_clicked(move |channel, step| {
                 let (channel, step) = (channel as usize, step as usize);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                let pattern = st.session.current_pattern;
+                if channel >= st.session.channels.len() || step >= st.session.pattern_lengths[pattern] {
                     return;
                 }
                 let start = step as u32 * TICKS_PER_STEP;
                 let end = start + TICKS_PER_STEP;
-                let ids: Vec<NoteId> = st.channels[channel].notes[pattern]
+                let ids: Vec<NoteId> = st.session.channels[channel].notes[pattern]
                     .iter()
                     .filter(|note| note.start_tick >= start && note.start_tick < end)
                     .map(|note| note.id)
                     .collect();
                 if ids.is_empty() {
-                    let note = st.channels[channel].create_note(
+                    let note = st.session.channels[channel].create_note(
                         pattern,
                         start,
                         DEFAULT_NOTE_DURATION_TICKS,
                         60,
                     );
-                    if channel == st.selected {
-                        st.select_note(Some(note.id));
+                    if channel == st.session.selected {
+                        st.session.select_note(Some(note.id));
                     }
                     let _ = tx.send(EngineCommand::UpsertNote {
                         pattern: pattern as u8,
@@ -5910,8 +4977,8 @@ impl AppUi {
                         note,
                     });
                 } else {
-                    st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                    st.prune_note_selection(&ids);
+                    st.session.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                    st.session.prune_note_selection(&ids);
                     for id in ids {
                         let _ = tx.send(EngineCommand::RemoveNote {
                             pattern: pattern as u8,
@@ -5921,7 +4988,7 @@ impl AppUi {
                     }
                 }
                 st.refresh_rack_cell(channel, step);
-                if channel == st.selected {
+                if channel == st.session.selected {
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);
                     }
@@ -5935,19 +5002,19 @@ impl AppUi {
             window.on_step_removed(move |channel, step| {
                 let (channel, step) = (channel as usize, step as usize);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                let pattern = st.session.current_pattern;
+                if channel >= st.session.channels.len() || step >= st.session.pattern_lengths[pattern] {
                     return;
                 }
                 let start = step as u32 * TICKS_PER_STEP;
                 let end = start + TICKS_PER_STEP;
-                let ids: Vec<NoteId> = st.channels[channel].notes[pattern]
+                let ids: Vec<NoteId> = st.session.channels[channel].notes[pattern]
                     .iter()
                     .filter(|note| note.start_tick >= start && note.start_tick < end)
                     .map(|note| note.id)
                     .collect();
-                st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                st.prune_note_selection(&ids);
+                st.session.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                st.session.prune_note_selection(&ids);
                 for id in ids {
                     let _ = tx.send(EngineCommand::RemoveNote {
                         pattern: pattern as u8,
@@ -5956,7 +5023,7 @@ impl AppUi {
                     });
                 }
                 st.refresh_rack_cell(channel, step);
-                if channel == st.selected {
+                if channel == st.session.selected {
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);
                     }
@@ -5971,13 +5038,13 @@ impl AppUi {
                 let (channel, step) = (channel as usize, step as usize);
                 let velocity = (1.0 + value.clamp(0.0, 1.0) * 126.0).round() as u8;
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                let pattern = st.session.current_pattern;
+                if channel >= st.session.channels.len() || step >= st.session.pattern_lengths[pattern] {
                     return;
                 }
                 let start = step as u32 * TICKS_PER_STEP;
                 let end = start + TICKS_PER_STEP;
-                let mut edited: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                let mut edited: Vec<NoteEvent> = st.session.channels[channel].notes[pattern]
                     .iter_mut()
                     .filter(|note| note.start_tick >= start && note.start_tick < end)
                     .map(|note| {
@@ -5986,23 +5053,23 @@ impl AppUi {
                     })
                     .collect();
                 if edited.is_empty() {
-                    let mut note = st.channels[channel].create_note(
+                    let mut note = st.session.channels[channel].create_note(
                         pattern,
                         start,
                         DEFAULT_NOTE_DURATION_TICKS,
                         60,
                     );
                     note.velocity = velocity;
-                    *st.channels[channel].notes[pattern]
+                    *st.session.channels[channel].notes[pattern]
                         .iter_mut()
                         .find(|stored| stored.id == note.id)
                         .unwrap() = note;
                     edited.push(note);
                 }
-                let primary = (channel == st.selected).then_some(edited[0].id);
-                st.select_note(primary);
+                let primary = (channel == st.session.selected).then_some(edited[0].id);
+                st.session.select_note(primary);
                 st.refresh_rack_cell(channel, step);
-                if channel == st.selected {
+                if channel == st.session.selected {
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);
                     }
@@ -6026,13 +5093,13 @@ impl AppUi {
             window.on_step_painted(move |channel, step, on| {
                 let (channel, step) = (channel as usize, step as usize);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                let pattern = st.session.current_pattern;
+                if channel >= st.session.channels.len() || step >= st.session.pattern_lengths[pattern] {
                     return;
                 }
                 let start = step as u32 * TICKS_PER_STEP;
                 let end = start + TICKS_PER_STEP;
-                let ids: Vec<NoteId> = st.channels[channel].notes[pattern]
+                let ids: Vec<NoteId> = st.session.channels[channel].notes[pattern]
                     .iter()
                     .filter(|note| note.start_tick >= start && note.start_tick < end)
                     .map(|note| note.id)
@@ -6041,14 +5108,14 @@ impl AppUi {
                     if !ids.is_empty() {
                         return;
                     }
-                    let note = st.channels[channel].create_note(
+                    let note = st.session.channels[channel].create_note(
                         pattern,
                         start,
                         DEFAULT_NOTE_DURATION_TICKS,
                         60,
                     );
-                    if channel == st.selected {
-                        st.select_note(Some(note.id));
+                    if channel == st.session.selected {
+                        st.session.select_note(Some(note.id));
                     }
                     let _ = tx.send(EngineCommand::UpsertNote {
                         pattern: pattern as u8,
@@ -6059,8 +5126,8 @@ impl AppUi {
                     if ids.is_empty() {
                         return;
                     }
-                    st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                    st.prune_note_selection(&ids);
+                    st.session.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                    st.session.prune_note_selection(&ids);
                     for id in ids {
                         let _ = tx.send(EngineCommand::RemoveNote {
                             pattern: pattern as u8,
@@ -6070,7 +5137,7 @@ impl AppUi {
                     }
                 }
                 st.refresh_rack_cell(channel, step);
-                if channel == st.selected {
+                if channel == st.session.selected {
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);
                     }
@@ -6087,19 +5154,19 @@ impl AppUi {
                 let (channel, step) = (channel as usize, step as usize);
                 let divisions = divisions.clamp(2, 4) as u32;
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                let pattern = st.session.current_pattern;
+                if channel >= st.session.channels.len() || step >= st.session.pattern_lengths[pattern] {
                     return;
                 }
                 let start = step as u32 * TICKS_PER_STEP;
                 let end = start + TICKS_PER_STEP;
-                let ids: Vec<NoteId> = st.channels[channel].notes[pattern]
+                let ids: Vec<NoteId> = st.session.channels[channel].notes[pattern]
                     .iter()
                     .filter(|note| note.start_tick >= start && note.start_tick < end)
                     .map(|note| note.id)
                     .collect();
-                st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                st.prune_note_selection(&ids);
+                st.session.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                st.session.prune_note_selection(&ids);
                 for id in ids {
                     let _ = tx.send(EngineCommand::RemoveNote {
                         pattern: pattern as u8,
@@ -6109,7 +5176,7 @@ impl AppUi {
                 }
                 let slice_ticks = TICKS_PER_STEP / divisions;
                 for k in 0..divisions {
-                    let note = st.channels[channel].create_note(
+                    let note = st.session.channels[channel].create_note(
                         pattern,
                         start + k * slice_ticks,
                         slice_ticks,
@@ -6122,7 +5189,7 @@ impl AppUi {
                     });
                 }
                 st.refresh_rack_cell(channel, step);
-                if channel == st.selected {
+                if channel == st.session.selected {
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);
                     }
@@ -6140,11 +5207,11 @@ impl AppUi {
             window.on_step_length_dragged(move |channel, step, length_in_steps| {
                 let (channel, step) = (channel as usize, step as usize);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                if channel >= st.channels.len() || step >= st.pattern_lengths[pattern] {
+                let pattern = st.session.current_pattern;
+                if channel >= st.session.channels.len() || step >= st.session.pattern_lengths[pattern] {
                     return;
                 }
-                let pattern_length = st.pattern_lengths[pattern];
+                let pattern_length = st.session.pattern_lengths[pattern];
                 let max_length = (pattern_length - step) as i32;
                 let length_in_steps = length_in_steps.clamp(1, max_length) as u32;
                 let duration_ticks = length_in_steps * TICKS_PER_STEP;
@@ -6152,7 +5219,7 @@ impl AppUi {
                 let end = start + TICKS_PER_STEP;
                 let mut edited = Vec::new();
                 let mut max_end_step = step;
-                for note in st.channels[channel].notes[pattern].iter_mut() {
+                for note in st.session.channels[channel].notes[pattern].iter_mut() {
                     if note.start_tick < start || note.start_tick >= end {
                         continue;
                     }
@@ -6174,7 +5241,7 @@ impl AppUi {
                 for s in step..=max_end_step.min(pattern_length - 1) {
                     st.refresh_rack_cell(channel, s);
                 }
-                if channel == st.selected {
+                if channel == st.session.selected {
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);
                     }
@@ -6206,12 +5273,12 @@ impl AppUi {
                 };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let selected = st.selected_note_ids.clone();
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let selected = st.session.selected_note_ids.clone();
                 let mut edited = Vec::new();
-                for note in st.channels[channel].notes[pattern]
+                for note in st.session.channels[channel].notes[pattern]
                     .iter_mut()
                     .filter(|note| selected.contains(&note.id))
                 {
@@ -6250,13 +5317,13 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let moving: HashSet<NoteId> = st.selected_note_ids.clone();
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let moving: HashSet<NoteId> = st.session.selected_note_ids.clone();
                 let (mut min_tick, mut max_tick) = (i64::MAX, i64::MIN);
                 let (mut min_note, mut max_note) = (i32::MAX, i32::MIN);
-                for note in st.channels[channel].notes[pattern]
+                for note in st.session.channels[channel].notes[pattern]
                     .iter()
                     .filter(|note| moving.contains(&note.id))
                 {
@@ -6278,7 +5345,7 @@ impl AppUi {
 
                 let mut edited = Vec::new();
                 let mut touched_steps = Vec::new();
-                for note in st.channels[channel].notes[pattern]
+                for note in st.session.channels[channel].notes[pattern]
                     .iter_mut()
                     .filter(|note| moving.contains(&note.id))
                 {
@@ -6288,7 +5355,7 @@ impl AppUi {
                     touched_steps.push(note.start_tick / TICKS_PER_STEP);
                     edited.push(*note);
                 }
-                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
                 for step in touched_steps {
                     st.refresh_rack_cell(channel, step as usize);
                 }
@@ -6314,12 +5381,12 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let mut copied: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let mut copied: Vec<NoteEvent> = st.session.channels[channel].notes[pattern]
                     .iter()
                     .copied()
-                    .filter(|note| st.selected_note_ids.contains(&note.id))
+                    .filter(|note| st.session.selected_note_ids.contains(&note.id))
                     .collect();
                 if copied.is_empty() {
                     return;
@@ -6339,9 +5406,9 @@ impl AppUi {
                     );
                     return;
                 }
-                let ids: Vec<NoteId> = st.selected_note_ids.iter().copied().collect();
-                st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                st.prune_note_selection(&ids);
+                let ids: Vec<NoteId> = st.session.selected_note_ids.iter().copied().collect();
+                st.session.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                st.session.prune_note_selection(&ids);
                 st.refresh_rack_row(channel);
                 st.refresh_note_editor(&window);
                 for id in &ids {
@@ -6370,15 +5437,15 @@ impl AppUi {
                 }
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
                 // Land the phrase after whatever is selected, or at the top
                 // of the pattern when nothing is -- pasting on top of the
                 // originals looks like nothing happened.
-                let origin = st.channels[channel].notes[pattern]
+                let origin = st.session.channels[channel].notes[pattern]
                     .iter()
-                    .filter(|note| st.selected_note_ids.contains(&note.id))
+                    .filter(|note| st.session.selected_note_ids.contains(&note.id))
                     .map(|note| note.end_tick())
                     .max()
                     .unwrap_or(0);
@@ -6388,24 +5455,24 @@ impl AppUi {
                     if start >= length_ticks {
                         continue;
                     }
-                    let id = st.channels[channel].next_note_id;
-                    st.channels[channel].next_note_id = id.wrapping_add(1).max(1);
+                    let id = st.session.channels[channel].next_note_id;
+                    st.session.channels[channel].next_note_id = id.wrapping_add(1).max(1);
                     let mut copy = NoteEvent { id, ..note };
                     copy.start_tick = start;
                     copy.duration_ticks = copy
                         .duration_ticks
                         .min(length_ticks.saturating_sub(start).max(1));
-                    st.channels[channel].notes[pattern].push(copy);
+                    st.session.channels[channel].notes[pattern].push(copy);
                     pasted.push(copy);
                 }
                 if pasted.is_empty() {
                     window.set_status_message("Nothing fits at the paste position".into());
                     return;
                 }
-                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
                 // Select what was pasted, so it can be moved straight away.
-                st.selected_note_ids = pasted.iter().map(|note| note.id).collect();
-                st.selected_note_id = (pasted.len() == 1).then(|| pasted[0].id);
+                st.session.selected_note_ids = pasted.iter().map(|note| note.id).collect();
+                st.session.selected_note_id = (pasted.len() == 1).then(|| pasted[0].id);
                 st.refresh_rack_row(channel);
                 st.refresh_note_editor(&window);
                 for note in &pasted {
@@ -6449,11 +5516,11 @@ impl AppUi {
                 };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
                 let start_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
-                let mut note = st.channels[channel].create_note(
+                let mut note = st.session.channels[channel].create_note(
                     pattern,
                     start_tick,
                     duration_ticks.max(1) as u32,
@@ -6462,13 +5529,13 @@ impl AppUi {
                 note.duration_ticks = note
                     .duration_ticks
                     .min(length_ticks.saturating_sub(start_tick).max(1));
-                if let Some(stored) = st.channels[channel].notes[pattern]
+                if let Some(stored) = st.session.channels[channel].notes[pattern]
                     .iter_mut()
                     .find(|stored| stored.id == note.id)
                 {
                     *stored = note;
                 }
-                st.select_note(Some(note.id));
+                st.session.select_note(Some(note.id));
                 st.refresh_rack_cell(channel, (start_tick / TICKS_PER_STEP) as usize);
                 st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
@@ -6503,19 +5570,19 @@ impl AppUi {
             window.on_piano_note_selected(move |id, mode| {
                 let mut st = st.borrow_mut();
                 let id = id as NoteId;
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                if st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                if st.session.channels[channel].notes[pattern]
                     .iter()
                     .any(|note| note.id == id)
                 {
                     // The grid resolves which of the gesture roles the held
                     // modifiers satisfied; this only applies the result.
                     match mode {
-                        1 => st.toggle_note_selection(id),
-                        2 => st.remove_note_from_selection(id),
+                        1 => st.session.toggle_note_selection(id),
+                        2 => st.session.remove_note_from_selection(id),
                         // A plain click always collapses to just this note.
-                        _ => st.select_note(Some(id)),
+                        _ => st.session.select_note(Some(id)),
                     }
                     if let Some(window) = weak.upgrade() {
                         st.refresh_note_editor(&window);
@@ -6533,10 +5600,10 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let Some(anchor) = st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let Some(anchor) = st.session.channels[channel].notes[pattern]
                     .iter()
                     .copied()
                     .find(|note| note.id == id as NoteId)
@@ -6564,7 +5631,7 @@ impl AppUi {
                 // ever had.
                 let (mut min_tick, mut max_tick) = (i64::MAX, i64::MIN);
                 let (mut min_note, mut max_note) = (i32::MAX, i32::MIN);
-                for note in st.channels[channel].notes[pattern]
+                for note in st.session.channels[channel].notes[pattern]
                     .iter()
                     .filter(|note| moving.contains(&note.id))
                 {
@@ -6584,7 +5651,7 @@ impl AppUi {
 
                 let mut edited = Vec::with_capacity(moving.len());
                 let mut touched_steps = Vec::with_capacity(moving.len() * 2);
-                for note in st.channels[channel].notes[pattern]
+                for note in st.session.channels[channel].notes[pattern]
                     .iter_mut()
                     .filter(|note| moving.contains(&note.id))
                 {
@@ -6598,9 +5665,9 @@ impl AppUi {
                     touched_steps.push(note.start_tick / TICKS_PER_STEP);
                     edited.push(*note);
                 }
-                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
                 if edited.len() == 1 {
-                    st.select_note(Some(edited[0].id));
+                    st.session.select_note(Some(edited[0].id));
                 }
                 for step in touched_steps {
                     st.refresh_rack_cell(channel, step as usize);
@@ -6629,13 +5696,13 @@ impl AppUi {
                 };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
                 let anchor_id = anchor_id.max(0) as NoteId;
-                let originals: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                let originals: Vec<NoteEvent> = st.session.channels[channel].notes[pattern]
                     .iter()
                     .copied()
-                    .filter(|note| note.id == anchor_id || st.selected_note_ids.contains(&note.id))
+                    .filter(|note| note.id == anchor_id || st.session.selected_note_ids.contains(&note.id))
                     .collect();
                 if originals.is_empty() {
                     return -1;
@@ -6646,18 +5713,18 @@ impl AppUi {
                 let mut copies = Vec::with_capacity(originals.len());
                 let mut anchor_copy = -1;
                 for original in originals {
-                    let id = st.channels[channel].next_note_id;
-                    st.channels[channel].next_note_id = id.wrapping_add(1).max(1);
+                    let id = st.session.channels[channel].next_note_id;
+                    st.session.channels[channel].next_note_id = id.wrapping_add(1).max(1);
                     let copy = NoteEvent { id, ..original };
                     if original.id == anchor_id {
                         anchor_copy = id as i32;
                     }
-                    st.channels[channel].notes[pattern].push(copy);
+                    st.session.channels[channel].notes[pattern].push(copy);
                     copies.push(copy);
                 }
-                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                st.selected_note_ids = copies.iter().map(|note| note.id).collect();
-                st.selected_note_id = (copies.len() == 1).then(|| copies[0].id);
+                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                st.session.selected_note_ids = copies.iter().map(|note| note.id).collect();
+                st.session.selected_note_id = (copies.len() == 1).then(|| copies[0].id);
                 st.refresh_rack_row(channel);
                 st.refresh_note_editor(&window);
                 for note in copies {
@@ -6688,10 +5755,10 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let Some(anchor) = st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let Some(anchor) = st.session.channels[channel].notes[pattern]
                     .iter()
                     .copied()
                     .find(|note| note.id == id as NoteId)
@@ -6710,7 +5777,7 @@ impl AppUi {
                 // limit instead of stopping the whole gesture.
                 let mut floor = i64::MIN;
                 let mut ceiling = i64::MAX;
-                for note in st.channels[channel].notes[pattern]
+                for note in st.session.channels[channel].notes[pattern]
                     .iter()
                     .filter(|note| resizing.contains(&note.id))
                 {
@@ -6726,7 +5793,7 @@ impl AppUi {
                 let delta = delta.clamp(floor, ceiling.max(floor));
 
                 let mut edited = Vec::with_capacity(resizing.len());
-                for note in st.channels[channel].notes[pattern]
+                for note in st.session.channels[channel].notes[pattern]
                     .iter_mut()
                     .filter(|note| resizing.contains(&note.id))
                 {
@@ -6734,7 +5801,7 @@ impl AppUi {
                     edited.push(*note);
                 }
                 if edited.len() == 1 {
-                    st.select_note(Some(edited[0].id));
+                    st.session.select_note(Some(edited[0].id));
                 }
                 for note in &edited {
                     st.refresh_rack_cell(channel, (note.start_tick / TICKS_PER_STEP) as usize);
@@ -6761,9 +5828,9 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let Some(anchor) = st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let Some(anchor) = st.session.channels[channel].notes[pattern]
                     .iter()
                     .copied()
                     .find(|note| note.id == id as NoteId)
@@ -6777,7 +5844,7 @@ impl AppUi {
                 // reason the other two gestures are.
                 let mut floor = i64::MIN;
                 let mut ceiling = i64::MAX;
-                for note in st.channels[channel].notes[pattern]
+                for note in st.session.channels[channel].notes[pattern]
                     .iter()
                     .filter(|note| resizing.contains(&note.id))
                 {
@@ -6791,7 +5858,7 @@ impl AppUi {
 
                 let mut edited = Vec::with_capacity(resizing.len());
                 let mut touched_steps = Vec::with_capacity(resizing.len() * 2);
-                for note in st.channels[channel].notes[pattern]
+                for note in st.session.channels[channel].notes[pattern]
                     .iter_mut()
                     .filter(|note| resizing.contains(&note.id))
                 {
@@ -6801,9 +5868,9 @@ impl AppUi {
                     touched_steps.push(note.start_tick / TICKS_PER_STEP);
                     edited.push(*note);
                 }
-                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
                 if edited.len() == 1 {
-                    st.select_note(Some(edited[0].id));
+                    st.session.select_note(Some(edited[0].id));
                 }
                 for step in touched_steps {
                     st.refresh_rack_cell(channel, step as usize);
@@ -6829,8 +5896,8 @@ impl AppUi {
             let st = state.clone();
             window.on_piano_marquee_begin(move |mode| {
                 let mut st = st.borrow_mut();
-                let base = st.selected_note_ids.clone();
-                st.marquee_base = Some((mode, base));
+                let base = st.session.selected_note_ids.clone();
+                st.session.marquee_base = Some((mode, base));
             });
         }
         {
@@ -6840,14 +5907,14 @@ impl AppUi {
                 move |start_tick, end_tick, low_note, high_note| {
                     let Some(window) = weak.upgrade() else { return };
                     let mut st = st.borrow_mut();
-                    let Some((mode, base)) = st.marquee_base.clone() else {
+                    let Some((mode, base)) = st.session.marquee_base.clone() else {
                         return;
                     };
-                    let pattern = st.current_pattern;
-                    let channel = st.selected;
+                    let pattern = st.session.current_pattern;
+                    let channel = st.session.selected;
                     let (start_tick, end_tick) = (start_tick.min(end_tick), start_tick.max(end_tick));
                     let (low_note, high_note) = (low_note.min(high_note), low_note.max(high_note));
-                    let caught: HashSet<NoteId> = st.channels[channel].notes[pattern]
+                    let caught: HashSet<NoteId> = st.session.channels[channel].notes[pattern]
                         .iter()
                         .filter(|note| {
                             // Overlap, not containment: clipping a long
@@ -6864,13 +5931,13 @@ impl AppUi {
                         })
                         .map(|note| note.id)
                         .collect();
-                    st.selected_note_ids = match mode {
+                    st.session.selected_note_ids = match mode {
                         1 => base.union(&caught).copied().collect(),
                         2 => base.difference(&caught).copied().collect(),
                         _ => caught,
                     };
-                    st.selected_note_id = (st.selected_note_ids.len() == 1)
-                        .then(|| *st.selected_note_ids.iter().next().unwrap());
+                    st.session.selected_note_id = (st.session.selected_note_ids.len() == 1)
+                        .then(|| *st.session.selected_note_ids.iter().next().unwrap());
                     st.refresh_note_editor(&window);
                 },
             );
@@ -6885,9 +5952,9 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let Some(original) = st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let Some(original) = st.session.channels[channel].notes[pattern]
                     .iter()
                     .copied()
                     .find(|note| note.id == id as NoteId)
@@ -6901,8 +5968,8 @@ impl AppUi {
                 if cut <= original.start_tick || cut >= original.end_tick() {
                     return;
                 }
-                let tail_id = st.channels[channel].next_note_id;
-                st.channels[channel].next_note_id = tail_id.wrapping_add(1).max(1);
+                let tail_id = st.session.channels[channel].next_note_id;
+                st.session.channels[channel].next_note_id = tail_id.wrapping_add(1).max(1);
                 let tail = NoteEvent {
                     id: tail_id,
                     start_tick: cut,
@@ -6911,17 +5978,17 @@ impl AppUi {
                 };
                 let mut head = original;
                 head.duration_ticks = cut - original.start_tick;
-                for note in st.channels[channel].notes[pattern].iter_mut() {
+                for note in st.session.channels[channel].notes[pattern].iter_mut() {
                     if note.id == head.id {
                         *note = head;
                     }
                 }
-                st.channels[channel].notes[pattern].push(tail);
-                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                st.session.channels[channel].notes[pattern].push(tail);
+                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
                 // Both halves selected, so the next gesture can act on the
                 // whole of what used to be one note.
-                st.selected_note_ids = HashSet::from([head.id, tail.id]);
-                st.selected_note_id = None;
+                st.session.selected_note_ids = HashSet::from([head.id, tail.id]);
+                st.session.selected_note_id = None;
                 st.refresh_rack_row(channel);
                 st.refresh_note_editor(&window);
                 for note in [head, tail] {
@@ -6945,12 +6012,12 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let selected: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let selected: Vec<NoteEvent> = st.session.channels[channel].notes[pattern]
                     .iter()
                     .copied()
-                    .filter(|note| st.selected_note_ids.contains(&note.id))
+                    .filter(|note| st.session.selected_note_ids.contains(&note.id))
                     .collect();
                 if selected.len() < 2 {
                     return;
@@ -6974,7 +6041,7 @@ impl AppUi {
                     merged.duration_ticks = end.saturating_sub(merged.start_tick).max(1);
                     // The earliest note survives, so the join keeps a stable
                     // id and whatever velocity the phrase started on.
-                    for note in st.channels[channel].notes[pattern].iter_mut() {
+                    for note in st.session.channels[channel].notes[pattern].iter_mut() {
                         if note.id == merged.id {
                             *note = merged;
                         }
@@ -6985,13 +6052,13 @@ impl AppUi {
                 if removed.is_empty() {
                     return;
                 }
-                st.channels[channel].notes[pattern].retain(|note| !removed.contains(&note.id));
-                let edited: Vec<NoteEvent> = st.channels[channel].notes[pattern]
+                st.session.channels[channel].notes[pattern].retain(|note| !removed.contains(&note.id));
+                let edited: Vec<NoteEvent> = st.session.channels[channel].notes[pattern]
                     .iter()
                     .copied()
                     .filter(|note| kept.contains(&note.id))
                     .collect();
-                st.prune_note_selection(&removed);
+                st.session.prune_note_selection(&removed);
                 st.refresh_rack_row(channel);
                 st.refresh_note_editor(&window);
                 for id in removed {
@@ -7022,11 +6089,11 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
                 let start_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
-                let mut note = st.channels[channel].create_note(
+                let mut note = st.session.channels[channel].create_note(
                     pattern,
                     start_tick,
                     duration_ticks.max(1) as u32,
@@ -7035,7 +6102,7 @@ impl AppUi {
                 note.duration_ticks = note
                     .duration_ticks
                     .min(length_ticks.saturating_sub(start_tick).max(1));
-                if let Some(stored) = st.channels[channel].notes[pattern]
+                if let Some(stored) = st.session.channels[channel].notes[pattern]
                     .iter_mut()
                     .find(|stored| stored.id == note.id)
                 {
@@ -7043,8 +6110,8 @@ impl AppUi {
                 }
                 // A stroke selects what it laid down, so the run can be
                 // moved or lengthened without re-selecting it by hand.
-                st.selected_note_ids.insert(note.id);
-                st.selected_note_id = (st.selected_note_ids.len() == 1).then_some(note.id);
+                st.session.selected_note_ids.insert(note.id);
+                st.session.selected_note_id = (st.session.selected_note_ids.len() == 1).then_some(note.id);
                 st.refresh_rack_cell(channel, (start_tick / TICKS_PER_STEP) as usize);
                 st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
@@ -7060,15 +6127,15 @@ impl AppUi {
             let st = state.clone();
             window.on_piano_scale_begin(move |from_left| {
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let notes: Vec<(NoteId, u32, u32)> = st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let notes: Vec<(NoteId, u32, u32)> = st.session.channels[channel].notes[pattern]
                     .iter()
-                    .filter(|note| st.selected_note_ids.contains(&note.id))
+                    .filter(|note| st.session.selected_note_ids.contains(&note.id))
                     .map(|note| (note.id, note.start_tick, note.duration_ticks))
                     .collect();
                 if notes.len() < 2 {
-                    st.scale_base = None;
+                    st.session.scale_base = None;
                     return;
                 }
                 // Scale about the edge the drag is not moving, so that edge
@@ -7082,7 +6149,7 @@ impl AppUi {
                 } else {
                     notes.iter().map(|(_, start, _)| *start).min().unwrap_or(0)
                 };
-                st.scale_base = Some(ScaleBase { anchor, notes });
+                st.session.scale_base = Some(ScaleBase { anchor, notes });
             });
         }
         {
@@ -7095,12 +6162,12 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let Some(base) = st.scale_base.take() else {
+                let Some(base) = st.session.scale_base.take() else {
                     return;
                 };
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
                 let last_start = length_ticks.saturating_sub(1);
                 let factor = factor.clamp(0.02, 64.0) as f64;
                 let anchor = base.anchor as f64;
@@ -7108,7 +6175,7 @@ impl AppUi {
                 let mut edited = Vec::with_capacity(base.notes.len());
                 let mut touched_steps = Vec::with_capacity(base.notes.len() * 2);
                 for (id, start, duration) in &base.notes {
-                    let Some(note) = st.channels[channel].notes[pattern]
+                    let Some(note) = st.session.channels[channel].notes[pattern]
                         .iter_mut()
                         .find(|note| note.id == *id)
                     else {
@@ -7125,8 +6192,8 @@ impl AppUi {
                     touched_steps.push(note.start_tick / TICKS_PER_STEP);
                     edited.push(*note);
                 }
-                st.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                st.scale_base = Some(base);
+                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+                st.session.scale_base = Some(base);
                 for step in touched_steps {
                     st.refresh_rack_cell(channel, step as usize);
                 }
@@ -7158,16 +6225,16 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let Some(index) = st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let Some(index) = st.session.channels[channel].notes[pattern]
                     .iter()
                     .position(|note| note.id == id as NoteId)
                 else {
                     return;
                 };
-                let removed = st.channels[channel].notes[pattern].remove(index);
-                st.prune_note_selection(&[removed.id]);
+                let removed = st.session.channels[channel].notes[pattern].remove(index);
+                st.session.prune_note_selection(&[removed.id]);
                 st.refresh_rack_cell(channel, (removed.start_tick / TICKS_PER_STEP) as usize);
                 st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::RemoveNote {
@@ -7190,9 +6257,9 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 let velocity = (1.0 + value.clamp(0.0, 1.0) * 126.0).round() as u8;
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                let Some(note) = st.channels[channel].notes[pattern]
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                let Some(note) = st.session.channels[channel].notes[pattern]
                     .iter_mut()
                     .find(|note| note.id == id as NoteId)
                 else {
@@ -7200,7 +6267,7 @@ impl AppUi {
                 };
                 note.velocity = velocity;
                 let edited = *note;
-                st.select_note(Some(edited.id));
+                st.session.select_note(Some(edited.id));
                 st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
                 st.refresh_note_editor(&window);
                 let _ = tx.send(EngineCommand::UpsertNote {
@@ -7229,22 +6296,22 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let destinations = st.automation_destinations();
+                let destinations = st.session.automation_destinations();
                 let Some(target) = destinations
                     .get(index.max(0) as usize)
                     .map(|(target, _, _)| *target)
                 else {
                     return;
                 };
-                st.automation_target.set(Some(target));
-                st.automation_selected_point.set(None);
+                st.session.automation_target.set(Some(target));
+                st.session.automation_selected_point.set(None);
                 // Opening the lane in the project and in the engine keeps the
                 // picker's "already open" marks meaningful even before the
                 // first point is drawn.
-                let pattern = st.current_pattern;
-                let channel = st.selected;
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
                 if let Some(lanes) = st
-                    .channels
+                    .session.channels
                     .get_mut(channel)
                     .and_then(|state| state.automation.get_mut(pattern))
                 {
@@ -7282,15 +6349,15 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.current_pattern, st.selected);
-                let Some(target) = st.automation_target.get() else {
+                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
+                let Some(target) = st.session.automation_target.get() else {
                     return;
                 };
-                let Some(lane) = st.automation_lane_mut() else {
+                let Some(lane) = st.session.automation_lane_mut() else {
                     return;
                 };
                 lane.clear();
-                st.automation_selected_point.set(None);
+                st.session.automation_selected_point.set(None);
                 let _ = tx.send(EngineCommand::ClearAutomationLane {
                     pattern: pattern as u8,
                     channel: channel as u8,
@@ -7317,19 +6384,19 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.current_pattern, st.selected);
-                let Some(target) = st.automation_target.get() else {
+                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
+                let Some(target) = st.session.automation_target.get() else {
                     return;
                 };
                 if let Some(lanes) = st
-                    .channels
+                    .session.channels
                     .get_mut(channel)
                     .and_then(|state| state.automation.get_mut(pattern))
                 {
                     lanes.retain(|lane| lane.target != target);
                 }
-                st.automation_target.set(None);
-                st.automation_selected_point.set(None);
+                st.session.automation_target.set(None);
+                st.session.automation_selected_point.set(None);
                 let _ = tx.send(EngineCommand::RemoveAutomationLane {
                     pattern: pattern as u8,
                     channel: channel as u8,
@@ -7350,7 +6417,7 @@ impl AppUi {
             let st = state.clone();
             window.on_automation_point_hit_test(move |tick, value, tolerance| {
                 let st = st.borrow();
-                let Some(lane) = st.automation_lane() else {
+                let Some(lane) = st.session.automation_lane() else {
                     return -1;
                 };
                 let tolerance = tolerance.max(1);
@@ -7381,12 +6448,12 @@ impl AppUi {
                 };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.current_pattern, st.selected);
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let Some(target) = st.automation_target.get() else {
+                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let Some(target) = st.session.automation_target.get() else {
                     return -1;
                 };
-                let Some(lane) = st.automation_lane_mut() else {
+                let Some(lane) = st.session.automation_lane_mut() else {
                     return -1;
                 };
                 let id = lane.allocate_id();
@@ -7398,7 +6465,7 @@ impl AppUi {
                 if !lane.upsert(point) {
                     return -1;
                 }
-                st.automation_selected_point.set(Some(id));
+                st.session.automation_selected_point.set(Some(id));
                 let _ = tx.send(EngineCommand::UpsertAutomationPoint {
                     pattern: pattern as u8,
                     channel: channel as u8,
@@ -7427,12 +6494,12 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.current_pattern, st.selected);
-                let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let Some(target) = st.automation_target.get() else {
+                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
+                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                let Some(target) = st.session.automation_target.get() else {
                     return;
                 };
-                let Some(lane) = st.automation_lane_mut() else {
+                let Some(lane) = st.session.automation_lane_mut() else {
                     return;
                 };
                 let id = id.max(0) as PointId;
@@ -7445,7 +6512,7 @@ impl AppUi {
                     value.clamp(0.0, 1.0),
                 );
                 lane.upsert(point);
-                st.automation_selected_point.set(Some(id));
+                st.session.automation_selected_point.set(Some(id));
                 let _ = tx.send(EngineCommand::UpsertAutomationPoint {
                     pattern: pattern as u8,
                     channel: channel as u8,
@@ -7473,19 +6540,19 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (pattern, channel) = (st.current_pattern, st.selected);
-                let Some(target) = st.automation_target.get() else {
+                let (pattern, channel) = (st.session.current_pattern, st.session.selected);
+                let Some(target) = st.session.automation_target.get() else {
                     return;
                 };
                 let id = id.max(0) as PointId;
-                let Some(lane) = st.automation_lane_mut() else {
+                let Some(lane) = st.session.automation_lane_mut() else {
                     return;
                 };
                 if lane.remove(id).is_none() {
                     return;
                 }
-                if st.automation_selected_point.get() == Some(id) {
-                    st.automation_selected_point.set(None);
+                if st.session.automation_selected_point.get() == Some(id) {
+                    st.session.automation_selected_point.set(None);
                 }
                 let _ = tx.send(EngineCommand::RemoveAutomationPoint {
                     pattern: pattern as u8,
@@ -7512,13 +6579,13 @@ impl AppUi {
                 let weak = window.as_weak();
                 window.$callback(move |value| {
                     let mut st = st.borrow_mut();
-                    let pattern = st.current_pattern;
-                    let channel = st.selected;
-                    let Some(id) = st.selected_note_id else {
+                    let pattern = st.session.current_pattern;
+                    let channel = st.session.selected;
+                    let Some(id) = st.session.selected_note_id else {
                         return;
                     };
-                    let length_ticks = st.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                    let Some(note) = st.channels[channel].notes[pattern]
+                    let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                    let Some(note) = st.session.channels[channel].notes[pattern]
                         .iter_mut()
                         .find(|note| note.id == id)
                     else {
@@ -7555,8 +6622,8 @@ impl AppUi {
             window.on_select_all_requested(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let mut st = st.borrow_mut();
-                let channel = st.selected;
-                st.select_all_notes(channel);
+                let channel = st.session.selected;
+                st.session.select_all_notes(channel);
                 st.refresh_note_editor(&window);
             });
         }
@@ -7571,16 +6638,16 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_delete_selected_notes_requested(move || {
                 let Some(window) = weak.upgrade() else { return };
-                let ids: Vec<NoteId> = st.borrow().selected_note_ids.iter().copied().collect();
+                let ids: Vec<NoteId> = st.borrow().session.selected_note_ids.iter().copied().collect();
                 if ids.is_empty() {
                     return;
                 }
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.current_pattern;
-                let channel = st.selected;
-                st.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                st.prune_note_selection(&ids);
+                let pattern = st.session.current_pattern;
+                let channel = st.session.selected;
+                st.session.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
+                st.session.prune_note_selection(&ids);
                 st.refresh_rack_row(channel);
                 st.refresh_note_editor(&window);
                 for id in &ids {
@@ -7605,14 +6672,14 @@ impl AppUi {
                     let mut guard = st.borrow_mut();
                     // Re-clicking the selected channel is still meaningful
                     // when the rack is showing a bus: it points it back.
-                    let already_here = ch == guard.selected
-                        && guard.effect_target == EffectTarget::Channel(ch as u8);
-                    if ch >= guard.channels.len() || already_here {
+                    let already_here = ch == guard.session.selected
+                        && guard.session.effect_target == EffectTarget::Channel(ch as u8);
+                    if ch >= guard.session.channels.len() || already_here {
                         return;
                     }
-                    guard.selected = ch;
-                    guard.effect_target = EffectTarget::Channel(ch as u8);
-                    guard.select_note(None);
+                    guard.session.selected = ch;
+                    guard.session.effect_target = EffectTarget::Channel(ch as u8);
+                    guard.session.select_note(None);
                 }
                 if let Some(w) = weak.upgrade() {
                     w.set_selected_channel(ch as i32);
@@ -7634,11 +6701,11 @@ impl AppUi {
             window.on_channel_muted(move |ch| {
                 let ch = ch as usize;
                 let mut st = st.borrow_mut();
-                if ch >= st.channels.len() {
+                if ch >= st.session.channels.len() {
                     return;
                 }
-                st.channels[ch].muted = !st.channels[ch].muted;
-                let muted = st.channels[ch].muted;
+                st.session.channels[ch].muted = !st.session.channels[ch].muted;
+                let muted = st.session.channels[ch].muted;
                 st.sync_row_flags();
                 let _ = tx.send(EngineCommand::SetChannelMuted {
                     channel: ch as u8,
@@ -7655,7 +6722,7 @@ impl AppUi {
             window.on_channel_volume_changed(move |ch, volume| {
                 let ch = ch as usize;
                 let mut st = st.borrow_mut();
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 // Gain stages share the container's +12 dB headroom.
@@ -7665,7 +6732,7 @@ impl AppUi {
                 // The source device's output-trim knob is the same parameter;
                 // restate it or its readout freezes at whatever the channel
                 // had when it was selected.
-                if ch == st.selected {
+                if ch == st.session.selected {
                     if let Some(w) = weak.upgrade() {
                         w.set_selected_channel_volume_db(linear_to_db(volume));
                     }
@@ -7682,7 +6749,7 @@ impl AppUi {
             window.on_channel_pan_changed(move |ch, pan| {
                 let ch = ch as usize;
                 let mut st = st.borrow_mut();
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.pan = pan.clamp(-1.0, 1.0);
@@ -7705,12 +6772,12 @@ impl AppUi {
                 let source = device_kind_from_int(value);
                 let channel = {
                     let mut guard = st.borrow_mut();
-                    let channel = guard.selected;
-                    if guard.channels[channel].kind == source {
+                    let channel = guard.session.selected;
+                    if guard.session.channels[channel].kind == source {
                         return;
                     }
-                    guard.reset_channel_source(channel, source);
-                    guard.select_note(None);
+                    guard.session.reset_channel_source(channel, source);
+                    guard.session.select_note(None);
                     guard.sync_row_flags();
                     channel
                 };
@@ -7737,25 +6804,25 @@ impl AppUi {
                 }
                 let source = device_kind_from_int(value);
                 let mut st = st.borrow_mut();
-                if st.channels.len() >= MAX_CHANNELS {
+                if st.session.channels.len() >= MAX_CHANNELS {
                     return;
                 }
                 log_debug!("ui", "add channel");
-                let index = st.channels.len();
+                let index = st.session.channels.len();
                 let mut ch = ChannelState::new(index);
-                ch.notes.resize_with(st.pattern_lengths.len(), Vec::new);
+                ch.notes.resize_with(st.session.pattern_lengths.len(), Vec::new);
                 ch.automation
-                    .resize_with(st.pattern_lengths.len(), Vec::new);
-                let cells: Vec<StepCell> = (0..st.pattern_lengths[st.current_pattern])
-                    .map(|step| rack_cell(&ch.notes[st.current_pattern], step))
+                    .resize_with(st.session.pattern_lengths.len(), Vec::new);
+                let cells: Vec<StepCell> = (0..st.session.pattern_lengths[st.session.current_pattern])
+                    .map(|step| rack_cell(&ch.notes[st.session.current_pattern], step))
                     .collect();
                 let model = Rc::new(VecModel::from(cells));
-                st.channels.push(ch);
-                st.reset_channel_source(index, source);
-                st.selected = index;
-                st.effect_target = EffectTarget::Channel(index as u8);
-                st.select_note(None);
-                let ch = &st.channels[index];
+                st.session.channels.push(ch);
+                st.session.reset_channel_source(index, source);
+                st.session.selected = index;
+                st.session.effect_target = EffectTarget::Channel(index as u8);
+                st.session.select_note(None);
+                let ch = &st.session.channels[index];
                 let row = ChannelRow {
                     name: ch.name.as_str().into(),
                     muted: false,
@@ -7787,7 +6854,7 @@ impl AppUi {
                 if commands.borrow().project_edit_pending {
                     return;
                 }
-                let selected = st.borrow().selected;
+                let selected = st.borrow().session.selected;
                 if queue_channel_delete(&tx, &st, &window, selected, "Channel deleted") {
                     commands.borrow_mut().project_edit_pending = true;
                     sync_command_availability(&window, &commands.borrow());
@@ -7836,7 +6903,7 @@ impl AppUi {
                         else {
                             return;
                         };
-                        if st.borrow().channels.len() <= 1 {
+                        if st.borrow().session.channels.len() <= 1 {
                             return;
                         }
                         commands.borrow_mut().channel_clipboard = Some(copy);
@@ -7897,7 +6964,7 @@ impl AppUi {
                 if commands.borrow().project_edit_pending {
                     return;
                 }
-                let index = st.borrow().current_pattern;
+                let index = st.borrow().session.current_pattern;
                 if queue_pattern_clone(&tx, &st, &window, index, "Pattern cloned") {
                     commands.borrow_mut().project_edit_pending = true;
                     sync_command_availability(&window, &commands.borrow());
@@ -7914,7 +6981,7 @@ impl AppUi {
                 if commands.borrow().project_edit_pending {
                     return;
                 }
-                let index = st.borrow().current_pattern;
+                let index = st.borrow().session.current_pattern;
                 if queue_pattern_remove(&tx, &st, &window, index, "Pattern deleted") {
                     commands.borrow_mut().project_edit_pending = true;
                     sync_command_availability(&window, &commands.borrow());
@@ -7931,7 +6998,7 @@ impl AppUi {
                 if commands.borrow().project_edit_pending {
                     return;
                 }
-                let index = st.borrow().current_pattern;
+                let index = st.borrow().session.current_pattern;
                 if queue_pattern_clear(&tx, &st, &window, index, "Pattern cleared") {
                     commands.borrow_mut().project_edit_pending = true;
                     sync_command_availability(&window, &commands.borrow());
@@ -7947,10 +7014,10 @@ impl AppUi {
                 let Ok(bus) = u8::try_from(bus) else { return };
                 {
                     let mut guard = st.borrow_mut();
-                    if bus as usize >= guard.buses.len() {
+                    if bus as usize >= guard.session.buses.len() {
                         return;
                     }
-                    guard.effect_target = EffectTarget::Bus(bus);
+                    guard.session.effect_target = EffectTarget::Bus(bus);
                 }
                 let guard = st.borrow();
                 guard.sync_mixer_selection();
@@ -7970,7 +7037,7 @@ impl AppUi {
                     return;
                 };
                 let mut guard = st.borrow_mut();
-                let Some(setup) = guard.buses.get_mut(index) else {
+                let Some(setup) = guard.session.buses.get_mut(index) else {
                     return;
                 };
                 setup.bus.muted = !setup.bus.muted;
@@ -7991,9 +7058,9 @@ impl AppUi {
             let st = state.clone();
             window.on_eq_analyzer_changed(move |slot, enabled| {
                 let mut st = st.borrow_mut();
-                let target = st.effect_target;
+                let target = st.session.effect_target;
                 let slot = slot as usize;
-                let Some(effect) = st.effect_chain_mut().and_then(|chain| chain.get_mut(slot))
+                let Some(effect) = st.session.effect_chain_mut().and_then(|chain| chain.get_mut(slot))
                 else {
                     return;
                 };
@@ -8024,7 +7091,7 @@ impl AppUi {
                 // here at unity left the top of every bus fader dead.
                 let volume = volume.clamp(0.0, MAX_LINEAR_GAIN);
                 let mut guard = st.borrow_mut();
-                let Some(setup) = guard.buses.get_mut(index) else {
+                let Some(setup) = guard.session.buses.get_mut(index) else {
                     return;
                 };
                 setup.bus.volume = volume;
@@ -8049,7 +7116,7 @@ impl AppUi {
                 };
                 let pan = pan.clamp(-1.0, 1.0);
                 let mut guard = st.borrow_mut();
-                let Some(setup) = guard.buses.get_mut(index) else {
+                let Some(setup) = guard.session.buses.get_mut(index) else {
                     return;
                 };
                 setup.bus.pan = pan;
@@ -8074,27 +7141,27 @@ impl AppUi {
                 };
                 let output = sanitize_route(index as u8, output);
                 let mut guard = st.borrow_mut();
-                if guard.buses.get(index).is_none() {
+                if guard.session.buses.get(index).is_none() {
                     return;
                 }
                 // The picker greys out looping destinations, but this is the
                 // boundary the engine's schedule rests on, so refuse here too
                 // rather than shipping a graph that cannot be sorted.
-                if would_create_cycle(&guard.buses, index as u8, output) {
+                if would_create_cycle(&guard.session.buses, index as u8, output) {
                     if let Some(w) = weak.upgrade() {
-                        let name = guard.buses[output as usize].bus.name.clone();
+                        let name = guard.session.buses[output as usize].bus.name.clone();
                         w.set_status_message(
                             format!("{name} already feeds this bus - routing would loop").into(),
                         );
                     }
                     return;
                 }
-                let previous = std::mem::replace(&mut guard.buses[index].bus.output, output);
-                let Some(graph) = compile_bus_graph(&guard.buses) else {
+                let previous = std::mem::replace(&mut guard.session.buses[index].bus.output, output);
+                let Some(graph) = compile_bus_graph(&guard.session.buses) else {
                     // Unreachable given the check above. Restore the visible
                     // graph rather than letting UI and audio generations
                     // diverge.
-                    guard.buses[index].bus.output = previous;
+                    guard.session.buses[index].bus.output = previous;
                     return;
                 };
                 // Every strip's legal destinations move when an edge does.
@@ -8117,7 +7184,7 @@ impl AppUi {
                     return;
                 }
                 let mut guard = st.borrow_mut();
-                let Some(state) = guard.channels.get_mut(channel) else {
+                let Some(state) = guard.session.channels.get_mut(channel) else {
                     return;
                 };
                 state.bus = bus;
@@ -8140,7 +7207,7 @@ impl AppUi {
             window.on_modulation_shelf_toggled(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let mut state = st.borrow_mut();
-                state.modulation_shelf_open = !state.modulation_shelf_open;
+                state.session.modulation_shelf_open = !state.session.modulation_shelf_open;
                 state.refresh_modulation(&window);
             });
         }
@@ -8153,8 +7220,8 @@ impl AppUi {
                 };
                 let mut state = st.borrow_mut();
                 let exists = state
-                    .channels
-                    .get(state.selected)
+                    .session.channels
+                    .get(state.session.selected)
                     .is_some_and(|channel| channel.modulation.params(slot as usize).is_some());
                 if !exists {
                     return;
@@ -8162,11 +7229,11 @@ impl AppUi {
                 // Selection opens an editor. If assignment is already active,
                 // it follows the newly selected source; otherwise this click
                 // has no effect on ordinary parameter gestures.
-                state.modulation_selected_slot.set(Some(slot));
-                if state.modulation_armed_slot.get().is_some() {
-                    state.modulation_armed_slot.set(Some(slot));
+                state.session.modulation_selected_slot.set(Some(slot));
+                if state.session.modulation_armed_slot.get().is_some() {
+                    state.session.modulation_armed_slot.set(Some(slot));
                 }
-                state.modulation_shelf_open = true;
+                state.session.modulation_shelf_open = true;
                 state.refresh_modulation(&window);
             });
         }
@@ -8192,13 +7259,13 @@ impl AppUi {
                 };
                 let moved = {
                     let mut state = st.borrow_mut();
-                    let selected = state.selected;
+                    let selected = state.session.selected;
                     // Selection and arming follow the module, not the slot it
                     // used to be in, or a reorder would silently retarget the
                     // assignment gesture.
-                    let selected_slot = state.modulation_selected_slot.get();
-                    let armed_slot = state.modulation_armed_slot.get();
-                    let Some(channel) = state.channels.get_mut(selected) else {
+                    let selected_slot = state.session.modulation_selected_slot.get();
+                    let armed_slot = state.session.modulation_armed_slot.get();
+                    let Some(channel) = state.session.channels.get_mut(selected) else {
                         return;
                     };
                     let source_of = |slot: Option<u8>| {
@@ -8211,8 +7278,8 @@ impl AppUi {
                     }
                     let next_selected = selected_id.and_then(|id| channel.modulation.slot_of(id));
                     let next_armed = armed_id.and_then(|id| channel.modulation.slot_of(id));
-                    state.modulation_selected_slot.set(next_selected);
-                    state.modulation_armed_slot.set(next_armed);
+                    state.session.modulation_selected_slot.set(next_selected);
+                    state.session.modulation_armed_slot.set(next_armed);
                     // Both racks run the same permutation, so the engine's
                     // copy carries routes and a math module's input slot
                     // across the move exactly as this one did.
@@ -8236,17 +7303,17 @@ impl AppUi {
             window.on_modulation_assignment_toggled(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let mut state = st.borrow_mut();
-                let next = if state.modulation_armed_slot.get().is_some() {
+                let next = if state.session.modulation_armed_slot.get().is_some() {
                     None
                 } else {
-                    state.modulation_selected_slot.get()
+                    state.session.modulation_selected_slot.get()
                 };
-                state.modulation_armed_slot.set(next);
-                state.modulation_shelf_open = true;
+                state.session.modulation_armed_slot.set(next);
+                state.session.modulation_shelf_open = true;
                 let source_name = next.and_then(|slot| {
                     state
-                        .channels
-                        .get(state.selected)
+                        .session.channels
+                        .get(state.session.selected)
                         .and_then(|channel| channel.modulation.params(slot as usize))
                         .map(|params| format!("{} {}", params.kind().badge(), slot + 1))
                 });
@@ -8281,8 +7348,8 @@ impl AppUi {
                 };
                 let added = {
                     let mut state = st.borrow_mut();
-                    let selected = state.selected;
-                    let Some(channel) = state.channels.get_mut(selected) else {
+                    let selected = state.session.selected;
+                    let Some(channel) = state.session.channels.get_mut(selected) else {
                         return;
                     };
                     let Some(slot) = channel.modulation.free_slot() else {
@@ -8295,9 +7362,9 @@ impl AppUi {
                         envelope.input_channel = selected as u8;
                     }
                     channel.modulation.install(slot, params);
-                    state.modulation_selected_slot.set(Some(slot as u8));
-                    state.modulation_armed_slot.set(None);
-                    state.modulation_shelf_open = true;
+                    state.session.modulation_selected_slot.set(Some(slot as u8));
+                    state.session.modulation_armed_slot.set(None);
+                    state.session.modulation_shelf_open = true;
                     state.send_modulator_slot(&window, &tx, slot);
                     true
                 };
@@ -8356,11 +7423,11 @@ impl AppUi {
                 };
                 let before = {
                     let mut state = st.borrow_mut();
-                    let in_gesture = state.modulation_edit_before.is_some();
+                    let in_gesture = state.session.modulation_edit_before.is_some();
                     let before = (!in_gesture).then(|| project_snapshot(&state, &window));
-                    let selected = state.selected;
+                    let selected = state.session.selected;
                     let Some(params) = state
-                        .channels
+                        .session.channels
                         .get_mut(selected)
                         .and_then(|channel| channel.modulation.params_mut(slot))
                     else {
@@ -8372,7 +7439,7 @@ impl AppUi {
                         return;
                     }
                     if in_gesture {
-                        state.modulation_edit_changed = true;
+                        state.session.modulation_edit_changed = true;
                     }
                     state.send_modulation(&window, &tx, |channel| {
                         EngineCommand::SetModulatorParam {
@@ -8395,7 +7462,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_modulation_param_edit_finished(move || {
                 let Some(window) = weak.upgrade() else { return };
-                let before = st.borrow_mut().finish_modulation_edit();
+                let before = st.borrow_mut().session.finish_modulation_edit();
                 if let Some(before) = before {
                     record_project_history(&commands, before, &st, &window, "Modulator edited");
                 }
@@ -8419,8 +7486,8 @@ impl AppUi {
                 };
                 let removed = {
                     let mut state = st.borrow_mut();
-                    let selected = state.selected;
-                    let Some(channel) = state.channels.get_mut(selected) else {
+                    let selected = state.session.selected;
+                    let Some(channel) = state.session.channels.get_mut(selected) else {
                         return;
                     };
                     // The rack drops the module's routes by identity, so a
@@ -8429,11 +7496,11 @@ impl AppUi {
                     if !channel.modulation.clear(slot as usize) {
                         false
                     } else {
-                        if state.modulation_selected_slot.get() == Some(slot) {
-                            state.modulation_selected_slot.set(None);
+                        if state.session.modulation_selected_slot.get() == Some(slot) {
+                            state.session.modulation_selected_slot.set(None);
                         }
-                        if state.modulation_armed_slot.get() == Some(slot) {
-                            state.modulation_armed_slot.set(None);
+                        if state.session.modulation_armed_slot.get() == Some(slot) {
+                            state.session.modulation_armed_slot.set(None);
                         }
                         state.send_modulation(&window, &tx, |channel| {
                             EngineCommand::ClearModulator { channel, slot }
@@ -8457,10 +7524,10 @@ impl AppUi {
                     return;
                 };
                 let mut state = st.borrow_mut();
-                if channel as usize >= state.channels.len() {
+                if channel as usize >= state.session.channels.len() {
                     return;
                 }
-                let Some(envelope) = state.modulation_envelope_mut(slot) else {
+                let Some(envelope) = state.session.modulation_envelope_mut(slot) else {
                     return;
                 };
                 envelope.input_channel = channel;
@@ -8484,9 +7551,9 @@ impl AppUi {
                 };
                 let changed = {
                     let mut state = st.borrow_mut();
-                    let selected = state.selected;
+                    let selected = state.session.selected;
                     let Some(route) = state
-                        .channels
+                        .session.channels
                         .get_mut(selected)
                         .and_then(|channel| channel.modulation.routes.get_mut(index))
                         .and_then(Option::as_mut)
@@ -8535,9 +7602,9 @@ impl AppUi {
                 };
                 let removed = {
                     let mut state = st.borrow_mut();
-                    let selected = state.selected;
+                    let selected = state.session.selected;
                     let Some(route) = state
-                        .channels
+                        .session.channels
                         .get_mut(selected)
                         .and_then(|channel| channel.modulation.routes.get_mut(index))
                     else {
@@ -8597,7 +7664,7 @@ impl AppUi {
                 };
                 let mut state = st.borrow_mut();
                 let destination = ParamAddr {
-                    scope: EffectTarget::Channel(state.selected as u8),
+                    scope: EffectTarget::Channel(state.session.selected as u8),
                     owner: ParamOwner::Source,
                     param,
                 };
@@ -8615,7 +7682,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_source_modulation_edit_finished(move |_| {
                 let Some(window) = weak.upgrade() else { return };
-                let before = st.borrow_mut().finish_modulation_edit();
+                let before = st.borrow_mut().session.finish_modulation_edit();
                 if let Some(before) = before {
                     record_project_history(
                         &commands,
@@ -8645,7 +7712,7 @@ impl AppUi {
                 };
                 let mut state = st.borrow_mut();
                 let destination =
-                    ParamAddr::strip(EffectTarget::Channel(state.selected as u8), param);
+                    ParamAddr::strip(EffectTarget::Channel(state.session.selected as u8), param);
                 if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
                     state.refresh_modulation(&window);
                 }
@@ -8657,7 +7724,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_strip_modulation_edit_finished(move |_| {
                 let Some(window) = weak.upgrade() else { return };
-                let before = st.borrow_mut().finish_modulation_edit();
+                let before = st.borrow_mut().session.finish_modulation_edit();
                 if let Some(before) = before {
                     record_project_history(
                         &commands,
@@ -8681,10 +7748,10 @@ impl AppUi {
                     return;
                 };
                 let mut state = st.borrow_mut();
-                let valid = matches!(state.effect_target, EffectTarget::Channel(channel) if channel as usize == state.selected)
+                let valid = matches!(state.session.effect_target, EffectTarget::Channel(channel) if channel as usize == state.session.selected)
                     && state
-                        .channels
-                        .get(state.selected)
+                        .session.channels
+                        .get(state.session.selected)
                         .and_then(|channel| channel.effects.get(slot))
                         .and_then(|effect| effect.kind().descriptor(param))
                         .is_some();
@@ -8704,10 +7771,10 @@ impl AppUi {
                     return;
                 };
                 let mut state = st.borrow_mut();
-                let destination = match state.effect_target {
-                    EffectTarget::Channel(channel) if channel as usize == state.selected => state
-                        .channels
-                        .get(state.selected)
+                let destination = match state.session.effect_target {
+                    EffectTarget::Channel(channel) if channel as usize == state.session.selected => state
+                        .session.channels
+                        .get(state.session.selected)
                         .and_then(|channel| channel.effects.get(slot))
                         .and_then(|effect| effect.kind().descriptor(param))
                         .map(|descriptor| {
@@ -8733,7 +7800,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_effect_modulation_edit_finished(move |_, _| {
                 let Some(window) = weak.upgrade() else { return };
-                let before = st.borrow_mut().finish_modulation_edit();
+                let before = st.borrow_mut().session.finish_modulation_edit();
                 if let Some(before) = before {
                     record_project_history(
                         &commands,
@@ -8768,8 +7835,8 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 let added = {
                     let mut st = st.borrow_mut();
-                    let target = st.effect_target;
-                    let inserted = st.effect_chain_mut().and_then(|effects| {
+                    let target = st.session.effect_target;
+                    let inserted = st.session.effect_chain_mut().and_then(|effects| {
                         let tail = effects.len();
                         let effect = EffectSlotState::of_kind(kind);
                         insert_effect(effects, insert_before as usize, effect)
@@ -8778,7 +7845,7 @@ impl AppUi {
                     let Some((slot, tail, remap, params)) = inserted else {
                         return;
                     };
-                    st.retarget_effect_slots(target, &remap);
+                    st.session.retarget_effect_slots(target, &remap);
                     st.sync_effects();
                     st.refresh_automation(&window);
                     st.refresh_modulation(&window);
@@ -8830,15 +7897,15 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 let removed = {
                     let mut st = st.borrow_mut();
-                    let target = st.effect_target;
+                    let target = st.session.effect_target;
                     let slot = slot as usize;
-                    let removed = st.effect_chain_mut().and_then(|effects| {
+                    let removed = st.session.effect_chain_mut().and_then(|effects| {
                         remove_effect(effects, slot).map(|(_, remap)| (effects.len(), remap))
                     });
                     let Some((tail, remap)) = removed else {
                         return;
                     };
-                    st.retarget_effect_slots(target, &remap);
+                    st.session.retarget_effect_slots(target, &remap);
                     st.sync_effects();
                     st.refresh_automation(&window);
                     st.refresh_modulation(&window);
@@ -8869,9 +7936,9 @@ impl AppUi {
             let st = state.clone();
             window.on_effect_bypass_toggled(move |slot| {
                 let mut st = st.borrow_mut();
-                let target = st.effect_target;
+                let target = st.session.effect_target;
                 let slot = slot as usize;
-                let Some(effects) = st.effect_chain_mut() else {
+                let Some(effects) = st.session.effect_chain_mut() else {
                     return;
                 };
                 let Some(effect) = effects.get_mut(slot) else {
@@ -8894,9 +7961,9 @@ impl AppUi {
             let st = state.clone();
             window.on_effect_wet_dry_changed(move |slot, wet_dry| {
                 let mut st = st.borrow_mut();
-                let target = st.effect_target;
+                let target = st.session.effect_target;
                 let Some(effect) = st
-                    .effect_chain_mut()
+                    .session.effect_chain_mut()
                     .and_then(|chain| chain.get_mut(slot as usize))
                 else {
                     return;
@@ -8917,9 +7984,9 @@ impl AppUi {
             let st = state.clone();
             window.on_effect_input_trim_changed(move |slot, input_trim_db| {
                 let mut st = st.borrow_mut();
-                let target = st.effect_target;
+                let target = st.session.effect_target;
                 let Some(effect) = st
-                    .effect_chain_mut()
+                    .session.effect_chain_mut()
                     .and_then(|chain| chain.get_mut(slot as usize))
                 else {
                     return;
@@ -8942,9 +8009,9 @@ impl AppUi {
             let st = state.clone();
             window.on_effect_output_trim_changed(move |slot, output_trim_db| {
                 let mut st = st.borrow_mut();
-                let target = st.effect_target;
+                let target = st.session.effect_target;
                 let Some(effect) = st
-                    .effect_chain_mut()
+                    .session.effect_chain_mut()
                     .and_then(|chain| chain.get_mut(slot as usize))
                 else {
                     return;
@@ -8974,7 +8041,7 @@ impl AppUi {
                     return;
                 };
                 let _ = rtx.send(EngineCommand::TriggerBuffer {
-                    target: rst.borrow().effect_target,
+                    target: rst.borrow().session.effect_target,
                     slot,
                     event: held_reverse_event(),
                 });
@@ -8988,7 +8055,7 @@ impl AppUi {
                 // Inert unless the gated head is still the one running, so a
                 // release can never cancel an event that superseded it.
                 let _ = rtx.send(EngineCommand::ReleaseBuffer {
-                    target: rst.borrow().effect_target,
+                    target: rst.borrow().session.effect_target,
                     slot,
                 });
             });
@@ -9002,7 +8069,7 @@ impl AppUi {
                 // The tuple travels whole, never split into parameter
                 // updates, so the read head sees one sample-accurate change.
                 let _ = tx.send(EngineCommand::TriggerBuffer {
-                    target: st.borrow().effect_target,
+                    target: st.borrow().session.effect_target,
                     slot,
                     event,
                 });
@@ -9017,9 +8084,9 @@ impl AppUi {
             // and the DSP use.
             window.on_effect_param_changed(move |slot, param_index, normalized| {
                 let mut st = st.borrow_mut();
-                let target = st.effect_target;
+                let target = st.session.effect_target;
                 let slot = slot as usize;
-                let Some(effects) = st.effect_chain_mut() else {
+                let Some(effects) = st.session.effect_chain_mut() else {
                     return;
                 };
                 let Some(effect) = effects.get_mut(slot) else {
@@ -9055,7 +8122,7 @@ impl AppUi {
             window.on_delay_tempo_sync_changed(move |slot, enabled| {
                 let mut state = st.borrow_mut();
                 let slot = slot as usize;
-                let Some(effects) = state.effect_chain_mut() else {
+                let Some(effects) = state.session.effect_chain_mut() else {
                     return;
                 };
                 let Some(effect) = effects.get_mut(slot) else {
@@ -9067,8 +8134,8 @@ impl AppUi {
                 params.tempo_sync = enabled;
                 let row = effect_slot_row(effect);
                 state.effect_slot_model.set_row_data(slot, row);
-                state.dirty = true;
-                state.revision = state.revision.wrapping_add(1);
+                state.session.dirty = true;
+                state.session.revision = state.session.revision.wrapping_add(1);
                 if let Some(window) = weak.upgrade() {
                     state.update_document_title(&window);
                 }
@@ -9081,7 +8148,7 @@ impl AppUi {
             window.on_delay_time_division_changed(move |slot, division| {
                 let mut state = st.borrow_mut();
                 let slot = slot as usize;
-                let Some(effects) = state.effect_chain_mut() else {
+                let Some(effects) = state.session.effect_chain_mut() else {
                     return;
                 };
                 let Some(effect) = effects.get_mut(slot) else {
@@ -9093,8 +8160,8 @@ impl AppUi {
                 params.time_division = mooloop_core::DelayTimeDivision::from_index(division);
                 let row = effect_slot_row(effect);
                 state.effect_slot_model.set_row_data(slot, row);
-                state.dirty = true;
-                state.revision = state.revision.wrapping_add(1);
+                state.session.dirty = true;
+                state.session.revision = state.session.revision.wrapping_add(1);
                 if let Some(window) = weak.upgrade() {
                     state.update_document_title(&window);
                 }
@@ -9111,15 +8178,15 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 let moved = {
                     let mut st = st.borrow_mut();
-                    let target = st.effect_target;
+                    let target = st.session.effect_target;
                     let (from, to) = (from as usize, to as usize);
                     let Some(remap) = st
-                        .effect_chain_mut()
+                        .session.effect_chain_mut()
                         .and_then(|effects| move_effect(effects, from, to))
                     else {
                         return;
                     };
-                    st.retarget_effect_slots(target, &remap);
+                    st.session.retarget_effect_slots(target, &remap);
                     st.sync_effects();
                     st.refresh_automation(&window);
                     st.refresh_modulation(&window);
@@ -9143,8 +8210,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$on(move |v: f32| {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     channel.params.$field = norm_to_time(v);
@@ -9162,8 +8229,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$on(move |v: f32| {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     channel.params.$field = v;
@@ -9196,8 +8263,8 @@ impl AppUi {
                     let marker = $marker;
                     let (value, status) = {
                         let mut st = st.borrow_mut();
-                        let ch = st.selected;
-                        let Some(channel) = st.channels.get_mut(ch) else {
+                        let ch = st.session.selected;
+                        let Some(channel) = st.session.channels.get_mut(ch) else {
                             return;
                         };
                         let mut value = v;
@@ -9303,8 +8370,8 @@ impl AppUi {
                 };
                 let (resolved, moved, searched) = {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     let Some(sample) = channel.published_sample().cloned() else {
@@ -9366,8 +8433,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$on(move |v: f32| {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     #[allow(clippy::redundant_closure_call)]
@@ -9393,7 +8460,7 @@ impl AppUi {
             let st = state.clone();
             window.on_waveform_view_changed(move |offset: f32, visible_fraction: f32| {
                 let st = st.borrow();
-                let Some(channel) = st.channels.get(st.selected) else {
+                let Some(channel) = st.session.channels.get(st.session.selected) else {
                     return;
                 };
                 let Some(sample) = channel.published_sample() else {
@@ -9420,8 +8487,8 @@ impl AppUi {
             let st = state.clone();
             window.on_reverse_playback_changed(move |reverse| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.params.reverse = reverse;
@@ -9438,8 +8505,8 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_root_note_changed(move |note| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.params.root_note = note.clamp(0, 127) as u8;
@@ -9459,8 +8526,8 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_tune_semitones_changed(move |v: f32| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.params.tune_semitones = v;
@@ -9480,8 +8547,8 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_tune_cents_changed(move |v: f32| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.params.tune_cents = v;
@@ -9500,8 +8567,8 @@ impl AppUi {
             let st = state.clone();
             window.on_retune_live_changed(move |on| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.params.retune_live = on;
@@ -9517,8 +8584,8 @@ impl AppUi {
             let st = state.clone();
             window.on_filter_env_changed(move |v| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.params.filter_env_amount = v.clamp(0.0, 1.0) * 2.0 - 1.0;
@@ -9534,8 +8601,8 @@ impl AppUi {
             let st = state.clone();
             window.on_loop_mode_changed(move |i| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.params.loop_mode = loop_mode_from_int(i);
@@ -9572,8 +8639,8 @@ impl AppUi {
             let st = state.clone();
             window.on_play_mode_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.params.play_mode = PlayMode::from_index(value);
@@ -9589,8 +8656,8 @@ impl AppUi {
             let st = state.clone();
             window.on_slice_base_note_changed(move |note| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get_mut(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(ch) else {
                     return;
                 };
                 channel.params.slice_base_note = note.clamp(0, 127) as u8;
@@ -9612,8 +8679,8 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     let Some(frame) = resolve_slice_frame(channel, position, window.get_snap_to_zero())
@@ -9630,7 +8697,7 @@ impl AppUi {
                     publish_channel_audio_to(&audio_out, ch, channel);
                     let markers = slice_fractions(channel);
                     st.slice_model.set_vec(markers);
-                    st.dirty = true;
+                    st.session.dirty = true;
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slice added");
             });
@@ -9646,8 +8713,8 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     // By id, not by position: a drag past a neighbour
@@ -9672,7 +8739,7 @@ impl AppUi {
                     publish_channel_audio_to(&audio_out, ch, channel);
                     let markers = slice_fractions(channel);
                     st.slice_model.set_vec(markers);
-                    st.dirty = true;
+                    st.session.dirty = true;
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slice moved");
             });
@@ -9688,8 +8755,8 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     let Some(id) = channel
@@ -9703,7 +8770,7 @@ impl AppUi {
                     publish_channel_audio_to(&audio_out, ch, channel);
                     let markers = slice_fractions(channel);
                     st.slice_model.set_vec(markers);
-                    st.dirty = true;
+                    st.session.dirty = true;
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slice removed");
             });
@@ -9719,8 +8786,8 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     let Some(sample) = channel.published_sample().cloned() else {
@@ -9754,7 +8821,7 @@ impl AppUi {
                     publish_channel_audio_to(&audio_out, ch, channel);
                     let markers = slice_fractions(channel);
                     st.slice_model.set_vec(markers);
-                    st.dirty = true;
+                    st.session.dirty = true;
                     window.set_status_message(
                         format!("Divided into {} slices", count.max(1)).into(),
                     );
@@ -9779,14 +8846,14 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     channel.slices.clear();
                     publish_channel_audio_to(&audio_out, ch, channel);
                     st.slice_model.set_vec(Vec::new());
-                    st.dirty = true;
+                    st.session.dirty = true;
                 }
                 record_project_history(
                     &commands,
@@ -9802,8 +8869,8 @@ impl AppUi {
             let st = state.clone();
             window.on_slice_auditioned(move |index| {
                 let mut st = st.borrow_mut();
-                let ch = st.selected;
-                let Some(channel) = st.channels.get(ch) else {
+                let ch = st.session.selected;
+                let Some(channel) = st.session.channels.get(ch) else {
                     return;
                 };
                 // Through the channel's own device, so what is heard is the
@@ -9814,7 +8881,7 @@ impl AppUi {
                 if note > 127 {
                     return;
                 }
-                st.slice_audition = Some((ch as u8, note as u8));
+                st.session.slice_audition = Some((ch as u8, note as u8));
                 let _ = tx.send(EngineCommand::TriggerChannelNote {
                     channel: ch as u8,
                     note: note as u8,
@@ -9829,7 +8896,7 @@ impl AppUi {
                 // The note that was struck, not the note under the handle's
                 // current index: a drag that crossed a neighbour has already
                 // renumbered the handles by the time the button comes up.
-                let Some((channel, note)) = st.borrow_mut().slice_audition.take() else {
+                let Some((channel, note)) = st.borrow_mut().session.slice_audition.take() else {
                     return;
                 };
                 let _ = tx.send(EngineCommand::ReleaseChannelNote { channel, note });
@@ -9849,8 +8916,8 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     // Always from the source, never from a buffer that has
@@ -9898,7 +8965,7 @@ impl AppUi {
                         channel: ch as u8,
                         pool: None,
                     });
-                    st.dirty = true;
+                    st.session.dirty = true;
                     window.set_status_message(
                         format!("Committed the stretch at {ratio:.2}x").into(),
                     );
@@ -9926,8 +8993,8 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.selected;
-                    let Some(channel) = st.channels.get_mut(ch) else {
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
                     let Some(commit) = channel.commit.take() else {
@@ -9957,7 +9024,7 @@ impl AppUi {
                             MAX_SAMPLER_VOICES as usize,
                         ))),
                     });
-                    st.dirty = true;
+                    st.session.dirty = true;
                     window.set_status_message("Reverted to the source sample".into());
                 }
                 st.borrow().refresh_editor(&window);
@@ -9976,8 +9043,8 @@ impl AppUi {
             let st = state.clone();
             window.on_voice_mode_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.params.voice_mode = voice_mode_from_int(value);
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                     channel: channel_index as u8,
@@ -9991,8 +9058,8 @@ impl AppUi {
             let st = state.clone();
             window.on_sampler_polyphony_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.params.polyphony = value.clamp(1, 16) as u8;
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                     channel: channel_index as u8,
@@ -10006,8 +9073,8 @@ impl AppUi {
             let st = state.clone();
             window.on_retrigger_mode_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.params.retrigger_mode = retrigger_mode_from_int(value);
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                     channel: channel_index as u8,
@@ -10021,8 +9088,8 @@ impl AppUi {
             let st = state.clone();
             window.on_choke_group_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.params.choke_group = value.clamp(0, 16) as u8;
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                     channel: channel_index as u8,
@@ -10043,8 +9110,8 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_stretch_enabled_changed(move |on| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.params.stretch_enabled = on;
                 // Guess the loop length on the way in. A loop is nearly
                 // always some power of two of bars and nearly always
@@ -10088,8 +9155,8 @@ impl AppUi {
             let st = state.clone();
             window.on_stretch_sync_changed(move |on| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.params.stretch_sync = on;
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                     channel: channel_index as u8,
@@ -10104,8 +9171,8 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_stretch_bars_changed(move |norm| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 let bars = stretch_bars_from_norm(norm);
                 channel.params.stretch_bars = bars;
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
@@ -10137,8 +9204,8 @@ impl AppUi {
                     };
                     {
                         let mut st = st.borrow_mut();
-                        let channel_index = st.selected;
-                        let channel = &mut st.channels[channel_index];
+                        let channel_index = st.session.selected;
+                        let channel = &mut st.session.channels[channel_index];
                         #[allow(clippy::redundant_closure_call)]
                         ($apply)(&mut channel.params, typed);
                         let _ = tx.send(EngineCommand::SetChannelSamplerParams {
@@ -10173,8 +9240,8 @@ impl AppUi {
             let st = state.clone();
             window.on_stretch_mode_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.params.stretch_mode = match value {
                     1 => StretchMode::Drums,
                     2 => StretchMode::Grain,
@@ -10193,8 +9260,8 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_stretch_ratio_changed(move |norm| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 let ratio = stretch_ratio_from_norm(norm);
                 channel.params.stretch_ratio = ratio;
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
@@ -10214,8 +9281,8 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_stretch_grain_changed(move |norm| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 let frames = stretch_grain_from_norm(norm);
                 channel.params.stretch_grain = frames;
                 let _ = tx.send(EngineCommand::SetChannelSamplerParams {
@@ -10241,8 +9308,8 @@ impl AppUi {
                 let window_weak = window.as_weak();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.drum_params.$field = value;
                     let params = channel.drum_params;
                     let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
@@ -10281,8 +9348,8 @@ impl AppUi {
                 let window_weak = window.as_weak();
                 window.$callback(move |value| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.drum_params.$field = $map(value);
                     let params = channel.drum_params;
                     let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
@@ -10319,8 +9386,8 @@ impl AppUi {
             let window_weak = window.as_weak();
             window.on_drum_mode_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.drum_params.mode = drum_mode_from_int(value);
                 let params = channel.drum_params;
                 let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
@@ -10338,8 +9405,8 @@ impl AppUi {
             let st = state.clone();
             window.on_drum_choke_group_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.drum_params.choke_group = value.clamp(0, 16) as u8;
                 let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
                     channel: channel_index as u8,
@@ -10354,8 +9421,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.mono_params.$($field).+ = value;
                     let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
                         channel: channel_index as u8,
@@ -10386,8 +9453,8 @@ impl AppUi {
             let st = state.clone();
             window.on_mono_lfo_wave_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.mono_params.lfo.wave = lfo_wave_from_int(value);
                 let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
                     channel: channel_index as u8,
@@ -10400,8 +9467,8 @@ impl AppUi {
             let st = state.clone();
             window.on_mono_lfo_retrigger_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.mono_params.lfo.retrigger = value;
                 let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
                     channel: channel_index as u8,
@@ -10416,8 +9483,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.mlm1_params.$($field).+ = value;
                     let _ = tx.send(EngineCommand::SetChannelMlM1Params {
                         channel: channel_index as u8,
@@ -10451,8 +9518,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value: i32| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.mlm1_params.$field = $from_index(value);
                     let _ = tx.send(EngineCommand::SetChannelMlM1Params {
                         channel: channel_index as u8,
@@ -10485,8 +9552,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.mlm1_params.osc[$index].$field = value;
                     let _ = tx.send(EngineCommand::SetChannelMlM1Params {
                         channel: channel_index as u8,
@@ -10501,8 +9568,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.mlm1_params.osc[$index].wave = osc_wave_from_int(value);
                     let _ = tx.send(EngineCommand::SetChannelMlM1Params {
                         channel: channel_index as u8,
@@ -10542,8 +9609,8 @@ impl AppUi {
                     let id: u32 = $id;
                     let value = value as f32;
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     let mut params = GeneratorParams::MlP8(channel.mlp8_params);
                     let Some(value) = params.set(id, value) else {
                         return;
@@ -10580,7 +9647,7 @@ impl AppUi {
                         };
                         let params = {
                             let st = st.borrow();
-                            st.channels[st.selected].ds01_params
+                            st.session.channels[st.session.selected].ds01_params
                         };
                         sync_ds01_preview(&window, &params);
                         sync_ds01_burst_ticks(&window, &params);
@@ -10606,8 +9673,8 @@ impl AppUi {
                     return;
                 };
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 let mut params = GeneratorParams::Ds01(channel.ds01_params);
                 let Some(value) = params.set(id, descriptor.from_normalized(normalized)) else {
                     return;
@@ -10641,8 +9708,8 @@ impl AppUi {
                     return;
                 };
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 let base = channel.ds01_params;
                 let natural = if id == ds01::PARAM_PITCH_DEPTH {
                     // The only handle that drags vertically: the pitch
@@ -10768,8 +9835,8 @@ impl AppUi {
             let st = state.clone();
             window.on_mlp8_lfo_sync_changed(move |on| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 let mut params = GeneratorParams::MlP8(channel.mlp8_params);
                 let Some(value) = params.set(p8::PARAM_LFO_SYNC, f32::from(u8::from(on))) else {
                     return;
@@ -10806,8 +9873,8 @@ impl AppUi {
                         return;
                     };
                     let mut st = st.borrow_mut();
-                    let index = st.selected;
-                    if st.channels[index].kind != DeviceKind::MlP8 {
+                    let index = st.session.selected;
+                    if st.session.channels[index].kind != DeviceKind::MlP8 {
                         return;
                     }
                     // A closure so an edit can bail with `?` on an id that
@@ -10817,16 +9884,16 @@ impl AppUi {
                                 $channel: u8|
                      -> Option<EngineCommand> { $body };
                     let Some(command) = edit(
-                        &mut st.channels[index].mlp8_params.routes,
+                        &mut st.session.channels[index].mlp8_params.routes,
                         index as u8,
                     ) else {
                         return;
                     };
                     let _ = tx.send(command);
-                    let routes = st.channels[index].mlp8_params.routes;
+                    let routes = st.session.channels[index].mlp8_params.routes;
                     refresh_mlp8_routes(&window, &routes);
-                    st.dirty = true;
-                    st.revision = st.revision.wrapping_add(1);
+                    st.session.dirty = true;
+                    st.session.revision = st.session.revision.wrapping_add(1);
                     st.update_document_title(&window);
                 });
             }};
@@ -10893,11 +9960,11 @@ impl AppUi {
                     return;
                 };
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                if st.channels[channel_index].kind != DeviceKind::MlP8 {
+                let channel_index = st.session.selected;
+                if st.session.channels[channel_index].kind != DeviceKind::MlP8 {
                     return;
                 }
-                if !st.channels[channel_index]
+                if !st.session.channels[channel_index]
                     .mlp8_params
                     .routes
                     .set_amount(id, amount)
@@ -10909,7 +9976,7 @@ impl AppUi {
                     route: id,
                     amount,
                 });
-                st.dirty = true;
+                st.session.dirty = true;
             });
         }
 
@@ -10939,8 +10006,8 @@ impl AppUi {
                 };
                 {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     let mut params = GeneratorParams::MlP8(channel.mlp8_params);
                     if let Some(clamped) = params.set(id, value) {
                         if let GeneratorParams::MlP8(updated) = params {
@@ -10965,8 +10032,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.mono_params.osc[$index].$field = value;
                     let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
                         channel: channel_index as u8,
@@ -10981,8 +10048,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.mono_params.osc[$index].wave = osc_wave_from_int(value);
                     let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
                         channel: channel_index as u8,
@@ -11014,8 +10081,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.poly_params.$($field).+ = value;
                     let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                         channel: channel_index as u8,
@@ -11046,8 +10113,8 @@ impl AppUi {
             let st = state.clone();
             window.on_poly_lfo_wave_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.poly_params.lfo.wave = lfo_wave_from_int(value);
                 let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                     channel: channel_index as u8,
@@ -11060,8 +10127,8 @@ impl AppUi {
             let st = state.clone();
             window.on_poly_lfo_retrigger_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.poly_params.lfo.retrigger = value;
                 let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                     channel: channel_index as u8,
@@ -11074,8 +10141,8 @@ impl AppUi {
             let st = state.clone();
             window.on_poly_polyphony_changed(move |value| {
                 let mut st = st.borrow_mut();
-                let channel_index = st.selected;
-                let channel = &mut st.channels[channel_index];
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
                 channel.poly_params.polyphony = value.clamp(1, MAX_POLY_VOICES as i32) as u8;
                 let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                     channel: channel_index as u8,
@@ -11090,8 +10157,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.poly_params.osc[$index].$field = value;
                     let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                         channel: channel_index as u8,
@@ -11106,8 +10173,8 @@ impl AppUi {
                 let st = state.clone();
                 window.$callback(move |value| {
                     let mut st = st.borrow_mut();
-                    let channel_index = st.selected;
-                    let channel = &mut st.channels[channel_index];
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
                     channel.poly_params.osc[$index].wave = osc_wave_from_int(value);
                     let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                         channel: channel_index as u8,
@@ -11176,8 +10243,8 @@ impl AppUi {
                 let mut st = st.borrow_mut();
                 // Insert-or-remove: a path never expanded collapses to a
                 // no-op remove, so the set only ever holds expanded folders.
-                if !st.browser_expanded.remove(&path) {
-                    st.browser_expanded.insert(path);
+                if !st.session.browser_expanded.remove(&path) {
+                    st.session.browser_expanded.insert(path);
                 }
                 refresh_browser(&st);
             });
@@ -11202,8 +10269,8 @@ impl AppUi {
                 let saved = settings.borrow().save();
                 {
                     let mut st = st.borrow_mut();
-                    st.browser_locations.retain(|p| p != &path);
-                    st.browser_expanded.remove(&path);
+                    st.session.browser_locations.retain(|p| p != &path);
+                    st.session.browser_expanded.remove(&path);
                     refresh_browser(&st);
                 }
                 match saved {
@@ -11228,7 +10295,7 @@ impl AppUi {
             window.on_browser_sample_loaded(move |path| {
                 let (channel, source_revision) = {
                     let st = st.borrow();
-                    (st.selected, st.source_revision)
+                    (st.session.selected, st.session.source_revision)
                 };
                 spawn_browser_sample_load(&path, channel, source_revision, false, &load_tx);
             });
@@ -11239,7 +10306,7 @@ impl AppUi {
             window.on_browser_sample_loaded_new_channel(move |path| {
                 let (channel, source_revision) = {
                     let st = st.borrow();
-                    (st.channels.len(), st.source_revision)
+                    (st.session.channels.len(), st.session.source_revision)
                 };
                 spawn_browser_sample_load(&path, channel, source_revision, true, &load_tx);
             });
@@ -11250,7 +10317,7 @@ impl AppUi {
             window.on_load_sample_clicked(move || {
                 let (channel, source_revision) = {
                     let st = st.borrow();
-                    (st.selected, st.source_revision)
+                    (st.session.selected, st.session.source_revision)
                 };
                 let tx = load_tx.clone();
                 log_debug!("ui", "loading sample for channel {channel}");
@@ -11272,9 +10339,9 @@ impl AppUi {
                 let (channel, source_revision, path) = {
                     let st = st.borrow();
                     (
-                        st.selected,
-                        st.source_revision,
-                        st.channels[st.selected].sample_path.clone(),
+                        st.session.selected,
+                        st.session.source_revision,
+                        st.session.channels[st.session.selected].sample_path.clone(),
                     )
                 };
                 let Some(path) = path else { return };
@@ -11301,9 +10368,9 @@ impl AppUi {
                 let (channel, source_revision, path) = {
                     let st = st.borrow();
                     (
-                        st.selected,
-                        st.source_revision,
-                        st.channels[st.selected].sample_path.clone(),
+                        st.session.selected,
+                        st.session.source_revision,
+                        st.session.channels[st.session.selected].sample_path.clone(),
                     )
                 };
                 let Some(path) = path else { return };
@@ -11354,7 +10421,7 @@ impl AppUi {
                     let Some(window) = weak.upgrade() else {
                         continue;
                     };
-                    if st.borrow().browser_locations.contains(&path) {
+                    if st.borrow().session.browser_locations.contains(&path) {
                         window.set_status_message(
                             format!("Already browsing {}", path.display()).into(),
                         );
@@ -11368,8 +10435,8 @@ impl AppUi {
                     let saved = ui_settings_for_pump.borrow().save();
                     {
                         let mut state = st.borrow_mut();
-                        state.browser_locations.push(path.clone());
-                        state.browser_expanded.insert(path.clone());
+                        state.session.browser_locations.push(path.clone());
+                        state.session.browser_expanded.insert(path.clone());
                         refresh_browser(&state);
                     }
                     match saved {
@@ -11427,9 +10494,9 @@ impl AppUi {
                                 &samples,
                             );
                             let mut state = st.borrow_mut();
-                            state.bundle_path = None;
-                            state.dirty = false;
-                            state.revision = state.revision.wrapping_add(1);
+                            state.session.bundle_path = None;
+                            state.session.dirty = false;
+                            state.session.revision = state.session.revision.wrapping_add(1);
                             state.update_document_title(&window);
                             window.set_status_message("New randomized kit".into());
                         }
@@ -11441,10 +10508,10 @@ impl AppUi {
                             sample_references,
                         } => {
                             let mut state = st.borrow_mut();
-                            state.bundle_path = Some(path.clone());
-                            if state.revision == revision {
-                                state.dirty = false;
-                                apply_sample_references(&mut state.channels, sample_references);
+                            state.session.bundle_path = Some(path.clone());
+                            if state.session.revision == revision {
+                                state.session.dirty = false;
+                                apply_sample_references(&mut state.session.channels, sample_references);
                             }
                             state.update_document_title(&window);
                             window.set_embed_assets(mode == AssetMode::Embedded);
@@ -11538,8 +10605,8 @@ impl AppUi {
                             log_repairs("opening the file", &repairs);
                             let current = st
                                 .borrow()
-                                .project_snapshot(window.get_bpm(), window.get_swing_percent());
-                            let current_samples = st.borrow().sample_snapshots();
+                                .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
+                            let current_samples = st.borrow().session.sample_snapshots();
                             let merged = match (target, document) {
                                 (LoadTarget::Song, LoadedDocument::Song(project)) => {
                                     Some((project, loaded_samples, true))
@@ -11663,12 +10730,12 @@ impl AppUi {
                                 }
                                 let mut state = st.borrow_mut();
                                 if is_song {
-                                    state.bundle_path = Some(path.clone());
-                                    state.dirty = false;
+                                    state.session.bundle_path = Some(path.clone());
+                                    state.session.dirty = false;
                                     window.set_embed_assets(asset_mode == AssetMode::Embedded);
                                 } else {
-                                    state.dirty = true;
-                                    state.revision = state.revision.wrapping_add(1);
+                                    state.session.dirty = true;
+                                    state.session.revision = state.session.revision.wrapping_add(1);
                                 }
                                 state.update_document_title(&window);
                                 window.set_status_message(
@@ -11717,11 +10784,11 @@ impl AppUi {
                 while let Ok(load) = load_rx.try_recv() {
                     let still_current = {
                         let st = st.borrow();
-                        load.source_revision == st.source_revision
-                            && (load.new_channel && st.channels.len() < MAX_CHANNELS
+                        load.source_revision == st.session.source_revision
+                            && (load.new_channel && st.session.channels.len() < MAX_CHANNELS
                                 || !load.new_channel
                                     && st
-                                        .channels
+                                        .session.channels
                                         .get(load.channel)
                                         .is_some_and(|channel| channel.kind == DeviceKind::Sampler))
                     };
@@ -11762,7 +10829,7 @@ impl AppUi {
                                 handle.clear_sample(channel);
                             }
                         }
-                        let channel = st.borrow().channels.len().saturating_sub(1);
+                        let channel = st.borrow().session.channels.len().saturating_sub(1);
                         apply_loaded_sample(&handle, &st, &weak, channel, loaded);
                     }
                 }
@@ -11776,9 +10843,9 @@ impl AppUi {
                                 EngineCommand::Play | EngineCommand::Pause | EngineCommand::Stop
                             ) {
                                 let mut state = st.borrow_mut();
-                                document_title_needs_refresh |= !state.dirty;
-                                state.dirty = true;
-                                state.revision = state.revision.wrapping_add(1);
+                                document_title_needs_refresh |= !state.session.dirty;
+                                state.session.dirty = true;
+                                state.session.revision = state.session.revision.wrapping_add(1);
                             }
                             if autodrive_verbose {
                                 eprintln!("autodrive cmd: {cmd:?}");
@@ -11797,7 +10864,7 @@ impl AppUi {
                             let buffers: Vec<_> = {
                                 let state = st.borrow();
                                 state
-                                    .channels
+                                    .session.channels
                                     .iter()
                                     .enumerate()
                                     .flat_map(|(channel, state)| {
@@ -11809,7 +10876,7 @@ impl AppUi {
                                             },
                                         )
                                     })
-                                    .chain(state.buses.iter().enumerate().flat_map(|(bus, state)| {
+                                    .chain(state.session.buses.iter().enumerate().flat_map(|(bus, state)| {
                                         state.effects.iter().enumerate().filter_map(
                                             move |(slot, effect)| {
                                                 effect.params.buffer().copied().map(|params| {
@@ -11827,9 +10894,9 @@ impl AppUi {
                         PendingEngineMessage::AddChannel { channel, source } => {
                             {
                                 let mut state = st.borrow_mut();
-                                document_title_needs_refresh |= !state.dirty;
-                                state.dirty = true;
-                                state.revision = state.revision.wrapping_add(1);
+                                document_title_needs_refresh |= !state.session.dirty;
+                                state.session.dirty = true;
+                                state.session.revision = state.session.revision.wrapping_add(1);
                             }
                             handle.add_channel(channel, source);
                         }
@@ -11837,9 +10904,9 @@ impl AppUi {
                             // Any structural change is an unsaved edit.
                             {
                                 let mut state = st.borrow_mut();
-                                document_title_needs_refresh |= !state.dirty;
-                                state.dirty = true;
-                                state.revision = state.revision.wrapping_add(1);
+                                document_title_needs_refresh |= !state.session.dirty;
+                                state.session.dirty = true;
+                                state.session.revision = state.session.revision.wrapping_add(1);
                             }
                             handle.send_structural(cmd);
                         }
@@ -11857,8 +10924,8 @@ impl AppUi {
                                 &edit.samples,
                             ) {
                                 let mut state = st.borrow_mut();
-                                state.dirty = true;
-                                state.revision = state.revision.wrapping_add(1);
+                                state.session.dirty = true;
+                                state.session.revision = state.session.revision.wrapping_add(1);
                                 state.update_document_title(&window);
                                 window.set_status_message(edit.status.into());
                                 drop(state);
@@ -11990,12 +11057,12 @@ impl AppUi {
                             w.set_beat_in_bar(beat_in_bar as i32);
                             w.set_playing(playing);
                             let st = st.borrow();
-                            let length = st.pattern_lengths[st.current_pattern] as u64;
+                            let length = st.session.pattern_lengths[st.session.current_pattern] as u64;
                             let ticks_per_step = (Ppq::DEFAULT.ticks_per_beat() / 4) as u64;
                             let ticks_per_beat = Ppq::DEFAULT.ticks_per_beat() as u64;
                             w.set_current_step(((tick / ticks_per_step) % length) as i32);
-                            let position_ticks = if st.song_mode {
-                                let song_length = u64::from(st.song_length_ticks());
+                            let position_ticks = if st.session.song_mode {
+                                let song_length = u64::from(st.session.song_length_ticks());
                                 let song_position = tick % song_length;
                                 w.set_playlist_position_ticks(song_position as i32);
                                 song_position
@@ -12046,7 +11113,7 @@ impl AppUi {
                 let showing_device_rack = w.get_editor_page() == 0;
                 let editing_bus = w.get_editing_bus();
                 let edited_bus = w.get_editing_bus_index().max(0) as usize;
-                let selected_channel = st.borrow().selected;
+                let selected_channel = st.borrow().session.selected;
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
                     let (peak_l, peak_r) = handle.take_bus_peak(bus);
                     let left = meters.0.update(peak_l, elapsed);
@@ -12115,14 +11182,14 @@ impl AppUi {
                                             reduction_db,
                                         );
                                 if row.eq_analyzer_enabled {
-                                    let spectrum = handle.effect_spectrum(state.effect_target, slot as u8);
+                                    let spectrum = handle.effect_spectrum(state.session.effect_target, slot as u8);
                                     row.eq_spectrum_data = spectrum.as_slice().into();
                                 }
                                 // A forced return to live leaves no other
                                 // trace, so the buffer face reads the count
                                 // rather than waiting for an audible cue.
                                 let collisions = if row.kind == effect_kind_index(EffectKind::Buffer) {
-                                    handle.effect_buffer_collisions(state.effect_target, slot as u8)
+                                    handle.effect_buffer_collisions(state.session.effect_target, slot as u8)
                                         as i32
                                 } else {
                                     row.buffer_collisions
@@ -12152,7 +11219,7 @@ impl AppUi {
                     // stale line lingers over an unrelated device or a bus.
                     let state = st.borrow();
                     let is_sampler = state
-                        .channels
+                        .session.channels
                         .get(selected_channel)
                         .is_some_and(|channel| channel.kind == DeviceKind::Sampler);
                     if showing_device_rack && !editing_bus && is_sampler {
@@ -12176,7 +11243,7 @@ impl AppUi {
                     let state = st.borrow();
                     let outputs = handle.modulator_outputs(selected_channel);
                     let routed = state
-                        .channels
+                        .session.channels
                         .get(selected_channel)
                         .is_some_and(|channel| {
                             channel.modulation.routes.iter().flatten().next().is_some()
@@ -12184,8 +11251,8 @@ impl AppUi {
                     // An unrouted channel has nothing to animate, and once the
                     // outputs stop moving the arcs are already where they
                     // belong -- so neither case is worth a model write.
-                    if routed && !editing_bus && outputs != state.modulation_outputs.get() {
-                        state.modulation_outputs.set(outputs);
+                    if routed && !editing_bus && outputs != state.session.modulation_outputs.get() {
+                        state.session.modulation_outputs.set(outputs);
                         state.refresh_modulation_offsets(&w);
                     }
                 }
@@ -12401,7 +11468,7 @@ fn install_project_in_ui(
     // its slice map has to arrive with it.
     {
         let st = state.borrow();
-        for (index, channel) in st.channels.iter().enumerate() {
+        for (index, channel) in st.session.channels.iter().enumerate() {
             if channel.kind == DeviceKind::Sampler {
                 publish_channel_audio(handle, index, channel);
             }
@@ -12415,7 +11482,7 @@ fn install_project_in_ui(
 }
 
 fn sync_effect_spectrum_subscriptions(state: &UiState, handle: &EngineHandle) {
-    for (channel, setup) in state.channels.iter().enumerate() {
+    for (channel, setup) in state.session.channels.iter().enumerate() {
         for (slot, effect) in setup.effects.iter().enumerate() {
             if let Some(eq) = effect.params.eq() {
                 handle.set_effect_spectrum_enabled(
@@ -12426,7 +11493,7 @@ fn sync_effect_spectrum_subscriptions(state: &UiState, handle: &EngineHandle) {
             }
         }
     }
-    for (bus, setup) in state.buses.iter().enumerate() {
+    for (bus, setup) in state.session.buses.iter().enumerate() {
         for (slot, effect) in setup.effects.iter().enumerate() {
             if let Some(eq) = effect.params.eq() {
                 handle.set_effect_spectrum_enabled(
@@ -12455,8 +11522,8 @@ fn preset_menu_label(preset: &PresetSummary) -> slint::SharedString {
 fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
     let kind = {
         let st = state.borrow();
-        st.channels
-            .get(st.selected)
+        st.session.channels
+            .get(st.session.selected)
             .map(|channel| channel.kind)
             .unwrap_or(DeviceKind::Sampler)
     };
@@ -12464,8 +11531,8 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
     let channel_presets = mooloop_project::list_presets(&settings::channel_presets_dir());
     {
         let mut st = state.borrow_mut();
-        st.generator_presets = generator_presets;
-        st.channel_presets = channel_presets;
+        st.session.generator_presets = generator_presets;
+        st.session.channel_presets = channel_presets;
     }
     let st = state.borrow();
     st.sync_generator_preset_menu(window);
@@ -12514,7 +11581,7 @@ fn apply_loaded_sample(
     // map that names frames in audio it no longer holds.
     handle.clear_slices(channel);
     let mut st = st.borrow_mut();
-    if let Some(ch) = st.channels.get_mut(channel) {
+    if let Some(ch) = st.session.channels.get_mut(channel) {
         ch.sample_name = name;
         ch.sample_description = description;
         ch.sample_duration = duration;
@@ -12530,9 +11597,9 @@ fn apply_loaded_sample(
         ch.can_previous_sample = loaded.can_previous;
         ch.can_next_sample = loaded.can_next;
     }
-    st.dirty = true;
-    st.revision = st.revision.wrapping_add(1);
-    if channel == st.selected {
+    st.session.dirty = true;
+    st.session.revision = st.session.revision.wrapping_add(1);
+    if channel == st.session.selected {
         if let Some(window) = weak.upgrade() {
             st.refresh_editor(&window);
             st.update_document_title(&window);
@@ -12614,8 +11681,8 @@ fn push_browser_rows(
 /// Rebuilds the visible tree from the session's locations and expansion set.
 fn refresh_browser(st: &UiState) {
     st.browser_rows.set_vec(build_browser_rows(
-        &st.browser_locations,
-        &st.browser_expanded,
+        &st.session.browser_locations,
+        &st.session.browser_expanded,
     ));
 }
 

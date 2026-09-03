@@ -568,10 +568,12 @@ work session you can recall being part of, and don't stress over precision.
   the face and the kit; its published outlets are blocked on the same
   device-outlet mechanism ML-P8's step 06 needs, so they wait for it to be
   built once rather than twice.
-  Then started `docs/plans/session-layer-extraction/`: created `mooloop-session`
-  and moved the already-toolkit-free code and then the plain data types into
-  it, so the live application model has somewhere to live that the compiler
-  keeps `slint` out of.
+  Then worked `docs/plans/session-layer-extraction/`: created `mooloop-session`,
+  moved the already-toolkit-free code and the plain data types into it, and
+  split `UiState` into a `Session` that owns the model and a view that owns
+  only the Slint models and the projection into them. The compiler drove the
+  mechanical half -- move the fields, then rewrite the byte spans rustc points
+  at -- which is what made a 900-site change reviewable.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

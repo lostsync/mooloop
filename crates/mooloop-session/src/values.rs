@@ -5,7 +5,7 @@
 //! only decides which control they are attached to.
 
 use mooloop_core::{
-    SamplerParams, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_BARS,
+    ParamDescriptor, SamplerParams, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_BARS,
     MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
 };
 
@@ -112,6 +112,17 @@ pub fn stretch_grain_from_norm(norm: f32) -> u16 {
         i32::from(MIN_STRETCH_GRAIN),
         i32::from(MAX_STRETCH_GRAIN),
     ) as u16
+}
+
+/// How many slots a descriptor table needs: ids are positions in a fixed
+/// array the view indexes directly, so the array is as long as the highest
+/// id, not as long as the table.
+pub fn descriptor_slots(descriptors: &[ParamDescriptor]) -> usize {
+    descriptors
+        .iter()
+        .map(|descriptor| descriptor.id as usize + 1)
+        .max()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

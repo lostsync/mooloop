@@ -1,10 +1,10 @@
 # Session layer extraction — plan status
 
-Steps 01 and 02 done, 2026-09-03. Written 2026-09-02, out of
+Steps 01 to 03 done, 2026-09-03. Written 2026-09-02, out of
 `docs/ARCHITECTURE_REVIEW.md`.
 
 `crates/mooloop-session` exists and `crates/mooloop-ui/src/lib.rs` is down from
-14,157 lines to 12,853. The line counts quoted below are the ones the plan was
+14,157 lines to 11,920. The line counts quoted below are the ones the plan was
 written against and are left as written; `UiState::new` has not been touched.
 
 ## The decision
@@ -101,7 +101,7 @@ and projection; the tests that become possible.
 | --- | --- | --- |
 | `01` | Create the crate; move the toolkit-free free functions and `history.rs` | Very low — pure moves — **done** |
 | `02` | Move the plain data types | Low — **done** |
-| `03` | Split `UiState` into `Session` plus view-side models | Medium |
+| `03` | Split `UiState` into `Session` plus view-side models | Medium — **done** |
 | `04` | Break up `UiState::new`; hoist closure bodies onto `Session` | High — the bulk of the work |
 | `05` | Move engine command emission behind a session-owned interface | Medium |
 | `06` | Test the session layer | None; this is the payoff |
@@ -183,3 +183,47 @@ Three departures:
   `(&UiState, &MainWindow, usize)`, so it is blocked on step 03 rather than
   on anything in this step. `LoadTarget` moved even though it is not in the
   table, because `DocumentResult::Loaded` carries it.
+
+### 03 — done, 2026-09-03
+
+`Session` lives in `mooloop-session/src/session.rs` with 35 fields and 30
+methods. `UiState` keeps the fourteen `Rc<VecModel<...>>` fields and the 32
+projection methods, and holds the session in a field.
+
+Nearly all of it was done by the compiler rather than by hand. The fields moved
+first; every `st.channels` then became an error naming its own byte span, and a
+script walked cargo's JSON diagnostics inserting `session.` at each one — 869
+spans across four passes, with the compiler deciding what moved rather than a
+regex over names. The methods went the same way.
+
+Five methods did both halves and were split rather than moved, all the same
+way: the computation became a `Session` method returning plain data and the
+projection stayed behind calling it.
+
+- `replace_project` — the session installs the document; the view rebuilds the
+  step models, the rows, and the window properties, then re-syncs.
+- `update_tempo_synced_delay_times` — the retune is the session's, the
+  `sync_effects` after it is not.
+- `destination_depths` / `destination_offsets` return `Vec<f32>` and the view
+  makes the `ModelRc`. `allowed_destinations` likewise with `Vec<bool>`.
+- `set_armed_modulation_depth` became `Session::arm_modulation_route`
+  returning an `ArmedRoute`. A full matrix is a refusal the user has to be
+  told about, and the telling is the view's.
+- `begin_modulation_edit` takes the snapshot rather than building one, because
+  building one needs the window's tempo.
+
+Three departures:
+
+- **There is no `ViewModels` struct.** `UiState` is that struct — models plus a
+  `session` field — because it is what 187 callbacks already hold as
+  `Rc<RefCell<UiState>>`. Splitting the ownership as well as the contents would
+  have changed every one of those signatures for no gain the plan asks for.
+- **`send_modulation` and `send_modulator_slot` stayed.** Both need the window,
+  because both end in a projection. Step 05 is where they get an interface that
+  does not; moving them now would only mean moving them twice.
+- **`descriptor_slots`, `normalized_buses` and `WAVEFORM_BINS` moved** without
+  being listed, because the methods that moved use them.
+
+One stale comment was dropped rather than carried: `normalized_buses` had a
+first doc line describing `ChannelState`, glued there on `main` long before
+this plan. It says nothing true about the function it was attached to.
