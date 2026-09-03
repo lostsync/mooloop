@@ -219,7 +219,7 @@ UI commands -> rtrb queue -> shared render state -> transport + sequencer
                          timed events/channel
                                   |
                                   v
-selected source (sampler / drum synth / v1 mono / ML-M1 / ML-P8 / poly synth) -> effect chain -> gain/pan/mute
+selected source (sampler / drum synth / DS-01 / v1 mono / ML-M1 / ML-P8 / poly) -> effect chain -> gain/pan/mute
                                                            |
                                                            v
                                              assigned mixer bus (0-16)
@@ -257,9 +257,10 @@ boundary.
 ## Useful Foundations
 
 - `AudioNode` provides one in-place DSP interface for instruments and effects.
-- `DrumSynth` (kick/snare/hat), the v1 `MonoSynth`, the filter/performance-led
-  `MlM1`, the eight-voice `MlP8` and its oscillator network, and `PolySynth`
-  use the same timed note path as the sampler in realtime and offline renders.
+- `DrumSynth` (kick/snare/hat), `Ds01` and its one universal percussion voice,
+  the v1 `MonoSynth`, the filter/performance-led `MlM1`, the eight-voice
+  `MlP8` and its oscillator network, and `PolySynth` use the same timed note
+  path as the sampler in realtime and offline renders.
   Their oscillator and envelope types are shared DSP primitives; their voice
   engines are deliberately separate.
 - `EventList` carries fixed-capacity, sample-timed NoteOn, NoteOff, generic
@@ -487,20 +488,32 @@ land on its own when it starts to matter:
   not a parameter: resizing the ring reallocates, which happens off-thread.
   The JUMP/REV/STUT gestures are unchanged and outrank the offset while they
   run; the offset re-asserts on the next control tick after one ends.
-- The sampler, v1 mono synth, ML-M1, ML-P8, and poly synth are
+- The sampler, v1 mono synth, ML-M1, ML-P8, DS-01, and poly synth are
   descriptor-addressed through `GeneratorParams`, so their parameters automate
   and modulate like an effect's. The three-oscillator synths reserve ten
-  parameter ids per oscillator, starting at 100; ML-P8's ids are their own
-  namespace starting at zero, because it is not that voice with a different
-  count. The drum synth is the one generator that is not addressable, and the
-  reason is structural rather than unfinished work: `DrumSynthParams` is a
-  mode-union, so a flat descriptor table over it would produce ids whose
-  meaning changes with the Mode switch. `docs/plans/drum-synth-v2/` is the
-  approved answer — a new DS-01 generator beside the v1 device, addressable
-  from its first step.
+  parameter ids per oscillator, starting at 100; ML-P8's and DS-01's ids are
+  each their own namespace starting at zero, because neither is that voice
+  with a different count. The **v1** drum synth is the one generator that is
+  not addressable, and the reason is structural rather than unfinished work:
+  `DrumSynthParams` is a mode-union, so a flat descriptor table over it would
+  produce ids whose meaning changes with the Mode switch. DS-01 is the answer
+  and is built: a second drum instrument beside the v1 device, addressable
+  from its first commit, with the v1 device and its saved projects untouched.
   `docs/MODULATION_PLAN.md` records the approved design; build order is in
   `docs/plans/buffer-implementation/02-control-and-modulation.md`.
-- The ML-P8 is the one generator with modulation of its own. It owns an
+- DS-01 is a second drum instrument, not a rewrite of the first: one universal
+  percussion voice with no drum-type mode, three layers — a morphing tone with
+  a partial bank and FM, a four-colour noise generator through a morphing
+  state-variable filter, and three tuned resonators that ring — into a shape
+  stage with four drive characters. Four AHD envelopes with a curve control
+  and an optional gate; a burst that fires up to eight impulses from one
+  trigger inside one voice; and its own eight-row modulation matrix whose
+  sources are per hit. Its face is one screen: four columns, each layer's
+  scope directly under the controls that make it, envelope times dragged on
+  the curves rather than dialled. Its published outlets are not built and are
+  blocked on the same device-outlet mechanism ML-P8's step 06 needs; its
+  factory bank and listening pass are step 09 and have not happened.
+- The ML-P8 and DS-01 are the two generators with modulation of their own. It owns an
   audio-rate LFO and a list of internal routes reading six per-voice sources
   — the LFO, both envelopes, velocity, key, and gate — into thirty-one
   continuous destinations, resolved per sample as authored base plus offset and

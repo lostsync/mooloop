@@ -30,7 +30,9 @@ Scope:
 - Finish sampler voice controls that do not require the new event model.
 - Audit drum synth time ranges and parameter scaling; defaults and useful
   knob travel should make sub-100 ms percussion easy without making the rest
-  of the range feel wrong.
+  of the range feel wrong. Now scoped to DS-01's step 09 rather than to v1:
+  the ranges to correct are the ones DS-01 chose, and the audit is what that
+  step's listening pass is for. Not closed — nobody has listened yet.
 - Add per-channel meters through the existing strip; volume and pan are exposed.
 - Replace terse implementation-style tooltips with user-facing wording. Done:
   the docked status bar carries longer hover text through `hover-hint`, and
