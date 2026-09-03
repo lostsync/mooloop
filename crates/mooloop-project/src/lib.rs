@@ -1802,6 +1802,99 @@ id = "default_kick"
         );
     }
 
+    #[test]
+    fn ds01_source_round_trips_in_a_song() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("ds01.mooloop");
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::ds01(0, 1);
+        let params = &mut project.channels[0].setup.ds01_state_mut().unwrap().params;
+        // One value from every band, because the bands are what the on-disk
+        // form is made of: a field that failed to serialize would otherwise
+        // hide behind its own default.
+        params.tune = -12.0;
+        params.retrigger = mooloop_core::Ds01Retrigger::Mono;
+        params.tone_partials = 5;
+        params.tone_spread = 0.75;
+        params.noise_color = mooloop_core::Ds01NoiseColor::Velvet;
+        params.body_ratio = 0.8;
+        params.body_decay = 1.5;
+        params.amp.gate = true;
+        params.amp.sustain = 0.6;
+        params.amp.curve = -0.4;
+        params.pitch.depth = -36.0;
+        params.noise_env.hold = 0.02;
+        params.mod_env.decay = 2.0;
+        params.burst_repeats = 4;
+        params.burst_spread = -0.5;
+        params.character = mooloop_core::Ds01Character::Crush;
+        params.bits = 6.0;
+        params.matrix[2] = mooloop_core::Ds01Route {
+            source: mooloop_core::Ds01ModSource::HitAlternator,
+            dest: mooloop_core::ds01::PARAM_FILTER_CUTOFF,
+            amount: -0.65,
+            curve: 0.3,
+        };
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        // The tag is `ds01`, and it is written down here because it is an
+        // on-disk identifier: `rename_all` would have produced the same
+        // string today, which is exactly why it is pinned rather than left to
+        // depend on the variant's spelling.
+        assert!(manifest.contains("type = \"ds01\""), "{manifest}");
+        assert_eq!(
+            load_bundle(&bundle).unwrap().document,
+            LoadedDocument::Song(project)
+        );
+    }
+
+    /// A row pointed at something that cannot be modulated is switched off
+    /// rather than left to be applied at the trigger. Only reachable from a
+    /// hand-edited file — the face cannot author one — which is exactly why
+    /// the doctor has to see it.
+    #[test]
+    fn ds01_validation_switches_off_a_row_aimed_at_a_stepped_control() {
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::ds01(0, 1);
+        project.channels[0]
+            .setup
+            .ds01_state_mut()
+            .unwrap()
+            .params
+            .matrix[0] = mooloop_core::Ds01Route {
+            source: mooloop_core::Ds01ModSource::Velocity,
+            dest: mooloop_core::ds01::PARAM_NOISE_COLOR,
+            amount: 1.0,
+            curve: 0.0,
+        };
+
+        assert!(integrity::repair_project(&mut project).is_usable());
+        let route = project.channels[0].setup.ds01_state().unwrap().params.matrix[0];
+        assert_eq!(route.source, mooloop_core::Ds01ModSource::None);
+        assert!(mooloop_core::ds01::destination_index(route.dest).is_some());
+    }
+
+    /// A value out of range is repaired rather than refused, like every other
+    /// range in the document.
+    #[test]
+    fn ds01_validation_clamps_an_out_of_range_value() {
+        let mut project = Project::default();
+        project.channels[0] = mooloop_core::ProjectChannel::ds01(0, 1);
+        project.channels[0]
+            .setup
+            .ds01_state_mut()
+            .unwrap()
+            .params
+            .body_decay = 900.0;
+
+        assert!(integrity::repair_project(&mut project).is_usable());
+        assert_eq!(
+            project.channels[0].setup.ds01_state().unwrap().params.body_decay,
+            8.0
+        );
+    }
+
     /// A signed percent out of range is repaired rather than refused, like
     /// every other range in the document.
     #[test]

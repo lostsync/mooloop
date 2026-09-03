@@ -264,7 +264,15 @@ in `mooloop_engine::ds01_tests`:
   1024 is sample-for-sample identical, with and without an automation lane on
   Tone Pitch.
 
-The last one rests on a condition worth naming: DS-01 walks its own control
+A fourth criterion — **it saves and reloads** — is covered in
+`mooloop_project`: a patch with a value from every band round-trips through a
+bundle, the on-disk tag `ds01` is pinned, a value out of range is repaired
+rather than refused, and a matrix row pointed at something that cannot be
+modulated is switched off. That last one is only reachable from a hand-edited
+file, since the face cannot author it, which is exactly why the doctor has to
+see it.
+
+The offline-and-live criterion rests on a condition worth naming: DS-01 walks its own control
 tick from the start of each block, so the grid only lands on the same absolute
 frames because every block boundary is a multiple of the control rate. That is
 true of every driver buffer size and of the offline renderer's chunking, but it
