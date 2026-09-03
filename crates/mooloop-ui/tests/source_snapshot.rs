@@ -1,4 +1,4 @@
-use mooloop_core::{DrumMode, DrumSynthParams};
+use mooloop_core::{Ds01EnvParams, Ds01Params, DrumMode, DrumSynthParams};
 use mooloop_dsp::DrumSynth;
 use mooloop_ui::{
     ChannelRow, EffectSlotRow, MainWindow, MlP8RouteRow, ModulationRouteRow, ModulationSourceRow,
@@ -1158,4 +1158,61 @@ fn render_mlp8_source_editor() {
     assert_eq!((narrow.width(), narrow.height()), (720, 760));
     assert!(narrow.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&narrow, "MOOLOOP_MLP8_NARROW_SNAPSHOT");
+}
+
+/// The DS-01's face, which is one screen with no page, tab or scroll.
+///
+/// Two patches, because the scopes' span follows the patch rather than being
+/// fixed: a fixed window draws a 5 ms hat as a single spike and clips a 4 s
+/// ride entirely, which makes the display useless at both ends of the range
+/// this instrument is meant to reach. The two renders differing is that
+/// auto-scaling being real.
+#[test]
+fn render_the_ds01_face() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .ok();
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(1280.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_pattern_length(16);
+    ui.set_selected_channel_name(SharedString::from("Kick"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(6);
+
+    mooloop_ui::refresh_ds01(&ui, &Ds01Params::default());
+    let default_patch = ui.window().take_snapshot().unwrap();
+    assert_eq!((default_patch.width(), default_patch.height()), (1280, 760));
+    assert!(default_patch.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&default_patch, "MOOLOOP_DS01_SOURCE_SNAPSHOT");
+
+    // A four-second ride against a 240 ms kick: every scope has to restate
+    // its span, so every scope has to redraw.
+    mooloop_ui::refresh_ds01(
+        &ui,
+        &Ds01Params {
+            amp: Ds01EnvParams {
+                sustain: 0.7,
+                gate: true,
+                ..Ds01EnvParams::one_shot(4.0)
+            },
+            body_level: 0.8,
+            body_decay: 4.0,
+            noise_level: 0.6,
+            ..Ds01Params::default()
+        },
+    );
+    let long_tail = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        default_patch.as_bytes(),
+        long_tail.as_bytes(),
+        "the scopes did not follow the patch"
+    );
+    write_snapshot(&long_tail, "MOOLOOP_DS01_LONG_TAIL_SNAPSHOT");
 }

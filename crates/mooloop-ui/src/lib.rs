@@ -31,10 +31,11 @@ use mooloop_core::{
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
     ModPolarity, ModRack, ModRandomTrigger, ModRoute, ModStepTrigger,
     ModulatorKind, ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State,
-    Ds01Params, Ds01State, MlP8Params, MlP8State,
+    ds01, Ds01Params, Ds01State, MlP8Params, MlP8State,
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
-    ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
+    ParamCurve, ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId,
+    PolySynthParams,
     PolySynthState, Ppq, Project, ProjectChannel, RetriggerMode, SampleReference,
     PlayMode, SampleCommit, SamplerParams, SamplerState, SliceMap, SnareCharacter, StretchMode,
     VoiceMode, MAX_SLICES,
@@ -2209,6 +2210,272 @@ fn format_param_value(descriptor: &ParamDescriptor, normalized: f32) -> String {
     }
 }
 
+/// The DS-01 face's per-id arrays.
+///
+/// The face is indexed by descriptor id rather than declaring a property per
+/// parameter, because ninety-two properties would be a second copy of the
+/// parameter table written out by hand — which is the thing the device exists
+/// not to have. Rust owns the ranges, the curves and the formatting; the face
+/// owns the layout.
+struct Ds01FaceValues {
+    /// Normalized `0..1`, which is the space a route and an automation lane
+    /// both work in, and the one space where a knob's travel means the same
+    /// thing on a linear parameter and an exponential one.
+    values: Vec<f32>,
+    defaults: Vec<f32>,
+    texts: Vec<SharedString>,
+    /// `0` for a continuous parameter, the position count for a stepped one.
+    steps: Vec<i32>,
+}
+
+/// One past the highest DS-01 id, so an array indexed by id is long enough
+/// for every one of them.
+fn ds01_array_len() -> usize {
+    ds01::DESCRIPTORS
+        .iter()
+        .map(|d| d.id as usize + 1)
+        .max()
+        .unwrap_or(0)
+}
+
+/// A stepped DS-01 control's label, or `None` where the number is the answer.
+///
+/// The enums carry their own labels in `mooloop_core`, so this is a mapping
+/// from id to enum rather than a second list of names.
+fn ds01_step_label(id: u32, params: &Ds01Params) -> Option<&'static str> {
+    Some(match id {
+        ds01::PARAM_RETRIGGER => params.retrigger.label(),
+        ds01::PARAM_NOISE_COLOR => params.noise_color.label(),
+        ds01::PARAM_CHARACTER => params.character.label(),
+        id if id == ds01::PARAM_AMP_ENV_BASE + ds01::ENV_OFFSET_GATE => {
+            if params.amp.gate { "GATE" } else { "ONE" }
+        }
+        id if id == ds01::PARAM_NOISE_ENV_BASE + ds01::ENV_OFFSET_GATE => {
+            if params.noise_env.gate { "GATE" } else { "ONE" }
+        }
+        id if id == ds01::PARAM_MOD_ENV_BASE + ds01::ENV_OFFSET_GATE => {
+            if params.mod_env.gate { "GATE" } else { "ONE" }
+        }
+        _ => return None,
+    })
+}
+
+/// A DS-01 value as its control reads it.
+///
+/// A stepped control without an enum behind it is a count — a choke group, a
+/// partial, a repeat, a bit depth — so it is shown as one. The shared
+/// formatter's two decimal places are right for a continuous parameter and
+/// wrong for "16 bits".
+fn ds01_text(
+    descriptor: &ParamDescriptor,
+    params: &Ds01Params,
+    normalized: f32,
+) -> SharedString {
+    if let Some(label) = ds01_step_label(descriptor.id, params) {
+        return label.into();
+    }
+    if matches!(descriptor.curve, ParamCurve::Stepped(_)) {
+        let natural = descriptor.from_normalized(normalized).round();
+        return if descriptor.unit.is_empty() {
+            format!("{natural:.0}").into()
+        } else {
+            format!("{natural:.0} {}", descriptor.unit).into()
+        };
+    }
+    format_param_value(descriptor, normalized).into()
+}
+
+fn ds01_face_values(params: &Ds01Params) -> Ds01FaceValues {
+    let len = ds01_array_len();
+    let mut out = Ds01FaceValues {
+        values: vec![0.0; len],
+        defaults: vec![0.0; len],
+        texts: vec![SharedString::new(); len],
+        steps: vec![0; len],
+    };
+    for descriptor in ds01::DESCRIPTORS.iter() {
+        let index = descriptor.id as usize;
+        let natural = ds01::get(params, descriptor.id).unwrap_or(descriptor.default);
+        let normalized = descriptor.to_normalized(natural);
+        out.values[index] = normalized;
+        out.defaults[index] = descriptor.to_normalized(descriptor.default);
+        out.texts[index] = ds01_text(descriptor, params, normalized);
+        if let ParamCurve::Stepped(count) = descriptor.curve {
+            out.steps[index] = i32::from(count);
+        }
+    }
+    out
+}
+
+/// How long the scopes are drawn over: the longest thing in the patch that
+/// ends.
+///
+/// Auto-scaled rather than fixed, because a fixed window — v1's 300 ms —
+/// draws a 5 ms hat as a single spike and clips a 4 s ride entirely, which
+/// makes the display useless at both ends of the range this instrument is
+/// supposed to reach.
+fn ds01_span_seconds(p: &Ds01Params) -> f32 {
+    let env = |e: &mooloop_core::Ds01EnvParams| e.attack + e.hold + e.decay;
+    env(&p.amp)
+        .max(env(&p.noise_env))
+        .max(env(&p.mod_env))
+        .max(p.pitch.attack + p.pitch.decay)
+        .max(p.body_decay)
+        .max(0.02)
+}
+
+fn ds01_contour(
+    attack: f32,
+    hold: f32,
+    decay: f32,
+    curve: f32,
+    sustain: f32,
+    height: f32,
+    span: f32,
+) -> Ds01Contour {
+    Ds01Contour {
+        attack: attack / span,
+        hold: hold / span,
+        decay: (decay / span).max(0.001),
+        curve,
+        sustain,
+        height,
+        active: height > 0.001,
+    }
+}
+
+/// The four contours the face draws, in the order it expects: amp, pitch,
+/// noise, mod.
+fn ds01_contours(p: &Ds01Params, span: f32) -> Vec<Ds01Contour> {
+    vec![
+        ds01_contour(p.amp.attack, p.amp.hold, p.amp.decay, p.amp.curve, p.amp.sustain, 1.0, span),
+        // The pitch envelope is the one contour drawn at less than full
+        // height: its depth *is* its height, which is what makes the depth
+        // draggable on the same curve as its times.
+        ds01_contour(
+            p.pitch.attack,
+            0.0,
+            p.pitch.decay,
+            p.pitch.curve,
+            0.0,
+            (p.pitch.depth.abs() / 60.0).clamp(0.0, 1.0),
+            span,
+        ),
+        ds01_contour(
+            p.noise_env.attack,
+            p.noise_env.hold,
+            p.noise_env.decay,
+            p.noise_env.curve,
+            p.noise_env.sustain,
+            1.0,
+            span,
+        ),
+        ds01_contour(
+            p.mod_env.attack,
+            p.mod_env.hold,
+            p.mod_env.decay,
+            p.mod_env.curve,
+            p.mod_env.sustain,
+            1.0,
+            span,
+        ),
+    ]
+}
+
+/// A span, in the units a drum patch is read in.
+fn ds01_format_span(seconds: f32) -> String {
+    if seconds < 1.0 {
+        format!("{:.0} ms", seconds * 1000.0)
+    } else {
+        format!("{seconds:.2} s")
+    }
+}
+
+/// Push a DS-01 patch into the face.
+///
+/// Public because the face is a view of a patch and nothing else: handing it
+/// one is the whole of showing it, which is what lets a snapshot test render
+/// the device without standing up an engine.
+pub fn refresh_ds01(window: &MainWindow, params: &Ds01Params) {
+    let face = ds01_face_values(params);
+    window.set_ds01_values(face.values.as_slice().into());
+    window.set_ds01_defaults(face.defaults.as_slice().into());
+    window.set_ds01_value_texts(face.texts.as_slice().into());
+    window.set_ds01_step_counts(face.steps.as_slice().into());
+    refresh_ds01_contours(window, params);
+}
+
+/// The scopes, and the span the header states them over.
+fn refresh_ds01_contours(window: &MainWindow, params: &Ds01Params) {
+    let span = ds01_span_seconds(params);
+    window.set_ds01_contours(ds01_contours(params, span).as_slice().into());
+    window.set_ds01_body_decay_fraction((params.body_decay / span).clamp(0.0, 1.0));
+    window.set_ds01_span_text(
+        format!("every scope  0 – {}", ds01_format_span(span)).into(),
+    );
+}
+
+/// Where an envelope segment starts, in seconds, so a handle dropped at a
+/// point on the scope becomes the length of its own segment rather than the
+/// distance from the origin.
+fn ds01_segment_start(p: &Ds01Params, id: u32) -> f32 {
+    let env = |e: &mooloop_core::Ds01EnvParams, offset: u32| match offset {
+        ds01::ENV_OFFSET_HOLD => e.attack,
+        ds01::ENV_OFFSET_DECAY => e.attack + e.hold,
+        _ => 0.0,
+    };
+    match id {
+        id if (ds01::PARAM_AMP_ENV_BASE..ds01::PARAM_AMP_ENV_BASE + ds01::ENV_BLOCK)
+            .contains(&id) =>
+        {
+            env(&p.amp, id - ds01::PARAM_AMP_ENV_BASE)
+        }
+        id if (ds01::PARAM_NOISE_ENV_BASE..ds01::PARAM_NOISE_ENV_BASE + ds01::ENV_BLOCK)
+            .contains(&id) =>
+        {
+            env(&p.noise_env, id - ds01::PARAM_NOISE_ENV_BASE)
+        }
+        id if (ds01::PARAM_MOD_ENV_BASE..ds01::PARAM_MOD_ENV_BASE + ds01::ENV_BLOCK)
+            .contains(&id) =>
+        {
+            env(&p.mod_env, id - ds01::PARAM_MOD_ENV_BASE)
+        }
+        ds01::PARAM_PITCH_DECAY => p.pitch.attack,
+        _ => 0.0,
+    }
+}
+
+/// Whether moving this parameter changes what the scopes draw.
+///
+/// The envelope blocks and the body's ring are the whole of it, and they are
+/// exactly the parameters `ds01::is_latched` names plus the body decay — the
+/// contours are a drawing of the shape a hit latches.
+fn ds01_redraws_contours(id: u32) -> bool {
+    ds01::is_latched(id) || id == ds01::PARAM_BODY_DECAY
+}
+
+/// Update the one row a knob moved, rather than rebuilding a hundred and
+/// thirty of them per drag sample.
+fn touch_ds01_param(window: &MainWindow, params: &Ds01Params, id: u32) {
+    let Some(descriptor) = ds01::descriptor(id) else {
+        return;
+    };
+    let index = id as usize;
+    let natural = ds01::get(params, id).unwrap_or(descriptor.default);
+    let normalized = descriptor.to_normalized(natural);
+    let values = window.get_ds01_values();
+    if index < values.row_count() {
+        values.set_row_data(index, normalized);
+    }
+    let texts = window.get_ds01_value_texts();
+    if index < texts.row_count() {
+        texts.set_row_data(index, ds01_text(descriptor, params, normalized));
+    }
+    if ds01_redraws_contours(id) {
+        refresh_ds01_contours(window, params);
+    }
+}
+
 fn note_cell(note: NoteEvent, selected_ids: &HashSet<NoteId>) -> NoteCell {
     NoteCell {
         id: note.id as i32,
@@ -4292,6 +4559,7 @@ impl UiState {
         window.set_mlp8_lfo_slew(mlp8.lfo.slew);
         window.set_mlp8_lfo_retrigger(mlp8.lfo.retrigger.to_index());
         refresh_mlp8_routes(window, &mlp8.routes);
+        refresh_ds01(window, &ch.ds01_params);
         let mlm1 = ch.mlm1_params;
         window.set_mlm1_osc1_wave(osc_wave_to_int(mlm1.osc[0].wave));
         window.set_mlm1_osc1_semitones(mlm1.osc[0].semitones);
@@ -10712,6 +10980,104 @@ impl AppUi {
                 });
             }};
         }
+
+        // DS-01's face reports `(id, normalized)` for everything, so one
+        // handler covers ninety-two controls rather than ninety-two closures
+        // covering one each. That is the same reason the face takes arrays: a
+        // device whose whole premise is that every parameter is addressable by
+        // id should not need its parameter table written out a second time to
+        // be edited.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_ds01_value_changed(move |id, normalized| {
+                let id = id as u32;
+                let Some(descriptor) = ds01::descriptor(id) else {
+                    return;
+                };
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                let mut params = GeneratorParams::Ds01(channel.ds01_params);
+                let Some(value) = params.set(id, descriptor.from_normalized(normalized)) else {
+                    return;
+                };
+                if let GeneratorParams::Ds01(updated) = params {
+                    channel.ds01_params = updated;
+                }
+                let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                    channel: channel_index as u8,
+                    id,
+                    value,
+                });
+                if let Some(window) = weak.upgrade() {
+                    touch_ds01_param(&window, &channel.ds01_params, id);
+                }
+            });
+        }
+
+        // A handle drop, as a fraction of the scope. The face cannot turn that
+        // back into a parameter value because the conversion needs the span
+        // and the descriptor, and the face has neither.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_ds01_handle_dragged(move |id, fraction| {
+                let id = id as u32;
+                let Some(descriptor) = ds01::descriptor(id) else {
+                    return;
+                };
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                let base = channel.ds01_params;
+                let natural = if id == ds01::PARAM_PITCH_DEPTH {
+                    // The only handle that drags vertically: the pitch
+                    // envelope's depth is drawn as the contour's height, so
+                    // its height is what the drag reports. The sign stays
+                    // where the patch had it — a drag on a curve cannot say
+                    // "the other way", and flipping it silently would turn a
+                    // downward sweep into an upward one mid-gesture.
+                    let magnitude = fraction * descriptor.max;
+                    if base.pitch.depth < 0.0 {
+                        -magnitude
+                    } else {
+                        magnitude
+                    }
+                } else {
+                    // Every other handle is a time, and the scope is drawn
+                    // over the span, so the fraction is seconds directly.
+                    // Handles past the first in a chain report where they
+                    // were dropped, so the segment is the gap to the one
+                    // before it rather than the drop position.
+                    let seconds = fraction * ds01_span_seconds(&base);
+                    let before = ds01_segment_start(&base, id);
+                    (seconds - before).max(0.0)
+                };
+                let mut params = GeneratorParams::Ds01(base);
+                let Some(value) = params.set(id, natural) else {
+                    return;
+                };
+                if let GeneratorParams::Ds01(updated) = params {
+                    channel.ds01_params = updated;
+                }
+                let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                    channel: channel_index as u8,
+                    id,
+                    value,
+                });
+                if let Some(window) = weak.upgrade() {
+                    touch_ds01_param(&window, &channel.ds01_params, id);
+                }
+            });
+        }
+
+        // The face also reports base-value gesture boundaries, so a drag can
+        // one day coalesce into one undo step. Nothing subscribes yet, here or
+        // on any other device face; the callbacks exist because the widget
+        // emits them and the face should not swallow them.
 
         use mooloop_core::mlp8 as p8;
         macro_rules! wire_mlp8_osc {

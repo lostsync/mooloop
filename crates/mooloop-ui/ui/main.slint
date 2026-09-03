@@ -42,6 +42,7 @@ import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { MlM1DeviceFace } from "mlm1-device.slint";
 import { MlP8DeviceFace, MlP8RouteRow } from "mlp8-device.slint";
+import { Ds01Contour, Ds01DeviceFace } from "ds01-device.slint";
 import { PolyDeviceFace } from "poly-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 import { SampleTrace } from "device-displays.slint";
@@ -951,6 +952,22 @@ export component MainWindow inherits Window {
     callback mono-lfo-wave-changed(int); callback mono-lfo-rate-changed(float); callback mono-lfo-retrigger-changed(bool);
     callback mono-lfo-pitch-changed(float); callback mono-lfo-filter-changed(float); callback mono-lfo-pulse-width-changed(float); callback mono-lfo-amp-changed(float);
 
+
+    // ---- DS-01 params of the selected channel ----
+    // Indexed by descriptor id rather than one property per parameter: the
+    // device has ninety-two, and a property each would be a second copy of
+    // its parameter table maintained by hand.
+    in-out property <[float]> ds01-values;
+    in-out property <[float]> ds01-defaults;
+    in-out property <[string]> ds01-value-texts;
+    in-out property <[int]> ds01-step-counts;
+    in-out property <[Ds01Contour]> ds01-contours;
+    in-out property <float> ds01-body-decay-fraction;
+    in-out property <string> ds01-span-text;
+    callback ds01-value-changed(int, float);
+    callback ds01-edit-started(int);
+    callback ds01-edit-finished(int);
+    callback ds01-handle-dragged(int, float);
 
     // ---- ML-P8 params of the selected channel ----
     // Which oscillator the ML-P8's left column is editing, and which of its
@@ -2555,9 +2572,17 @@ export component MainWindow inherits Window {
                                             // generator, or the bus's own output stage
                                             // when the rack is following the mixer.
                                             source-device := DeviceFrame {
-                                                width: root.editing-bus
-                                                    ? DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap + DeviceRackMetrics.rail-width * 2
-                                                    : DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap + DeviceRackMetrics.rail-width * 2;
+                                                // A device declares its own width in units, the
+                                                // same way an effect slot does. DS-01 is five
+                                                // because it is one screen with no pages: its
+                                                // four columns and two bands are the whole
+                                                // instrument, and three units is the width at
+                                                // which that stops being true.
+                                                property <int> source-units:
+                                                    root.editing-bus ? 2 : (root.source-kind == 6 ? 5 : 3);
+                                                width: DeviceRackMetrics.unit-width * self.source-units
+                                                    + DeviceRackMetrics.half-gap
+                                                    + DeviceRackMetrics.rail-width * 2;
                                                 height: DeviceRackMetrics.face-height;
                                                 input-left-db: root.editing-bus ? root.editing-bus-input-left-db : -60;
                                                 input-right-db: root.editing-bus ? root.editing-bus-input-right-db : -60;
@@ -2962,37 +2987,30 @@ export component MainWindow inherits Window {
                                                     modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
                                                 }
 
-                                                // DS-01's face is step 08 of
-                                                // `docs/plans/drum-synth-v2/`, and it has three
-                                                // rendered concepts waiting in that step's
-                                                // `mockups/`. The device is fully playable,
-                                                // automatable and modulatable before it: every
-                                                // parameter is descriptor-addressed, so the
-                                                // modulation shelf and the automation lanes reach
-                                                // it without a knob existing. Saying so is more
-                                                // use than an improvised panel step 08 deletes.
-                                                if !root.editing-bus && root.source-kind == 6 : Rectangle {
+                                                if !root.editing-bus && root.source-kind == 6 : Ds01DeviceFace {
                                                     x: DeviceRackMetrics.rail-width;
                                                     y: DeviceRackMetrics.header-height;
                                                     width: parent.content-width;
                                                     height: parent.height - DeviceRackMetrics.header-height;
-                                                    VerticalLayout {
-                                                        alignment: center;
-                                                        spacing: 6px;
-                                                        Text {
-                                                            text: "DS-01";
-                                                            color: Theme.text-faint;
-                                                            font-size: 13px;
-                                                            horizontal-alignment: center;
-                                                        }
-                                                        Text {
-                                                            text: "Playable now. Reach it from the modulation shelf and automation lanes; its face lands with step 08.";
-                                                            color: Theme.text-faint;
-                                                            font-size: 9px;
-                                                            horizontal-alignment: center;
-                                                            wrap: word-wrap;
-                                                        }
-                                                    }
+                                                    values: root.ds01-values;
+                                                    defaults: root.ds01-defaults;
+                                                    value-texts: root.ds01-value-texts;
+                                                    step-counts: root.ds01-step-counts;
+                                                    contours: root.ds01-contours;
+                                                    body-decay-fraction: root.ds01-body-decay-fraction;
+                                                    span-text: root.ds01-span-text;
+                                                    modulation-armed: root.modulation-armed-slot >= 0;
+                                                    modulation-depths: root.source-modulation-depths;
+                                                    modulation-allowed: root.source-modulation-allowed;
+                                                    modulation-offsets: root.source-modulation-offsets;
+                                                    modulation-route-counts: root.source-modulation-route-counts;
+                                                    value-changed(p, v) => { root.ds01-value-changed(p, v); }
+                                                    edit-started(p) => { root.ds01-edit-started(p); }
+                                                    edit-finished(p) => { root.ds01-edit-finished(p); }
+                                                    handle-dragged(p, f) => { root.ds01-handle-dragged(p, f); }
+                                                    modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
+                                                    modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
+                                                    modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
                                                 }
 
                                                 if !root.editing-bus : DeviceHeader {
@@ -3003,7 +3021,7 @@ export component MainWindow inherits Window {
                                                         : root.source-kind == 3 ? "Poly Synth"
                                                         : root.source-kind == 4 ? "ML-M1"
                                                         : root.source-kind == 5 ? "ML-P8" : "DS-01";
-                                                    kind: "SOURCE / 3U";
+                                                    kind: "SOURCE / " + source-device.source-units + "U";
                                                     device-color: Theme.accent;
                                                 }
                                             }

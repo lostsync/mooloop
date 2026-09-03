@@ -1,6 +1,7 @@
 # DS-01 plan status
 
-**Steps 02 through 07 are in, except step 07's outlets.** The device exists and plays: a new `Ds01` generator kind
+**Steps 02 through 07 are in except step 07's outlets, and step 08 is
+mostly in.** The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
 state-variable filter, the amplitude and pitch envelopes, and the voice pool
@@ -42,7 +43,12 @@ its own envelopes.
 **Step 07's published outlets are not built, and are blocked rather than
 skipped.** See below.
 
-Read `01-what-ds01-is.md`, then work `08` and `09` in order.
+Step 08 built the face: the adopted four-column layout, wired and live in the
+rack. Every one of the device's sixty non-matrix parameters is reachable on one
+screen — forty-eight as knobs and chips, twelve as handles on the scopes — and
+the scopes' span follows the patch, so a 5 ms hat and a 4 s ride both read.
+
+Read `01-what-ds01-is.md`, then finish `08` and work `09`.
 
 Four things step 02 turned up that the plan could not have known:
 
@@ -234,7 +240,46 @@ and the matrix is what delivers that. `Trigger` is the one worth wanting
 soonest — it is what lets a kick duck a bass or fire an envelope on another
 device without a sidechain graph — and it arrives with the shared mechanism.
 
-The device face is **not** part of steps 02 through 07. DS-01 is selectable, playable,
+And three from step 08:
+
+- **The face is indexed by parameter id, not one property per parameter.**
+  Every other device face here declares a property each; DS-01 has ninety-two,
+  and ninety-two properties would be a second copy of the parameter table
+  maintained by hand — which is the thing this device exists not to have. It
+  takes arrays indexed by descriptor id and reports edits as
+  `(id, normalized)`, the shape the modulation depths already use, so one
+  handler covers every control. Values cross normalized rather than natural,
+  because that is the space a route and an automation lane both work in.
+- **A source device declares its own width.** It was three rack units for
+  every kind. DS-01 declares five, the way an effect slot declares its units:
+  three is the width at which "one screen, no pages" stops being true, and the
+  concept was drawn at a width the rack did not give a source. ML-P8 spent the
+  same problem on a second page instead.
+- **The columns are not equal width.** TONE, NOISE, BODY and AMP take 4, 5, 3
+  and 4, because that is how many cells they have. Equal columns would have
+  meant either a different knob size per column or leaving two of the noise
+  layer's controls out, which is the failure the plan refuses.
+
+## What step 08 still owes
+
+The layout, the controls, the four scopes and their handles are in and
+verified by a software-rendered snapshot at the default patch and at a
+four-second one. Four things are not:
+
+- **The MOD panel.** The three checked-in concepts settled the columns and the
+  bands and none of them draws it, so the layout for the matrix's thirty-two
+  controls is genuinely undecided rather than a detail to fill in. The band
+  carries a labelled empty region where it goes. **This is the one thing in
+  the plan that wants Adam before it wants code.**
+- **The rendered hit in the AMP scope.** `Ds01::preview_waveform` exists and
+  renders through the production voice path; what is missing is the debounced
+  plumbing from a parameter edit to a redraw, which `08-the-face.md` is
+  explicit must not run per keystroke on the UI thread.
+- **Burst impulse ticks** on a short axis inside the BURST section.
+- **Focus dimming** — the touched column's scope drawn solid and the others
+  quiet.
+
+The face is **not** part of steps 02 through 07. DS-01 is selectable, playable,
 automatable and modulatable without one — every parameter is
 descriptor-addressed, so the modulation shelf and the automation lanes reach it
 whether or not a knob exists — and the rack shows a placeholder saying so.
@@ -320,7 +365,7 @@ instrument. Hence DS-01.
 | `05-the-burst.md` | **In.** Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | **In.** Drive characters, the output stage, the gain contract |
 | `07-internal-modulation-and-outlets.md` | **Matrix in; outlets blocked** on the shared device-outlet mechanism |
-| `08-the-face.md` | The device face, with rendered concepts in `mockups/` |
+| `08-the-face.md` | **Mostly in.** Layout, controls, scopes and handles; the MOD panel, the hit trace, burst ticks and focus dimming remain |
 | `09-the-kit.md` | Factory patches, range tuning, and the listening pass |
 
 `mockups/` holds three rendered face concepts at the real face size, against

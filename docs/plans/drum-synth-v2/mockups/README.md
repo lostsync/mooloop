@@ -53,6 +53,29 @@ The three source scopes share one span, stated once in the header, with
 matching gridlines, so a shorter contour is a shorter contour rather than a
 different scale.
 
+### As built
+
+The face shipped in `crates/mooloop-ui/ui/ds01-device.slint` is this layout,
+and departs from the rendering above in three measurable ways. They are
+recorded here rather than re-rendered, because a second copy of a layout that
+now exists for real is a second thing to keep true:
+
+- **Five rack units, not a literal 1040 px.** A source device was three units
+  wide for every kind; DS-01 declares five, the way an effect slot declares
+  its own. Three is the width at which "one screen, no pages" stops being
+  true, and the rack scrolls horizontally anyway — ML-P8 spent the same
+  problem on a second page instead.
+- **The columns are not equal.** TONE, NOISE, BODY and AMP take 4, 5, 3 and 4
+  units of the row, because that is how many cells they have: the noise layer
+  carries ten and the body six. Equal columns would have meant a different
+  knob size per column, or leaving two of the noise layer's controls out — the
+  failure this whole plan refuses.
+- **The header carries controls rather than a summary.** The concept drew
+  "TUNE +0 st" as text. Those five globals are parameters and have to be
+  editable, so they are chips and knobs with their captions beside them rather
+  than under them, which costs eight pixels of header and buys them back in
+  every scope below.
+
 ## A: lanes — rejected
 
 ![lanes](concept-lanes.png)
