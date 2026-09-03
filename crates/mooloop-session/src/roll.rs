@@ -670,6 +670,52 @@ impl Session {
         })
     }
 
+    /// Sets one note's velocity, from the control's 0..1 travel.
+    pub fn set_note_velocity(&mut self, id: NoteId, value: f32) -> Option<NoteEdit> {
+        let (channel, pattern) = self.roll();
+        let velocity = (1.0 + value.clamp(0.0, 1.0) * 126.0).round() as u8;
+        let note = self.channels[channel].notes[pattern]
+            .iter_mut()
+            .find(|note| note.id == id)?;
+        note.velocity = velocity;
+        let edited = *note;
+        self.select_note(Some(edited.id));
+        Some(NoteEdit {
+            notes: 1,
+            commands: vec![self.upsert(edited)],
+            cells: Some(vec![(edited.start_tick / TICKS_PER_STEP) as usize]),
+        })
+    }
+
+    /// Gives every selected note the same length, trimmed so none overhangs
+    /// what the pattern can hold.
+    pub fn set_selection_duration(&mut self, ticks: u32) -> Option<NoteEdit> {
+        let (channel, pattern) = self.roll();
+        let length_ticks = self.pattern_ticks();
+        let selected = self.selected_note_ids.clone();
+        let mut edited = Vec::new();
+        for note in self.channels[channel].notes[pattern]
+            .iter_mut()
+            .filter(|note| selected.contains(&note.id))
+        {
+            note.duration_ticks = ticks.min(length_ticks.saturating_sub(note.start_tick).max(1));
+            edited.push(*note);
+        }
+        if edited.is_empty() {
+            return None;
+        }
+        Some(NoteEdit {
+            notes: edited.len(),
+            cells: Some(
+                edited
+                    .iter()
+                    .map(|note| (note.start_tick / TICKS_PER_STEP) as usize)
+                    .collect(),
+            ),
+            commands: edited.iter().map(|note| self.upsert(*note)).collect(),
+        })
+    }
+
     /// The selection as a clipboard phrase.
     ///
     /// Stored relative to the earliest note, so a paste is a phrase that can

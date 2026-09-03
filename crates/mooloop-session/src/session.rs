@@ -1109,4 +1109,22 @@ impl Session {
             self.modulation_edit_changed = false;
         }
     }
+
+    /// A channel and its decoded audio, for the clipboard.
+    ///
+    /// The sample travels with it so a paste never has to decode on the UI
+    /// thread.
+    pub fn channel_clipboard(
+        &self,
+        index: usize,
+        bpm: i32,
+        swing_percent: i32,
+    ) -> Option<crate::channel::ChannelClipboard> {
+        let mut project = self.project_snapshot(bpm, swing_percent);
+        crate::project::normalize_project_pattern_banks(&mut project);
+        Some(crate::channel::ChannelClipboard {
+            channel: project.channels.get(index)?.clone(),
+            sample: self.sample_snapshots().get(index)?.clone(),
+        })
+    }
 }

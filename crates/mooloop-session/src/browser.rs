@@ -2,6 +2,7 @@
 //!
 //! This produces paths and names. Turning them into rows is the view's job.
 
+use crate::session::Session;
 use crate::audio_file;
 use std::path::{Path, PathBuf};
 
@@ -76,4 +77,47 @@ pub fn browser_display_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+/// Which channel a background sample load is destined for, and the source
+/// revision it was started against.
+///
+/// The revision travels with the load so an arrival that raced a device
+/// change can be discarded rather than dropped onto the wrong instrument.
+pub struct LoadTarget {
+    pub channel: usize,
+    pub source_revision: u64,
+    pub path: PathBuf,
+}
+
+impl Session {
+    /// Expands or collapses a browser folder.
+    ///
+    /// Insert-or-remove: a path never expanded collapses to a no-op remove,
+    /// so the set only ever holds folders that are open.
+    pub fn toggle_browser_folder(&mut self, path: PathBuf) {
+        if !self.browser_expanded.remove(&path) {
+            self.browser_expanded.insert(path);
+        }
+    }
+
+    /// Drops a browser location and forgets its expansion.
+    ///
+    /// Only top-level rows offer removal, so a path the tree hands back that
+    /// is not a location is a stale no-op rather than an error.
+    pub fn remove_browser_location(&mut self, path: &Path) {
+        self.browser_locations.retain(|p| p != path);
+        self.browser_expanded.remove(path);
+    }
+
+    /// The selected channel's current sample, as a load target.
+    ///
+    /// `None` when the channel has no sample to step away from.
+    pub fn selected_sample_target(&self) -> Option<LoadTarget> {
+        Some(LoadTarget {
+            channel: self.selected,
+            source_revision: self.source_revision,
+            path: self.channels.get(self.selected)?.sample_path.clone()?,
+        })
+    }
 }

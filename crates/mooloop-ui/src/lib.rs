@@ -500,18 +500,6 @@ fn apply_pane(window: &MainWindow, pane: Pane) {
     }
 }
 
-fn snapshot_channel_clipboard(
-    state: &UiState,
-    window: &MainWindow,
-    index: usize,
-) -> Option<ChannelClipboard> {
-    let snapshot = project_snapshot(state, window);
-    Some(ChannelClipboard {
-        channel: snapshot.project.channels.get(index)?.clone(),
-        sample: snapshot.samples.get(index)?.clone(),
-    })
-}
-
 fn project_snapshot(state: &UiState, window: &MainWindow) -> ProjectSnapshot {
     let mut project = state.session.project_snapshot(window.get_bpm(), window.get_swing_percent());
     normalize_project_pattern_banks(&mut project);
@@ -4727,32 +4715,12 @@ impl AppUi {
                 };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let selected = st.session.selected_note_ids.clone();
-                let mut edited = Vec::new();
-                for note in st.session.channels[channel].notes[pattern]
-                    .iter_mut()
-                    .filter(|note| selected.contains(&note.id))
-                {
-                    note.duration_ticks =
-                        ticks.min(length_ticks.saturating_sub(note.start_tick).max(1));
-                    edited.push(*note);
-                }
-                if edited.is_empty() {
+                let Some(edit) = st.session.set_selection_duration(ticks) else {
                     return;
-                }
-                for note in &edited {
-                    st.refresh_rack_cell(channel, (note.start_tick / TICKS_PER_STEP) as usize);
-                }
-                st.refresh_note_editor(&window);
-                for note in edited {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note,
-                    });
+                };
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Note length");
@@ -5146,26 +5114,14 @@ impl AppUi {
             window.on_velocity_edited(move |id, value| {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
-                let velocity = (1.0 + value.clamp(0.0, 1.0) * 126.0).round() as u8;
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let Some(note) = st.session.channels[channel].notes[pattern]
-                    .iter_mut()
-                    .find(|note| note.id == id as NoteId)
-                else {
+                let Some(edit) = st.session.set_note_velocity(id as NoteId, value) else {
                     return;
                 };
-                note.velocity = velocity;
-                let edited = *note;
-                st.session.select_note(Some(edited.id));
-                st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
-                st.refresh_note_editor(&window);
-                let _ = tx.send(EngineCommand::UpsertNote {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    note: edited,
-                });
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
+                }
                 drop(st);
                 record_project_history(
                     &commands,
@@ -5405,24 +5361,17 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_delete_selected_notes_requested(move || {
                 let Some(window) = weak.upgrade() else { return };
-                let ids: Vec<NoteId> = st.borrow().session.selected_note_ids.iter().copied().collect();
-                if ids.is_empty() {
+                if st.borrow().session.selected_note_ids.is_empty() {
                     return;
                 }
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                st.session.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                st.session.prune_note_selection(&ids);
-                st.refresh_rack_row(channel);
-                st.refresh_note_editor(&window);
-                for id in &ids {
-                    let _ = tx.send(EngineCommand::RemoveNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        id: *id,
-                    });
+                let Some(edit) = st.session.delete_selection() else {
+                    return;
+                };
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Notes deleted");
@@ -5626,7 +5575,11 @@ impl AppUi {
                         }
                     }
                     2 => {
-                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index)
+                        let Some(copy) = st.borrow().session.channel_clipboard(
+                            index,
+                            window.get_bpm(),
+                            window.get_swing_percent(),
+                        )
                         else {
                             return;
                         };
@@ -5641,7 +5594,11 @@ impl AppUi {
                         }
                     }
                     3 => {
-                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index)
+                        let Some(copy) = st.borrow().session.channel_clipboard(
+                            index,
+                            window.get_bpm(),
+                            window.get_swing_percent(),
+                        )
                         else {
                             return;
                         };
@@ -5659,7 +5616,11 @@ impl AppUi {
                         }
                     }
                     5 => {
-                        let Some(copy) = snapshot_channel_clipboard(&st.borrow(), &window, index)
+                        let Some(copy) = st.borrow().session.channel_clipboard(
+                            index,
+                            window.get_bpm(),
+                            window.get_swing_percent(),
+                        )
                         else {
                             return;
                         };
@@ -8413,13 +8374,9 @@ impl AppUi {
         {
             let st = state.clone();
             window.on_browser_row_toggled(move |path| {
-                let path = PathBuf::from(path.to_string());
                 let mut st = st.borrow_mut();
-                // Insert-or-remove: a path never expanded collapses to a
-                // no-op remove, so the set only ever holds expanded folders.
-                if !st.session.browser_expanded.remove(&path) {
-                    st.session.browser_expanded.insert(path);
-                }
+                st.session
+                    .toggle_browser_folder(PathBuf::from(path.to_string()));
                 refresh_browser(&st);
             });
         }
@@ -8429,12 +8386,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_browser_location_removed(move |path| {
                 let path = PathBuf::from(path.to_string());
-                let window = match weak.upgrade() {
-                    Some(window) => window,
-                    None => return,
-                };
-                // Only top-level rows offer removal, so anything the tree
-                // hands back that is not a location is a stale no-op.
+                let Some(window) = weak.upgrade() else { return };
                 settings
                     .borrow_mut()
                     .browser
@@ -8443,17 +8395,13 @@ impl AppUi {
                 let saved = settings.borrow().save();
                 {
                     let mut st = st.borrow_mut();
-                    st.session.browser_locations.retain(|p| p != &path);
-                    st.session.browser_expanded.remove(&path);
+                    st.session.remove_browser_location(&path);
                     refresh_browser(&st);
                 }
-                match saved {
-                    Ok(()) => window.set_status_message(
-                        format!("Removed sample folder {}", path.display()).into(),
-                    ),
-                    Err(error) => window
-                        .set_status_message(format!("Could not save settings: {error}").into()),
-                };
+                window.set_status_message(match saved {
+                    Ok(()) => format!("Removed sample folder {}", path.display()).into(),
+                    Err(error) => format!("Could not save settings: {error}").into(),
+                });
             });
         }
 
@@ -8510,26 +8458,20 @@ impl AppUi {
             let st = state.clone();
             let load_tx = load_tx.clone();
             window.on_previous_sample_clicked(move || {
-                let (channel, source_revision, path) = {
-                    let st = st.borrow();
-                    (
-                        st.session.selected,
-                        st.session.source_revision,
-                        st.session.channels[st.session.selected].sample_path.clone(),
-                    )
+                let Some(target) = st.borrow().session.selected_sample_target() else {
+                    return;
                 };
-                let Some(path) = path else { return };
                 let tx = load_tx.clone();
                 std::thread::spawn(move || {
-                    let result = match adjacent_sample(&path, -1) {
+                    let result = match adjacent_sample(&target.path, -1) {
                         Ok(Some(path)) => Some(load_sample_at_path(&path)),
                         Ok(None) => None,
                         Err(error) => Some(Err(error)),
                     };
                     let _ = tx.send(LoadResult {
-                        channel,
-                        source_revision,
-                    new_channel: false,
+                        channel: target.channel,
+                        source_revision: target.source_revision,
+                        new_channel: false,
                         result,
                     });
                 });
@@ -8539,26 +8481,20 @@ impl AppUi {
             let st = state.clone();
             let load_tx = load_tx.clone();
             window.on_next_sample_clicked(move || {
-                let (channel, source_revision, path) = {
-                    let st = st.borrow();
-                    (
-                        st.session.selected,
-                        st.session.source_revision,
-                        st.session.channels[st.session.selected].sample_path.clone(),
-                    )
+                let Some(target) = st.borrow().session.selected_sample_target() else {
+                    return;
                 };
-                let Some(path) = path else { return };
                 let tx = load_tx.clone();
                 std::thread::spawn(move || {
-                    let result = match adjacent_sample(&path, 1) {
+                    let result = match adjacent_sample(&target.path, 1) {
                         Ok(Some(path)) => Some(load_sample_at_path(&path)),
                         Ok(None) => None,
                         Err(error) => Some(Err(error)),
                     };
                     let _ = tx.send(LoadResult {
-                        channel,
-                        source_revision,
-                    new_channel: false,
+                        channel: target.channel,
+                        source_revision: target.source_revision,
+                        new_channel: false,
                         result,
                     });
                 });
