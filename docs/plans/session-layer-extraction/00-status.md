@@ -1,10 +1,10 @@
 # Session layer extraction — plan status
 
-Step 01 done, 2026-09-03. Written 2026-09-02, out of
+Steps 01 and 02 done, 2026-09-03. Written 2026-09-02, out of
 `docs/ARCHITECTURE_REVIEW.md`.
 
 `crates/mooloop-session` exists and `crates/mooloop-ui/src/lib.rs` is down from
-14,157 lines to 13,674. The line counts quoted below are the ones the plan was
+14,157 lines to 12,853. The line counts quoted below are the ones the plan was
 written against and are left as written; `UiState::new` has not been touched.
 
 ## The decision
@@ -100,7 +100,7 @@ and projection; the tests that become possible.
 | Step | What it does | Risk |
 | --- | --- | --- |
 | `01` | Create the crate; move the toolkit-free free functions and `history.rs` | Very low — pure moves — **done** |
-| `02` | Move the plain data types | Low |
+| `02` | Move the plain data types | Low — **done** |
 | `03` | Split `UiState` into `Session` plus view-side models | Medium |
 | `04` | Break up `UiState::new`; hoist closure bodies onto `Session` | High — the bulk of the work |
 | `05` | Move engine command emission behind a session-owned interface | Medium |
@@ -154,3 +154,32 @@ Slint type.
 a workspace member forces a re-resolve, and `i-slint-backend-testing`'s
 optional dependencies got recorded that had been absent. No version moved and
 nothing new compiles — `cargo tree -i prost` finds no path to any of it.
+
+### 02 — done, 2026-09-03
+
+Every type in the step's table now lives in `mooloop-session`, split across
+`channel`, `command`, `document`, `notes`, `project`, `sample`, and `values`.
+Thirteen more tests came with them; `cargo test -p mooloop-session` is 24
+passing and 1 ignored, and the workspace count is unchanged at 1,019, so
+nothing was dropped on the way.
+
+`DocumentResult` moved intact. The step document offered a fallback for the
+`SharedString` in its failure arm; there is no longer one to convert, so it
+was not needed.
+
+Three departures:
+
+- **`Pane`, `PANE_CYCLE` and `cycle_pane` moved after all.** The step says to
+  leave them, but `CommandState` has a `pane: Pane` field, so `CommandState`
+  could not move without the enum. `apply_pane` — the half that sets Slint
+  properties — stayed behind, which is the split the rest of the plan uses
+  anyway.
+- **`quarantine_song` gained two parameters.** It reached for
+  `settings::quarantine_dir()` and `build_description()`, and `settings.rs`
+  still holds a `slint::Color`. It now takes `directory: &Path` and
+  `build: &str`; the one caller passes them. This also makes it testable,
+  which it was not.
+- **`snapshot_channel_clipboard` did not move.** Its signature is
+  `(&UiState, &MainWindow, usize)`, so it is blocked on step 03 rather than
+  on anything in this step. `LoadTarget` moved even though it is not in the
+  table, because `DocumentResult::Loaded` carries it.

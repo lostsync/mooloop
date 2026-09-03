@@ -569,8 +569,9 @@ work session you can recall being part of, and don't stress over precision.
   device-outlet mechanism ML-P8's step 06 needs, so they wait for it to be
   built once rather than twice.
   Then started `docs/plans/session-layer-extraction/`: created `mooloop-session`
-  and moved the already-toolkit-free code into it, so the live application
-  model has somewhere to live that the compiler keeps `slint` out of.
+  and moved the already-toolkit-free code and then the plain data types into
+  it, so the live application model has somewhere to live that the compiler
+  keeps `slint` out of.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

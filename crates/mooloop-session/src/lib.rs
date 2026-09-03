@@ -10,14 +10,12 @@
 
 pub mod audio_file;
 pub mod browser;
+pub mod channel;
+pub mod command;
 pub mod dialogs;
+pub mod document;
 pub mod history;
+pub mod notes;
+pub mod project;
 pub mod sample;
-
-pub use browser::{browser_display_name, has_playable_descendant, is_playable_sample,
-                  scan_browser_dir};
-pub use dialogs::{confirm_via_zenity, pick_bundle_via_zenity, pick_export_via_zenity,
-                  pick_sample_via_zenity, pick_save_via_zenity, pick_song_via_zenity};
-pub use sample::{adjacent_sample, inspect_sample, load_sample_at_path, sample_description,
-                 sample_duration, sample_files_in_directory, sample_index, tune_label,
-                 waveform_peaks, waveform_peaks_windowed, LoadedSample, SampleInspection};
+pub mod values;

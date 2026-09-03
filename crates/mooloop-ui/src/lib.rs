@@ -60,21 +60,34 @@ use mooloop_engine::{
     PreviewCommand,
     RenderScope, StructuralCommand, WavEncoding,
 };
-use mooloop_project::{
-    AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetSummary,
-    SaveReport,
-};
-use mooloop_session::audio_file;
+use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetSummary};
 use mooloop_session::browser::{browser_display_name, has_playable_descendant, scan_browser_dir};
+use mooloop_session::channel::{
+    apply_sample_references, copied_channel_name, ChannelClipboard, ChannelState,
+};
+use mooloop_session::command::{cycle_pane, CommandState, Pane};
 use mooloop_session::dialogs::{
     confirm_via_zenity, pick_bundle_via_zenity, pick_export_via_zenity, pick_sample_via_zenity,
     pick_save_via_zenity, pick_song_via_zenity,
 };
-use mooloop_session::history::{Entry as HistoryEntry, History};
+use mooloop_session::document::{
+    log_repairs, quarantine_song, repair_suffix, resolve_document, warning_suffix, DocumentProblem,
+    DocumentResult, LoadTarget, ResolvedDocument,
+};
+use mooloop_session::history::Entry as HistoryEntry;
+use mooloop_session::notes::ScaleBase;
+use mooloop_session::project::{
+    fresh_starter_seed, normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
+};
 use mooloop_session::sample::{
     adjacent_sample, inspect_sample, load_sample_at_path, sample_description, sample_duration,
     sample_files_in_directory, sample_index, tune_label, waveform_peaks, waveform_peaks_windowed,
-    LoadedSample, SampleInspection,
+    LoadResult, LoadedSample, SampleInspection,
+};
+use mooloop_session::values::{
+    format_bars, measured_loop_bars, parse_typed_value, stretch_bars_from_norm,
+    stretch_bars_to_norm, stretch_grain_from_norm, stretch_grain_to_norm, stretch_ratio_from_norm,
+    stretch_ratio_to_norm,
 };
 pub use mockup::{load_mockup_layout, wire_mockup};
 use settings::{AppearanceSettings, ThemePalette, ThemeScheme, UiSettings};
@@ -86,9 +99,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const PUMP_INTERVAL_MS: u64 = 8;
 const INITIAL_BPM: i32 = 120;
@@ -241,111 +252,6 @@ const DS01_PREVIEW_BINS: usize = 256;
 /// enough that a drag renders once when it stops; short enough that letting
 /// go feels like the picture was already there.
 const DS01_PREVIEW_DEBOUNCE_MS: u64 = 60;
-
-/// Parse a number a user typed into a value field.
-///
-/// Tolerant of the units the field itself displays, because the obvious thing
-/// to do with a box reading "2.00x" is to type "4x". Anything unparseable
-/// returns `None` and the field snaps back to the authoritative text rather
-/// than committing a guess.
-fn parse_typed_value(text: &str) -> Option<f32> {
-    // The *leading* number, not every digit in the string. Stripping
-    // non-digits and concatenating what is left looks equivalent and is not:
-    // the grain field reads "256 fr / 375 Hz", so clicking into it and
-    // pressing Enter unchanged would have committed 256375.
-    let text = text.trim();
-    let mut end = 0;
-    for (index, ch) in text.char_indices() {
-        let numeric = ch.is_ascii_digit()
-            || (ch == '.' && !text[..index].contains('.'))
-            || (matches!(ch, '-' | '+') && index == 0);
-        if !numeric {
-            break;
-        }
-        end = index + ch.len_utf8();
-    }
-    text[..end]
-        .parse::<f32>()
-        .ok()
-        .filter(|value| value.is_finite())
-}
-
-/// Bar counts read as "2 bar" or "0.5 bar" rather than "2.000000": the
-/// values that matter here are powers of two, and trailing zeros make a
-/// snapped length look like an arbitrary one.
-fn format_bars(bars: f32) -> String {
-    if (bars - bars.round()).abs() < 1.0e-4 {
-        format!("{} bar", bars.round() as i32)
-    } else {
-        format!("{bars:.3} bar")
-    }
-}
-
-fn stretch_bars_to_norm(bars: f32) -> f32 {
-    let bars = bars.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS);
-    (bars / MIN_STRETCH_BARS).log2() / (MAX_STRETCH_BARS / MIN_STRETCH_BARS).log2()
-}
-
-fn stretch_bars_from_norm(norm: f32) -> f32 {
-    let span = (MAX_STRETCH_BARS / MIN_STRETCH_BARS).log2();
-    (MIN_STRETCH_BARS * (norm.clamp(0.0, 1.0) * span).exp2())
-        .clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS)
-}
-
-/// How many bars a channel's loop currently measures, at the project tempo.
-///
-/// The loop is what gets fitted when there is one, matching what the DSP
-/// derives its ratio from; otherwise the playback region is.
-fn measured_loop_bars(params: SamplerParams, frames: usize, sample_rate: u32, bpm: f64) -> f32 {
-    let len = frames.max(1) as f32;
-    // The same span fit-to-tempo will derive its ratio from, asked of the
-    // sampler rather than re-decided here: a guess measured against one
-    // region and a ratio derived from another is a seed that is wrong by
-    // construction.
-    let (start, end) = if mooloop_dsp::Sampler::fits_the_playback_region(params) {
-        (params.start, params.end)
-    } else {
-        (params.loop_start, params.loop_end)
-    };
-    let region = ((end - start).max(0.0) * len).max(1.0);
-    let per_bar = mooloop_core::frames_per_bar(sample_rate, bpm) as f32;
-    region / per_bar.max(1.0)
-}
-
-/// Map the stretch ratio onto a knob's 0..1 travel, and back.
-///
-/// Logarithmic, matching the parameter's own `Exponential` curve: the band
-/// that stays clean sits just around unity while the ceiling is deliberately
-/// far past it, so linear travel would spend almost the whole knob on
-/// extremes. Unity lands at about a third of the way round.
-fn stretch_ratio_to_norm(ratio: f32) -> f32 {
-    let ratio = ratio.clamp(MIN_STRETCH_RATIO, MAX_STRETCH_RATIO);
-    (ratio / MIN_STRETCH_RATIO).log2() / (MAX_STRETCH_RATIO / MIN_STRETCH_RATIO).log2()
-}
-
-fn stretch_ratio_from_norm(norm: f32) -> f32 {
-    let span = (MAX_STRETCH_RATIO / MIN_STRETCH_RATIO).log2();
-    (MIN_STRETCH_RATIO * (norm.clamp(0.0, 1.0) * span).exp2())
-        .clamp(MIN_STRETCH_RATIO, MAX_STRETCH_RATIO)
-}
-
-/// Same treatment for the grain window, for the same reason: it maps to a
-/// repetition frequency, so equal knob travel should be equal musical
-/// intervals.
-fn stretch_grain_to_norm(frames: u16) -> f32 {
-    let frames = f32::from(frames.clamp(MIN_STRETCH_GRAIN, MAX_STRETCH_GRAIN));
-    (frames / f32::from(MIN_STRETCH_GRAIN)).log2()
-        / (f32::from(MAX_STRETCH_GRAIN) / f32::from(MIN_STRETCH_GRAIN)).log2()
-}
-
-fn stretch_grain_from_norm(norm: f32) -> u16 {
-    let span = (f32::from(MAX_STRETCH_GRAIN) / f32::from(MIN_STRETCH_GRAIN)).log2();
-    let frames = f32::from(MIN_STRETCH_GRAIN) * (norm.clamp(0.0, 1.0) * span).exp2();
-    (frames.round() as i32).clamp(
-        i32::from(MIN_STRETCH_GRAIN),
-        i32::from(MAX_STRETCH_GRAIN),
-    ) as u16
-}
 
 fn sync_drum_preview(window: &MainWindow, params: DrumSynthParams) {
     let (minimums, maximums) = DrumSynth::preview_waveform(params, DRUM_PREVIEW_BINS);
@@ -608,210 +514,6 @@ fn normalized_buses(buses: &[BusSetup]) -> Vec<BusSetup> {
     normalized
 }
 
-struct ChannelState {
-    name: String,
-    kind: DeviceKind,
-    muted: bool,
-    volume: f32,
-    pan: f32,
-    params: SamplerParams,
-    drum_params: DrumSynthParams,
-    mono_params: MonoSynthParams,
-    mlm1_params: MlM1Params,
-    mlp8_params: MlP8Params,
-    ds01_params: Ds01Params,
-    poly_params: PolySynthParams,
-    sample_name: String,
-    sample_description: String,
-    sample_duration: f32,
-    sample_path: Option<PathBuf>,
-    sample_embedded: bool,
-    /// The decoded source. Authoritative, and never what the engine plays
-    /// once a stretch has been committed.
-    sample_data: Option<Arc<SampleData>>,
-    /// The committed render, when there is one. This is what is published,
-    /// drawn, and measured against, so the waveform, the markers, and the
-    /// start/end fractions all live in one coordinate system.
-    committed_sample: Option<Arc<SampleData>>,
-    /// What the committed render was baked from, and what the editor looked
-    /// like before it. `None` means the published buffer is the source.
-    commit: Option<Box<SampleCommit>>,
-    /// Slice boundaries into the *published* buffer, in frames, so they move
-    /// with the waveform under any zoom.
-    slices: SliceMap,
-    waveform: Vec<f32>,
-    can_previous_sample: bool,
-    can_next_sample: bool,
-    notes: Vec<Vec<NoteEvent>>,
-    /// Pattern-indexed automation lanes, parallel to `notes`. A lane is kept
-    /// even when the editor is not showing it, so switching the visible lane
-    /// never destroys what is behind it.
-    automation: Vec<Vec<AutomationLane>>,
-    next_note_id: NoteId,
-    effects: Vec<EffectSlotState>,
-    modulation: ModRack,
-    /// Mixer bus this channel feeds; 0 is the master.
-    bus: u8,
-}
-
-impl ChannelState {
-    /// What this channel actually plays and the editor actually draws: the
-    /// committed render when there is one, the decoded source otherwise.
-    ///
-    /// Every measurement against the audio -- the waveform, zero-crossing
-    /// snapping, the fit-to-tempo guess, the frame count the markers are
-    /// expressed in -- goes through here, so there is one coordinate system
-    /// rather than two.
-    fn published_sample(&self) -> Option<&Arc<SampleData>> {
-        self.committed_sample.as_ref().or(self.sample_data.as_ref())
-    }
-
-    /// This channel's generator parameters in their addressable form. The
-    /// `ChannelState` keeps one struct per kind so switching sources does not
-    /// lose the others; only the active kind is addressable.
-    fn generator_params(&self) -> GeneratorParams {
-        match self.kind {
-            DeviceKind::Sampler => GeneratorParams::Sampler(self.params),
-            DeviceKind::MonoSynth => GeneratorParams::MonoSynth(self.mono_params),
-            DeviceKind::PolySynth => GeneratorParams::PolySynth(self.poly_params),
-            DeviceKind::MlM1 => GeneratorParams::MlM1(self.mlm1_params),
-            DeviceKind::MlP8 => GeneratorParams::MlP8(self.mlp8_params),
-            DeviceKind::Ds01 => GeneratorParams::Ds01(self.ds01_params),
-            DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
-        }
-    }
-
-    /// A brand new sampler channel is silent and empty until a sample is
-    /// loaded or a project assigns one.
-    fn new(index: usize) -> Self {
-        Self {
-            name: format!("Sampler {}", index + 1),
-            kind: DeviceKind::Sampler,
-            muted: false,
-            volume: 0.8,
-            pan: 0.0,
-            params: SamplerParams::default(),
-            drum_params: DrumSynthParams::default(),
-            mono_params: MonoSynthParams::default(),
-            mlm1_params: MlM1Params::default(),
-            mlp8_params: MlP8Params::default(),
-            ds01_params: Ds01Params::default(),
-            poly_params: PolySynthParams::default(),
-            sample_name: String::new(),
-            sample_description: String::new(),
-            sample_duration: 0.0,
-            sample_path: None,
-            sample_embedded: false,
-            sample_data: None,
-            committed_sample: None,
-            commit: None,
-            slices: SliceMap::default(),
-            waveform: Vec::new(),
-            can_previous_sample: false,
-            can_next_sample: false,
-            notes: vec![Vec::new()],
-            automation: vec![Vec::new()],
-            next_note_id: 1,
-            effects: Vec::new(),
-            modulation: ModRack::default(),
-            bus: MASTER_BUS,
-        }
-    }
-
-    fn create_note(
-        &mut self,
-        pattern: usize,
-        start_tick: u32,
-        duration_ticks: u32,
-        note: u8,
-    ) -> NoteEvent {
-        let event = NoteEvent::new(self.next_note_id, start_tick, duration_ticks, note, 100);
-        self.next_note_id = self.next_note_id.wrapping_add(1).max(1);
-        self.notes[pattern].push(event);
-        self.notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-        event
-    }
-}
-
-/// Result of a background sample load, delivered to the pump.
-struct LoadResult {
-    channel: usize,
-    source_revision: u64,
-    /// Load into a sampler channel created on arrival (`channel` is then the
-    /// index the new channel will take) rather than an existing one.
-    new_channel: bool,
-    /// `None` = dialog cancelled; `Some(Err)` = decode failed.
-    result: Option<Result<LoadedSample, String>>,
-}
-
-struct ResolvedDocument {
-    report: LoadReport,
-    samples: Vec<Option<Arc<SampleData>>>,
-}
-
-/// In-memory channel clipboard. It intentionally keeps decoded sample data
-/// alongside the serializable channel so pasting never needs to re-read audio
-/// on the UI thread.
-#[derive(Clone)]
-struct ChannelClipboard {
-    channel: ProjectChannel,
-    sample: Option<Arc<SampleData>>,
-}
-
-/// A complete, UI-owned project snapshot. Samples stay beside the serializable
-/// project because restoring an edit must never decode audio on the UI thread.
-#[derive(Clone)]
-struct ProjectSnapshot {
-    project: Project,
-    samples: Vec<Option<Arc<SampleData>>>,
-}
-
-/// The command layer's state. Clipboard data and history live here rather
-/// than in a particular widget, so menu, keyboard, and context-menu surfaces
-/// all dispatch the same command.
-#[derive(Default)]
-struct CommandState {
-    channel_clipboard: Option<ChannelClipboard>,
-    history: History<ProjectSnapshot>,
-    project_edit_pending: bool,
-    pane: Pane,
-    /// Notes cut or copied from the roll, kept relative to the earliest one
-    /// so a paste lands as a phrase rather than at absolute ticks.
-    note_clipboard: Vec<NoteEvent>,
-    /// Token identifying the pointer gesture currently in flight, if one is.
-    /// A drag reports an edit on every move frame; stamping them all with the
-    /// same token is what collapses them into one undo step.
-    gesture: Option<u64>,
-    /// Source of the next token. Monotonic rather than a bool so that two
-    /// drags separated by a release never look like one continuous gesture.
-    next_gesture: u64,
-}
-
-/// The work-surface/lower-dock combination a `view.pane-*` shortcut
-/// targets. `mixer-visible` and `editor-page` are independent Slint
-/// properties (the step grid or mixer sits above an always-visible
-/// Source/Notes/Playlist dock), so there is no single UI property that
-/// says "which pane is current" -- this is tracked here instead of derived,
-/// so Next/Prev cycles predictably even though Steps and the dock tabs are
-/// simultaneously visible.
-#[derive(Clone, Copy, Default, PartialEq)]
-enum Pane {
-    Steps,
-    Mixer,
-    #[default]
-    Source,
-    Notes,
-    Playlist,
-}
-
-const PANE_CYCLE: [Pane; 5] = [
-    Pane::Steps,
-    Pane::Mixer,
-    Pane::Source,
-    Pane::Notes,
-    Pane::Playlist,
-];
-
 fn apply_pane(window: &MainWindow, pane: Pane) {
     match pane {
         Pane::Steps => window.set_mixer_visible(false),
@@ -831,185 +533,6 @@ fn apply_pane(window: &MainWindow, pane: Pane) {
     }
 }
 
-fn cycle_pane(current: Pane, forward: bool) -> Pane {
-    let position = PANE_CYCLE
-        .iter()
-        .position(|pane| *pane == current)
-        .unwrap_or(0);
-    let len = PANE_CYCLE.len();
-    let next = if forward {
-        (position + 1) % len
-    } else {
-        (position + len - 1) % len
-    };
-    PANE_CYCLE[next]
-}
-
-#[derive(Clone, Copy)]
-enum HistoryMove {
-    Record,
-    Undo,
-    Redo,
-}
-
-/// Structural channel edits are prepared by UI callbacks and installed by the
-/// pump, which exclusively owns the engine handle. A complete project swap
-/// keeps insertion/removal/reordering atomically visible to the audio thread.
-struct ProjectEdit {
-    project: Project,
-    samples: Vec<Option<Arc<SampleData>>>,
-    status: String,
-    history: Option<(HistoryMove, HistoryEntry<ProjectSnapshot>)>,
-}
-
-/// A failure the user has to be told about in full. `message` is the plain
-/// language they act on; `report` is the codes and counts they copy into a bug
-/// report, empty when the error has nothing more to say than `message` does.
-/// Kept together so no failure path can show one and drop the other.
-struct DocumentProblem {
-    message: String,
-    report: String,
-}
-
-impl From<mooloop_project::Error> for DocumentProblem {
-    fn from(error: mooloop_project::Error) -> Self {
-        Self {
-            report: error.report().unwrap_or_default(),
-            message: error.to_string(),
-        }
-    }
-}
-
-impl From<String> for DocumentProblem {
-    fn from(message: String) -> Self {
-        Self {
-            message,
-            report: String::new(),
-        }
-    }
-}
-
-impl DocumentProblem {
-    /// Everything the problem knows, flattened onto one line for the log.
-    /// Both halves, because the plain-language message and the codes are the
-    /// two things a report needs and a log entry that carries one without the
-    /// other is the situation this whole pass exists to remove.
-    fn one_line(&self) -> String {
-        let joined = if self.report.is_empty() {
-            self.message.clone()
-        } else {
-            format!("{} | {}", self.message, self.report)
-        };
-        joined.split_whitespace().collect::<Vec<_>>().join(" ")
-    }
-}
-
-/// Parks a song that could not be saved, returning where it went.
-///
-/// The user has already lost the save they asked for; what they must not also
-/// lose is the document, because a problem nobody can reopen is a problem
-/// nobody can fix. The written report holds the same text as the dialog, so a
-/// file found weeks later still says what was wrong with it.
-///
-/// Failing to park is reported to the log and otherwise swallowed: this runs
-/// inside the handler for an error that is already on its way to the user, and
-/// a second error stacked on the first would only bury the first.
-fn quarantine_song(project: &Project, problem: &DocumentProblem) -> Option<PathBuf> {
-    let path = settings::quarantine_dir()
-        .join(format!("{}.mooloop", mooloop_core::log::file_stamp()));
-    let report = format!(
-        "mooloop {}\n\n{}\n\n{}\n",
-        build_description(),
-        problem.message,
-        problem.report
-    );
-    match mooloop_project::quarantine_song(&path, project, &report) {
-        Ok(path) => {
-            log_warn!("project", "song set aside at {}", path.display());
-            Some(path)
-        }
-        Err(error) => {
-            log_error!(
-                "project",
-                "could not set the song aside at {}: {error}",
-                path.display()
-            );
-            None
-        }
-    }
-}
-
-enum DocumentResult {
-    Cancelled,
-    NewSong(Project),
-    SavedSong {
-        path: PathBuf,
-        mode: AssetMode,
-        revision: u64,
-        report: SaveReport,
-        sample_references: Vec<Option<SampleReference>>,
-    },
-    SavedOther {
-        label: &'static str,
-        report: SaveReport,
-    },
-    SavedPreset {
-        label: &'static str,
-        report: SaveReport,
-    },
-    /// `action` completes "Could not ...", e.g. `save this song`.
-    Failed {
-        action: &'static str,
-        problem: DocumentProblem,
-    },
-    Loaded {
-        path: PathBuf,
-        target: LoadTarget,
-        document: ResolvedDocument,
-    },
-    Exported {
-        path: PathBuf,
-    },
-}
-
-fn fresh_starter_seed() -> u64 {
-    static SEQUENCE: AtomicU64 = AtomicU64::new(1);
-    let clock = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    clock
-        ^ SEQUENCE
-            .fetch_add(1, Ordering::Relaxed)
-            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-}
-
-fn copied_channel_name(project: &Project, source_name: &str) -> String {
-    let base = if source_name.trim().is_empty() {
-        "Channel".to_string()
-    } else {
-        format!("{source_name} copy")
-    };
-    if !project
-        .channels
-        .iter()
-        .any(|channel| channel.setup.channel.name == base)
-    {
-        return base;
-    }
-    for suffix in 2..=MAX_CHANNELS {
-        let candidate = format!("{base} {suffix}");
-        if !project
-            .channels
-            .iter()
-            .any(|channel| channel.setup.channel.name == candidate)
-        {
-            return candidate;
-        }
-    }
-    base
-}
-
 fn snapshot_channel_clipboard(
     state: &UiState,
     window: &MainWindow,
@@ -1020,17 +543,6 @@ fn snapshot_channel_clipboard(
         channel: snapshot.project.channels.get(index)?.clone(),
         sample: snapshot.samples.get(index)?.clone(),
     })
-}
-
-/// Keep every channel's pattern-indexed banks parallel to the project's
-/// pattern list. A clipboard can outlive pattern edits, and old projects may
-/// legitimately arrive without the automation banks introduced later.
-fn normalize_project_pattern_banks(project: &mut Project) {
-    let pattern_count = project.pattern_lengths.len();
-    for channel in &mut project.channels {
-        channel.notes.resize_with(pattern_count, Vec::new);
-        channel.automation.resize_with(pattern_count, Vec::new);
-    }
 }
 
 fn project_snapshot(state: &UiState, window: &MainWindow) -> ProjectSnapshot {
@@ -1112,20 +624,6 @@ const DYNAMICS_DISPLAY_STEP_DB: f32 = 0.5;
 
 fn dynamics_display_changed(previous: f32, next: f32) -> bool {
     (previous - next).abs() >= DYNAMICS_DISPLAY_STEP_DB
-}
-
-/// The selected notes a group gesture should act on, always including the
-/// note that was actually grabbed.
-///
-/// Grabbing an unselected note has to act on that note alone, not on some
-/// selection elsewhere in the pattern; grabbing a selected one acts on the
-/// whole selection. Both fall out of "the selection, plus the anchor".
-/// A scale drag's starting state.
-struct ScaleBase {
-    /// The tick the selection scales about: the edge the drag is not moving.
-    anchor: u32,
-    /// Each selected note's id with its pre-drag start and duration.
-    notes: Vec<(NoteId, u32, u32)>,
 }
 
 /// Whether a keyboard edit should act on the piano roll's note selection
@@ -1397,14 +895,6 @@ fn queue_pattern_clear(
         channel.automation[index].clear();
     }
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
-}
-
-#[derive(Clone, Copy, Debug)]
-enum LoadTarget {
-    Song,
-    Kit,
-    Channel,
-    Generator,
 }
 
 pub struct AppUi {
@@ -5143,7 +4633,12 @@ impl AppUi {
                         // it just failed. Park a copy before the failure is
                         // reported, so the answer to "can I look at it later"
                         // is yes even if they close the window in disgust.
-                        if let Some(parked) = quarantine_song(&project, &problem) {
+                        if let Some(parked) = quarantine_song(
+                            &settings::quarantine_dir(),
+                            &build_description(),
+                            &project,
+                            &problem,
+                        ) {
                             problem.message.push_str(&format!(
                                 "\n\nNothing is lost: a copy of this song was set aside at {}.",
                                 parked.display()
@@ -12850,62 +12345,6 @@ fn asset_mode_from_window(window: &MainWindow) -> AssetMode {
     }
 }
 
-fn apply_sample_references(
-    channels: &mut [ChannelState],
-    references: impl IntoIterator<Item = Option<SampleReference>>,
-) {
-    for (channel, sample) in channels.iter_mut().zip(references) {
-        match sample {
-            Some(SampleReference::Builtin { .. } | SampleReference::Empty) => {
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-            }
-            Some(SampleReference::File { path, embedded }) => {
-                channel.sample_path = Some(path);
-                channel.sample_embedded = embedded;
-            }
-            None => {}
-        }
-    }
-}
-
-fn warning_suffix(count: usize) -> String {
-    if count == 0 {
-        String::new()
-    } else {
-        format!(
-            " ({count} sample warning{})",
-            if count == 1 { "" } else { "s" }
-        )
-    }
-}
-
-/// Saving and loading repair what they can rather than refusing, so a clean
-/// run still has something to say when it corrected anything on the way.
-fn repair_suffix(count: usize) -> String {
-    if count == 0 {
-        String::new()
-    } else {
-        format!(
-            " ({count} problem{} corrected)",
-            if count == 1 { "" } else { "s" }
-        )
-    }
-}
-
-/// Writes every correction to the log, one line each.
-///
-/// The status bar has room for a count and nothing else, but the count is not
-/// the useful part: the code says which invariant the edit layer let through,
-/// and that is the only lead there is on a bug that corrected itself. At
-/// `warn` because a document needing repair is never expected, even though the
-/// user's save went through.
-fn log_repairs(what: &str, repairs: &[Issue]) {
-    for issue in repairs {
-        log_warn!("project", "{what}: [{}] {issue}", issue.code);
-    }
-}
-
 fn operation_status(
     label: &str,
     path: &Path,
@@ -13031,63 +12470,6 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
     let st = state.borrow();
     st.sync_generator_preset_menu(window);
     st.sync_channel_preset_menu(window);
-}
-
-fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem> {
-    let mut report = mooloop_project::load_bundle(path)?;
-    let sample_references = match &report.document {
-        LoadedDocument::Song(project) => project
-            .channels
-            .iter()
-            .map(|channel| {
-                channel
-                    .setup
-                    .source
-                    .sampler_state()
-                    .map(|sampler| sampler.sample.clone())
-            })
-            .collect::<Vec<_>>(),
-        LoadedDocument::Kit(kit) => kit
-            .channels
-            .iter()
-            .map(|channel| {
-                channel
-                    .source
-                    .sampler_state()
-                    .map(|sampler| sampler.sample.clone())
-            })
-            .collect(),
-        LoadedDocument::Channel(channel) => vec![channel
-            .source
-            .sampler_state()
-            .map(|sampler| sampler.sample.clone())],
-        LoadedDocument::Generator(source) => {
-            vec![source.sampler_state().map(|sampler| sampler.sample.clone())]
-        }
-    };
-    let mut samples = Vec::with_capacity(sample_references.len());
-    for (channel, reference) in sample_references.into_iter().enumerate() {
-        match reference {
-            None | Some(SampleReference::Builtin { .. } | SampleReference::Empty) => {
-                samples.push(None)
-            }
-            Some(SampleReference::File { path, .. }) if path.is_file() => {
-                match audio_file::decode(&path) {
-                    Ok(decoded) => samples.push(Some(decoded.sample)),
-                    Err(error) => {
-                        report.warnings.push(AssetWarning {
-                            channel,
-                            path,
-                            message: error,
-                        });
-                        samples.push(None);
-                    }
-                }
-            }
-            Some(SampleReference::File { .. }) => samples.push(None),
-        }
-    }
-    Ok(ResolvedDocument { report, samples })
 }
 
 /// Hand one channel's audio and slice map to the engine.
@@ -13246,147 +12628,6 @@ mod tests {
         assert_eq!(effect_kind_units(EffectKind::Modulation), 2);
     }
 
-    /// A knob that reports a different number from the one the engine runs is
-    /// worse than no knob. Round-trip both stretch mappings across their
-    /// declared ranges.
-    #[test]
-    fn the_stretch_mappings_round_trip() {
-        for ratio in [0.25f32, 0.5, 0.75, 1.0, 1.5, 2.0, 6.5, 16.0] {
-            let back = stretch_ratio_from_norm(stretch_ratio_to_norm(ratio));
-            assert!(
-                (back - ratio).abs() < ratio * 1.0e-4,
-                "ratio {ratio} came back as {back}"
-            );
-        }
-        for frames in [64u16, 128, 192, 256, 1024, 2048, 4096] {
-            let back = stretch_grain_from_norm(stretch_grain_to_norm(frames));
-            assert_eq!(back, frames, "grain {frames} came back as {back}");
-        }
-    }
-
-    /// Unity is the value a user returns to, so it has to be reachable and it
-    /// has to be where the knob's default sits. The Slint default is 0.3333;
-    /// this is what pins that number to something real rather than a guess.
-    #[test]
-    fn unity_stretch_sits_at_the_knobs_default_position() {
-        let norm = stretch_ratio_to_norm(1.0);
-        assert!(
-            (norm - 0.3333).abs() < 0.001,
-            "unity maps to {norm}, but the control defaults to 0.3333"
-        );
-        assert!((stretch_ratio_from_norm(0.3333) - 1.0).abs() < 0.001);
-
-        let grain = stretch_grain_to_norm(1024);
-        assert!(
-            (grain - 0.6667).abs() < 0.001,
-            "the default grain maps to {grain}, but the control defaults to 0.6667"
-        );
-    }
-
-    /// The bars knob maps like the other two, and unity -- one bar -- has to
-    /// be reachable and sit where the Slint control defaults.
-    #[test]
-    fn the_bars_mapping_round_trips_and_defaults_to_one_bar() {
-        for bars in [0.0625f32, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 64.0] {
-            let back = stretch_bars_from_norm(stretch_bars_to_norm(bars));
-            assert!((back - bars).abs() < bars * 1.0e-4, "{bars} came back {back}");
-        }
-        let norm = stretch_bars_to_norm(1.0);
-        assert!(
-            (norm - 0.4).abs() < 0.001,
-            "one bar maps to {norm}, but the control defaults to 0.4"
-        );
-    }
-
-    /// Typed entry has to survive the units the field itself displays: the
-    /// obvious thing to do with a box reading "2.00x" is to type "4x".
-    #[test]
-    fn typed_values_tolerate_the_units_the_field_shows() {
-        assert_eq!(parse_typed_value("4"), Some(4.0));
-        assert_eq!(parse_typed_value("4x"), Some(4.0));
-        assert_eq!(parse_typed_value("2.5 bar"), Some(2.5));
-        // The grain field's own text: the leading number is the value, and
-        // committing it unchanged has to be a no-op rather than a jump to
-        // 256375.
-        assert_eq!(parse_typed_value("256 fr / 375 Hz"), Some(256.0));
-        assert_eq!(parse_typed_value("-3 st"), Some(-3.0));
-        assert_eq!(parse_typed_value(" 1.75 "), Some(1.75));
-    }
-
-    /// Anything unparseable must be refused rather than guessed at, so a
-    /// half-typed string never reaches the engine.
-    #[test]
-    fn unparseable_typed_values_are_refused() {
-        for text in ["", "   ", "bar", "x", "..", "-", "nan", "inf"] {
-            assert_eq!(parse_typed_value(text), None, "{text:?} was accepted");
-        }
-    }
-
-    /// The auto-snap seed measures the loop against the tempo. At 120 BPM a
-    /// bar is 96,000 frames, so a 192,000-frame sample is two bars.
-    #[test]
-    fn the_seed_measures_the_loop_against_the_tempo() {
-        let params = SamplerParams::default();
-        let bars = measured_loop_bars(params, 192_000, 48_000, 120.0);
-        assert!((bars - 2.0).abs() < 1.0e-3, "measured {bars}");
-        assert_eq!(snap_bars_to_power_of_two(bars), 2.0);
-
-        // A slightly long recording still lands on the intended length.
-        let sloppy = measured_loop_bars(params, 196_000, 48_000, 120.0);
-        assert_eq!(snap_bars_to_power_of_two(sloppy), 2.0);
-    }
-
-    /// With a loop set, the loop is what gets measured -- not the whole
-    /// sample -- because the loop is the part that repeats against the grid.
-    /// Except in slice mode, where the loop is the slice and the global loop
-    /// points are hidden: there the whole region is what lies on the grid,
-    /// and the seed has to measure what the ratio will be derived from.
-    #[test]
-    fn the_seed_measures_the_loop_rather_than_the_whole_sample() {
-        let params = SamplerParams {
-            loop_mode: LoopMode::Forward,
-            loop_start: 0.0,
-            loop_end: 0.5,
-            ..SamplerParams::default()
-        };
-        let bars = measured_loop_bars(params, 192_000, 48_000, 120.0);
-        assert!((bars - 1.0).abs() < 1.0e-3, "measured {bars}");
-
-        let sliced = SamplerParams {
-            play_mode: PlayMode::Slice,
-            ..params
-        };
-        let bars = measured_loop_bars(sliced, 192_000, 48_000, 120.0);
-        assert!((bars - 2.0).abs() < 1.0e-3, "slice mode measured {bars}");
-    }
-
-    /// The frame count is the file's, so the rate has to be the file's too.
-    /// Two bars of 44.1 kHz break measured at 48 kHz read as 1.84 bars --
-    /// still snapping to two here, but a slightly short two-bar loop would
-    /// have been dragged down to one.
-    #[test]
-    fn the_seed_measures_in_the_samples_own_rate() {
-        let params = SamplerParams::default();
-        let two_bars_at_44k = 2 * 44_100 * 2;
-        let bars = measured_loop_bars(params, two_bars_at_44k, 44_100, 120.0);
-        assert!((bars - 2.0).abs() < 1.0e-3, "measured {bars}");
-        let misread = measured_loop_bars(params, two_bars_at_44k, 48_000, 120.0);
-        assert!(misread < 1.9, "the wrong rate should visibly misread: {misread}");
-    }
-
-    /// Out-of-range input is clamped rather than propagated. Both ends of both
-    /// controls, because a modulated or automated value can arrive at
-    /// anything.
-    #[test]
-    fn the_stretch_mappings_clamp_rather_than_extrapolate() {
-        assert_eq!(stretch_ratio_from_norm(-5.0), MIN_STRETCH_RATIO);
-        assert_eq!(stretch_ratio_from_norm(5.0), MAX_STRETCH_RATIO);
-        assert_eq!(stretch_grain_from_norm(-5.0), MIN_STRETCH_GRAIN);
-        assert_eq!(stretch_grain_from_norm(5.0), MAX_STRETCH_GRAIN);
-        assert_eq!(stretch_ratio_to_norm(1_000.0), 1.0);
-        assert_eq!(stretch_ratio_to_norm(0.0), 0.0);
-    }
-
     use super::*;
 
     #[test]
@@ -13537,36 +12778,6 @@ mod tests {
     }
 
     #[test]
-    fn copied_channel_names_are_readable_and_unique() {
-        let mut project = Project::default();
-        project.channels[0].setup.channel.name = "Kick".into();
-        assert_eq!(copied_channel_name(&project, "Kick"), "Kick copy");
-
-        let mut first_copy = project.channels[0].clone();
-        first_copy.setup.channel.name = "Kick copy".into();
-        project.channels.push(first_copy);
-        assert_eq!(copied_channel_name(&project, "Kick"), "Kick copy 2");
-    }
-
-    #[test]
-    fn project_pattern_banks_are_normalized_for_stale_clipboard_channels() {
-        let mut project = Project {
-            pattern_lengths: vec![16, 32, 8],
-            ..Default::default()
-        };
-        project.channels[0].notes = vec![vec![NoteEvent::new(1, 0, 6, 60, 100)]];
-        project.channels[0].automation = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-
-        normalize_project_pattern_banks(&mut project);
-
-        assert_eq!(project.channels[0].notes.len(), 3);
-        assert_eq!(project.channels[0].automation.len(), 3);
-        assert_eq!(project.channels[0].notes[0].len(), 1);
-        assert!(project.channels[0].notes[1].is_empty());
-        assert!(project.channels[0].notes[2].is_empty());
-    }
-
-    #[test]
     fn rack_cell_preserves_sixty_fourth_note_gaps() {
         let notes = [
             NoteEvent::new(1, 0, 6, 60, 70),
@@ -13637,38 +12848,6 @@ mod tests {
             note_cell(note, &selected).selected,
             "every member of the set should read as selected, not just a lone primary"
         );
-    }
-
-    #[test]
-    fn channel_assigns_stable_note_ids() {
-        let mut channel = ChannelState::new(0);
-        let first = channel.create_note(0, 0, DEFAULT_NOTE_DURATION_TICKS, 60);
-        let second = channel.create_note(0, TICKS_PER_64TH, DEFAULT_NOTE_DURATION_TICKS, 62);
-        assert_ne!(first.id, second.id);
-        assert_eq!(channel.notes[0][0].id, first.id);
-        assert_eq!(channel.notes[0][1].id, second.id);
-    }
-
-    #[test]
-    fn saved_bundle_sample_paths_replace_external_paths() {
-        let mut channel = ChannelState::new(0);
-        channel.sample_path = Some(PathBuf::from("/samples/source.wav"));
-
-        apply_sample_references(
-            std::slice::from_mut(&mut channel),
-            [Some(SampleReference::File {
-                path: PathBuf::from("/songs/beat.mooloop-assets/samples/00-source.wav"),
-                embedded: true,
-            })],
-        );
-
-        assert_eq!(
-            channel.sample_path,
-            Some(PathBuf::from(
-                "/songs/beat.mooloop-assets/samples/00-source.wav"
-            ))
-        );
-        assert!(channel.sample_embedded);
     }
 
 }

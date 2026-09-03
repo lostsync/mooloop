@@ -18,6 +18,17 @@ pub struct LoadedSample {
     pub can_next: bool,
 }
 
+/// Result of a background sample load, delivered to the pump.
+pub struct LoadResult {
+    pub channel: usize,
+    pub source_revision: u64,
+    /// Load into a sampler channel created on arrival (`channel` is then the
+    /// index the new channel will take) rather than an existing one.
+    pub new_channel: bool,
+    /// `None` = dialog cancelled; `Some(Err)` = decode failed.
+    pub result: Option<Result<LoadedSample, String>>,
+}
+
 pub fn sample_files_in_directory(path: &Path) -> Result<Vec<PathBuf>, String> {
     let directory = path
         .parent()
