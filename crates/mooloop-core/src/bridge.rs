@@ -33,7 +33,7 @@ use crate::{
 // future channel-preset verb belongs on the structural ring rather than
 // here: that ring may carry a `Box` because it has a reclaim path back off
 // the audio thread. See
-// `docs/plans/modulator-capacity/03-per-slot-commands.md`.
+// `docs/plans/archive/modulator-capacity/03-per-slot-commands.md`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EngineCommand {
     /// Begin or resume playback from the current position.

@@ -72,7 +72,7 @@ pub enum StructuralCommand {
         /// The slot's host and control state. Allocated here with the node
         /// rather than reserved for all 256 addressable slots up front, which
         /// is what an empty slot used to cost
-        /// (`docs/plans/modulator-capacity/`).
+        /// (`docs/plans/archive/modulator-capacity/`).
         state: Box<EffectSlot>,
     },
     /// Replace an installed node only when the destination still contains the

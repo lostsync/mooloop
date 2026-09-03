@@ -40,6 +40,7 @@ that affect the decision at hand:
 | --- | --- |
 | Product or architecture decision | `docs/PRODUCT.md`, then the relevant architecture/design document |
 | Open-ended priority or scope choice | `docs/FOCUS.md` and `docs/ROADMAP.md` |
+| Which plans are live, and what state each is in | `docs/plans/README.md` |
 | Broad existing user surface or known gap | `docs/CURRENT.md` |
 | UI layout, controls, or interaction | `docs/UI_DESIGN.md` |
 | Retained-audio buffer work | `docs/BUFFER_ENGINE.md` |

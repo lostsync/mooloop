@@ -3823,7 +3823,7 @@ impl UiState {
     /// The command names one fact — a parameter, a slot, a route — rather
     /// than the rack it lives in, so the preallocated command ring is sized
     /// by the widest single module instead of by modulator capacity
-    /// (`docs/plans/modulator-capacity/03-per-slot-commands.md`). The channel
+    /// (`docs/plans/archive/modulator-capacity/03-per-slot-commands.md`). The channel
     /// index is supplied here rather than by the caller so no gesture can
     /// address a channel other than the one it just edited.
     fn send_modulation(

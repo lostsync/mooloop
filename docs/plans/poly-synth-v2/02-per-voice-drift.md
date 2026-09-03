@@ -207,7 +207,7 @@ paid for on every live channel whether or not anything uses it. `MlP8` is
 its neighbours), and a sixteen-channel project went from 1,157 KiB to 1,198.
 `MlP8Params` is also now the widest block a command carries, so
 `EngineCommand` went from 136 to 152 bytes. Both numbers are pinned by the
-tests `docs/plans/modulator-capacity/` left behind, and both were updated
+tests `docs/plans/archive/modulator-capacity/` left behind, and both were updated
 rather than worked around.
 
 ### The oscillator primitive

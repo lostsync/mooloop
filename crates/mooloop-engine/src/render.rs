@@ -203,7 +203,7 @@ impl PendingEffectParams {
 /// because that is the width of the index, and a project populates a handful;
 /// holding a 320-byte event queue and a 140-byte parameter set for each of
 /// the 256 was 140 KiB per chain, and a chain lives on every one of 256
-/// channels (`docs/plans/modulator-capacity/`).
+/// channels (`docs/plans/archive/modulator-capacity/`).
 ///
 /// Allocated on the control thread and installed, like the node beside it.
 pub struct EffectSlot {
@@ -1209,7 +1209,7 @@ pub(crate) struct RenderState {
     modulators: Vec<ModulatorRack>,
     /// A full block of resolved control signal is 8 KiB; reserving one for
     /// every addressable channel cost 2 MiB before a project existed
-    /// (`docs/plans/modulator-capacity/`).
+    /// (`docs/plans/archive/modulator-capacity/`).
     control_outputs: Vec<Box<ControlOutputs>>,
     sample_rate: u32,
     /// Nodes displaced from effect slots this block, awaiting handoff to the
@@ -3019,7 +3019,7 @@ mod tests {
     /// That guard was written when it could not fire: `MAX_CHANNELS` is 256
     /// and the command addresses channels with a `u8`, so every address was
     /// backed by a strip that had been reserved up front. Reserving them
-    /// stopped (`docs/plans/modulator-capacity/`) -- the graph now builds
+    /// stopped (`docs/plans/archive/modulator-capacity/`) -- the graph now builds
     /// only the channels a project describes -- so an in-range `u8` can
     /// address a strip that is simply not there, and the guard became load
     /// bearing rather than defensive. This is the case that reaches it.
@@ -4804,7 +4804,7 @@ mod tests {
             ));
         });
         // The cutoff now ramps (see
-        // docs/plans/share-dsp-primitives/01-smooth-effect-parameters.md)
+        // docs/plans/archive/share-dsp-primitives/01-smooth-effect-parameters.md)
         // rather than snapping, so a queued change doesn't fully close the
         // filter within the same 1024-frame block it's queued in. Render
         // one block to let the ramp settle, discard it, then measure the
@@ -5178,7 +5178,7 @@ mod footprint {
     /// something changed a ceiling or widened a per-slot or per-channel
     /// struct; check the new figure is one worth paying before updating it.
     ///
-    /// `docs/plans/modulator-capacity/`.
+    /// `docs/plans/archive/modulator-capacity/`.
     #[test]
     fn the_render_graph_costs_what_the_project_uses() {
         use core::mem::size_of;

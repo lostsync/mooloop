@@ -84,7 +84,7 @@ let sample = filtered * amp_env.level() * velocity * tremolo;
 The gain-staging problem this creates is real and is the reason to be careful:
 three oscillators at full level sum to roughly 3× a single one, so pre-drive
 sees wildly different input depending on the OSC page. The
-`docs/plans/gain-structure/` work is the eventual answer; until it lands,
+`docs/plans/archive/gain-structure/` work is the eventual answer; until it lands,
 compensate inside the drive stage — normalize by a cheap running estimate of
 the mix level, or apply makeup gain as a function of `drive` — so that turning
 Drive up changes character much more than it changes loudness. Record whatever

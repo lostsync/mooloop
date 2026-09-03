@@ -52,4 +52,4 @@ before/after baseline instead of trusting the micro-benchmarks in isolation.
 
 This step *is* verification for the rest of the plan — its output is a
 before/after comparison, not a further code change. Record the numbers in
-the PR description for `docs/plans/reduce-ui-pump-overhead/`.
+the PR description for `docs/plans/archive/reduce-ui-pump-overhead/`.

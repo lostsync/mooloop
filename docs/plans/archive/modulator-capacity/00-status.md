@@ -4,7 +4,7 @@ Eight modules per channel is fine to play with. This plan is about the
 number being *allowed to move* — so raising it is a constant edit and an
 argument about memory, never a hunt through layout code.
 
-`docs/plans/modulator-modules/` is complete and this does not reopen it.
+`docs/plans/archive/modulator-modules/` is complete and this does not reopen it.
 Nothing here changes what a module is, how routes are addressed, or the
 32-frame control contract. Durable `ModSourceId` already landed, so slot
 numbers are an implementation detail rather than something a saved project

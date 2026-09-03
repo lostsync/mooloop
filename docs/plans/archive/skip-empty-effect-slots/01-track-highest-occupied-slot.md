@@ -23,7 +23,7 @@ channels=32  64 frames: 159.4 us/block   (~12% of budget doing nothing)
 This is fixed overhead independent of block size (nearly identical at 64
 and 128 frames), and it evicts cache lines the reverb/delay/filter state
 actually needs, compounding the reverb load-spike problem in
-`docs/plans/amortize-reverb-partition-cost/`.
+`docs/plans/archive/amortize-reverb-partition-cost/`.
 
 ## What to do
 

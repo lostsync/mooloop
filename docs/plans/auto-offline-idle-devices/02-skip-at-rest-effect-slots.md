@@ -9,7 +9,7 @@ reverb, a delay, and an EQ on a channel that is not currently sounding pays
 full price for all three, forever.
 
 (This is separate from — and should land after —
-`docs/plans/skip-empty-effect-slots/`, which stops the loop from scanning
+`docs/plans/archive/skip-empty-effect-slots/`, which stops the loop from scanning
 all 256 slots. That one removes the cost of *absent* nodes; this one
 removes the cost of *quiet* nodes.)
 
@@ -71,5 +71,5 @@ removes the cost of *quiet* nodes.)
   and assert the decaying output matches the always-process reference for
   the full tail length.
 - Measure: extend the throwaway probe used in
-  `docs/plans/skip-empty-effect-slots/` to a chain of 3-4 effects on an
+  `docs/plans/archive/skip-empty-effect-slots/` to a chain of 3-4 effects on an
   idle channel and record the before/after per-block cost.

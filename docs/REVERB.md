@@ -37,7 +37,7 @@ optimized, for three reasons:
   single `process` call where the 512-sample input window filled. At a
   64-frame period a two-second tail measured ~1400 us in that one block out of
   eight against a 1333 us budget — an xrun — while the mean was an affordable
-  54 us. `docs/plans/amortize-reverb-partition-cost/` proposed spreading that
+  54 us. `docs/plans/archive/amortize-reverb-partition-cost/` proposed spreading that
   work across the intervening blocks. An FDN removes the window instead of
   redistributing it.
 - **It could not be modulated.** A convolution node cannot accept a parameter

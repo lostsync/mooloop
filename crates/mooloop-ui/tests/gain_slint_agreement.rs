@@ -1,6 +1,6 @@
 //! The fader taper must agree exactly across the Rust/Slint boundary: a
 //! fader whose readout does not match its audio is the failure mode
-//! docs/plans/gain-structure/03-a-shared-gain-module.md exists to prevent.
+//! docs/plans/archive/gain-structure/03-a-shared-gain-module.md exists to prevent.
 //! `mooloop-core/src/gain.rs` owns the breakpoints; `ui/gain.slint` mirrors
 //! them, and this test fails loudly when the two lists diverge.
 

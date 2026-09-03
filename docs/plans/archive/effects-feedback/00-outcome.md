@@ -1,6 +1,6 @@
 # Outcome: done
 
-Closed August 2026. Thirteen of the fourteen plans that came out of
+Closed September 2026. All fourteen plans that came out of
 `docs/EFFECTS_FEEDBACK.md` landed; the status audit for each is preserved in
 the files here. Two notes that outlive the individual plans:
 
@@ -14,5 +14,11 @@ the files here. Two notes that outlive the individual plans:
   draggable marker on a curve should use it rather than a bespoke
   `TouchArea`.
 
-`13-mod-device-shrink.md` is the one plan still open and lives in the active
-`docs/plans/effects-feedback/` directory.
+`13-mod-device-shrink.md` was the last to land, on 2026-09-02, about a week
+after the other thirteen. All four of its items are in: the redundant
+mode/rate/depth text panel beside the display is gone, `ModulationDisplay`
+went from a 330x108 banner to a 174x148 left column, the seven full-size
+`ParameterKnob`s became eight compact ones at 60px/36px, and the device
+dropped from 3U to 2U -- pinned by `effect_kind_units(EffectKind::Modulation)
+== 2` rather than left to drift. The face was recomposed as an instrument
+panel in the same pass (`87d18f8`, `5013ad9`).

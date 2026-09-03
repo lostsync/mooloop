@@ -1231,7 +1231,7 @@ impl ModRoute {
 
 /// Fixed rack size. Eight slots per channel: four stopped being enough the
 /// moment modules became cheap to add, and the grid is laid out to hold this
-/// many (`docs/plans/modulator-modules/03-the-grid.md`).
+/// many (`docs/plans/archive/modulator-modules/03-the-grid.md`).
 ///
 /// This is a protocol number, not a UI one. The whole rack rides the command
 /// ring by value, so growing it grows every preallocated ring entry — which

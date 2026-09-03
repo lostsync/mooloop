@@ -3,7 +3,7 @@
 Standing documentation for how levels work in mooloop. The authority is
 `crates/mooloop-core/src/gain.rs` — if this document and the code disagree,
 the code wins and the document should be fixed. The decisions behind it were
-made in `docs/plans/gain-structure/01-the-gain-contract.md`.
+made in `docs/plans/archive/gain-structure/01-the-gain-contract.md`.
 
 ## Operating level
 

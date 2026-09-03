@@ -867,7 +867,7 @@ fn render_sampler_committed_stretch() {
 /// has sixteen slots instead of eight, must still show every module cell and
 /// still pick an input by name — with no edit anywhere in the UI. This is the
 /// test that fails if a literal row count or a per-slot segment creeps back
-/// in (`docs/plans/modulator-capacity/01-capacity-is-a-constant.md`).
+/// in (`docs/plans/archive/modulator-capacity/01-capacity-is-a-constant.md`).
 #[test]
 fn the_module_grid_scales_with_capacity_alone() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(

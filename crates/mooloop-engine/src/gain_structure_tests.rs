@@ -1,11 +1,11 @@
 //! Gain-structure characterization tests.
 //!
-//! These lock in TODAY'S levels before docs/plans/gain-structure/ changes
+//! These lock in TODAY'S levels before docs/plans/archive/gain-structure/ changes
 //! them. They are intentionally *characterization*, not correctness: when a
 //! plan step (04, 05, 06, 07) deliberately moves a number, update the
 //! expected range here in the same commit rather than treating the diff as a
 //! regression. Measured values are transcribed into
-//! `docs/plans/gain-structure/00-status.md` so later steps can compare
+//! `docs/plans/archive/gain-structure/00-status.md` so later steps can compare
 //! without re-running anything.
 
 use crate::render::RenderState;

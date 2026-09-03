@@ -2,7 +2,7 @@
 //!
 //! One module for every dB/linear conversion, the +12 dB gain ceiling, and
 //! the mixer fader taper, so a control's readout and its audio can never
-//! disagree. Reference document: `docs/plans/gain-structure/01-the-gain-contract.md`.
+//! disagree. Reference document: `docs/plans/archive/gain-structure/01-the-gain-contract.md`.
 //!
 //! These run per control change, not per sample: clarity beats speed.
 

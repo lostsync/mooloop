@@ -5,7 +5,7 @@
 //! allocation or locking.
 //!
 //! Deliberately **not** running through `crate::smooth` like the other
-//! effects (see `docs/plans/share-dsp-primitives/01-smooth-effect-parameters.md`).
+//! effects (see `docs/plans/archive/share-dsp-primitives/01-smooth-effect-parameters.md`).
 //! `apply_param` already recomputes coefficients at the exact sample offset
 //! of the event, so a knob drag does not zipper the way an unsmoothed
 //! amplitude parameter does elsewhere. What's left is a different artifact:

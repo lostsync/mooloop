@@ -10,7 +10,7 @@
 //! (32 voices, 4s of audio at 48 kHz, coefficients varying every 1000
 //! frames) measured shared-coefficient-per-frame at ~154ms versus
 //! per-channel-recompute at ~310ms — about 2x, dominated by the doubled
-//! `tan()`. `docs/plans/share-dsp-primitives/03-collapse-duplicate-implementations.md`
+//! `tan()`. `docs/plans/archive/share-dsp-primitives/03-collapse-duplicate-implementations.md`
 //! asked for exactly this measurement before converting; this is the
 //! result. New instruments (mono, not stereo-per-voice) use `Svf` directly,
 //! where the doubling doesn't apply.

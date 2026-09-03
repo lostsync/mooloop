@@ -64,6 +64,6 @@ of whether their content actually changed:
   confirm meters still respond to actual level changes, not just frozen
   after the first non-silent tick.
 - If `SLINT_DEBUG_PERFORMANCE=refresh_lazy,console` is set (see
-  `docs/plans/reduce-ui-pump-overhead/03-verify-with-slint-perf-logging.md`),
+  `docs/plans/archive/reduce-ui-pump-overhead/03-verify-with-slint-perf-logging.md`),
   confirm layer/redraw counts drop for an idle-but-playing project
   (silence, or a muted channel) compared to before this change.

@@ -19,8 +19,8 @@ not new plumbing.
 
 1. Change `AudioConfig::default()`'s `buffer_size` to `Some(256)` (safe
    middle ground before the other engine-side fixes in
-   `docs/plans/skip-empty-effect-slots/` and
-   `docs/plans/amortize-reverb-partition-cost/` land — 128 becomes
+   `docs/plans/archive/skip-empty-effect-slots/` and
+   `docs/plans/archive/amortize-reverb-partition-cost/` land — 128 becomes
    reasonable once those are done).
 2. Confirm `Engine::new` still degrades gracefully (falls back to the
    server's current buffer size with a printed warning) when
