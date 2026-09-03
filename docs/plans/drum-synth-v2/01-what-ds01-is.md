@@ -54,9 +54,17 @@ noise band, and a resonance.
    where most of the new drum types come from: rim, clave, conga, tabla, bell,
    cowbell, and the ringing metal that is neither a tone nor a noise.
 
-They sum, and the sum goes through a **SHAPE** stage — drive with a selectable
-character, plus a bias/fold and a rate reducer — and then the amplitude
-envelope and the output.
+They sum, the amplitude envelope shapes the sum, and *then* it goes through a
+**SHAPE** stage — drive with a selectable character, plus a bias and a bit
+reducer — and out.
+
+The shaper's position was corrected while step 06 was built. It was drawn
+ahead of the amplitude envelope and belongs after it, for the reason step 06
+gives Fold: folding is a function of instantaneous amplitude, so the shape of
+a hit changes across its own decay for free — but only if the decay has
+already happened by the time the signal reaches the folder. Ahead of the
+envelope a tone-only patch presents a constant amplitude and every hit folds
+identically. The same choice is what lets velocity reach the colour.
 
 ## Signal path
 
@@ -78,8 +86,10 @@ PER VOICE
                          ^
                          └── excited by impulse ↔ noise (Excite)
 
-   SUM ──> SHAPE ──> AMP ENV ──> OUT (mono)
-           (drive, character, bias, bits)
+   SUM ──> AMP ENV ──> SHAPE ──> OUT (mono)
+                       (drive, character, bias, bits)
+
+                                  ──> output HP, output level (per device)
 
    MOD ENV, VELOCITY, NOTE, BURST INDEX, HIT ALTERNATOR, PER-HIT RANDOM
        ──> DS-01's internal matrix ──> any continuous parameter

@@ -16,6 +16,14 @@ Each generator calibrates itself against the reference:
 
 - `DrumSynth`: `drumsynth::OUTPUT_REFERENCE`, the absolute anchor shared by
   the per-character balance tables.
+- `Ds01`: `ds01::VOICE_OUTPUT_REFERENCE`, calibrated so the default patch —
+  one tone layer at its default level, the device Level at 0.8, full velocity,
+  and a shape stage that is *exactly* transparent at its defaults — lands
+  where a default `DrumSynth` kick lands. Its shaper is separate from the
+  reference on purpose: v1's one `OUTPUT_REFERENCE` constant is a mix
+  decision, a character control and a safety bound at once, and DS-01 splits
+  those into `PARAM_LEVEL`, the Drive/Character/Bias/Bits stage, and
+  `ds01::device_bound`.
 - `MonoSynth` / `PolySynth`: `VOICE_OUTPUT_REFERENCE` in each file; the
   default patch runs one oscillator at its 0 dB top, and one oscillator at
   that top *is* the reference.

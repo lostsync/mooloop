@@ -1,6 +1,6 @@
 # DS-01 plan status
 
-**Steps 02 through 05 are in.** The device exists and plays: a new `Ds01` generator kind
+**Steps 02 through 06 are in.** The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
 state-variable filter, the amplitude and pitch envelopes, and the voice pool
@@ -27,7 +27,12 @@ by a longer one, which no amount of envelope shaping reaches from a single hit
 — and once the mechanism exists it is also a flam, a drag, a buzz roll and a
 machine-gun fill.
 
-Read `01-what-ds01-is.md`, then work `06` through `09` in order.
+Step 06 added the shape stage and settled the gain contract: Drive into one of
+four characters, a bias, a bit reducer, and an output high-pass, with the
+device reference documented as a contract rather than left as a constant doing
+three jobs.
+
+Read `01-what-ds01-is.md`, then work `07` through `09` in order.
 
 Four things step 02 turned up that the plan could not have known:
 
@@ -142,7 +147,32 @@ And four from step 05:
   more use than eight copies of a short one — which is also what makes it worth
   routing to Burst Index's neighbours in step 07.
 
-The device face is **not** part of steps 02 through 05. DS-01 is selectable, playable,
+And three from step 06, one of which changed `01`:
+
+- **The shaper is after the amplitude envelope, not before it.** `01`'s signal
+  path had it ahead; that diagram is now corrected there, as `01` asks. The
+  reason is the property step 06 requires of Fold: folding is a function of
+  instantaneous amplitude, so the shape of a hit changes across its own decay
+  *for free* — but only if the decay has already happened by the time the
+  signal reaches the folder. Ahead of the envelope, a tone-only patch presents
+  a constant amplitude and every hit folds identically. The same choice is
+  what lets velocity reach the colour, which is the taste brief's "reacts to
+  level, timing and the source" rather than a fixed percentage of an effect.
+- **Soft is `filter::apply_drive`, called rather than re-derived.** "Reproduces
+  v1's drive curve" is then an identity a test can assert with `assert_eq!`
+  rather than a tolerance, and an old-sounding patch is reachable exactly.
+- **Crush rectifies asymmetrically, not fully.** A full-wave rectifier leaves a
+  DC pedestal under silence, and the output high-pass removing it afterwards is
+  not the same thing as it never being there. Keeping most of the negative half
+  out gives the even harmonics and the partly-doubled fundamental without a
+  voice whose idle output is -1.
+
+`DS01_BITS_TRANSPARENT` is named rather than left as "the top of the range",
+because the identity is load-bearing: the default patch has to reach the gain
+reference through a shaper doing nothing at all, and `(x * 32768).round() /
+32768` is not `x`.
+
+The device face is **not** part of steps 02 through 06. DS-01 is selectable, playable,
 automatable and modulatable without one — every parameter is
 descriptor-addressed, so the modulation shelf and the automation lanes reach it
 whether or not a knob exists — and the rack shows a placeholder saying so.
@@ -226,7 +256,7 @@ instrument. Hence DS-01.
 | `03-the-envelopes.md` | **In.** Four AHD envelopes with curve and optional gate |
 | `04-the-body-resonator.md` | **In.** The tuned modal layer — toms, rims, bells, clangs |
 | `05-the-burst.md` | **In.** Multi-impulse triggering: clap, flam, roll, buzz |
-| `06-the-shape-stage.md` | Drive characters, the output stage, the gain contract |
+| `06-the-shape-stage.md` | **In.** Drive characters, the output stage, the gain contract |
 | `07-internal-modulation-and-outlets.md` | DS-01's own matrix and its published outlets |
 | `08-the-face.md` | The device face, with rendered concepts in `mockups/` |
 | `09-the-kit.md` | Factory patches, range tuning, and the listening pass |

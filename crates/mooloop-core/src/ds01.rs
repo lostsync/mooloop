@@ -93,6 +93,12 @@ pub const PARAM_BURST_SPREAD: u32 = 82;
 pub const PARAM_BURST_LEVEL_STEP: u32 = 83;
 pub const PARAM_BURST_PITCH_STEP: u32 = 84;
 
+pub const PARAM_DRIVE: u32 = 90;
+pub const PARAM_CHARACTER: u32 = 91;
+pub const PARAM_BIAS: u32 = 92;
+pub const PARAM_BITS: u32 = 93;
+pub const PARAM_OUTPUT_HP: u32 = 94;
+
 pub const PARAM_AMP_ENV_BASE: u32 = 40;
 pub const PARAM_NOISE_ENV_BASE: u32 = 60;
 pub const PARAM_MOD_ENV_BASE: u32 = 70;
@@ -113,6 +119,14 @@ pub const DS01_VOICES: usize = crate::MAX_DRUM_VOICES as usize;
 
 /// Most partials the tone bank can run.
 pub const DS01_MAX_PARTIALS: u8 = 6;
+
+/// Bit depth at which the reducer is exactly transparent.
+///
+/// Named rather than left as "the top of the range" because the identity is
+/// load-bearing: the default patch has to reach the gain reference through a
+/// shaper that is doing nothing at all, and `(x * 32768).round() / 32768` is
+/// not `x`.
+pub const DS01_BITS_TRANSPARENT: f32 = 16.0;
 
 /// Most impulses one trigger can fire.
 pub const DS01_MAX_REPEATS: u8 = 8;
@@ -403,6 +417,56 @@ const NOISE_DESCRIPTORS: [ParamDescriptor; 6] = [
     unit(PARAM_FILTER_RES, "Reso", 0.1),
 ];
 
+/// Which nonlinearity the shape stage runs.
+///
+/// The one place DS-01 gets an opinion rather than a range, and four is all
+/// it gets. Structural, and so ineligible for modulation by default:
+/// switching between hits must not click, and switching mid-hit is undefined.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ds01Character {
+    /// Symmetric soft clip: v1's `apply_drive`, curve for curve, so an
+    /// old-sounding patch stays reachable.
+    #[default]
+    Soft,
+    /// Sharp knee. Squares off a kick and puts the click back.
+    Hard,
+    /// Wavefolder. Turns level into timbre — a folded sine kick gets
+    /// harmonically dense without getting louder — and because folding is a
+    /// function of instantaneous amplitude, the shape of a hit changes across
+    /// its own decay for free.
+    Fold,
+    /// Rectification plus the bit reducer's character. The damaged one.
+    Crush,
+}
+
+impl Ds01Character {
+    pub const ALL: [Self; 4] = [Self::Soft, Self::Hard, Self::Fold, Self::Crush];
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|character| *character == self)
+            .unwrap_or_default() as i32
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Soft => "Soft",
+            Self::Hard => "Hard",
+            Self::Fold => "Fold",
+            Self::Crush => "Crush",
+        }
+    }
+}
+
 /// The layer v1 has no equivalent of, and where most of the new drum types
 /// come from: a rim, a clave, a conga, a cowbell, a bell, a piece of struck
 /// metal. Those sounds are a short excitation ringing through a resonant
@@ -462,6 +526,37 @@ const BURST_DESCRIPTORS: [ParamDescriptor; 5] = [
     bipolar(PARAM_BURST_LEVEL_STEP, "Level step", 0.0),
     // A fill that climbs, or a tom roll that falls.
     semitones(PARAM_BURST_PITCH_STEP, "Pitch step", -24.0, 24.0, 0.0),
+];
+
+/// Everything above sums into one shaper, and this is what that shaper is.
+///
+/// v1 applies `apply_drive` and multiplies by a single `OUTPUT_REFERENCE`
+/// constant. That is a reasonable calibration and the wrong structure: the
+/// constant does the job of a mix decision, a character control, and a safety
+/// bound at once. Here the mix decision is [`PARAM_LEVEL`], the safety bound
+/// is the device's own, and these five are the colour.
+const SHAPE_DESCRIPTORS: [ParamDescriptor; 5] = [
+    unit(PARAM_DRIVE, "Drive", 0.0),
+    stepped(
+        PARAM_CHARACTER,
+        "Character",
+        Ds01Character::ALL.len() as u8,
+        0.0,
+    ),
+    // Asymmetry: it adds even harmonics, and at the top it gates and spits.
+    // The DC it creates is what the output high-pass is for.
+    unit(PARAM_BIAS, "Bias", 0.0),
+    ParamDescriptor {
+        id: PARAM_BITS,
+        name: "Bits",
+        unit: "",
+        min: 1.0,
+        max: DS01_BITS_TRANSPARENT,
+        curve: ParamCurve::Stepped(DS01_BITS_TRANSPARENT as u8),
+        default: DS01_BITS_TRANSPARENT,
+    },
+    // Removes the DC that Bias creates, and thins a hit deliberately.
+    hz(PARAM_OUTPUT_HP, "Output HP", 5.0, 2_000.0, 20.0),
 ];
 
 /// Longest attack or hold. Half a second is already past a drum and into a
@@ -562,10 +657,10 @@ const MOD_ENV_DESCRIPTORS: [ParamDescriptor; ENV_BLOCK as usize] = env_block(
 );
 
 /// The complete DS-01 table for this step.
-pub static DESCRIPTORS: [ParamDescriptor; 55] = concat();
+pub static DESCRIPTORS: [ParamDescriptor; 60] = concat();
 
-const fn concat() -> [ParamDescriptor; 55] {
-    let mut out = [GLOBAL_DESCRIPTORS[0]; 55];
+const fn concat() -> [ParamDescriptor; 60] {
+    let mut out = [GLOBAL_DESCRIPTORS[0]; 60];
     let mut at = 0;
     let mut i = 0;
     while i < GLOBAL_DESCRIPTORS.len() {
@@ -618,6 +713,12 @@ const fn concat() -> [ParamDescriptor; 55] {
     i = 0;
     while i < BURST_DESCRIPTORS.len() {
         out[at] = BURST_DESCRIPTORS[i];
+        at += 1;
+        i += 1;
+    }
+    i = 0;
+    while i < SHAPE_DESCRIPTORS.len() {
+        out[at] = SHAPE_DESCRIPTORS[i];
         at += 1;
         i += 1;
     }
@@ -830,6 +931,18 @@ pub struct Ds01Params {
     /// Bipolar semitones, applied per impulse and cumulatively.
     pub burst_pitch_step: f32,
 
+    // --- Shape and output -----------------------------------------------
+    /// Amount into the nonlinearity, `[0, 1]`. `0` is exactly transparent.
+    pub drive: f32,
+    pub character: Ds01Character,
+    /// Asymmetry, `[0, 1]`.
+    pub bias: f32,
+    /// Bit depth, `1..=DS01_BITS_TRANSPARENT`. The top is exactly
+    /// transparent rather than very nearly so.
+    pub bits: f32,
+    /// Output high-pass in Hz.
+    pub output_hp: f32,
+
     // --- Envelopes ------------------------------------------------------
     /// The VCA, always.
     pub amp: Ds01EnvParams,
@@ -871,6 +984,11 @@ impl Default for Ds01Params {
             body_decay: 0.4,
             body_damping: 0.3,
             body_excite: 0.0,
+            drive: 0.0,
+            character: Ds01Character::Soft,
+            bias: 0.0,
+            bits: DS01_BITS_TRANSPARENT,
+            output_hp: 20.0,
             burst_repeats: 1,
             burst_spacing: 0.012,
             burst_spread: 0.0,
@@ -921,6 +1039,11 @@ pub fn get(p: &Ds01Params, id: u32) -> Option<f32> {
         PARAM_BODY_DECAY => p.body_decay,
         PARAM_BODY_DAMPING => p.body_damping,
         PARAM_BODY_EXCITE => p.body_excite,
+        PARAM_DRIVE => p.drive,
+        PARAM_CHARACTER => p.character.to_index() as f32,
+        PARAM_BIAS => p.bias,
+        PARAM_BITS => p.bits,
+        PARAM_OUTPUT_HP => p.output_hp,
         PARAM_BURST_REPEATS => f32::from(p.burst_repeats),
         PARAM_BURST_SPACING => p.burst_spacing,
         PARAM_BURST_SPREAD => p.burst_spread,
@@ -974,6 +1097,11 @@ pub fn set(p: &mut Ds01Params, id: u32, value: f32) -> bool {
         PARAM_BODY_DECAY => p.body_decay = value,
         PARAM_BODY_DAMPING => p.body_damping = value,
         PARAM_BODY_EXCITE => p.body_excite = value,
+        PARAM_DRIVE => p.drive = value,
+        PARAM_CHARACTER => p.character = Ds01Character::from_index(value.round() as i32),
+        PARAM_BIAS => p.bias = value,
+        PARAM_BITS => p.bits = value.round().clamp(1.0, DS01_BITS_TRANSPARENT),
+        PARAM_OUTPUT_HP => p.output_hp = value,
         PARAM_BURST_REPEATS => {
             p.burst_repeats = value.round().clamp(1.0, DS01_MAX_REPEATS as f32) as u8
         }
@@ -1003,14 +1131,14 @@ mod tests {
         }
     }
 
-    /// Steps 02 through 05 own 0-39, the four envelope bands, and the burst.
-    /// 90 onward is the shaper and the matrix; reaching into either would be
+    /// Steps 02 through 06 own everything below 100. The matrix's eight rows
+    /// are 100-131 and belong to step 07; reaching into them would be
     /// spending a later step's reservation.
     #[test]
     fn every_id_lands_in_a_band_these_steps_own() {
         for d in &DESCRIPTORS {
-            let owned = d.id < 40 || (40..90).contains(&d.id);
-            assert!(owned, "{} ({}) is outside steps 02-05's bands", d.id, d.name);
+            let owned = d.id < 100;
+            assert!(owned, "{} ({}) is outside steps 02-06's bands", d.id, d.name);
             assert!(
                 !(54..60).contains(&d.id),
                 "{} ({}) sits in the pitch band's unused tail",
@@ -1018,7 +1146,7 @@ mod tests {
                 d.name
             );
         }
-        assert_eq!(DESCRIPTORS.len(), 55);
+        assert_eq!(DESCRIPTORS.len(), 60);
     }
 
     /// The four envelopes are one type used four times, so their blocks have
@@ -1114,6 +1242,8 @@ mod tests {
                 PARAM_NOISE_ENV_BASE + ENV_OFFSET_GATE,
                 PARAM_MOD_ENV_BASE + ENV_OFFSET_GATE,
                 PARAM_BURST_REPEATS,
+                PARAM_CHARACTER,
+                PARAM_BITS,
             ]
         );
     }
@@ -1123,8 +1253,9 @@ mod tests {
         let mut params = Ds01Params::default();
         // 6 is inside the global band but unassigned; 36 is the tail of the
         // body one, 47 the tail of the amplitude block, 54 the tail of the
-        // pitch one, 85 the tail of the burst, and 90 the shaper in step 06.
-        for id in [6, 36, 47, 54, 85, 90] {
+        // pitch one, 85 the tail of the burst, 95 the tail of the shaper, and
+        // 100 the matrix's first row in step 07.
+        for id in [6, 36, 47, 54, 85, 95, 100] {
             assert_eq!(get(&params, id), None, "id {id} reads");
             assert!(!set(&mut params, id, 1.0), "id {id} writes");
         }

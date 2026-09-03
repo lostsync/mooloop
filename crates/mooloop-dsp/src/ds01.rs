@@ -58,14 +58,16 @@
 use crate::bus::StereoBus;
 use crate::env::{Ahd, AhdShape, DECAY_TAIL_CONSTANTS};
 use crate::event::{Event, EventList};
-use crate::filter::{soft_ceiling, Svf};
+use crate::filter::{apply_drive, soft_ceiling, OnePoleHp, Svf};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{Noise, Osc};
+use crate::shaper;
 use crate::smooth::Smoothed;
 use mooloop_core::{
-    body_mode_ratio, ds01, Ds01EnvParams, Ds01NoiseColor, Ds01Params, Ds01Retrigger, OscWave,
-    DS01_BODY_MODES, DS01_BURST_MAX_S, DS01_MAX_PARTIALS, DS01_MAX_REPEATS, DS01_VOICES,
-    MAX_CHOKE_GROUP,
+    body_mode_ratio, ds01, Ds01Character, Ds01EnvParams, Ds01NoiseColor, Ds01Params,
+    Ds01Retrigger, DriveCurve, OscWave,
+    DS01_BITS_TRANSPARENT, DS01_BODY_MODES, DS01_BURST_MAX_S, DS01_MAX_PARTIALS,
+    DS01_MAX_REPEATS, DS01_VOICES, MAX_CHOKE_GROUP,
 };
 
 /// One DS-01 envelope block as the shared envelope's shape.
@@ -81,16 +83,133 @@ fn ahd_shape(env: &Ds01EnvParams) -> AhdShape {
     }
 }
 
-/// The voice's absolute output reference, provisional until step 06 settles
-/// the gain contract and the shape stage that goes with it.
+/// The device's output reference, and the whole of DS-01's gain contract.
 ///
-/// Set so the default patch — one tone layer at its default level, the device
-/// Level at 0.8, full velocity — peaks within a dB of
-/// `mooloop_core::gain::GENERATOR_OUTPUT_REFERENCE_DBFS`, which is v1's own
-/// calibration. A v1 kick and a DS-01 kick therefore sit in the same place in
-/// a mix. `default_patch_peaks_at_the_generator_reference` is what holds it
-/// there.
+/// v1 has one `OUTPUT_REFERENCE` constant doing three jobs at once — a mix
+/// decision, a character control, and a safety bound. Here they are three
+/// things: `PARAM_LEVEL` is the mix decision, the shape stage is the
+/// character, [`device_bound`] is the safety bound, and this is only the
+/// reference they are all measured against.
+///
+/// The contract, under `docs/GAIN_STRUCTURE.md`:
+///
+/// - **One layer at its default level with Drive at 0 is the device
+///   reference.** The default patch — the tone layer at 1.0, the device Level
+///   at 0.8, full velocity, a shaper that is exactly transparent — peaks
+///   within a dB of `gain::GENERATOR_OUTPUT_REFERENCE_DBFS`, which is v1's own
+///   calibration, so a v1 kick and a DS-01 kick sit in the same place in a
+///   mix.
+/// - **Adding the noise or the body layer does not turn the tone down.** They
+///   are separate summed layers with their own levels, not a crossfade.
+/// - **Drive is compensated but not normalized.** Raising it changes timbre
+///   substantially more than it changes level, and it is still allowed to
+///   make a hit louder, because that is what drive does.
+///
+/// `the_default_patch_peaks_at_the_generator_reference` holds the first,
+/// `adding_a_layer_does_not_turn_the_tone_down` the second, and
+/// `drive_changes_timbre_more_than_level` the third.
 const VOICE_OUTPUT_REFERENCE: f32 = 0.4444;
+
+/// Input gain at full Drive. Shared with `filter::apply_drive`, which is the
+/// Soft character, so all four characters reach the same distance.
+const DRIVE_GAIN_RANGE: f32 = 15.0;
+
+/// How far Bias offsets the signal before the nonlinearity. Enough that the
+/// top of the control pushes a quiet tail entirely onto one side of the
+/// curve, which is the gating and spitting the step asks for.
+const BIAS_DEPTH: f32 = 0.6;
+
+/// How much of the negative half the Crush character keeps.
+const CRUSH_NEGATIVE: f32 = 0.15;
+
+/// The quantization Crush applies on its own, before the Bits control gets
+/// its turn. Four bits: this is the damaged one.
+const CRUSH_STEP: f32 = 1.0 / 16.0;
+
+/// Quantization step for a bit depth, or `0` where the reducer is exactly
+/// transparent.
+///
+/// Exactly rather than nearly: the default patch has to reach the gain
+/// reference through a shaper doing nothing at all, and `(x * 32768).round()
+/// / 32768` is not `x`.
+fn bit_step(bits: f32) -> f32 {
+    if bits >= DS01_BITS_TRANSPARENT {
+        0.0
+    } else {
+        1.0 / 2.0_f32.powf(bits.max(1.0) - 1.0)
+    }
+}
+
+fn quantize(input: f32, step: f32) -> f32 {
+    if step <= 0.0 {
+        input
+    } else {
+        (input / step).round() * step
+    }
+}
+
+/// The shape stage: drive with a selectable character, an asymmetry, and a
+/// bit reducer.
+///
+/// It sits **after** the amplitude envelope rather than before it, which is
+/// where `01-what-ds01-is.md`'s first sketch of the signal path put it. That
+/// diagram has been corrected. The reason is the property step 06 asks Fold
+/// to have: folding is a function of instantaneous amplitude, so the shape of
+/// a hit changes across its own decay *for free* — but only if the decay has
+/// already happened by the time the signal reaches the folder. Ahead of the
+/// envelope, a tone-only patch presents the shaper with a constant amplitude
+/// and every hit folds identically.
+///
+/// The same choice is what makes velocity reach the colour: a harder hit is a
+/// hotter signal into the nonlinearity, which is the "colour that reacts to
+/// level, timing and the source" the taste brief asks for rather than a fixed
+/// percentage of an effect.
+fn shape_stage(
+    input: f32,
+    drive: f32,
+    character: Ds01Character,
+    bias: f32,
+    step: f32,
+) -> f32 {
+    // Bias pushes the signal onto an uneven part of the curve, which is what
+    // produces the even harmonics. Its own DC is left in and taken out by the
+    // output high-pass rather than subtracted back out here, because at the
+    // top of the range the offset *is* the effect.
+    let biased = input + bias * BIAS_DEPTH;
+    let gain = 1.0 + drive.clamp(0.0, 1.0) * DRIVE_GAIN_RANGE;
+    let driven = match character {
+        // v1's curve, called rather than re-derived, so "reproduces v1's
+        // drive curve" is an identity instead of a tolerance.
+        Ds01Character::Soft => apply_drive(biased, drive),
+        Ds01Character::Hard => {
+            shaper::shape(DriveCurve::Hard, biased * gain)
+                * shaper::drive_compensation(DriveCurve::Hard, gain)
+        }
+        Ds01Character::Fold => {
+            shaper::shape(DriveCurve::Fold, biased * gain)
+                * shaper::drive_compensation(DriveCurve::Fold, gain)
+        }
+        Ds01Character::Crush => {
+            let x = biased * gain;
+            // Asymmetric rather than full-wave rectification: the negative
+            // half is nearly gone, so the spectrum fills with even harmonics
+            // and the fundamental partly doubles, and zero in is still zero
+            // out. A full-wave rectifier leaves a DC pedestal under silence,
+            // and the high-pass removing it afterwards is not the same thing
+            // as it never being there.
+            let rectified = if x >= 0.0 {
+                x.tanh()
+            } else {
+                x.tanh() * CRUSH_NEGATIVE
+            };
+            quantize(
+                rectified * shaper::drive_compensation(DriveCurve::Soft, gain),
+                CRUSH_STEP,
+            )
+        }
+    };
+    quantize(driven, step)
+}
 
 /// Where the device's output bound starts to bend, and what it is asymptotic
 /// to, both in output units.
@@ -201,6 +320,11 @@ struct Continuous {
     body_decay: f32,
     body_damping: f32,
     body_excite: f32,
+    drive: f32,
+    character: Ds01Character,
+    bias: f32,
+    bit_step: f32,
+    output_hp: f32,
 }
 
 impl Continuous {
@@ -223,6 +347,11 @@ impl Continuous {
             body_decay: p.body_decay.max(0.001),
             body_damping: p.body_damping.clamp(0.0, 1.0),
             body_excite: p.body_excite.clamp(0.0, 1.0),
+            drive: p.drive.clamp(0.0, 1.0),
+            character: p.character,
+            bias: p.bias.clamp(0.0, 1.0),
+            bit_step: bit_step(p.bits),
+            output_hp: p.output_hp.clamp(5.0, 2_000.0),
         }
     }
 }
@@ -824,12 +953,18 @@ impl Voice {
         // filter at full resonance is linear and will happily hand back
         // several times full scale, which is what this catches. The device
         // bound below is a different job and is sized differently.
-        soft_ceiling(
+        // The voice's own guard, before the shaper: a state-variable filter
+        // at full resonance is linear and will happily hand back several
+        // times full scale, and the shaper should be given a signal rather
+        // than an explosion. The device bound later is a different job and is
+        // sized differently.
+        let vca = soft_ceiling(
             ((tone * tone_level + noise * noise_contour * noise_level) * struck
                 + body * body_level)
                 * amp
                 * self.latched.velocity_amp,
-        )
+        );
+        shape_stage(vca, c.drive, c.character, c.bias, c.bit_step)
     }
 
     fn render_tone(&mut self, c: &Continuous, swept_hz: f32, sample_rate: u32) -> f32 {
@@ -922,6 +1057,9 @@ pub struct Ds01 {
     noise_level: Smoothed,
     body_level: Smoothed,
     level: Smoothed,
+    /// One high-pass for the device, not one per voice: it is the output
+    /// stage, and the DC that Bias creates sums like everything else.
+    output_hp: OnePoleHp,
 }
 
 impl Ds01 {
@@ -938,6 +1076,7 @@ impl Ds01 {
             noise_level: Smoothed::new(params.noise_level, SMOOTHING_S, sample_rate),
             body_level: Smoothed::new(params.body_level, SMOOTHING_S, sample_rate),
             level: Smoothed::new(params.level, SMOOTHING_S, sample_rate),
+            output_hp: OnePoleHp::new(),
         }
     }
 
@@ -975,6 +1114,7 @@ impl Ds01 {
         self.noise_level.reset_to(self.params.noise_level);
         self.body_level.reset_to(self.params.body_level);
         self.level.reset_to(self.params.level);
+        self.output_hp.reset();
     }
 
     pub fn choke(&mut self) {
@@ -1046,6 +1186,7 @@ impl Ds01 {
         // against them. `process` splits at every event offset, so this runs
         // again the moment any of them changes.
         let continuous = Continuous::new(&self.params);
+        self.output_hp.set_cutoff(continuous.output_hp, self.sample_rate);
         self.tone_level
             .set_target(self.params.tone_level.clamp(0.0, 1.0));
         self.noise_level
@@ -1063,6 +1204,9 @@ impl Ds01 {
             self.noise_level.advance_by(end - start);
             self.body_level.advance_by(end - start);
             self.level.advance_by(end - start);
+            // Nothing is feeding it, so the high-pass starts the next hit
+            // from rest rather than from a state left over from the last one.
+            self.output_hp.reset();
             return;
         }
 
@@ -1097,7 +1241,7 @@ impl Ds01 {
                     voice.gate_held = false;
                 }
             }
-            let sample = device_bound(sum * level * VOICE_OUTPUT_REFERENCE);
+            let sample = device_bound(self.output_hp.next_sample(sum) * level * VOICE_OUTPUT_REFERENCE);
             bus.l[frame] += sample;
             bus.r[frame] += sample;
         }
@@ -1274,8 +1418,8 @@ mod tests {
         assert_eq!(size_of::<Voice>(), 624);
         // Eight of those, plus the parameter block and the four device-wide
         // smoothers the layers share. The pool is 95% of the node.
-        assert_eq!(size_of::<Ds01Params>(), 208);
-        assert_eq!(size_of::<Ds01>(), 5_264);
+        assert_eq!(size_of::<Ds01Params>(), 224);
+        assert_eq!(size_of::<Ds01>(), 5_288);
         assert_eq!(size_of::<Voice>() * DS01_VOICES, 4_992);
     }
 
@@ -2255,6 +2399,213 @@ mod tests {
                         node.voices.iter().all(|voice| !voice.active),
                         "repeats {repeats}, spread {spread}, spacing {spacing} stranded a voice"
                     );
+                }
+            }
+        }
+    }
+
+    /// Soft with no bias and full bit depth *is* v1's drive curve — the same
+    /// function, called rather than re-derived — so an old-sounding patch
+    /// stays reachable rather than approximately reachable.
+    #[test]
+    fn soft_with_no_bias_and_full_bits_is_v1s_drive_curve() {
+        for drive in [0.0, 0.25, 0.6, 1.0] {
+            for input in [-1.0, -0.4, -0.05, 0.0, 0.05, 0.4, 1.0] {
+                let ours = shape_stage(input, drive, Ds01Character::Soft, 0.0, bit_step(16.0));
+                assert_eq!(ours, apply_drive(input, drive), "drive {drive}, input {input}");
+            }
+        }
+    }
+
+    /// At its defaults the whole stage is exactly transparent, which is what
+    /// lets the gain contract be calibrated against a path with nothing in it.
+    #[test]
+    fn the_shape_stage_is_transparent_at_its_defaults() {
+        let defaults = Ds01Params::default();
+        for input in [-0.9, -0.3, 0.0, 0.3, 0.9] {
+            assert_eq!(
+                shape_stage(
+                    input,
+                    defaults.drive,
+                    defaults.character,
+                    defaults.bias,
+                    bit_step(defaults.bits)
+                ),
+                input
+            );
+        }
+        assert_eq!(bit_step(DS01_BITS_TRANSPARENT), 0.0);
+        assert_eq!(quantize(0.123_456, 0.0), 0.123_456);
+    }
+
+    /// Fold is the character that reacts to level, and it is why the shape
+    /// stage sits after the amplitude envelope rather than before it: because
+    /// folding is a function of instantaneous amplitude, the spectrum of one
+    /// hit changes across its own decay for free. Measured as crest factor,
+    /// which a folded loud signal collapses and a quiet one leaves alone.
+    #[test]
+    fn fold_changes_the_spectrum_across_one_hit() {
+        let params = Ds01Params {
+            drive: 0.6,
+            character: Ds01Character::Fold,
+            amp: Ds01EnvParams::one_shot(0.5),
+            pitch: Ds01PitchEnvParams {
+                depth: 0.0,
+                ..Ds01PitchEnvParams::default()
+            },
+            ..Ds01Params::default()
+        };
+        let out = hit(params, 24_000);
+        let crest = |window: &[f32]| peak(window) / rms(window).max(1.0e-9);
+        let loud = crest(&out[480..2_400]);
+        let quiet = crest(&out[16_000..20_000]);
+        assert!(
+            quiet > loud * 1.15,
+            "the folded hit kept its shape across the decay: {loud} then {quiet}"
+        );
+    }
+
+    /// Bias creates a DC offset by design — at the top of the range the
+    /// offset is the effect — and the output high-pass is what takes it back
+    /// out.
+    #[test]
+    fn the_output_high_pass_removes_the_dc_that_bias_creates() {
+        let biased = Ds01Params {
+            drive: 0.5,
+            bias: 1.0,
+            amp: Ds01EnvParams::one_shot(1.0),
+            ..Ds01Params::default()
+        };
+        let out = hit(biased, 24_000);
+        let mean = out[4_800..].iter().sum::<f32>() / out[4_800..].len() as f32;
+        assert!(
+            mean.abs() < peak(&out) * 0.02,
+            "a mean of {mean} against a peak of {}",
+            peak(&out)
+        );
+        // And it is not vacuous: bias changed the sound.
+        assert_ne!(
+            out,
+            hit(
+                Ds01Params {
+                    bias: 0.0,
+                    ..biased
+                },
+                24_000
+            )
+        );
+    }
+
+    /// Drive is compensated but not normalized: raising it changes timbre
+    /// substantially more than it changes level, and it is still allowed to
+    /// make a hit louder, because that is what drive does.
+    #[test]
+    fn drive_changes_timbre_more_than_level() {
+        let measure = |drive: f32| {
+            let params = Ds01Params {
+                drive,
+                amp: Ds01EnvParams::one_shot(1.0),
+                pitch: Ds01PitchEnvParams {
+                    depth: 0.0,
+                    ..Ds01PitchEnvParams::default()
+                },
+                ..Ds01Params::default()
+            };
+            let out = hit(params, 24_000);
+            let window = &out[480..12_000];
+            (rms(window), peak(window) / rms(window).max(1.0e-9))
+        };
+        let (clean_rms, clean_crest) = measure(0.0);
+        let (driven_rms, driven_crest) = measure(1.0);
+
+        let level_db = 20.0 * (driven_rms / clean_rms).log10();
+        assert!(level_db.abs() < 6.0, "drive moved the level {level_db} dB");
+        // A sine driven into a soft clip approaches a square: its crest
+        // factor falls from 1.41 toward 1.
+        assert!(
+            driven_crest < clean_crest * 0.85,
+            "crest went {clean_crest} to {driven_crest}"
+        );
+    }
+
+    /// Layers sum honestly: adding the noise or the body never turns the tone
+    /// down, because they are separate summed layers with their own levels
+    /// rather than a crossfade or an automatic balance.
+    ///
+    /// Stated as superposition, which is what that claim actually means and
+    /// is sharper than a level comparison: two layers together are exactly
+    /// the two layers apart, sample for sample. Measured below the voice's
+    /// ceiling and the device's bound, since the whole point of those is that
+    /// they are *not* linear once a patch drives them.
+    #[test]
+    fn adding_a_layer_does_not_turn_the_tone_down() {
+        let quiet = Ds01Params {
+            tone_level: 0.4,
+            level: 0.5,
+            amp: Ds01EnvParams::one_shot(1.0),
+            ..Ds01Params::default()
+        };
+        for added in [
+            Ds01Params {
+                noise_level: 0.3,
+                ..quiet
+            },
+            Ds01Params {
+                body_level: 0.3,
+                ..quiet
+            },
+        ] {
+            let alone = hit(quiet, 12_000);
+            let layer = hit(
+                Ds01Params {
+                    tone_level: 0.0,
+                    ..added
+                },
+                12_000,
+            );
+            let both = hit(added, 12_000);
+            let worst = both
+                .iter()
+                .zip(alone.iter().zip(layer.iter()))
+                .fold(0.0_f32, |worst, (sum, (a, b))| {
+                    worst.max((sum - (a + b)).abs())
+                });
+            assert!(
+                worst < 1.0e-6,
+                "the layers did not sum: worst sample differs by {worst}"
+            );
+        }
+    }
+
+    /// Every character, at both ends of every shaper control, over a full
+    /// pool. The bound is audible saturation rather than a hidden limiter, so
+    /// it is asserted at the device output.
+    #[test]
+    fn every_character_stays_bounded_and_finite() {
+        for character in Ds01Character::ALL {
+            for drive in [0.0, 1.0] {
+                for bias in [0.0, 1.0] {
+                    for bits in [1.0, DS01_BITS_TRANSPARENT] {
+                        let params = Ds01Params {
+                            drive,
+                            character,
+                            bias,
+                            bits,
+                            level: 1.0,
+                            noise_level: 1.0,
+                            body_level: 1.0,
+                            ..Ds01Params::default()
+                        };
+                        let mut node = Ds01::new(params, SR);
+                        let mut events = EventList::empty();
+                        for voice in 0..DS01_VOICES as u32 {
+                            events.push_ordered(note_on(voice * 16, 36 + voice as u8 * 7, 127));
+                        }
+                        let out = render(&mut node, 12_000, &events);
+                        let label = format!("{character:?} drive {drive} bias {bias} bits {bits}");
+                        assert!(out.iter().all(|s| s.is_finite()), "{label} went non-finite");
+                        assert!(peak(&out) <= 1.0, "{label} peaked at {}", peak(&out));
+                    }
                 }
             }
         }
