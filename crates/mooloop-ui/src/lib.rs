@@ -45,12 +45,8 @@ use mooloop_core::{
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
-    buffer_allocation_key, build_effect_at_tempo,
-    sample_analysis::{
-        fraction_from_frame, frame_from_fraction, snap_to_zero_crossing, snap_window_frames,
-        SnapResult, DEFAULT_SNAP_WINDOW_MS,
-    },
-    Ds01, DrumSynth, DryAlign, SampleData, SpectrumAnalyzer, StretchPool,
+    buffer_allocation_key, build_effect_at_tempo, Ds01, DrumSynth, DryAlign, SampleData,
+    SpectrumAnalyzer, StretchPool,
 };
 use mooloop_engine::{
     EffectSlot, EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer,
@@ -76,7 +72,9 @@ use mooloop_session::roll::NoteEdit;
 use mooloop_session::project::{
     fresh_starter_seed, normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
 };
-use mooloop_session::sampler::{commit_is_stale, refresh_sample_view, slice_fractions, SliceEdit};
+use mooloop_session::sampler::{
+    commit_is_stale, slice_fractions, snap_marker, snap_status, SampleMarker, SliceEdit,
+};
 use mooloop_session::sample::{
     adjacent_sample, inspect_sample, load_sample_at_path, sample_description, sample_duration,
     tune_label, waveform_peaks, waveform_peaks_windowed,
@@ -851,46 +849,6 @@ pub struct AppUi {
     _pump: Timer,
 }
 
-/// The four sample markers a snap can move. Each one's legal range is
-/// derived from the others, so resolving a marker can never invert or
-/// collapse the region it belongs to.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SampleMarker {
-    Start,
-    End,
-    LoopStart,
-    LoopEnd,
-}
-
-impl SampleMarker {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Start => "Start",
-            Self::End => "End",
-            Self::LoopStart => "Loop start",
-            Self::LoopEnd => "Loop end",
-        }
-    }
-
-    fn get(self, params: &SamplerParams) -> f32 {
-        match self {
-            Self::Start => params.start,
-            Self::End => params.end,
-            Self::LoopStart => params.loop_start,
-            Self::LoopEnd => params.loop_end,
-        }
-    }
-
-    fn set(self, params: &mut SamplerParams, value: f32) {
-        match self {
-            Self::Start => params.start = value,
-            Self::End => params.end = value,
-            Self::LoopStart => params.loop_start = value,
-            Self::LoopEnd => params.loop_end = value,
-        }
-    }
-}
-
 /// A channel's audio, on its way to the pump.
 ///
 /// Neither half can ride the command ring: `EngineCommand` is `Copy` and
@@ -916,52 +874,6 @@ fn publish_channel_audio_to(tx: &ChannelAudioSender, channel: usize, state: &Cha
         sample: state.published_sample().cloned(),
         slices: (!state.slices.is_empty()).then(|| Arc::new(state.slices.clone())),
     });
-}
-
-fn snap_marker(
-    params: &SamplerParams,
-    sample: &SampleData,
-    marker: SampleMarker,
-    requested: f32,
-) -> Option<(f32, SnapResult)> {
-    let len = sample.frames.len();
-    if len < 2 {
-        return None;
-    }
-    let last = len - 1;
-    let frame = |fraction: f32| frame_from_fraction(fraction, len);
-    // Each marker is penned in by its neighbours. `saturating_sub` and the
-    // `min(last)` guards keep a degenerate region (an empty or inverted one
-    // already in the params) from producing a reversed range.
-    let bounds = match marker {
-        SampleMarker::Start => 0..=frame(params.end).saturating_sub(1),
-        SampleMarker::End => (frame(params.start) + 1).min(last)..=last,
-        SampleMarker::LoopStart => frame(params.start)..=frame(params.loop_end).saturating_sub(1),
-        SampleMarker::LoopEnd => (frame(params.loop_start) + 1).min(last)..=frame(params.end),
-    };
-    let window = snap_window_frames(DEFAULT_SNAP_WINDOW_MS, sample.sample_rate);
-    let result = snap_to_zero_crossing(&sample.frames, frame(requested), window, bounds);
-    Some((fraction_from_frame(result.resolved, len), result))
-}
-
-/// What to tell the user about a snap. Silence would make a marker that moved
-/// look like drift, and a marker that did not move look like a broken button.
-fn snap_status(marker: SampleMarker, result: SnapResult) -> String {
-    if result.moved() {
-        format!(
-            "{} snapped to frame {} ({:+} frames)",
-            marker.label(),
-            result.resolved,
-            result.offset()
-        )
-    } else {
-        format!(
-            "{} kept at frame {}: no zero crossing within {} ms",
-            marker.label(),
-            result.requested,
-            DEFAULT_SNAP_WINDOW_MS as i32
-        )
-    }
 }
 
 /// Push a resolved marker back onto the face. The Slint side moves the marker
@@ -6818,51 +6730,20 @@ impl AppUi {
                 let Some(window) = window_weak.upgrade() else {
                     return;
                 };
-                let (resolved, moved, searched) = {
-                    let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return;
-                    };
-                    let Some(sample) = channel.published_sample().cloned() else {
-                        window.set_status_message("No sample to snap".into());
-                        return;
-                    };
-                    let markers = [
-                        SampleMarker::Start,
-                        SampleMarker::End,
-                        SampleMarker::LoopStart,
-                        SampleMarker::LoopEnd,
-                    ];
-                    let mut resolved = Vec::with_capacity(markers.len());
-                    let mut moved = 0usize;
-                    let mut searched = 0usize;
-                    for marker in markers {
-                        let requested = marker.get(&channel.params);
-                        let Some((value, result)) =
-                            snap_marker(&channel.params, &sample, marker, requested)
-                        else {
-                            continue;
-                        };
-                        searched += 1;
-                        if result.moved() {
-                            moved += 1;
-                        }
-                        marker.set(&mut channel.params, value);
-                        resolved.push((marker, value));
-                    }
-                    let p = channel.params;
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: p,
-                    });
-                    (resolved, moved, searched)
+                let Some(snapped) = st.borrow_mut().session.snap_all_markers() else {
+                    window.set_status_message("No sample to snap".into());
+                    return;
                 };
-                for (marker, value) in resolved {
+                let _ = tx.send(snapped.command);
+                for (marker, value) in snapped.resolved {
                     set_marker_property(&window, marker, value);
                 }
                 window.set_status_message(
-                    format!("Snapped {moved} of {searched} markers to zero crossings").into(),
+                    format!(
+                        "Snapped {} of {} markers to zero crossings",
+                        snapped.moved, snapped.searched
+                    )
+                    .into(),
                 );
             });
         }
@@ -7282,67 +7163,33 @@ impl AppUi {
                 {
                     let mut st = st.borrow_mut();
                     let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return;
-                    };
-                    // Always from the source, never from a buffer that has
-                    // already been baked: re-committing at a new tempo has to
-                    // be a fresh render or repeated tempo changes accumulate
-                    // stretch on stretch.
-                    let Some(source) = channel.sample_data.clone() else {
-                        window.set_status_message("No sample to commit".into());
-                        return;
-                    };
-                    let (params, slices) = match channel.commit.as_ref() {
-                        Some(commit) => {
-                            let (params, slices) = mooloop_dsp::commit::revert_commit(
-                                channel.params,
-                                commit,
-                            );
-                            (params, slices)
+                    let committed = match st.session.commit_stretch(window.get_bpm() as f64) {
+                        Ok(committed) => committed,
+                        Err(no_sample) => {
+                            window.set_status_message(if no_sample {
+                                "No sample to commit".into()
+                            } else {
+                                "Nothing to commit".into()
+                            });
+                            return;
                         }
-                        None => (channel.params, channel.slices.clone()),
                     };
-                    let bpm = window.get_bpm() as f64;
-                    let Some(committed) =
-                        mooloop_dsp::commit::commit_stretch(&source, params, &slices, bpm)
-                    else {
-                        window.set_status_message("Nothing to commit".into());
-                        return;
-                    };
-                    let ratio = committed.commit.ratio;
-                    channel.params = committed.params;
-                    channel.slices = committed.slices;
-                    channel.commit = Some(Box::new(committed.commit));
-                    channel.committed_sample = Some(committed.sample);
-                    refresh_sample_view(channel);
-                    publish_channel_audio_to(&audio_out, ch, channel);
-                    let p = channel.params;
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: p,
-                    });
-                    // The stretch is in the audio now and the patch no longer
-                    // asks for it, so the pool goes back the way it came
-                    // rather than holding ~1.6 MB for a stretcher that will
-                    // not run. Same reconciliation the ON toggle does.
+                    st.publish_selected_audio(&audio_out);
+                    let _ = tx.send(committed.command);
+                    // The stretch is in the audio now and the patch no longer asks for
+                    // it, so the pool goes back the way it came rather than holding
+                    // ~1.6 MB for a stretcher that will not run. Same reconciliation
+                    // the ON toggle does.
                     let _ = stx.send(StructuralCommand::SetSamplerStretch {
                         channel: ch as u8,
                         pool: None,
                     });
-                    st.session.dirty = true;
                     window.set_status_message(
-                        format!("Committed the stretch at {ratio:.2}x").into(),
+                        format!("Committed the stretch at {:.2}x", committed.ratio).into(),
                     );
                 }
                 st.borrow().refresh_editor(&window);
-                record_project_history(
-                    &commands,
-                    before,
-                    &history_state,
-                    &window,
-                    "Stretch committed",
-                );
+                record_project_history(&commands, before, &history_state, &window, "Stretch committed");
             });
         }
         {
@@ -7359,28 +7206,16 @@ impl AppUi {
                 {
                     let mut st = st.borrow_mut();
                     let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                    let Some((params, command)) = st.session.revert_stretch() else {
                         return;
                     };
-                    let Some(commit) = channel.commit.take() else {
-                        return;
-                    };
-                    let (params, slices) =
-                        mooloop_dsp::commit::revert_commit(channel.params, &commit);
-                    channel.params = params;
-                    channel.slices = slices;
-                    channel.committed_sample = None;
-                    refresh_sample_view(channel);
-                    publish_channel_audio_to(&audio_out, ch, channel);
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params,
-                    });
-                    // The patch is stretching live again, and the state to
-                    // do it cannot be assumed: a project saved committed and
-                    // reloaded never provisioned a pool, because its patch
-                    // did not ask for one. Without this, revert after a
-                    // reload put the switch on and played unstretched.
+                    st.publish_selected_audio(&audio_out);
+                    let _ = tx.send(command);
+                    // The patch is stretching live again, and the state to do it cannot
+                    // be assumed: a project saved committed and reloaded never
+                    // provisioned a pool, because its patch did not ask for one.
+                    // Without this, revert after a reload put the switch on and played
+                    // unstretched.
                     let _ = stx.send(StructuralCommand::SetSamplerStretch {
                         channel: ch as u8,
                         pool: Some(Box::new(StretchPool::new(
@@ -7389,17 +7224,10 @@ impl AppUi {
                             MAX_SAMPLER_VOICES as usize,
                         ))),
                     });
-                    st.session.dirty = true;
                     window.set_status_message("Reverted to the source sample".into());
                 }
                 st.borrow().refresh_editor(&window);
-                record_project_history(
-                    &commands,
-                    before,
-                    &history_state,
-                    &window,
-                    "Stretch reverted",
-                );
+                record_project_history(&commands, before, &history_state, &window, "Stretch reverted");
             });
         }
 

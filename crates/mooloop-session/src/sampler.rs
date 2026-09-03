@@ -11,10 +11,10 @@ use crate::sample::{sample_description, sample_duration, waveform_peaks};
 use crate::session::{Session, WAVEFORM_BINS};
 use mooloop_dsp::sample_analysis::{
     fraction_from_frame, frame_from_fraction, snap_to_zero_crossing, snap_window_frames,
-    DEFAULT_SNAP_WINDOW_MS,
+    SnapResult, DEFAULT_SNAP_WINDOW_MS,
 };
 use mooloop_dsp::SampleData;
-use mooloop_core::{SampleCommit, SamplerParams, SliceMarker, StretchMode, MAX_SLICES};
+use mooloop_core::{EngineCommand, SampleCommit, SamplerParams, SliceMarker, StretchMode, MAX_SLICES};
 
 /// What a slice edit did.
 pub enum SliceEdit {
@@ -121,6 +121,109 @@ pub fn commit_is_stale(channel: &ChannelState, commit: &SampleCommit, bpm: f64) 
     (now - f64::from(commit.ratio)).abs() > 1.0e-3
 }
 
+/// One of the four draggable positions on the waveform.
+#[derive(Clone, Copy, PartialEq)]
+pub enum SampleMarker {
+    Start,
+    End,
+    LoopStart,
+    LoopEnd,
+}
+
+impl SampleMarker {
+    /// Every marker, in the order the editor lists them.
+    pub const ALL: [Self; 4] = [Self::Start, Self::End, Self::LoopStart, Self::LoopEnd];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::End => "End",
+            Self::LoopStart => "Loop start",
+            Self::LoopEnd => "Loop end",
+        }
+    }
+
+    pub fn get(self, params: &SamplerParams) -> f32 {
+        match self {
+            Self::Start => params.start,
+            Self::End => params.end,
+            Self::LoopStart => params.loop_start,
+            Self::LoopEnd => params.loop_end,
+        }
+    }
+
+    pub fn set(self, params: &mut SamplerParams, value: f32) {
+        match self {
+            Self::Start => params.start = value,
+            Self::End => params.end = value,
+            Self::LoopStart => params.loop_start = value,
+            Self::LoopEnd => params.loop_end = value,
+        }
+    }
+}
+
+/// The nearest zero crossing to a marker, within its neighbours.
+pub fn snap_marker(
+    params: &SamplerParams,
+    sample: &SampleData,
+    marker: SampleMarker,
+    requested: f32,
+) -> Option<(f32, SnapResult)> {
+    let len = sample.frames.len();
+    if len < 2 {
+        return None;
+    }
+    let last = len - 1;
+    let frame = |fraction: f32| frame_from_fraction(fraction, len);
+    // Each marker is penned in by its neighbours. `saturating_sub` and the
+    // `min(last)` guards keep a degenerate region (an empty or inverted one
+    // already in the params) from producing a reversed range.
+    let bounds = match marker {
+        SampleMarker::Start => 0..=frame(params.end).saturating_sub(1),
+        SampleMarker::End => (frame(params.start) + 1).min(last)..=last,
+        SampleMarker::LoopStart => frame(params.start)..=frame(params.loop_end).saturating_sub(1),
+        SampleMarker::LoopEnd => (frame(params.loop_start) + 1).min(last)..=frame(params.end),
+    };
+    let window = snap_window_frames(DEFAULT_SNAP_WINDOW_MS, sample.sample_rate);
+    let result = snap_to_zero_crossing(&sample.frames, frame(requested), window, bounds);
+    Some((fraction_from_frame(result.resolved, len), result))
+}
+
+/// What one marker's snap did, for the status bar.
+pub fn snap_status(marker: SampleMarker, result: SnapResult) -> String {
+    if result.moved() {
+        format!(
+            "{} snapped to frame {} ({:+} frames)",
+            marker.label(),
+            result.resolved,
+            result.offset()
+        )
+    } else {
+        format!(
+            "{} kept at frame {}: no zero crossing within {} ms",
+            marker.label(),
+            result.requested,
+            DEFAULT_SNAP_WINDOW_MS as i32
+        )
+    }
+}
+
+/// What snapping every marker at once did.
+pub struct SnapAll {
+    /// Each marker and where it ended up, for the view to write back.
+    pub resolved: Vec<(SampleMarker, f32)>,
+    pub moved: usize,
+    pub searched: usize,
+    pub command: EngineCommand,
+}
+
+/// A stretch that was baked into the audio.
+pub struct Committed {
+    /// The ratio that was baked, for the status bar to report.
+    pub ratio: f32,
+    pub command: EngineCommand,
+}
+
 impl Session {
     /// The slice map a marker edit acts on, plus the channel it belongs to.
     fn sliced_channel(&mut self) -> Option<(usize, &mut ChannelState)> {
@@ -218,6 +321,102 @@ impl Session {
         channel.slices.clear();
         self.dirty = true;
         Some(Vec::new())
+    }
+
+    /// Bakes the pending stretch into the channel's audio.
+    ///
+    /// Always rendered from the *source*, never from a buffer that has
+    /// already been baked: re-committing at a new tempo has to be a fresh
+    /// render, or repeated tempo changes accumulate stretch on stretch.
+    ///
+    /// `Err(true)` means there is no sample at all; `Err(false)` means there
+    /// is nothing the current parameters would change.
+    pub fn commit_stretch(&mut self, bpm: f64) -> Result<Committed, bool> {
+        let selected = self.selected;
+        let Some(channel) = self.channels.get_mut(selected) else {
+            return Err(true);
+        };
+        let Some(source) = channel.sample_data.clone() else {
+            return Err(true);
+        };
+        let (params, slices) = match channel.commit.as_ref() {
+            Some(commit) => mooloop_dsp::commit::revert_commit(channel.params, commit),
+            None => (channel.params, channel.slices.clone()),
+        };
+        let Some(committed) = mooloop_dsp::commit::commit_stretch(&source, params, &slices, bpm)
+        else {
+            return Err(false);
+        };
+        let ratio = committed.commit.ratio;
+        channel.params = committed.params;
+        channel.slices = committed.slices;
+        channel.commit = Some(Box::new(committed.commit));
+        channel.committed_sample = Some(committed.sample);
+        refresh_sample_view(channel);
+        let params = channel.params;
+        self.dirty = true;
+        Ok(Committed {
+            ratio,
+            command: EngineCommand::SetChannelSamplerParams {
+                channel: selected as u8,
+                params,
+            },
+        })
+    }
+
+    /// Throws away a committed render and goes back to the source.
+    ///
+    /// Returns the restored parameters, which the caller needs to build the
+    /// live stretcher the patch is asking for again.
+    pub fn revert_stretch(&mut self) -> Option<(SamplerParams, EngineCommand)> {
+        let selected = self.selected;
+        let channel = self.channels.get_mut(selected)?;
+        let commit = channel.commit.take()?;
+        let (params, slices) = mooloop_dsp::commit::revert_commit(channel.params, &commit);
+        channel.params = params;
+        channel.slices = slices;
+        channel.committed_sample = None;
+        refresh_sample_view(channel);
+        self.dirty = true;
+        Some((
+            params,
+            EngineCommand::SetChannelSamplerParams {
+                channel: selected as u8,
+                params,
+            },
+        ))
+    }
+
+    /// Snaps all four markers to zero crossings at once.
+    pub fn snap_all_markers(&mut self) -> Option<SnapAll> {
+        let selected = self.selected;
+        let channel = self.channels.get_mut(selected)?;
+        let sample = channel.published_sample().cloned()?;
+        let mut resolved = Vec::with_capacity(SampleMarker::ALL.len());
+        let (mut moved, mut searched) = (0usize, 0usize);
+        for marker in SampleMarker::ALL {
+            let requested = marker.get(&channel.params);
+            let Some((value, result)) = snap_marker(&channel.params, &sample, marker, requested)
+            else {
+                continue;
+            };
+            searched += 1;
+            if result.moved() {
+                moved += 1;
+            }
+            marker.set(&mut channel.params, value);
+            resolved.push((marker, value));
+        }
+        let params = channel.params;
+        Some(SnapAll {
+            resolved,
+            moved,
+            searched,
+            command: EngineCommand::SetChannelSamplerParams {
+                channel: selected as u8,
+                params,
+            },
+        })
     }
 
     /// How many markers the map can still take.
