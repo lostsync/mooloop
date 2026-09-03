@@ -4,8 +4,10 @@
 //! lose, so the failure paths here carry as much as the success ones.
 
 use crate::audio_file;
-use mooloop_core::{log_error, log_warn, Project, SampleReference};
+use crate::session::{PresetSaveTarget, Session};
+use mooloop_core::{log_error, log_warn, ChannelSetup, Project, SampleReference};
 use mooloop_dsp::SampleData;
+use mooloop_engine::{ExportFormat, Mp3Bitrate, RenderScope, WavEncoding};
 use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, SaveReport};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -230,5 +232,84 @@ pub fn repair_suffix(count: usize) -> String {
 pub fn log_repairs(what: &str, repairs: &[Issue]) {
     for issue in repairs {
         log_warn!("project", "{what}: [{}] {issue}", issue.code);
+    }
+}
+
+/// Everything an offline render needs, resolved from the session in one go.
+///
+/// The render runs on a worker thread, so it takes the project and its audio
+/// by value rather than borrowing a session that is still being edited.
+pub struct ExportRequest {
+    pub project: Project,
+    pub samples: Vec<Option<Arc<SampleData>>>,
+    pub scope: RenderScope,
+    pub format: ExportFormat,
+}
+
+impl ExportRequest {
+    /// The file extension the chosen format wants.
+    pub fn extension(&self) -> &'static str {
+        match self.format {
+            ExportFormat::Mp3(_) => "mp3",
+            _ => "wav",
+        }
+    }
+}
+
+/// The channel a preset is being saved from, and which kind of preset it is.
+pub struct PresetSource {
+    pub target: PresetSaveTarget,
+    pub setup: ChannelSetup,
+}
+
+impl Session {
+    /// Resolves an export from the menu's two indices and the current
+    /// transport state.
+    ///
+    /// The scope follows the transport rather than being asked for
+    /// separately: exporting the song while the sequencer is in pattern mode
+    /// would render something the user is not listening to.
+    pub fn export_request(
+        &self,
+        bpm: i32,
+        swing_percent: i32,
+        format: i32,
+        bitrate: i32,
+    ) -> ExportRequest {
+        ExportRequest {
+            project: self.project_snapshot(bpm, swing_percent),
+            samples: self.sample_snapshots(),
+            scope: if self.song_mode {
+                RenderScope::Song
+            } else {
+                RenderScope::Pattern {
+                    index: self.current_pattern,
+                }
+            },
+            format: match format {
+                1 => ExportFormat::Wav(WavEncoding::Float32),
+                2 => ExportFormat::Mp3(match bitrate {
+                    0 => Mp3Bitrate::Kbps192,
+                    1 => Mp3Bitrate::Kbps256,
+                    _ => Mp3Bitrate::Kbps320,
+                }),
+                _ => ExportFormat::Wav(WavEncoding::Pcm24),
+            },
+        }
+    }
+
+    /// Takes the pending preset save, with the channel setup it applies to.
+    ///
+    /// Taking rather than reading: a dialog that has been confirmed is spent,
+    /// and leaving it armed would let a second confirmation save again.
+    pub fn take_preset_save(&mut self, bpm: i32, swing_percent: i32) -> Option<PresetSource> {
+        let target = self.pending_preset_save.take()?;
+        let snapshot = self.project_snapshot(bpm, swing_percent);
+        let setup = snapshot
+            .channels
+            .get(snapshot.selected_channel as usize)?
+            .setup
+            .clone();
+        Some(PresetSource { target, setup })
     }
 }

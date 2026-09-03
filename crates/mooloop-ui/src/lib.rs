@@ -49,9 +49,7 @@ use mooloop_dsp::{
     SpectrumAnalyzer, StretchPool,
 };
 use mooloop_engine::{
-    EffectSlot, EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer,
-    PreviewCommand,
-    RenderScope, StructuralCommand, WavEncoding,
+    EffectSlot, EngineHandle, ExportSpec, OfflineRenderer, PreviewCommand, StructuralCommand,
 };
 use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetSummary};
 use mooloop_session::browser::{browser_display_name, has_playable_descendant, scan_browser_dir};
@@ -3669,24 +3667,22 @@ impl AppUi {
                 if name.is_empty() {
                     return;
                 }
-                let Some(target) = st.borrow_mut().session.pending_preset_save.take() else {
+                let Some(source) = st
+                    .borrow_mut()
+                    .session
+                    .take_preset_save(window.get_bpm(), window.get_swing_percent())
+                else {
                     return;
                 };
-                let snapshot = st
-                    .borrow()
-                    .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
-                let selected = snapshot.channels[snapshot.selected_channel as usize]
-                    .setup
-                    .clone();
                 let info = PresetInfo {
                     name: name.clone(),
                     category: category.trim().to_string(),
                     tags: Vec::new(),
                 };
                 let file_stem = mooloop_project::sanitize_preset_name(&name);
-                let (dir, extension, label) = match target {
+                let (dir, extension, label) = match source.target {
                     PresetSaveTarget::Generator => (
-                        settings::generator_presets_dir(selected.kind()),
+                        settings::generator_presets_dir(source.setup.kind()),
                         "mooloop-generator",
                         "Generator preset saved",
                     ),
@@ -3701,16 +3697,16 @@ impl AppUi {
                 window.set_status_message("Saving preset...".into());
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let result = match target {
+                    let result = match source.target {
                         PresetSaveTarget::Generator => mooloop_project::save_generator_preset(
                             &path,
-                            &selected.source,
+                            &source.setup.source,
                             info,
                             AssetMode::Embedded,
                         ),
                         PresetSaveTarget::Channel => mooloop_project::save_channel_preset(
                             &path,
-                            &selected,
+                            &source.setup,
                             info,
                             AssetMode::Embedded,
                         ),
@@ -3742,53 +3738,38 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
-                let project = st
-                    .borrow()
-                    .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
-                let samples = st.borrow().session.sample_snapshots();
-                let scope = if st.borrow().session.song_mode {
-                    RenderScope::Song
-                } else {
-                    RenderScope::Pattern {
-                        index: st.borrow().session.current_pattern,
-                    }
-                };
-                let format = match format {
-                    1 => ExportFormat::Wav(WavEncoding::Float32),
-                    2 => ExportFormat::Mp3(match bitrate {
-                        0 => Mp3Bitrate::Kbps192,
-                        1 => Mp3Bitrate::Kbps256,
-                        _ => Mp3Bitrate::Kbps320,
-                    }),
-                    _ => ExportFormat::Wav(WavEncoding::Pcm24),
-                };
+                let request = st.borrow().session.export_request(
+                    window.get_bpm(),
+                    window.get_swing_percent(),
+                    format,
+                    bitrate,
+                );
                 window.set_export_open(false);
                 window.set_document_busy(true);
                 window.set_status_message("Rendering audio...".into());
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let extension = if matches!(format, ExportFormat::Mp3(_)) {
-                        "mp3"
-                    } else {
-                        "wav"
-                    };
-                    let Some(path) = pick_export_via_zenity(extension) else {
+                    let Some(path) = pick_export_via_zenity(request.extension()) else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     };
                     let spec = ExportSpec {
                         path: path.clone(),
-                        scope,
+                        scope: request.scope,
                         tail_seconds: tail as f32,
-                        format,
+                        format: request.format,
                     };
-                    let result =
-                        OfflineRenderer::render(&project, &samples, export_sample_rate, &spec)
-                            .map(|_| DocumentResult::Exported { path })
-                            .unwrap_or_else(|error| DocumentResult::Failed {
-                                action: "export this song",
-                                problem: error.to_string().into(),
-                            });
+                    let result = OfflineRenderer::render(
+                        &request.project,
+                        &request.samples,
+                        export_sample_rate,
+                        &spec,
+                    )
+                    .map(|_| DocumentResult::Exported { path })
+                    .unwrap_or_else(|error| DocumentResult::Failed {
+                        action: "export this song",
+                        problem: error.to_string().into(),
+                    });
                     let _ = tx.send(result);
                 });
             });
