@@ -11,6 +11,9 @@ each one is in.
 
 Last swept 2026-09-02.
 
+`docs/ARCHITECTURE_REVIEW.md` is where the two newest plans came from, and it
+is worth reading before either.
+
 ## Active
 
 | Plan | State |
@@ -19,6 +22,8 @@ Last swept 2026-09-02.
 | `drum-synth-v2/` | **Approved, no code.** DS-01, nine steps, three rendered face concepts in `mockups/`. |
 | `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
+| `session-layer-extraction/` | **Written, no code.** Six steps. Lifts a toolkit-free session crate out of `mooloop-ui/src/lib.rs` (13,411 lines, of which `UiState::new` is 7,700). Worth doing whether or not the egui plan ever runs; step 06 is the first test coverage the edit logic has ever had. |
+| `egui-view-layer/` | **Written, not decided.** Blocked on `session-layer-extraction/` finishing, and on step 01's spike. `00-status.md` states the case both ways — the cost is losing `scripts/slint-sketch`'s 0.05s loop, the gain is deleting the projection layer. |
 
 ## Queued, not started
 
