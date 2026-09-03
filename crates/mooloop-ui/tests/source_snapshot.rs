@@ -1215,4 +1215,18 @@ fn render_the_ds01_face() {
         "the scopes did not follow the patch"
     );
     write_snapshot(&long_tail, "MOOLOOP_DS01_LONG_TAIL_SNAPSHOT");
+
+    // Editing a control quiets the columns nobody is touching, so the one
+    // being read is the one being edited. Rendered here because a dimming
+    // that did nothing would look exactly like a dimming that worked.
+    mooloop_ui::refresh_ds01(&ui, &Ds01Params::default());
+    let unfocused = ui.window().take_snapshot().unwrap();
+    ui.set_ds01_focused_column(1);
+    let focused = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        unfocused.as_bytes(),
+        focused.as_bytes(),
+        "focusing a column changed nothing"
+    );
+    write_snapshot(&focused, "MOOLOOP_DS01_FOCUSED_SNAPSHOT");
 }

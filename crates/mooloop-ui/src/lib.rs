@@ -2491,6 +2491,27 @@ fn ds01_segment_start(p: &Ds01Params, id: u32) -> f32 {
     }
 }
 
+/// Which column a parameter belongs to: 0 tone, 1 noise, 2 body, 3 amp.
+///
+/// The face dims the columns nobody is touching, and editing a control is the
+/// touch that matters — so focus follows the parameter rather than the
+/// pointer, and the id already says which column it is drawn in. The pitch
+/// envelope answers "tone" because that is the scope it is drawn on; the
+/// globals, the burst and the shaper answer nothing, because they are not
+/// columns and moving one should not blank the emphasis.
+fn ds01_column(id: u32) -> Option<i32> {
+    Some(match id {
+        10..=19 => 0,
+        20..=29 => 1,
+        30..=39 => 2,
+        40..=49 => 3,
+        50..=59 => 0,
+        60..=69 => 1,
+        70..=79 => 3,
+        _ => return None,
+    })
+}
+
 /// Whether moving this parameter changes what the scopes draw.
 ///
 /// The envelope blocks and the body's ring are the whole of it, and they are
@@ -2516,6 +2537,9 @@ fn touch_ds01_param(window: &MainWindow, params: &Ds01Params, id: u32) {
     let texts = window.get_ds01_value_texts();
     if index < texts.row_count() {
         texts.set_row_data(index, ds01_text(descriptor, params, normalized));
+    }
+    if let Some(column) = ds01_column(id) {
+        window.set_ds01_focused_column(column);
     }
     if ds01_redraws_contours(id) {
         refresh_ds01_contours(window, params);

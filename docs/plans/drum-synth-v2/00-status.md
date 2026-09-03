@@ -313,7 +313,8 @@ And three from step 08:
 ## What step 08 still owes
 
 The layout, the controls, the four scopes and their handles are in, along with
-the rendered hit in the amp scope and the burst's impulse ticks, verified by a software-rendered snapshot at
+the rendered hit in the amp scope, the burst's impulse ticks and the focus
+dimming, verified by a software-rendered snapshot at
 the default patch and at a four-second one.
 
 The preview follows the patch's span rather than a fixed window, which needed
@@ -321,16 +322,18 @@ The preview follows the patch's span rather than a fixed window, which needed
 the span grows: it is still the production voice path, clocked slower, because
 rendering four seconds at the full rate is a fifth of a second of arithmetic
 that `08-the-face.md` says must not happen on the UI thread. It is debounced
-on top of that, so a knob drag renders the hit once when it stops. Two things are not:
+on top of that, so a knob drag renders the hit once when it stops. One thing is not:
 
 - **The MOD panel.** The three checked-in concepts settled the columns and the
   bands and none of them draws it, so the layout for the matrix's thirty-two
   controls is genuinely undecided rather than a detail to fill in. The band
   carries a labelled empty region where it goes. **This is the one thing in
   the plan that wants Adam before it wants code.**
-- **Focus dimming** — the touched column's scope drawn solid and the others
-  quiet. Emphasis rather than information, and the only one of the four that
-  changes nothing about what the face can tell you.
+Focus follows the last-edited *parameter* rather than the pointer: editing a
+control is the touch that matters, and its id already says which column it is
+drawn in, so nothing has to be threaded through forty-eight cells to say so.
+The globals, the burst and the shaper answer no column, because they are not
+columns and moving one should not blank the emphasis.
 
 The ticks are read from `Ds01::burst_offsets`, which runs the same schedule
 the voice runs rather than re-deriving it from the controls: the spread's
@@ -425,7 +428,7 @@ instrument. Hence DS-01.
 | `05-the-burst.md` | **In.** Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | **In.** Drive characters, the output stage, the gain contract |
 | `07-internal-modulation-and-outlets.md` | **Matrix in; outlets blocked** on the shared device-outlet mechanism |
-| `08-the-face.md` | **Mostly in.** Layout, controls, scopes, handles and the rendered hit; the MOD panel, burst ticks and focus dimming remain |
+| `08-the-face.md` | **In except the MOD panel**, whose layout none of the three concepts settled |
 | `09-the-kit.md` | Factory patches, range tuning, and the listening pass |
 
 `mockups/` holds three rendered face concepts at the real face size, against

@@ -965,6 +965,7 @@ export component MainWindow inherits Window {
     in-out property <[float]> ds01-preview-minimums;
     in-out property <[float]> ds01-preview-maximums;
     in-out property <[float]> ds01-burst-ticks;
+    in-out property <int> ds01-focused-column: -1;
     in-out property <float> ds01-body-decay-fraction;
     in-out property <string> ds01-span-text;
     callback ds01-value-changed(int, float);
@@ -3003,6 +3004,7 @@ export component MainWindow inherits Window {
                                                     preview-minimums: root.ds01-preview-minimums;
                                                     preview-maximums: root.ds01-preview-maximums;
                                                     burst-ticks: root.ds01-burst-ticks;
+                                                    focused-column: root.ds01-focused-column;
                                                     body-decay-fraction: root.ds01-body-decay-fraction;
                                                     span-text: root.ds01-span-text;
                                                     modulation-armed: root.modulation-armed-slot >= 0;

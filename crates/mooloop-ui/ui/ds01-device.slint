@@ -172,7 +172,16 @@ component Contour inherits Rectangle {
     in property <Ds01Contour> shape;
     in property <color> tint: Theme.accent;
     in property <bool> filled: true;
+    // A column nobody is touching stays legible and goes quiet, so the one
+    // being edited is the one being read. Dimmed by mixing further toward the
+    // panel rather than by alpha: the fill has to stay opaque, for the seam
+    // reasons above.
+    in property <bool> dim;
     private property <int> steps: 160;
+    private property <color> fill-tint:
+        Theme.panel.mix(root.tint, root.dim ? 0.9 : 0.78);
+    private property <color> line-tint:
+        root.dim ? Theme.panel.mix(root.tint, 0.45) : root.tint;
 
     // `env::shape`, not an approximation of it. A power curve was standing in
     // for it and had the two ends the wrong way round: it drew the *fastest*
@@ -217,7 +226,7 @@ component Contour inherits Rectangle {
         height: root.filled
             ? parent.height * max(self.here, self.prev)
             : max(1px, parent.height * (abs(self.here - self.prev) + 0.012));
-        background: root.filled ? Theme.panel.mix(root.tint, 0.78) : root.tint;
+        background: root.filled ? root.fill-tint : root.line-tint;
     }
     if root.filled && root.shape.active : Rectangle {
         for index in root.steps : Rectangle {
@@ -403,6 +412,11 @@ export component Ds01DeviceFace inherits Rectangle {
     in property <[int]> modulation-route-counts;
     // The span every scope is drawn over, as the header states it.
     in property <string> span-text;
+    // Which column was last edited: 0 tone, 1 noise, 2 body, 3 amp, -1 none.
+    // Derived from the parameter rather than from a hover, because editing a
+    // control is the touch that matters and the id already says which column
+    // it belongs to.
+    in property <int> focused-column: -1;
 
     callback value-changed(int, float);
     callback edit-started(int);
@@ -661,11 +675,13 @@ export component Ds01DeviceFace inherits Rectangle {
                             x: 1px; y: 1px;
                             width: parent.width - 2px; height: parent.height - 2px;
                             shape: root.contours[0]; tint: Theme.accent; filled: true;
+                            dim: root.focused-column >= 0 && root.focused-column != 0;
                         }
                         Contour {
                             x: 1px; y: 1px;
                             width: parent.width - 2px; height: parent.height - 2px;
                             shape: root.contours[1]; tint: Theme.warning; filled: false;
+                            dim: root.focused-column >= 0 && root.focused-column != 0;
                         }
 
                         // The pitch envelope's own handles. The amplitude
@@ -841,6 +857,7 @@ export component Ds01DeviceFace inherits Rectangle {
                             x: 1px; y: 1px;
                             width: parent.width - 2px; height: parent.height - 2px;
                             shape: root.contours[2]; tint: #6ea8d8; filled: true;
+                            dim: root.focused-column >= 0 && root.focused-column != 1;
                         }
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
@@ -984,6 +1001,7 @@ export component Ds01DeviceFace inherits Rectangle {
                                     active: true,
                                 };
                                 tint: #d8a15a;
+                                dim: root.focused-column >= 0 && root.focused-column != 2;
                             }
                         }
                         ScopeHandle {
@@ -1111,11 +1129,13 @@ export component Ds01DeviceFace inherits Rectangle {
                             x: 1px; y: 1px;
                             width: parent.width - 2px; height: parent.height - 2px;
                             shape: root.contours[0]; tint: Theme.accent; filled: true;
+                            dim: root.focused-column >= 0 && root.focused-column != 3;
                         }
                         Contour {
                             x: 1px; y: 1px;
                             width: parent.width - 2px; height: parent.height - 2px;
                             shape: root.contours[3]; tint: #a78bfa; filled: false;
+                            dim: root.focused-column >= 0 && root.focused-column != 3;
                         }
                         // Over the envelope's fill rather than under it: the
                         // fill is opaque, for the seam reasons the contour
