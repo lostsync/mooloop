@@ -962,6 +962,8 @@ export component MainWindow inherits Window {
     in-out property <[string]> ds01-value-texts;
     in-out property <[int]> ds01-step-counts;
     in-out property <[Ds01Contour]> ds01-contours;
+    in-out property <[float]> ds01-preview-minimums;
+    in-out property <[float]> ds01-preview-maximums;
     in-out property <float> ds01-body-decay-fraction;
     in-out property <string> ds01-span-text;
     callback ds01-value-changed(int, float);
@@ -2997,6 +2999,8 @@ export component MainWindow inherits Window {
                                                     value-texts: root.ds01-value-texts;
                                                     step-counts: root.ds01-step-counts;
                                                     contours: root.ds01-contours;
+                                                    preview-minimums: root.ds01-preview-minimums;
+                                                    preview-maximums: root.ds01-preview-maximums;
                                                     body-decay-fraction: root.ds01-body-decay-fraction;
                                                     span-text: root.ds01-span-text;
                                                     modulation-armed: root.modulation-armed-slot >= 0;

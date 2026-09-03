@@ -235,6 +235,12 @@ const DEVICE_CEILING: f32 = 1.0;
 /// to cover a step and nothing more.
 const SMOOTHING_S: f32 = 0.002;
 
+/// Roughly how many samples a preview render costs, whatever span it covers.
+///
+/// The rate is derived from this and the span rather than fixed, so a long
+/// patch does not make the display expensive in proportion to its tail.
+const PREVIEW_SAMPLES: usize = 16_384;
+
 /// The node's noise seed, and the seed the per-hit random is derived from.
 const SEED: u32 = 0x9E37_79B9;
 
@@ -1478,15 +1484,31 @@ impl Ds01 {
     /// Render one deterministic hit through the production voice path and
     /// reduce it to min/max bins suitable for a waveform overview. v1's best
     /// property, kept: the drawn hit is the hit.
-    pub fn preview_waveform(params: Ds01Params, bins: usize) -> (Vec<f32>, Vec<f32>) {
+    ///
+    /// `seconds` is the span the caller is drawing, because DS-01's scopes
+    /// follow the patch rather than a fixed window — a preview that was
+    /// always 300 ms would draw a four-second ride as a spike in the corner
+    /// of a scope that is showing four seconds.
+    ///
+    /// The rate falls as the span grows, so the work stays near
+    /// [`PREVIEW_SAMPLES`] however long the patch is. That is still the
+    /// production voice path, clocked slower; a preview of a four-second tail
+    /// at the full rate is a fifth of a second of arithmetic on the UI
+    /// thread, which is what `08-the-face.md` says must not happen per
+    /// keystroke.
+    pub fn preview_waveform(
+        params: Ds01Params,
+        bins: usize,
+        seconds: f32,
+    ) -> (Vec<f32>, Vec<f32>) {
         if bins == 0 {
             return (Vec::new(), Vec::new());
         }
-        const PREVIEW_SAMPLE_RATE: u32 = 48_000;
-        const PREVIEW_SECONDS: f32 = 0.3;
-        let frames = (PREVIEW_SAMPLE_RATE as f32 * PREVIEW_SECONDS) as usize;
+        let seconds = seconds.clamp(0.01, 8.0);
+        let rate = (PREVIEW_SAMPLES as f32 / seconds).clamp(8_000.0, 48_000.0) as u32;
+        let frames = ((rate as f32 * seconds) as usize).max(bins);
 
-        let mut node = Self::new(params, PREVIEW_SAMPLE_RATE);
+        let mut node = Self::new(params, rate);
         node.trigger(0, 60, 127);
         let mut bus = StereoBus::with_capacity(frames);
         node.render_range(&mut bus, 0, frames);
@@ -3253,7 +3275,7 @@ mod tests {
 
     #[test]
     fn preview_renders_through_the_production_voice() {
-        let plain = Ds01::preview_waveform(Ds01Params::default(), 96);
+        let plain = Ds01::preview_waveform(Ds01Params::default(), 96, 0.3);
         let altered = Ds01::preview_waveform(
             Ds01Params {
                 tone_pitch: 700.0,
@@ -3262,9 +3284,17 @@ mod tests {
                 ..Ds01Params::default()
             },
             96,
+            0.3,
         );
         assert_eq!(plain.0.len(), 96);
         assert_ne!(plain, altered);
+
+        // The span is the caller's, and a longer one is a different drawing
+        // rather than the same one with empty space after it.
+        let long = Ds01::preview_waveform(Ds01Params::default(), 96, 4.0);
+        assert_eq!(long.0.len(), 96);
+        assert_ne!(plain, long);
+        assert!(long.0.iter().chain(&long.1).all(|s| s.is_finite()));
         assert!(plain
             .0
             .iter()

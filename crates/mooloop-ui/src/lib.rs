@@ -56,7 +56,7 @@ use mooloop_dsp::{
         fraction_from_frame, frame_from_fraction, snap_to_zero_crossing, snap_window_frames,
         SnapResult, DEFAULT_SNAP_WINDOW_MS,
     },
-    DrumSynth, DryAlign, SampleData, SpectrumAnalyzer, StretchPool,
+    Ds01, DrumSynth, DryAlign, SampleData, SpectrumAnalyzer, StretchPool,
 };
 use mooloop_engine::{
     EffectSlot, EngineHandle, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer,
@@ -220,6 +220,18 @@ impl PreviewSender {
 const JACK_BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 const WAVEFORM_BINS: usize = 256;
 const DRUM_PREVIEW_BINS: usize = 144;
+
+/// Bins in DS-01's rendered hit. Wider than v1's because its scope is wider:
+/// the device takes five rack units.
+const DS01_PREVIEW_BINS: usize = 256;
+
+/// How long a DS-01 edit sits still before the hit is re-rendered.
+///
+/// `08-the-face.md` is explicit that the preview must not run on the UI
+/// thread per keystroke, and a knob drag is a keystroke every frame. Long
+/// enough that a drag renders once when it stops; short enough that letting
+/// go feels like the picture was already there.
+const DS01_PREVIEW_DEBOUNCE_MS: u64 = 60;
 
 /// Parse a number a user typed into a value field.
 ///
@@ -2403,6 +2415,15 @@ pub fn refresh_ds01(window: &MainWindow, params: &Ds01Params) {
     window.set_ds01_value_texts(face.texts.as_slice().into());
     window.set_ds01_step_counts(face.steps.as_slice().into());
     refresh_ds01_contours(window, params);
+    sync_ds01_preview(window, params);
+}
+
+/// The rendered hit, over the same span the scopes are drawn on.
+fn sync_ds01_preview(window: &MainWindow, params: &Ds01Params) {
+    let (minimums, maximums) =
+        Ds01::preview_waveform(*params, DS01_PREVIEW_BINS, ds01_span_seconds(params));
+    window.set_ds01_preview_minimums(minimums.as_slice().into());
+    window.set_ds01_preview_maximums(maximums.as_slice().into());
 }
 
 /// The scopes, and the span the header states them over.
@@ -10981,6 +11002,34 @@ impl AppUi {
             }};
         }
 
+        // The hit is re-rendered once an edit stops, not once per frame of a
+        // drag. One timer for the whole device: a second edit restarts it,
+        // which is the debounce.
+        let ds01_preview = Rc::new(Timer::default());
+        let schedule_ds01_preview = {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let timer = ds01_preview.clone();
+            move || {
+                let st = st.clone();
+                let weak = weak.clone();
+                timer.start(
+                    TimerMode::SingleShot,
+                    std::time::Duration::from_millis(DS01_PREVIEW_DEBOUNCE_MS),
+                    move || {
+                        let Some(window) = weak.upgrade() else {
+                            return;
+                        };
+                        let params = {
+                            let st = st.borrow();
+                            st.channels[st.selected].ds01_params
+                        };
+                        sync_ds01_preview(&window, &params);
+                    },
+                );
+            }
+        };
+
         // DS-01's face reports `(id, normalized)` for everything, so one
         // handler covers ninety-two controls rather than ninety-two closures
         // covering one each. That is the same reason the face takes arrays: a
@@ -10991,6 +11040,7 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
+            let redraw = schedule_ds01_preview.clone();
             window.on_ds01_value_changed(move |id, normalized| {
                 let id = id as u32;
                 let Some(descriptor) = ds01::descriptor(id) else {
@@ -11014,6 +11064,7 @@ impl AppUi {
                 if let Some(window) = weak.upgrade() {
                     touch_ds01_param(&window, &channel.ds01_params, id);
                 }
+                redraw();
             });
         }
 
@@ -11024,6 +11075,7 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
+            let redraw = schedule_ds01_preview.clone();
             window.on_ds01_handle_dragged(move |id, fraction| {
                 let id = id as u32;
                 let Some(descriptor) = ds01::descriptor(id) else {
@@ -11071,6 +11123,7 @@ impl AppUi {
                 if let Some(window) = weak.upgrade() {
                     touch_ds01_param(&window, &channel.ds01_params, id);
                 }
+                redraw();
             });
         }
 

@@ -262,19 +262,22 @@ And three from step 08:
 
 ## What step 08 still owes
 
-The layout, the controls, the four scopes and their handles are in and
-verified by a software-rendered snapshot at the default patch and at a
-four-second one. Four things are not:
+The layout, the controls, the four scopes and their handles are in, along with
+the rendered hit in the amp scope, verified by a software-rendered snapshot at
+the default patch and at a four-second one.
+
+The preview follows the patch's span rather than a fixed window, which needed
+`Ds01::preview_waveform` to take the span and to *lower its sample rate* as
+the span grows: it is still the production voice path, clocked slower, because
+rendering four seconds at the full rate is a fifth of a second of arithmetic
+that `08-the-face.md` says must not happen on the UI thread. It is debounced
+on top of that, so a knob drag renders the hit once when it stops. Three things are not:
 
 - **The MOD panel.** The three checked-in concepts settled the columns and the
   bands and none of them draws it, so the layout for the matrix's thirty-two
   controls is genuinely undecided rather than a detail to fill in. The band
   carries a labelled empty region where it goes. **This is the one thing in
   the plan that wants Adam before it wants code.**
-- **The rendered hit in the AMP scope.** `Ds01::preview_waveform` exists and
-  renders through the production voice path; what is missing is the debounced
-  plumbing from a parameter edit to a redraw, which `08-the-face.md` is
-  explicit must not run per keystroke on the UI thread.
 - **Burst impulse ticks** on a short axis inside the BURST section.
 - **Focus dimming** — the touched column's scope drawn solid and the others
   quiet.
@@ -365,7 +368,7 @@ instrument. Hence DS-01.
 | `05-the-burst.md` | **In.** Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | **In.** Drive characters, the output stage, the gain contract |
 | `07-internal-modulation-and-outlets.md` | **Matrix in; outlets blocked** on the shared device-outlet mechanism |
-| `08-the-face.md` | **Mostly in.** Layout, controls, scopes and handles; the MOD panel, the hit trace, burst ticks and focus dimming remain |
+| `08-the-face.md` | **Mostly in.** Layout, controls, scopes, handles and the rendered hit; the MOD panel, burst ticks and focus dimming remain |
 | `09-the-kit.md` | Factory patches, range tuning, and the listening pass |
 
 `mockups/` holds three rendered face concepts at the real face size, against

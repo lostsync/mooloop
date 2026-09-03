@@ -212,6 +212,33 @@ component Contour inherits Rectangle {
     }
 }
 
+// The rendered hit, from the production voice path. v1's best property, and
+// the reason it sits in the amp column rather than behind every column: it is
+// the device's output, and the output is what the amp envelope shapes.
+//
+// Drawn as min/max bins rather than a resampled line, so a transient shorter
+// than a pixel still occupies that pixel instead of falling between two.
+component HitTrace inherits Rectangle {
+    in property <[float]> minimums;
+    in property <[float]> maximums;
+    private property <int> bins: min(root.minimums.length, root.maximums.length);
+
+    for index in root.bins : Rectangle {
+        x: index * parent.width / root.bins;
+        width: max(1px, parent.width / root.bins + 0.5px);
+        y: parent.height / 2 - parent.height * 0.46 * root.maximums[index];
+        height: max(1px, parent.height * 0.46
+            * (root.maximums[index] - root.minimums[index]));
+        background: Theme.text.with-alpha(0.5);
+    }
+    Rectangle {
+        y: parent.height / 2;
+        width: 100%;
+        height: 1px;
+        background: Theme.border.with-alpha(0.5);
+    }
+}
+
 // A draggable envelope handle. Its presence is the claim that the scope is
 // where that envelope is *edited* rather than where it is shown, which is
 // what took the envelope times off the knob rows and what makes the device
@@ -339,6 +366,9 @@ export component Ds01DeviceFace inherits Rectangle {
 
     // The four contours, in a fixed order Rust fills: amp, pitch, noise, mod.
     in property <[Ds01Contour]> contours;
+    // The rendered hit, in min/max bins over the same span.
+    in property <[float]> preview-minimums;
+    in property <[float]> preview-maximums;
     /// A handle moved: the parameter, and where it was dropped as a fraction
     /// of the scope. Rust turns that back into seconds through the span and
     /// the descriptor, because the conversion needs the parameter table.
@@ -1035,6 +1065,18 @@ export component Ds01DeviceFace inherits Rectangle {
                             x: 1px; y: 1px;
                             width: parent.width - 2px; height: parent.height - 2px;
                             shape: root.contours[3]; tint: #a78bfa; filled: false;
+                        }
+                        // Over the envelope's fill rather than under it: the
+                        // fill is opaque, for the seam reasons the contour
+                        // documents, so a trace beneath it would be a trace
+                        // nobody sees. Above it the hit reads inside the
+                        // shape that made it, which is the relationship the
+                        // column is for.
+                        HitTrace {
+                            x: 1px; y: 1px;
+                            width: parent.width - 2px; height: parent.height - 2px;
+                            minimums: root.preview-minimums;
+                            maximums: root.preview-maximums;
                         }
                         ScopeHandle {
                             span-width: parent.width; span-height: parent.height;
