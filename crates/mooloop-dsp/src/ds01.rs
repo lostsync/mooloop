@@ -56,15 +56,15 @@
 //!   phase across a level move.
 
 use crate::bus::StereoBus;
-use crate::env::{Ahd, AhdShape};
+use crate::env::{Ahd, AhdShape, DECAY_TAIL_CONSTANTS};
 use crate::event::{Event, EventList};
 use crate::filter::{soft_ceiling, Svf};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{Noise, Osc};
 use crate::smooth::Smoothed;
 use mooloop_core::{
-    ds01, Ds01EnvParams, Ds01NoiseColor, Ds01Params, Ds01Retrigger, OscWave, DS01_MAX_PARTIALS,
-    DS01_VOICES, MAX_CHOKE_GROUP,
+    body_mode_ratio, ds01, Ds01EnvParams, Ds01NoiseColor, Ds01Params, Ds01Retrigger, OscWave,
+    DS01_BODY_MODES, DS01_MAX_PARTIALS, DS01_VOICES, MAX_CHOKE_GROUP,
 };
 
 /// One DS-01 envelope block as the shared envelope's shape.
@@ -128,6 +128,17 @@ const METAL_RATIOS: [f32; DS01_MAX_PARTIALS as usize] =
 /// `noise_colours_share_a_level`.
 const PINK_GAIN: f32 = 0.27;
 
+/// How much Damping shortens a mode, per octave-ish of separation from the
+/// fundamental. At full damping the membrane's top mode rings roughly twenty
+/// times shorter than its fundamental, which is the woodblock end of the
+/// control; at zero every mode rings for the stated decay, which is the bell.
+const DAMPING_DEPTH: f32 = 4.0;
+
+/// What each mode contributes to the layer. Upper modes carry less, as they
+/// do in a struck object, so Ratio changes the material rather than the
+/// balance.
+const BODY_MODE_WEIGHT: [f32; DS01_BODY_MODES] = [1.0, 0.6, 0.4];
+
 /// Impulses per second in the Velvet noise colour. Sparse enough to hear as
 /// individual clicks at the bottom of the rate range and dense enough to read
 /// as texture at the top.
@@ -184,6 +195,11 @@ struct Continuous {
     filter_morph: f32,
     filter_cutoff: f32,
     filter_res: f32,
+    body_pitch: f32,
+    body_ratio: f32,
+    body_decay: f32,
+    body_damping: f32,
+    body_excite: f32,
 }
 
 impl Continuous {
@@ -201,6 +217,11 @@ impl Continuous {
             filter_morph: p.filter_morph.clamp(0.0, 1.0),
             filter_cutoff: p.filter_cutoff.max(1.0),
             filter_res: p.filter_res.clamp(0.0, 1.0),
+            body_pitch: p.body_pitch.max(1.0),
+            body_ratio: p.body_ratio.clamp(0.0, 1.0),
+            body_decay: p.body_decay.max(0.001),
+            body_damping: p.body_damping.clamp(0.0, 1.0),
+            body_excite: p.body_excite.clamp(0.0, 1.0),
         }
     }
 }
@@ -307,6 +328,127 @@ impl NoiseSource {
     }
 }
 
+/// One tuned mode: a two-pole resonator, `y[n] = x[n] + a1 y[n-1] + a2
+/// y[n-2]`, whose poles sit at `r e^{±jw}`.
+///
+/// Not a biquad band-pass, and the difference is the point. A band-pass is
+/// parameterized by Q, so the same Q is a different ring time at every pitch
+/// and "Body Decay" would stop being a time. Here the pole radius comes
+/// straight from the decay in seconds, so a mode at 60 Hz and a mode at 6 kHz
+/// ring for exactly as long as each other — which is what
+/// `body_decay_is_a_time_at_every_pitch` measures.
+///
+/// The two input gains are derived rather than tuned, because the same
+/// resonator has to be struck and to be driven:
+///
+/// - a strike is an impulse, whose response peaks at `1 / sin(w)`, so a
+///   strike is scaled by `sin(w)` and rings at about unity at every pitch;
+/// - a continuous excitation accumulates, with an output RMS of about
+///   `1 / (sin(w) * sqrt(2 (1 - r^2)))` for unit-variance input, so it is
+///   scaled by the inverse of that. Without it, an eight-second ring would be
+///   forty decibels louder than a short one for the same noise going in.
+#[derive(Clone, Copy, Debug, Default)]
+struct Resonator {
+    a1: f32,
+    a2: f32,
+    strike_gain: f32,
+    excite_gain: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl Resonator {
+    /// Recompute this mode's coefficients. Called on the control tick, never
+    /// per sample.
+    fn set(&mut self, freq_hz: f32, decay_s: f32, sample_rate: u32) {
+        let sr = sample_rate as f32;
+        let w = core::f32::consts::TAU * freq_hz / sr;
+        let r = (-DECAY_TAIL_CONSTANTS / (decay_s.max(0.001) * sr)).exp();
+        self.a1 = 2.0 * r * w.cos();
+        self.a2 = -(r * r);
+        let sin_w = w.sin().abs().max(1.0e-4);
+        self.strike_gain = sin_w;
+        self.excite_gain = sin_w * (2.0 * (1.0 - r * r)).max(0.0).sqrt();
+    }
+
+    fn tick(&mut self, input: f32) -> f32 {
+        let out = input + self.a1 * self.y1 + self.a2 * self.y2;
+        self.y2 = self.y1;
+        self.y1 = out;
+        out
+    }
+
+    fn reset(&mut self) {
+        self.y1 = 0.0;
+        self.y2 = 0.0;
+    }
+}
+
+/// Three tuned resonators in parallel, struck by an impulse, by the noise
+/// layer, or by a crossfade of the two.
+#[derive(Clone, Copy, Debug)]
+struct Body {
+    modes: [Resonator; DS01_BODY_MODES],
+    /// Per-mode mute, smoothed. A mode above Nyquist is silenced rather than
+    /// folded down into an alias that does not move with the pitch, and the
+    /// silencing is a ramp so a sweep through the top of the range is not a
+    /// click.
+    audible: [Smoothed; DS01_BODY_MODES],
+    /// Samples of unit impulse left to inject. Step 05's burst is what
+    /// re-arms this mid-hit.
+    impulse: u32,
+}
+
+impl Body {
+    fn new(sample_rate: u32) -> Self {
+        Self {
+            modes: [Resonator::default(); DS01_BODY_MODES],
+            audible: [Smoothed::new(0.0, SMOOTHING_S, sample_rate); DS01_BODY_MODES],
+            impulse: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        for mode in &mut self.modes {
+            mode.reset();
+        }
+        self.impulse = 0;
+    }
+
+    /// Recompute every mode for this control tick.
+    fn prepare(&mut self, fundamental_hz: f32, c: &Continuous, sample_rate: u32) {
+        let nyquist = sample_rate as f32 * 0.45;
+        for (index, mode) in self.modes.iter_mut().enumerate() {
+            let ratio = body_mode_ratio(index, c.body_ratio);
+            let freq = fundamental_hz * ratio;
+            // Damping is high-frequency loss, so it is a function of how far
+            // a mode sits above the fundamental rather than of its index:
+            // at Ratio 0 the modes are closer together and damping bites
+            // less, which is why a harmonic body stays a drum while a
+            // membrane turns into a woodblock.
+            let decay = c.body_decay / (1.0 + c.body_damping * DAMPING_DEPTH * (ratio - 1.0));
+            mode.set(freq, decay, sample_rate);
+            self.audible[index].set_target(if freq < nyquist { 1.0 } else { 0.0 });
+        }
+    }
+
+    fn tick(&mut self, excite: f32, noise: f32) -> f32 {
+        let strike = if self.impulse > 0 {
+            self.impulse -= 1;
+            1.0
+        } else {
+            0.0
+        };
+        let mut sum = 0.0;
+        for (index, mode) in self.modes.iter_mut().enumerate() {
+            let input = strike * mode.strike_gain * (1.0 - excite)
+                + noise * mode.excite_gain * excite;
+            sum += mode.tick(input) * BODY_MODE_WEIGHT[index] * self.audible[index].advance();
+        }
+        sum
+    }
+}
+
 /// One independently enveloped hit.
 struct Voice {
     active: bool,
@@ -334,6 +476,7 @@ struct Voice {
     fm: Osc,
     noise: NoiseSource,
     filter: Svf,
+    body: Body,
     /// Rate-reducer state: the held sample and the fraction of a held period
     /// elapsed.
     held_noise: f32,
@@ -341,7 +484,7 @@ struct Voice {
 }
 
 impl Voice {
-    fn new(seed: u32) -> Self {
+    fn new(seed: u32, sample_rate: u32) -> Self {
         Self {
             active: false,
             age: 0,
@@ -357,6 +500,7 @@ impl Voice {
             fm: Osc::new(),
             noise: NoiseSource::new(seed),
             filter: Svf::new(),
+            body: Body::new(sample_rate),
             held_noise: 0.0,
             hold_phase: 1.0,
         }
@@ -378,6 +522,7 @@ impl Voice {
         self.fm.reset();
         self.noise.reset(self.seed);
         self.filter.reset();
+        self.body.reset();
         self.held_noise = 0.0;
         self.hold_phase = 1.0;
     }
@@ -414,6 +559,11 @@ impl Voice {
         self.fm.reset();
         self.filter.reset();
         self.hold_phase = 1.0;
+        // The resonators are *not* cleared: a hit strikes an object that may
+        // still be ringing, which is what makes a fast pattern on a bell
+        // build rather than restart. Step 05's burst leans on the same
+        // property across the impulses of one hit.
+        self.body.impulse = 1;
         self.amp_env.trigger(ahd_shape(&params.amp), sample_rate);
         self.noise_env.trigger(ahd_shape(&params.noise_env), sample_rate);
         self.mod_env.trigger(ahd_shape(&params.mod_env), sample_rate);
@@ -462,6 +612,7 @@ impl Voice {
         c: &Continuous,
         tone_level: f32,
         noise_level: f32,
+        body_level: f32,
         sample_rate: u32,
     ) -> f32 {
         let amp = self.amp_env.tick();
@@ -483,13 +634,18 @@ impl Voice {
         let tone = self.render_tone(c, swept, sample_rate);
 
         let noise = self.render_noise(c, swept, sample_rate);
+        // The body is struck by the noise layer's *pre-level* signal, per
+        // `01-what-ds01-is.md`: a layer at zero level still exists at its
+        // pre-level tap, so a patch can drive the resonators with noise
+        // nobody hears directly.
+        let body = self.body.tick(c.body_excite, noise);
 
         // The voice's own guard, before any level scales it: a state-variable
         // filter at full resonance is linear and will happily hand back
         // several times full scale, which is what this catches. The device
         // bound below is a different job and is sized differently.
         soft_ceiling(
-            (tone * tone_level + noise * noise_contour * noise_level)
+            (tone * tone_level + noise * noise_contour * noise_level + body * body_level)
                 * amp
                 * self.latched.velocity_amp,
         )
@@ -583,6 +739,7 @@ pub struct Ds01 {
     next_age: u64,
     tone_level: Smoothed,
     noise_level: Smoothed,
+    body_level: Smoothed,
     level: Smoothed,
 }
 
@@ -593,11 +750,12 @@ impl Ds01 {
             params,
             sample_rate,
             voices: std::array::from_fn(|index| {
-                Voice::new(0x9E37_79B9_u32.wrapping_add(index as u32))
+                Voice::new(0x9E37_79B9_u32.wrapping_add(index as u32), sample_rate)
             }),
             next_age: 1,
             tone_level: Smoothed::new(params.tone_level, SMOOTHING_S, sample_rate),
             noise_level: Smoothed::new(params.noise_level, SMOOTHING_S, sample_rate),
+            body_level: Smoothed::new(params.body_level, SMOOTHING_S, sample_rate),
             level: Smoothed::new(params.level, SMOOTHING_S, sample_rate),
         }
     }
@@ -634,6 +792,7 @@ impl Ds01 {
         self.next_age = 1;
         self.tone_level.reset_to(self.params.tone_level);
         self.noise_level.reset_to(self.params.noise_level);
+        self.body_level.reset_to(self.params.body_level);
         self.level.reset_to(self.params.level);
     }
 
@@ -710,6 +869,8 @@ impl Ds01 {
             .set_target(self.params.tone_level.clamp(0.0, 1.0));
         self.noise_level
             .set_target(self.params.noise_level.clamp(0.0, 1.0));
+        self.body_level
+            .set_target(self.params.body_level.clamp(0.0, 1.0));
         self.level.set_target(self.params.level.clamp(0.0, 1.0));
 
         let sr = self.sample_rate;
@@ -719,17 +880,37 @@ impl Ds01 {
             // hit instead of already being there.
             self.tone_level.advance_by(end - start);
             self.noise_level.advance_by(end - start);
+            self.body_level.advance_by(end - start);
             self.level.advance_by(end - start);
             return;
+        }
+
+        // The body is skipped only when its level is zero *and* its smoother
+        // has arrived — ML-P8's lesson about level-gated skipping, written
+        // down in advance: a knob reaching zero does not mean the ramp has,
+        // and skipping early replaces it with a step. The resonators are
+        // cleared while skipped, so a level returning from zero starts from
+        // the next strike rather than resuming a frozen ring.
+        let body_live = self.body_level.value() > 0.0 || self.params.body_level > 0.0;
+        for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+            if body_live {
+                voice
+                    .body
+                    .prepare(continuous.body_pitch * voice.latched.pitch_factor, &continuous, sr);
+            } else {
+                voice.body.reset();
+            }
         }
 
         for frame in start..end {
             let tone_level = self.tone_level.advance();
             let noise_level = self.noise_level.advance();
+            let body_level = self.body_level.advance();
             let level = self.level.advance();
             let mut sum = 0.0;
             for voice in self.voices.iter_mut().filter(|voice| voice.active) {
-                sum += voice.render_sample(&continuous, tone_level, noise_level, sr);
+                let body_level = if body_live { body_level } else { 0.0 };
+                sum += voice.render_sample(&continuous, tone_level, noise_level, body_level, sr);
                 if voice.amp_env.is_idle() {
                     voice.active = false;
                     voice.gate_held = false;
@@ -896,19 +1077,23 @@ mod tests {
         use core::mem::size_of;
         // Six tone oscillators for the partial bank, an FM modulator, the
         // four noise generators' shared state, a state-variable filter, the
-        // rate reducer's held sample, the latch, and the four envelopes.
+        // rate reducer's held sample, the latch, four envelopes, and the
+        // three-mode body.
+        //
         // Step 03 nearly doubled this: an `Ahd` is 44 bytes against
         // `ExpDecay`'s 8, and there are four of them where there were two.
         // That is what a real envelope shape costs, and it is worth paying —
         // v1's single rate law is the largest single reason its snare and its
-        // hat sound like the same instrument.
+        // hat sound like the same instrument. Step 04 added 112 more: three
+        // resonators, their smoothed Nyquist mutes, and the impulse counter.
         assert_eq!(size_of::<crate::env::Ahd>(), 44);
-        assert_eq!(size_of::<Voice>(), 368);
-        // Eight of those, plus the parameter block and the three device-wide
-        // smoothers that the layers share. The pool is 93% of the node.
-        assert_eq!(size_of::<Ds01Params>(), 164);
-        assert_eq!(size_of::<Ds01>(), 3_160);
-        assert_eq!(size_of::<Voice>() * DS01_VOICES, 2_944);
+        assert_eq!(size_of::<Body>(), 112);
+        assert_eq!(size_of::<Voice>(), 480);
+        // Eight of those, plus the parameter block and the four device-wide
+        // smoothers the layers share. The pool is 94% of the node.
+        assert_eq!(size_of::<Ds01Params>(), 188);
+        assert_eq!(size_of::<Ds01>(), 4_088);
+        assert_eq!(size_of::<Voice>() * DS01_VOICES, 3_840);
     }
 
     #[test]
@@ -1452,6 +1637,181 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A body-only patch: the VCA held wide open by a gated envelope at full
+    /// sustain, so what is measured is the resonators' own ring and not the
+    /// amplitude envelope's.
+    fn body_only(pitch: f32, ratio: f32, decay: f32, damping: f32) -> Ds01Params {
+        Ds01Params {
+            tone_level: 0.0,
+            noise_level: 0.0,
+            body_level: 1.0,
+            body_pitch: pitch,
+            body_ratio: ratio,
+            body_decay: decay,
+            body_damping: damping,
+            body_excite: 0.0,
+            amp: Ds01EnvParams {
+                sustain: 1.0,
+                gate: true,
+                ..Ds01EnvParams::one_shot(0.002)
+            },
+            ..Ds01Params::default()
+        }
+    }
+
+    /// Seconds until the signal is 60 dB below its own peak.
+    fn decay_time_s(samples: &[f32]) -> f32 {
+        let floor = peak(samples) * 0.001;
+        let last = samples
+            .iter()
+            .rposition(|s| s.abs() > floor)
+            .unwrap_or(samples.len());
+        last as f32 / SR as f32
+    }
+
+    /// Normalized autocorrelation at the fundamental's period: how periodic
+    /// the layer is at the pitch it was tuned to.
+    fn periodicity(samples: &[f32], freq: f32) -> f32 {
+        let lag = (SR as f32 / freq).round() as usize;
+        let window = &samples[..samples.len() - lag];
+        let energy: f32 = window.iter().map(|s| s * s).sum();
+        if energy <= 0.0 {
+            return 0.0;
+        }
+        let correlation: f32 = window
+            .iter()
+            .zip(samples[lag..].iter())
+            .map(|(a, b)| a * b)
+            .sum();
+        correlation / energy
+    }
+
+    /// Ratio 0 is a pitched drum and Ratio 1 is a material. This is the whole
+    /// design in one control, so it is measured rather than described: at 0
+    /// the layer repeats at the period it was tuned to, and at 1 it does not
+    /// repeat at that period at all.
+    #[test]
+    fn ratio_sweeps_the_body_from_a_pitch_to_a_material() {
+        let render_body = |ratio: f32, pitch: f32| hit(body_only(pitch, ratio, 1.0, 0.0), 12_000);
+
+        let harmonic = periodicity(&render_body(0.0, 220.0)[2_400..9_600], 220.0);
+        let membrane = periodicity(&render_body(1.0, 220.0)[2_400..9_600], 220.0);
+        assert!(harmonic > 0.8, "a harmonic body is only {harmonic} periodic");
+        assert!(
+            membrane < harmonic * 0.7,
+            "a membrane is {membrane} periodic against {harmonic}"
+        );
+
+        // And the pitched end tracks the note, like the tone layer.
+        let pitch_of = |note: u8| {
+            let mut node = Ds01::new(body_only(220.0, 0.0, 1.0, 0.0), SR);
+            let mut events = EventList::empty();
+            events.push(note_on(0, note, 127));
+            upward_crossings(&render(&mut node, 12_000, &events)[2_400..9_600])
+        };
+        let low = pitch_of(48);
+        let high = pitch_of(60);
+        assert!(
+            (high as f32 - low as f32 * 2.0).abs() < low as f32 * 0.1,
+            "an octave gave {low} then {high} crossings"
+        );
+    }
+
+    /// Body Decay is a time, not a Q. The resonator's pole radius comes
+    /// straight from the seconds asked for, so a mode at 60 Hz and one at
+    /// 2 kHz ring for the same length — which a band-pass parameterized by Q
+    /// would not do, and which is why this device does not use one.
+    #[test]
+    fn body_decay_is_a_time_at_every_pitch() {
+        let measured: Vec<f32> = [80.0, 400.0, 2_000.0]
+            .into_iter()
+            .map(|pitch| decay_time_s(&hit(body_only(pitch, 0.0, 0.3, 0.0), 24_000)))
+            .collect();
+        for time in &measured {
+            assert!(
+                (time - 0.225).abs() < 0.06,
+                "a 0.3 s body decayed in {time} s (all: {measured:?})"
+            );
+        }
+    }
+
+    /// Damping is high-frequency loss: it shortens the modes above the
+    /// fundamental and leaves the fundamental alone. That is the difference
+    /// between a bell and a woodblock.
+    #[test]
+    fn damping_shortens_the_upper_modes_and_not_the_fundamental() {
+        let bright = hit(body_only(220.0, 1.0, 0.3, 0.0), 24_000);
+        let damped = hit(body_only(220.0, 1.0, 0.3, 1.0), 24_000);
+
+        // Well into the tail, the damped patch has lost its upper modes, so
+        // it crosses zero far less often for the same fundamental.
+        let bright_rate = upward_crossings(&bright[4_800..12_000]);
+        let damped_rate = upward_crossings(&damped[4_800..12_000]);
+        assert!(
+            (damped_rate as f32) < bright_rate as f32 * 0.7,
+            "damping left {damped_rate} crossings against {bright_rate}"
+        );
+        // The fundamental is untouched, so the layer still rings about as
+        // long. The window is longer than the decay, so both figures are
+        // real rather than the end of the buffer.
+        let bright_time = decay_time_s(&bright);
+        let damped_time = decay_time_s(&damped);
+        assert!(bright_time < 0.4, "the window clipped the tail at {bright_time}");
+        assert!(
+            damped_time > bright_time * 0.8,
+            "damping cut the fundamental too: {bright_time} then {damped_time}"
+        );
+    }
+
+    /// Excite decides what the resonators are hit with. At 0 it is the strike
+    /// — which is clave, rim and woodblock — and at 1 it is the noise layer,
+    /// which is cymbal shimmer and the ring under a snare.
+    #[test]
+    fn excite_crossfades_from_a_strike_to_the_noise_layer() {
+        // The noise layer's *level* is zero throughout: the body reads its
+        // pre-level tap, per `01-what-ds01-is.md`.
+        let with_excite = |excite: f32| {
+            let params = Ds01Params {
+                body_excite: excite,
+                // Silent, but wide open: the body reads the noise layer's
+                // pre-level tap, and a high-passed hiss has nothing at 220 Hz
+                // to drive a resonator tuned there with.
+                noise_level: 0.0,
+                filter_morph: 0.0,
+                filter_cutoff: 18_000.0,
+                ..body_only(220.0, 0.0, 0.5, 0.3)
+            };
+            let out = hit(params, 12_000);
+            (peak(&out[..480]), rms(&out[4_800..]))
+        };
+
+        let (struck_onset, struck_tail) = with_excite(0.0);
+        let (driven_onset, driven_tail) = with_excite(1.0);
+        // A strike is all onset; a driven resonator keeps being fed.
+        assert!(struck_onset > driven_onset * 2.0, "{struck_onset} vs {driven_onset}");
+        assert!(driven_tail > struck_tail, "{struck_tail} vs {driven_tail}");
+    }
+
+    /// With the layer at zero level, none of its five other controls reaches
+    /// the output — which is what makes skipping it safe, and is the
+    /// observable half of "Body Level at 0 costs approximately nothing".
+    #[test]
+    fn a_silent_body_layer_ignores_every_body_control() {
+        let quiet = Ds01Params {
+            body_level: 0.0,
+            ..Ds01Params::default()
+        };
+        let fiddled = Ds01Params {
+            body_pitch: 3_000.0,
+            body_ratio: 1.0,
+            body_decay: 8.0,
+            body_damping: 1.0,
+            body_excite: 1.0,
+            ..quiet
+        };
+        assert_eq!(hit(quiet, 12_000), hit(fiddled, 12_000));
     }
 
     #[test]

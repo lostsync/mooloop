@@ -1,6 +1,6 @@
 # DS-01 plan status
 
-**Steps 02 and 03 are in.** The device exists and plays: a new `Ds01` generator kind
+**Steps 02, 03 and 04 are in.** The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
 state-variable filter, the amplitude and pitch envelopes, and the voice pool
@@ -15,7 +15,13 @@ the control that earns the step — logarithmic at -1, v1's exponential law at 0
 linear at +1 — and gate mode is what makes a ride that rings for as long as it
 is written, sounds v1 cannot make at all.
 
-Read `01-what-ds01-is.md`, then work `04` through `09` in order.
+Step 04 added the body: three tuned resonators struck by the impulse, by the
+noise layer, or by a crossfade of the two. This is the layer v1 has no
+equivalent of, and Ratio is the whole design in one control — harmonic at 0, so
+the layer reads as a tom or a conga, and the ideal circular membrane's modes at
+1, where it stops having a pitch and starts having a material.
+
+Read `01-what-ds01-is.md`, then work `05` through `09` in order.
 
 Four things step 02 turned up that the plan could not have known:
 
@@ -78,7 +84,37 @@ And five from step 03:
   envelope that held its excursion for the length of a note is a transposition
   rather than a sweep.
 
-The device face is **not** part of step 02 or 03. DS-01 is selectable, playable,
+And five from step 04:
+
+- **A two-pole resonator, not the shared biquad in a band-pass.** The step asks
+  for the latter with a Q derived from decay and frequency; the property it
+  wants from that is "decay is a time in seconds at every pitch", and a
+  resonator whose pole radius comes *straight* from the decay time has that
+  property by construction rather than by a conversion. Two other things
+  settled it: `biquad.rs` has no band-pass constructor, so the shared-biquad
+  route meant adding one anyway; and the two-pole form is what makes the two
+  excitation gains below derivable.
+- **The two excitation gains are derived, not tuned.** The same resonator has
+  to be struck and to be driven, and those want opposite scalings: an impulse
+  response peaks at `1/sin(w)`, so a strike is scaled by `sin(w)`; a continuous
+  excitation accumulates with an RMS gain of about
+  `1/(sin(w) * sqrt(2(1 - r^2)))`, so it is scaled by the inverse of that.
+  Without the second, an eight-second ring would be forty decibels louder than
+  a short one for the same noise going in.
+- **Damping is a function of a mode's ratio to the fundamental, not of its
+  index.** That makes it literally high-frequency loss: a harmonic body at
+  Ratio 0 damps less than a membrane at Ratio 1 at the same setting, because
+  its modes are closer together. Damping the index instead would have made the
+  control mean something different at each end of Ratio.
+- **A trigger does not clear the resonators.** A hit strikes an object that may
+  still be ringing, which is what makes a fast pattern on a bell build rather
+  than restart — and it is the same property step 05's burst needs across the
+  impulses of one hit.
+- **The skip clears them.** When the layer is skipped its state is reset, so a
+  level returning from zero starts from the next strike instead of resuming a
+  ring that was frozen mid-decay.
+
+The device face is **not** part of steps 02 through 04. DS-01 is selectable, playable,
 automatable and modulatable without one — every parameter is
 descriptor-addressed, so the modulation shelf and the automation lanes reach it
 whether or not a knob exists — and the rack shows a placeholder saying so.
@@ -160,7 +196,7 @@ instrument. Hence DS-01.
 | --- | --- |
 | `02-the-voice-and-the-descriptor-table.md` | **In.** The kind, the params, the ids, the tone and noise sources, and descriptor addressing on day one |
 | `03-the-envelopes.md` | **In.** Four AHD envelopes with curve and optional gate |
-| `04-the-body-resonator.md` | The tuned modal layer — toms, rims, bells, clangs |
+| `04-the-body-resonator.md` | **In.** The tuned modal layer — toms, rims, bells, clangs |
 | `05-the-burst.md` | Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | Drive characters, the output stage, the gain contract |
 | `07-internal-modulation-and-outlets.md` | DS-01's own matrix and its published outlets |

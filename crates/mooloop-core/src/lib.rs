@@ -33,7 +33,8 @@ pub use automation::{
 };
 pub use bridge::{EngineCommand, EngineEvent};
 pub use ds01::{
-    Ds01EnvParams, Ds01NoiseColor, Ds01Params, Ds01PitchEnvParams, Ds01Retrigger,
+    body_mode_ratio, Ds01EnvParams, Ds01NoiseColor, Ds01Params, Ds01PitchEnvParams,
+    Ds01Retrigger, DS01_BODY_HARMONIC, DS01_BODY_INHARMONIC, DS01_BODY_MODES,
     DS01_MAX_PARTIALS, DS01_VOICES,
 };
 pub use buffer::{BufferDuration, BufferEvent};

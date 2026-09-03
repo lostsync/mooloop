@@ -65,6 +65,13 @@ pub const PARAM_FILTER_MORPH: u32 = 23;
 pub const PARAM_FILTER_CUTOFF: u32 = 24;
 pub const PARAM_FILTER_RES: u32 = 25;
 
+pub const PARAM_BODY_LEVEL: u32 = 30;
+pub const PARAM_BODY_PITCH: u32 = 31;
+pub const PARAM_BODY_RATIO: u32 = 32;
+pub const PARAM_BODY_DECAY: u32 = 33;
+pub const PARAM_BODY_DAMPING: u32 = 34;
+pub const PARAM_BODY_EXCITE: u32 = 35;
+
 // One envelope type used four times, so the offsets inside a block are named
 // once. The pitch envelope is the exception and has its own four ids: it has
 // no gate, so hold, sustain and release would be three controls that do
@@ -100,6 +107,27 @@ pub const DS01_VOICES: usize = crate::MAX_DRUM_VOICES as usize;
 
 /// Most partials the tone bank can run.
 pub const DS01_MAX_PARTIALS: u8 = 6;
+
+/// Tuned resonators in the body layer.
+pub const DS01_BODY_MODES: usize = 3;
+
+/// Mode ratios at [`Ds01Params::body_ratio`] `0` and `1`.
+///
+/// At 0 they are harmonics, and the layer reads as a pitched drum — a tom, a
+/// conga, a tuned kick body. At 1 they are the ideal circular membrane's mode
+/// set, which is the reason a real drum head sounds like a drum head and not
+/// like a sine: the layer stops having a pitch and starts having a material.
+/// Sweeping between them is the whole design in one control.
+pub const DS01_BODY_HARMONIC: [f32; DS01_BODY_MODES] = [1.0, 2.0, 3.0];
+pub const DS01_BODY_INHARMONIC: [f32; DS01_BODY_MODES] = [1.0, 2.76, 5.40];
+
+/// This mode's frequency ratio to the fundamental at a given Ratio setting.
+pub fn body_mode_ratio(mode: usize, ratio: f32) -> f32 {
+    let mode = mode.min(DS01_BODY_MODES - 1);
+    let ratio = ratio.clamp(0.0, 1.0);
+    let harmonic = DS01_BODY_HARMONIC[mode];
+    harmonic + (DS01_BODY_INHARMONIC[mode] - harmonic) * ratio
+}
 
 // --- Structural selectors --------------------------------------------------
 
@@ -358,6 +386,31 @@ const NOISE_DESCRIPTORS: [ParamDescriptor; 6] = [
     unit(PARAM_FILTER_RES, "Reso", 0.1),
 ];
 
+/// The layer v1 has no equivalent of, and where most of the new drum types
+/// come from: a rim, a clave, a conga, a cowbell, a bell, a piece of struck
+/// metal. Those sounds are a short excitation ringing through a resonant
+/// object, and the object is the sound.
+const BODY_DESCRIPTORS: [ParamDescriptor; 6] = [
+    // Zero, like the noise layer: the default patch is still a clean tone
+    // hit, and the body is something a patch reaches for rather than
+    // something it has to turn off.
+    unit(PARAM_BODY_LEVEL, "Body level", 0.0),
+    hz(PARAM_BODY_PITCH, "Body pitch", 20.0, 8_000.0, 220.0),
+    unit(PARAM_BODY_RATIO, "Ratio", 0.0),
+    // A time in seconds at every pitch, which is what deriving the
+    // resonator's pole radius from it rather than from a Q buys.
+    time_s(PARAM_BODY_DECAY, "Body decay", 0.005, 8.0, 0.4),
+    // The difference between a bell and a woodblock, and the most gestural
+    // control in the device: from the mod envelope it is a strike that opens
+    // or closes over its own tail.
+    unit(PARAM_BODY_DAMPING, "Damping", 0.3),
+    // Impulse at 0 — a hard strike, which makes clave, rim and woodblock —
+    // and the noise layer at 1, a sustained excitation, which makes cymbal
+    // shimmer and the ring under a snare. Between them is most of what
+    // percussion actually is.
+    unit(PARAM_BODY_EXCITE, "Excite", 0.0),
+];
+
 /// Longest attack or hold. Half a second is already past a drum and into a
 /// swell, which is the point: the top of the range is where the envelope
 /// stops being percussive.
@@ -456,10 +509,10 @@ const MOD_ENV_DESCRIPTORS: [ParamDescriptor; ENV_BLOCK as usize] = env_block(
 );
 
 /// The complete DS-01 table for this step.
-pub static DESCRIPTORS: [ParamDescriptor; 44] = concat();
+pub static DESCRIPTORS: [ParamDescriptor; 50] = concat();
 
-const fn concat() -> [ParamDescriptor; 44] {
-    let mut out = [GLOBAL_DESCRIPTORS[0]; 44];
+const fn concat() -> [ParamDescriptor; 50] {
+    let mut out = [GLOBAL_DESCRIPTORS[0]; 50];
     let mut at = 0;
     let mut i = 0;
     while i < GLOBAL_DESCRIPTORS.len() {
@@ -476,6 +529,12 @@ const fn concat() -> [ParamDescriptor; 44] {
     i = 0;
     while i < NOISE_DESCRIPTORS.len() {
         out[at] = NOISE_DESCRIPTORS[i];
+        at += 1;
+        i += 1;
+    }
+    i = 0;
+    while i < BODY_DESCRIPTORS.len() {
+        out[at] = BODY_DESCRIPTORS[i];
         at += 1;
         i += 1;
     }
@@ -682,6 +741,22 @@ pub struct Ds01Params {
     pub filter_cutoff: f32,
     pub filter_res: f32,
 
+    // --- Body -----------------------------------------------------------
+    pub body_level: f32,
+    /// Fundamental in Hz, before the note and [`Self::tune`] track it, the
+    /// same way the tone layer's pitch does.
+    pub body_pitch: f32,
+    /// Harmonic at `0`, the circular membrane's modes at `1`.
+    pub body_ratio: f32,
+    /// Ring time in seconds, the same at every pitch.
+    pub body_decay: f32,
+    /// High-frequency loss, in `[0, 1]`. Damps the upper modes faster than
+    /// the fundamental.
+    pub body_damping: f32,
+    /// What the resonators are struck with: the impulse at `0`, the noise
+    /// layer's post-filter signal at `1`.
+    pub body_excite: f32,
+
     // --- Envelopes ------------------------------------------------------
     /// The VCA, always.
     pub amp: Ds01EnvParams,
@@ -717,6 +792,12 @@ impl Default for Ds01Params {
             filter_morph: 1.0,
             filter_cutoff: 7_500.0,
             filter_res: 0.1,
+            body_level: 0.0,
+            body_pitch: 220.0,
+            body_ratio: 0.0,
+            body_decay: 0.4,
+            body_damping: 0.3,
+            body_excite: 0.0,
             amp: Ds01EnvParams::one_shot(0.24),
             pitch: Ds01PitchEnvParams::default(),
             noise_env: Ds01EnvParams::one_shot(0.12),
@@ -756,6 +837,12 @@ pub fn get(p: &Ds01Params, id: u32) -> Option<f32> {
         PARAM_FILTER_MORPH => p.filter_morph,
         PARAM_FILTER_CUTOFF => p.filter_cutoff,
         PARAM_FILTER_RES => p.filter_res,
+        PARAM_BODY_LEVEL => p.body_level,
+        PARAM_BODY_PITCH => p.body_pitch,
+        PARAM_BODY_RATIO => p.body_ratio,
+        PARAM_BODY_DECAY => p.body_decay,
+        PARAM_BODY_DAMPING => p.body_damping,
+        PARAM_BODY_EXCITE => p.body_excite,
         PARAM_PITCH_ATTACK => p.pitch.attack,
         PARAM_PITCH_DECAY => p.pitch.decay,
         PARAM_PITCH_CURVE => p.pitch.curve,
@@ -798,6 +885,12 @@ pub fn set(p: &mut Ds01Params, id: u32, value: f32) -> bool {
         PARAM_FILTER_MORPH => p.filter_morph = value,
         PARAM_FILTER_CUTOFF => p.filter_cutoff = value,
         PARAM_FILTER_RES => p.filter_res = value,
+        PARAM_BODY_LEVEL => p.body_level = value,
+        PARAM_BODY_PITCH => p.body_pitch = value,
+        PARAM_BODY_RATIO => p.body_ratio = value,
+        PARAM_BODY_DECAY => p.body_decay = value,
+        PARAM_BODY_DAMPING => p.body_damping = value,
+        PARAM_BODY_EXCITE => p.body_excite = value,
         PARAM_PITCH_ATTACK => p.pitch.attack = value,
         PARAM_PITCH_DECAY => p.pitch.decay = value,
         PARAM_PITCH_CURVE => p.pitch.curve = value,
@@ -820,14 +913,14 @@ mod tests {
         }
     }
 
-    /// Steps 02 and 03 own 0-29 and the four envelope bands. 30-39 is the
-    /// body resonator, 80 onward is the burst, the shaper and the matrix;
-    /// reaching into either would be spending a later step's reservation.
+    /// Steps 02 through 04 own 0-39 and the four envelope bands. 80 onward is
+    /// the burst, the shaper and the matrix; reaching into any of those would
+    /// be spending a later step's reservation.
     #[test]
     fn every_id_lands_in_a_band_these_steps_own() {
         for d in &DESCRIPTORS {
-            let owned = d.id < 30 || (40..80).contains(&d.id);
-            assert!(owned, "{} ({}) is outside steps 02-03's bands", d.id, d.name);
+            let owned = d.id < 40 || (40..80).contains(&d.id);
+            assert!(owned, "{} ({}) is outside steps 02-04's bands", d.id, d.name);
             assert!(
                 !(54..60).contains(&d.id),
                 "{} ({}) sits in the pitch band's unused tail",
@@ -835,7 +928,7 @@ mod tests {
                 d.name
             );
         }
-        assert_eq!(DESCRIPTORS.len(), 44);
+        assert_eq!(DESCRIPTORS.len(), 50);
     }
 
     /// The four envelopes are one type used four times, so their blocks have
@@ -937,12 +1030,31 @@ mod tests {
     #[test]
     fn an_id_this_step_has_not_assigned_is_neither_read_nor_written() {
         let mut params = Ds01Params::default();
-        // 6 is inside the global band but unassigned; 30 belongs to the body
-        // resonator in step 04, 47 to the tail of the amplitude block, 54 to
-        // the tail of the pitch one, and 80 to the burst in step 05.
-        for id in [6, 30, 47, 54, 80] {
+        // 6 is inside the global band but unassigned; 36 is the tail of the
+        // body one, 47 the tail of the amplitude block, 54 the tail of the
+        // pitch one, and 80 the burst in step 05.
+        for id in [6, 36, 47, 54, 80] {
             assert_eq!(get(&params, id), None, "id {id} reads");
             assert!(!set(&mut params, id, 1.0), "id {id} writes");
+        }
+    }
+
+    /// Ratio 0 is harmonic and Ratio 1 is the circular membrane. The two
+    /// tables are the design, so they are pinned rather than described.
+    #[test]
+    fn the_body_ratio_sweeps_from_harmonic_to_a_membrane() {
+        for mode in 0..DS01_BODY_MODES {
+            assert_eq!(body_mode_ratio(mode, 0.0), DS01_BODY_HARMONIC[mode]);
+            assert_eq!(body_mode_ratio(mode, 1.0), DS01_BODY_INHARMONIC[mode]);
+        }
+        // The fundamental is the fundamental at every setting: Ratio detunes
+        // the modes above it, it does not transpose the layer.
+        for ratio in [0.0, 0.25, 0.5, 1.0] {
+            assert_eq!(body_mode_ratio(0, ratio), 1.0);
+        }
+        // And the modes stay ordered, so "mode 2" never crosses "mode 1".
+        for ratio in [0.0, 0.5, 1.0] {
+            assert!(body_mode_ratio(1, ratio) < body_mode_ratio(2, ratio));
         }
     }
 

@@ -5239,24 +5239,24 @@ mod footprint {
         // are the sampler's transport-edge flag, which is what lets a note
         // auditioned while stopped keep sounding.
         assert_eq!(size_of::<MlP8>(), 3_176);
-        // DS-01 is 3,160, and almost all of it is the eight-voice pool: a
+        // DS-01 is 4,088, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a
-        // state-variable filter, the rate reducer's hold, and four envelopes.
-        // Step 03's envelopes are half of that figure -- an `Ahd` is 44 bytes
-        // against `ExpDecay`'s 8, four of them where there were two -- and
-        // they are the largest single reason DS-01's snare and its hat do not
-        // sound like the same instrument.
+        // state-variable filter, the rate reducer's hold, four envelopes, and
+        // the body's three resonators. Step 03's envelopes are the largest
+        // share -- an `Ahd` is 44 bytes against `ExpDecay`'s 8, four of them
+        // where there were two -- and they are the largest single reason
+        // DS-01's snare and its hat do not sound like the same instrument.
         // `mooloop_dsp::ds01`'s own size test splits that between the pool
         // and the parameter block. It does not widen `source_base`:
         // `Ds01Params` is smaller than `MlP8Params`, which is still the
         // widest `GeneratorParams` variant and therefore still what every
         // channel pays for.
-        assert_eq!(size_of::<Ds01>(), 3_160);
+        assert_eq!(size_of::<Ds01>(), 4_088);
         // The strip pays the ML-P8's 280 twice: once for the node above, and
         // once for `source_base`, whose `GeneratorParams` is as wide as its
         // widest variant and the ML-P8 is that variant.
-        assert_eq!(size_of::<ChannelStrip>(), 35_376);
+        assert_eq!(size_of::<ChannelStrip>(), 36_304);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -5267,16 +5267,17 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 53_816);
+        assert_eq!(per_live, 54_744);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
         // it by 41 KiB, which is what a device costs now: linear in the
         // channels a project has rather than in the channels it could address.
         // Slice mode moved it by 6 KiB across sixteen channels, the ML-P8's
-        // LFO and route table another 9, and DS-01 -- the seventh kind -- 49,
-        // of which 22 are the four real envelopes its voice runs.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_279);
+        // LFO and route table another 9, and DS-01 -- the seventh kind -- 64,
+        // of which 22 are the four real envelopes its voice runs and 14 the
+        // body's three resonators.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_294);
     }
 }
 
