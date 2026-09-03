@@ -179,6 +179,80 @@ output with `hyprctl output create headless agent`.
 `ydotool` input goes to the focused window. Keep live interaction brief and do
 not leave the agent window focused.
 
+## Driving the live application over MCP
+
+`scripts/mooloop-mcp` runs the application with Slint's embedded MCP server
+switched on, which publishes the running UI as MCP tools: `list_windows`,
+`get_element_tree`, `find_elements_by_id`, `get_element_properties`,
+`query_element_descendants`, `set_element_value`, `click_element`,
+`drag_element`, `dispatch_key_event`, `invoke_accessibility_action`,
+`take_screenshot`, and event recording.
+
+The tools are `i-slint-backend-testing`'s `ElementHandle` API over HTTP --
+the same introspection the UI tests in `crates/mooloop-ui/tests` drive
+in-process, which is why `first_click.rs` explains that the search half of it
+needs debug info and clicks fixed coordinates instead.
+
+This is the only view of the interface with the real Rust models behind it.
+`scripts/slint-sketch` draws widgets with nothing in them, and the snapshot
+tests render one frame of one window; here the engine is running, a click
+lands on the same code path Adam's click lands on, and the next screenshot
+shows what it did.
+
+```sh
+scripts/mooloop-mcp              # build on the box, start headless, print the endpoint
+scripts/mooloop-mcp --status
+scripts/mooloop-mcp --stop
+scripts/mooloop-mcp --window     # a real window on the `agent` output instead
+```
+
+It is headless by default for the reasons software rendering is preferred
+above -- no compositor, works while the screen is locked -- and because a
+windowed run on a machine with no display cannot screenshot at all. JACK is
+not optional either way: the engine starts before the UI and takes the process
+down with it if it fails, so a port that never answers usually means the log
+the script names, not the server.
+
+`.mcp.json` registers the endpoint for Claude Code, so the tools appear in a
+session started while the application is up; the entry is dead the rest of the
+time, which is the cost of having it checked in. Any client can call the
+endpoint directly, and `curl` is the reliable way to drive it from a script:
+
+```sh
+curl -s -X POST http://127.0.0.1:9010/mcp -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"list_windows","arguments":{}}}'
+```
+
+The two handle kinds are the thing to get right, since they have the same
+`{index, generation}` shape and are not interchangeable. `list_windows`
+returns a window handle; `get_window_properties` on it returns
+`rootElementHandle`; `get_element_tree` takes that *element* handle and walks
+down from it, a thousand elements at a time. The elements come back with the
+`.slint` ids and accessible labels -- `MainWindow::menu-bar`,
+`ToolButton::tap`, "Show the step grid or the mixer: Mixer" -- and absolute
+positions that line up with the screenshot, so finding the control you mean is
+a search over the tree rather than a guess at coordinates.
+
+`click_element` is a real pointer event, and the pointer stays where it left
+it: the next screenshot may show a hover tooltip the application is right to
+be drawing. The engine connects to JACK on startup and usually reports one
+xrun while doing so, which is the connection, not a fault in what you are
+testing.
+
+Two switches gate the server, and both are off in anything released. The
+`mcp` feature on `mooloop-app` compiles it in and makes `crates/mooloop-ui`'s
+`build.rs` emit element debug info, without which every tool that names an
+element fails at runtime. `$SLINT_MCP_PORT` starts it; unset, the code is
+inert. It binds `127.0.0.1`, validates that the request origin is local, and
+has no authentication -- it is a development tool, and the packaging never
+turns the feature on.
+
+Expect the feature flip to cost a full rebuild of the generated Slint module
+in either direction -- 13m05s on the box for a cold release build with it on
+-- which is why the script builds there by default and keeps its binary at
+`bin/mooloop-mcp` rather than in `target/`.
+
 ## Hook activation
 
 The tracked pre-commit hook protects `main` from ordinary commits. Enable it

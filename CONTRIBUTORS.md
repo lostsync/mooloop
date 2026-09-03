@@ -38,8 +38,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-02
-- Sessions: 38
+- Last seen: 2026-09-03
+- Sessions: 39
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -554,6 +554,12 @@ work session you can recall being part of, and don't stress over precision.
   addressed by a new `ParamOwner::SourceRoute`, so a durable route id is the
   address and the device's parameter table stays a description of the
   instrument rather than a fixed number of route slots.
+  Then wired up Slint's embedded MCP server behind a `mcp` feature and
+  `scripts/mooloop-mcp`, so the running application can be read and driven --
+  element tree, clicks, drags, keys, screenshots -- instead of inferred from
+  the source. The feature carries the element debug info rather than leaving
+  it to `SLINT_EMIT_DEBUG_INFO`, since a build that forgets the variable fails
+  only later, at the first tool call that names an element.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+# Run mooloop with Slint's embedded MCP server, so an agent can inspect and
+# drive the live application instead of guessing at it.
+#
+#   scripts/mooloop-mcp                 # build, start headless, print the endpoint
+#   scripts/mooloop-mcp --window        # show it on the `agent` Hyprland output
+#   scripts/mooloop-mcp --no-build      # reuse the binary already in ./bin
+#   scripts/mooloop-mcp --status        # is it up, and on which port
+#   scripts/mooloop-mcp --stop          # shut it down
+#
+# The server is compiled in by `--features mooloop-app/mcp` and started by
+# $SLINT_MCP_PORT; without the variable the code is inert, and without the
+# feature it is not in the binary at all. It speaks MCP over HTTP on
+# 127.0.0.1 only, has no authentication, and is a development tool: nothing
+# released enables the feature.
+#
+# What it is for: `scripts/slint-sketch` renders widgets with no Rust model
+# behind them, and the snapshot tests render one frame and stop. This is the
+# real application, with the real engine running, and the tools reach into it
+# -- read the element tree and properties, click, drag, type, set values, take
+# a screenshot. It is the only way to answer "what does the app actually do
+# when I press this" without Adam sitting at the keyboard.
+#
+# Headless by default, for the same reason the rest of the runbook prefers
+# software rendering: it needs no compositor, works while the screen is
+# locked, is deterministic, and -- unlike a windowed run on a machine with no
+# display -- `take_screenshot` works. `--window` puts a real window on the
+# `agent` output when the question is about the GPU renderer or about how the
+# thing feels to use.
+#
+# JACK is not optional: the engine starts before the UI, and a failure there
+# exits the process. Read the log the script points at if the port never
+# answers.
+set -euo pipefail
+
+PORT="${MOOLOOP_MCP_PORT:-9010}"
+BUILD=1
+LOCAL_BUILD=0
+HEADLESS=1
+ACTION="start"
+
+ROOT="$(git rev-parse --show-toplevel)"
+BIN="$ROOT/bin/mooloop-mcp"
+RUNTIME="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+
+usage() {
+  awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
+  cat <<'USAGE'
+
+Options:
+  -p, --port N    Serve on port N (default 9010, or $MOOLOOP_MCP_PORT).
+  -w, --window    Run with a real window on the `agent` output, not headless.
+  -n, --no-build  Skip the build and run ./bin/mooloop-mcp as it is.
+  -l, --local     Build on this machine instead of the remote box.
+      --status    Report whether the server is answering, then exit.
+      --stop      Stop the running server, then exit.
+  -h, --help      This text.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--port) PORT="${2:?--port needs a value}"; shift 2 ;;
+    -w|--window) HEADLESS=0; shift ;;
+    -n|--no-build) BUILD=0; shift ;;
+    -l|--local) LOCAL_BUILD=1; shift ;;
+    --status) ACTION="status"; shift ;;
+    --stop) ACTION="stop"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "mooloop-mcp: unknown option $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+PIDFILE="$RUNTIME/mooloop-mcp-$PORT.pid"
+LOG="${TMPDIR:-/tmp}/mooloop-mcp-$PORT.log"
+URL="http://127.0.0.1:$PORT/mcp"
+
+# One `initialize` round trip: the only answer that proves the server is up
+# rather than the port merely being taken.
+initialize() {
+  curl -s -m 3 -X POST "$URL" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mooloop-mcp","version":"1"}}}'
+}
+
+running_pid() {
+  [[ -f "$PIDFILE" ]] || return 1
+  local pid
+  pid="$(cat "$PIDFILE")"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && printf '%s' "$pid"
+}
+
+case "$ACTION" in
+  status)
+    pid="$(running_pid || true)"
+    if initialize | grep -q '"serverInfo"'; then
+      echo "mooloop-mcp: up on $URL${pid:+ (pid $pid)}"
+      exit 0
+    fi
+    echo "mooloop-mcp: nothing answering on $URL${pid:+, but pid $pid is alive}" >&2
+    exit 1
+    ;;
+  stop)
+    pid="$(running_pid || true)"
+    if [[ -z "$pid" ]]; then
+      echo "mooloop-mcp: no server recorded on port $PORT" >&2
+      exit 1
+    fi
+    kill "$pid"
+    for _ in $(seq 20); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.25
+    done
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+    rm -f "$PIDFILE"
+    echo "mooloop-mcp: stopped pid $pid"
+    exit 0
+    ;;
+esac
+
+if pid="$(running_pid)"; then
+  echo "mooloop-mcp: already running as pid $pid on $URL" >&2
+  echo "mooloop-mcp: --stop it first, or use --port for a second instance" >&2
+  exit 1
+fi
+
+if [[ $BUILD -eq 1 ]]; then
+  # A release build: this drives the real engine, and a debug build cannot
+  # keep up with realtime audio. Stripping it afterwards costs nothing that
+  # matters here -- it takes 932 MB to 52 MB, and Slint's element debug info
+  # is generated Rust data rather than DWARF, so the tools still resolve
+  # `MainWindow::menu-bar` out of a stripped binary. Backtraces are what you
+  # lose; use `scripts/antibox --release-bin` when you want those.
+  build='cargo build --release -p mooloop-app --bin mooloop --features mooloop-app/mcp'
+  if [[ $LOCAL_BUILD -eq 1 ]]; then
+    echo "mooloop-mcp: building locally (expect minutes; the generated Slint" >&2
+    echo "             module recompiles whenever the mcp feature flips)" >&2
+    "$ROOT/scripts/cargo-capped" build --release -p mooloop-app --bin mooloop \
+      --features mooloop-app/mcp
+    install -D -m 755 "${CARGO_TARGET_DIR:-$ROOT/target}/release/mooloop" "$BIN"
+    strip "$BIN"
+  else
+    echo "mooloop-mcp: building on the remote box" >&2
+    stage="/tmp/mooloop-mcp-build-$$"
+    "$ROOT/scripts/antibox" --pull "$stage" sh -c \
+      "$build && install -m 755 \"\$CARGO_TARGET_DIR/release/mooloop\" \"$stage\""
+    install -D -m 755 "$stage" "$BIN"
+    strip "$BIN"
+    rm -f "$stage"
+  fi
+fi
+
+if [[ ! -x "$BIN" ]]; then
+  echo "mooloop-mcp: no binary at $BIN; run without --no-build" >&2
+  exit 1
+fi
+
+: >"$LOG"
+if [[ $HEADLESS -eq 1 ]]; then
+  # `nohup` execs rather than forking, so $! is the application itself and the
+  # pidfile stays true; it also survives the terminal this was launched from.
+  SLINT_MCP_PORT="$PORT" SLINT_BACKEND=headless \
+    nohup "$BIN" >>"$LOG" 2>&1 </dev/null &
+  echo $! >"$PIDFILE"
+else
+  # Hyprland runs the string through `sh -c`, and the window must land on the
+  # `agent` output rather than whatever Adam is looking at. The launcher file
+  # keeps that one command free of nested quoting.
+  if ! command -v hyprctl >/dev/null || [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+    echo "mooloop-mcp: --window needs a running Hyprland to place the window on" >&2
+    echo "             the \`agent\` output; without one, run headless." >&2
+    exit 1
+  fi
+  launcher="$RUNTIME/mooloop-mcp-$PORT.sh"
+  cat >"$launcher" <<LAUNCHER
+#!/bin/sh
+echo \$\$ >"$PIDFILE"
+exec env SLINT_MCP_PORT="$PORT" "$BIN" >>"$LOG" 2>&1
+LAUNCHER
+  chmod +x "$launcher"
+  rm -f "$PIDFILE"
+  # hyprctl reports its errors on stdout, so keep them rather than discarding
+  # the output wholesale.
+  if ! out="$(hyprctl dispatch exec "[workspace name:agent] $launcher")" \
+    || [[ "$out" != ok* ]]; then
+    echo "mooloop-mcp: hyprctl refused the launch: $out" >&2
+    exit 1
+  fi
+fi
+
+for _ in $(seq 60); do
+  if initialize | grep -q '"serverInfo"'; then
+    pid="$(running_pid || true)"
+    echo "mooloop-mcp: up on $URL${pid:+ (pid $pid)}"
+    echo "mooloop-mcp: log $LOG"
+    echo "mooloop-mcp: stop with scripts/mooloop-mcp --stop --port $PORT"
+    exit 0
+  fi
+  pid="$(running_pid || true)"
+  if [[ $HEADLESS -eq 1 && -z "$pid" ]]; then
+    break
+  fi
+  sleep 0.5
+done
+
+echo "mooloop-mcp: nothing answering on $URL after 30s; the log follows" >&2
+tail -n 20 "$LOG" >&2 || true
+exit 1
