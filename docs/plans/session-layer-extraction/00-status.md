@@ -29,6 +29,14 @@ things justify it on their own terms:
   scheduling and drift tests; the session layer — which owns undo, structural
   retargeting, note selection, and every project mutation — has none.
 
+There is a fourth, found while measuring the egui question. `mooloop-ui`'s build
+is dominated by the single 39 MB module `slint_build` generates, but `lib.rs`
+being one 13,411-line file is a second codegen unit that cannot be subdivided
+either. Moving it into its own crate lets it rebuild independently of the
+generated module and of every `.slint` edit — a compile-time win that arrives
+with the extraction and does not depend on any toolkit decision. See
+`docs/plans/egui-view-layer/00-status.md` for the measurements.
+
 That third point is the real one. `mooloop_core::structure` exists because
 positional addressing was a live bug: routes and automation lanes named their
 destination by slot and their channel by index, so any structural edit silently

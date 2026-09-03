@@ -43,6 +43,12 @@ Do not set `CARGO_INCREMENTAL=0` to save memory. It is the obvious guess and
 it is measurably wrong here: on the same `.slint` edit it cost 4.58 GB and
 2m01s, against 3.42 GB and 41s with incremental left on.
 
+For scale on where that single module comes from: `slint_build` expands
+`ui/main.slint` into roughly 39 MB and 395,000 lines of Rust, so `mooloop-ui`
+compiles about 412,000 lines of which 96% are generated. Nothing here can be
+tuned below that; `docs/plans/egui-view-layer/00-status.md` measures what the
+figures look like without it.
+
 ## Remote builds and tests
 
 The laptop's Cargo limits exist because of its memory. `scripts/antibox` sends

@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-02
-- Sessions: 36
+- Sessions: 37
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -538,6 +538,11 @@ work session you can recall being part of, and don't stress over precision.
   reference architecture in `docs/ARCHITECTURE_REVIEW.md` -- it holds up, the
   one real gap is graph-wide latency compensation -- and split the UI question
   it raised into two plans, `session-layer-extraction/` and `egui-view-layer/`.
+  Then had to correct the egui plan's central claim: I argued compile time was
+  the case against, and Adam doubted it. He was right. `build.rs` expands
+  `ui/main.slint` into a single 39 MB Rust module, so the four minutes and the
+  3.4 GB peak that `scripts/cargo-capped` exists to contain are Slint's, and a
+  measured `eframe` probe checks in 1.4s inside 0.2 GB.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

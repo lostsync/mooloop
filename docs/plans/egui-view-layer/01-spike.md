@@ -35,16 +35,17 @@ numbers and two judgements:
 
 **Numbers**
 
-1. Incremental rebuild time for a one-line visual change in the spike binary.
-   This is the number that decides the plan; compare it against
-   `scripts/slint-sketch`'s 0.05s type-check and 0.2s screenshot.
+1. Frame time with the engine running and meters updating, on Adam's machine.
+   Immediate mode redraws everything every frame; the rack is 256 addressable
+   channels. **This is now the number that decides the plan**, since it is the
+   one remaining way egui could be worse rather than better.
 2. Lines of Rust for the pane, against the Slint version's markup plus
    projection code.
-3. Frame time with the engine running and meters updating, on Adam's machine.
-   Immediate mode redraws everything every frame; the rack is 256 addressable
-   channels.
-4. Binary build time from clean, since it gates how painful the migration's
-   middle is.
+3. Incremental rebuild time for a one-line change, to confirm the probe figures
+   in `00-status.md` hold for a binary that also links the engine. Expected
+   around 1.4s to check and upwards of 6.7s to build; the probe linked a small
+   binary, so the build figure is a floor rather than a prediction. This is a
+   confirmation, not an open question.
 
 **Judgements**
 
@@ -56,12 +57,14 @@ numbers and two judgements:
 
 ## What would make this a no
 
-Any of:
+Either of:
 
-- the rebuild loop is slow enough that UI work stops being fun,
 - frame time with a full rack is not comfortably inside the refresh budget,
 - the step grid's drag needs more fighting in immediate mode than it did in
   Slint.
+
+"The rebuild loop is too slow" was on this list and has been removed: it is
+measured, and it goes the other way. See `00-status.md`.
 
 A no here is a good outcome, not a wasted week. It converts a standing "should
 we switch" question into a recorded answer, and `docs/ARCHITECTURE_REVIEW.md`
@@ -70,8 +73,8 @@ already establishes that nothing else in the project is waiting on it.
 ## What would make this a yes
 
 The projection layer is gone and not missed, the visualizers are obviously
-better, and the rebuild loop is survivable with a small binary. In that case
-write steps 02–04 properly, with the spike's numbers in them, before continuing.
+better, and a full rack draws inside budget. In that case write steps 02–04
+properly, with the spike's numbers in them, before continuing.
 
 ## Verification
 

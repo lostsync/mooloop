@@ -23,7 +23,7 @@ is worth reading before either.
 | `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
 | `session-layer-extraction/` | **Written, no code.** Six steps. Lifts a toolkit-free session crate out of `mooloop-ui/src/lib.rs` (13,411 lines, of which `UiState::new` is 7,700). Worth doing whether or not the egui plan ever runs; step 06 is the first test coverage the edit logic has ever had. |
-| `egui-view-layer/` | **Written, not decided.** Blocked on `session-layer-extraction/` finishing, and on step 01's spike. `00-status.md` states the case both ways — the cost is losing `scripts/slint-sketch`'s 0.05s loop, the gain is deleting the projection layer. |
+| `egui-view-layer/` | **Written, not decided.** Blocked on `session-layer-extraction/` finishing, and on step 01's spike. `00-status.md` states the case both ways. Compile cost was assumed to be the argument against and measured as an argument for: `build.rs` expands `ui/main.slint` into a single 39 MB Rust module, which is where the four minutes and the 3.4 GB go. What is left to decide is frame time and interaction feel. |
 
 ## Queued, not started
 
