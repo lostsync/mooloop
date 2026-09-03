@@ -1,7 +1,8 @@
 use mooloop_core::{DrumMode, DrumSynthParams};
 use mooloop_dsp::DrumSynth;
 use mooloop_ui::{
-    ChannelRow, EffectSlotRow, MainWindow, ModulationRouteRow, ModulationSourceRow, StepCell,
+    ChannelRow, EffectSlotRow, MainWindow, MlP8RouteRow, ModulationRouteRow, ModulationSourceRow,
+    StepCell,
 };
 use slint::platform::WindowEvent;
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
@@ -924,6 +925,132 @@ fn the_module_grid_scales_with_capacity_alone() {
             },
         );
     }
+}
+
+/// The ML-P8's own modulation page: the LFO, and the route list it and the
+/// five per-voice sources reach through.
+#[test]
+fn render_mlp8_modulation_page() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .ok();
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_pattern_length(16);
+    ui.set_selected_channel_name(SharedString::from("ML-P8"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(5);
+
+    let names = |labels: &[&str]| {
+        ModelRc::from(Rc::new(VecModel::from(
+            labels
+                .iter()
+                .map(|label| SharedString::from(*label))
+                .collect::<Vec<_>>(),
+        )))
+    };
+    ui.set_mlp8_route_source_names(names(&[
+        "LFO", "Amp Env", "Filt Env", "Velocity", "Key", "Gate",
+    ]));
+    ui.set_mlp8_route_dest_names(names(&["Cutoff", "Drive", "XM 1>2", "Voice pan"]));
+
+    let instrument = ui.window().take_snapshot().unwrap();
+    ui.set_mlp8_device_page(1);
+    let empty = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        instrument.as_bytes(),
+        empty.as_bytes(),
+        "the MOD page drew the instrument page"
+    );
+    write_snapshot(&empty, "MOOLOOP_MLP8_MOD_EMPTY_SNAPSHOT");
+
+    // An empty list says so rather than showing a bare frame, and the add
+    // affordance is on offer.
+    ui.set_mlp8_routes_status(SharedString::from("3 of 16"));
+    ui.set_mlp8_routes(ModelRc::from(Rc::new(VecModel::from(vec![
+        MlP8RouteRow {
+            id: 1,
+            source: 0,
+            dest: 0,
+            amount: -35.0,
+            dest_name: SharedString::from("Cutoff"),
+            bipolar: true,
+        },
+        MlP8RouteRow {
+            id: 2,
+            source: 3,
+            dest: 1,
+            amount: 62.0,
+            dest_name: SharedString::from("Drive"),
+            bipolar: false,
+        },
+        MlP8RouteRow {
+            id: 3,
+            source: 2,
+            dest: 2,
+            amount: 18.0,
+            dest_name: SharedString::from("XM 1>2"),
+            bipolar: false,
+        },
+    ]))));
+    let routed = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        empty.as_bytes(),
+        routed.as_bytes(),
+        "three authored routes drew nothing"
+    );
+    write_snapshot(&routed, "MOOLOOP_MLP8_MOD_ROUTES_SNAPSHOT");
+
+    // At the ceiling the add affordance stops offering itself rather than
+    // failing on click.
+    ui.set_mlp8_routes_full(true);
+    let full = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        routed.as_bytes(),
+        full.as_bytes(),
+        "a full patch still offered to add a route"
+    );
+    ui.set_mlp8_routes_full(false);
+
+    // The LFO's two non-periodic waves make Warp mean a distribution bias
+    // rather than a phase skew, and the whole shape changes with the wave.
+    let mut previous = routed.as_bytes().to_vec();
+    for wave in [1, 3, 5] {
+        ui.set_mlp8_lfo_wave(wave);
+        let shot = ui.window().take_snapshot().unwrap();
+        assert_ne!(previous, shot.as_bytes(), "LFO wave {wave} drew the last one");
+        previous = shot.as_bytes().to_vec();
+    }
+
+    // Tempo sync turns the rate knob into a musical-division knob, which is a
+    // different readout as well as a different control.
+    ui.set_mlp8_lfo_synced(true);
+    let synced = ui.window().take_snapshot().unwrap();
+    assert_ne!(previous, synced.as_bytes(), "tempo sync changed nothing");
+    write_snapshot(&synced, "MOOLOOP_MLP8_MOD_SYNCED_SNAPSHOT");
+
+    for retrigger in [1, 2] {
+        ui.set_mlp8_lfo_retrigger(retrigger);
+        let shot = ui.window().take_snapshot().unwrap();
+        assert_ne!(
+            synced.as_bytes(),
+            shot.as_bytes(),
+            "retrigger policy {retrigger} drew as Free"
+        );
+    }
+
+    ui.window().set_size(LogicalSize::new(720.0, 760.0));
+    let narrow = ui.window().take_snapshot().unwrap();
+    assert_eq!((narrow.width(), narrow.height()), (720, 760));
+    assert!(narrow.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&narrow, "MOOLOOP_MLP8_MOD_NARROW_SNAPSHOT");
 }
 
 #[test]

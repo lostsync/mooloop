@@ -5545,14 +5545,22 @@ mod footprint {
         assert_eq!(size_of::<EffectChain>(), 20_544);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
-        // The ML-P8 is 3,176 bytes of it. Its eight voices are 2,896 -- a
+        // The ML-P8 is 4,712 bytes of it. Its eight voices are the bulk -- a
         // voice carries three oscillators, their modulation taps and sync
         // carries, a sub, coloured noise, two envelopes, two filter stages, a
-        // drive follower and the feedback loop's delay. The other 280 are the
-        // device's parameter block growing by the LFO's controls and the
-        // sixteen-slot route table, both held once per node rather than per
-        // voice. Step 04 of `docs/plans/poly-synth-v2/` stores those; step 05
-        // is what reads them, so today this is capacity, not yet sound.
+        // drive follower and the feedback loop's delay.
+        //
+        // Step 04 of `docs/plans/poly-synth-v2/` added 1,536 of it, and where
+        // it went is the point. Just over a thousand is per *voice*: the
+        // thirty-one destination offsets a voice resolves each sample, which
+        // is the price of the modulation landing per voice rather than per
+        // device, and is not reducible without giving that up. The rest is
+        // held once per node -- the LFO, the parameter block's LFO controls
+        // and route list, and the compiled route table with the destination
+        // ranges it clamps through. The compiled rows carry byte indices
+        // rather than words, and the voice clears its offsets by walking the
+        // routes rather than a second list of the destinations they touch;
+        // both were measured here, and together they were 576 bytes.
         // Sampler stretch adds another 160 bytes for its
         // pool pointer, tempo, and per-voice struck pitches; the ~1.6 MB pool
         // itself is allocated only when a sampler asks for stretching.
@@ -5561,30 +5569,36 @@ mod footprint {
         // with. The map itself lives in the slot, off the strip. The last 8
         // are the sampler's transport-edge flag, which is what lets a note
         // auditioned while stopped keep sounding.
-        assert_eq!(size_of::<MlP8>(), 3_176);
-        // The strip pays that 280 twice: once for the node above, and once
-        // for `source_base`, whose `GeneratorParams` is as wide as its widest
-        // variant and the ML-P8 is now that variant.
-        assert_eq!(size_of::<ChannelStrip>(), 32_216);
+        assert_eq!(size_of::<MlP8>(), 4_712);
+        // The strip pays the parameter block twice: once inside the node
+        // above, and once for `source_base`, whose `GeneratorParams` is as
+        // wide as its widest variant and the ML-P8 is that variant.
+        assert_eq!(size_of::<ChannelStrip>(), 33_752);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
+        // Sixteen KiB of the rise is `ParamAddr` growing four bytes to carry
+        // a durable internal-route id, paid once per stored route across the
+        // reserved channel count.
         let fixed = (size_of::<ModRack>() + size_of::<ModulatorRack>()) * MAX_CHANNELS
             + MAX_CHANNELS * size_of::<usize>() * 3;
-        assert_eq!(fixed / 1024, 439);
+        assert_eq!(fixed / 1024, 455);
 
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 50_656);
+        assert_eq!(per_live, 52_192);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
         // it by 41 KiB, which is what a device costs now: linear in the
         // channels a project has rather than in the channels it could address.
         // Slice mode moved it by 6 KiB across sixteen channels, and the
-        // ML-P8's LFO and route table another 9.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_230);
+        // ML-P8's native modulation another 40 -- 24 of it per-voice offset
+        // tables on sixteen channels, which is what buys modulation that
+        // lands per voice, and 16 of it the wider parameter address, paid
+        // once per reserved channel whether or not anything routes.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_270);
     }
 }
 

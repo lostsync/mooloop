@@ -1426,6 +1426,110 @@ export component LedIndicator inherits Rectangle {
 
 // Square glyph button, for toolbar affordances that carry a symbol rather
 // than a word.
+// The shared musical grid, spelled once. Every control that carries a
+// `ModTimeDivision` index -- the modulator rack's sync knobs, the step
+// sequencer's rate, the ML-P8's own LFO -- reads its names from here, so
+// none of them gets to invent a second spelling.
+export global Divisions {
+    public pure function label(index: int) -> string {
+        return index == 0 ? "4/1" : index == 1 ? "2/1" : index == 2 ? "1/1"
+            : index == 3 ? "1/2D" : index == 4 ? "1/2" : index == 5 ? "1/2T"
+            : index == 6 ? "1/4D" : index == 7 ? "1/4" : index == 8 ? "1/4T"
+            : index == 9 ? "1/8D" : index == 10 ? "1/8" : index == 11 ? "1/8T"
+            : index == 12 ? "1/16D" : index == 13 ? "1/16" : index == 14 ? "1/16T"
+            : index == 15 ? "1/32D" : index == 16 ? "1/32" : index == 17 ? "1/32T"
+            : index == 18 ? "1/64D" : index == 19 ? "1/64" : "1/64T";
+    }
+}
+
+// A continuously draggable knob becomes a stepped musical-division knob when
+// its adjacent LED is lit. The tiny clickable lamp is intentionally the
+// "O." gesture: timing mode stays visible without spending a selector row on
+// every sync-capable control.
+export component SyncMiniKnob inherits Rectangle {
+    in property <string> label;
+    in property <string> free-value-text;
+    in property <float> free-value;
+    in property <float> free-minimum;
+    in property <float> free-maximum;
+    in property <float> free-default;
+    in property <ValueScale> free-scale: ValueScale.linear;
+    in property <bool> synced;
+    in property <int> division: 7;
+    callback free-changed(float);
+    callback sync-changed(bool);
+    callback division-changed(int);
+    callback edit-started();
+    callback edit-finished();
+
+    width: 46px;
+    height: 51px;
+
+
+    Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 9px;
+        text: root.label;
+        color: Theme.text-muted;
+        font-size: 7px;
+        horizontal-alignment: center;
+    }
+    MiniKnob {
+        x: 9px;
+        y: 10px;
+        diameter: 22px;
+        label: root.label;
+        value: root.synced ? root.division * 1.0 : root.free-value;
+        minimum: root.synced ? 0 : root.free-minimum;
+        maximum: root.synced ? 20 : root.free-maximum;
+        default-value: root.synced ? 7 : root.free-default;
+        step: root.synced ? 1 : 0;
+        scale: root.synced ? ValueScale.linear : root.free-scale;
+        value-text: root.synced ? Divisions.label(root.division) : root.free-value-text;
+        changed(value) => {
+            if (root.synced) {
+                root.division-changed(round(value));
+            } else {
+                root.free-changed(value);
+            }
+        }
+        edit-started => { root.edit-started(); }
+        edit-finished => { root.edit-finished(); }
+    }
+    sync-light := Rectangle {
+        x: 33px;
+        y: 17px;
+        width: 11px;
+        height: 11px;
+        accessible-role: button;
+        accessible-label: "Tempo sync " + root.label;
+        LedIndicator {
+            x: 1px;
+            y: 1px;
+            diameter: 9px;
+            on: root.synced;
+            tooltip: root.synced ? "Tempo sync on" : "Tempo sync off";
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.sync-changed(!root.synced); }
+        }
+    }
+    Text {
+        x: 0px;
+        y: 35px;
+        width: parent.width;
+        height: 12px;
+        text: root.synced ? Divisions.label(root.division) : root.free-value-text;
+        color: root.synced ? Theme.focus : Theme.accent;
+        font-size: 7px;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+}
+
 export component IconButton inherits ToolButton {
     in property <length> size: 26px;
     min-width: root.size;

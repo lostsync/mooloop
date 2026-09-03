@@ -506,13 +506,18 @@ fn periodic_shape(phase: f32, wave: MlP8LfoWave) -> f32 {
 /// No descriptor id, no enum to match on a destination, no lookup: a source
 /// index, a slot index, and the factor to multiply by. Everything that needed
 /// a table was resolved when the topology was compiled.
+///
+/// The two indices are bytes rather than words on purpose. There are six
+/// sources and thirty-one destinations, one node of this device exists on
+/// every live channel, and a `usize` pair per row costs 320 bytes there to
+/// address a range that fits in two.
 #[derive(Clone, Copy)]
 struct CompiledRoute {
     /// The authored route's durable id. Carried so an amount arriving from an
     /// automation lane can find its row without the topology being rebuilt.
     id: u16,
-    source: usize,
-    slot: usize,
+    source: u8,
+    slot: u8,
     /// The destination's full span, which is what an amount of 100% covers.
     /// Kept per row so [`CompiledRoutes::set_amount`] needs no descriptor.
     span: f32,
@@ -527,11 +532,6 @@ struct CompiledRoutes {
     /// only where one can exist. An unrouted patch does no per-sample work at
     /// all.
     touched: [bool; MLP8_MOD_DESTS],
-    /// The same set as a list, so clearing a voice's offsets costs one pass
-    /// over the destinations a patch actually uses rather than over all of
-    /// them.
-    touched_list: [usize; MLP8_MOD_DESTS],
-    touched_len: usize,
     /// The span each destination clamps into, resolved once here rather than
     /// looked up per sample. Indexed by slot, like everything else the voice
     /// reads back.
@@ -551,8 +551,6 @@ impl CompiledRoutes {
             }; MLP8_MAX_ROUTES],
             len: 0,
             touched: [false; MLP8_MOD_DESTS],
-            touched_list: [0; MLP8_MOD_DESTS],
-            touched_len: 0,
             bounds: std::array::from_fn(|slot| MlP8ModDest::ALL[slot].range()),
             any: false,
         }
@@ -573,7 +571,6 @@ impl CompiledRoutes {
     fn compile(&mut self, routes: &MlP8Routes) {
         self.len = 0;
         self.touched = [false; MLP8_MOD_DESTS];
-        self.touched_len = 0;
         for route in routes.iter() {
             if self.len == MLP8_MAX_ROUTES {
                 break;
@@ -587,17 +584,13 @@ impl CompiledRoutes {
             let span = route.dest.full_range();
             self.routes[self.len] = CompiledRoute {
                 id: route.id,
-                source: route.source.to_index() as usize,
-                slot,
+                source: route.source.to_index() as u8,
+                slot: slot as u8,
                 span,
                 scale: route_scale(route.amount, span),
             };
             self.len += 1;
-            if !self.touched[slot] {
-                self.touched[slot] = true;
-                self.touched_list[self.touched_len] = slot;
-                self.touched_len += 1;
-            }
+            self.touched[slot] = true;
         }
         self.any = self.len > 0;
     }
@@ -879,11 +872,16 @@ impl Voice {
         if !routes.any {
             return;
         }
-        for slot in &routes.touched_list[..routes.touched_len] {
-            self.mod_offsets[*slot] = 0.0;
+        // Two passes over the routes rather than one over a list of the
+        // destinations they touch. Clearing a shared destination twice is
+        // free; keeping that list was thirty-two bytes on every voice of
+        // every channel to save at most fifteen stores.
+        for route in &routes.routes[..routes.len] {
+            self.mod_offsets[route.slot as usize] = 0.0;
         }
         for route in &routes.routes[..routes.len] {
-            self.mod_offsets[route.slot] += sources[route.source] * route.scale;
+            self.mod_offsets[route.slot as usize] +=
+                sources[route.source as usize] * route.scale;
         }
     }
 
@@ -2210,7 +2208,7 @@ mod tests {
         let mut voice = Voice::new(0, SR);
         voice.resolve_routes(&routes, &[0.0, 1.0, 0.0, 1.0, 0.0, 0.0]);
         assert!((voice.mod_offsets[slot::CUTOFF] - 0.4).abs() < 1e-6);
-        assert_eq!(routes.touched_len, 1, "one destination, one clear to do");
+        assert_eq!(routes.len, 2, "two routes, one destination");
     }
 
     /// The route table survives an ordinary knob change: only the routes

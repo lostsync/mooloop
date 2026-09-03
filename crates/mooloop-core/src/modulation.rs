@@ -2170,14 +2170,21 @@ retrigger = true
         // One slot is a module plus its durable identity, and the widest
         // module is the step pattern's sixteen values.
         assert_eq!(size_of::<Option<ModSlot>>(), 76);
-        assert_eq!(size_of::<ModRoute>(), 20);
+        // A route is an address and a depth, and the address grew by four
+        // bytes when `ParamOwner` gained `SourceRoute { route: u16 }`: a
+        // durable route id does not fit in the byte a slot index did. It is
+        // paid once per stored route -- 64 bytes per channel's rack, a
+        // kilobyte across the whole project -- and, crucially, not on the
+        // command ring, which the rack stopped travelling on.
+        assert_eq!(size_of::<ParamAddr>(), 12);
+        assert_eq!(size_of::<ModRoute>(), 24);
         assert_eq!(
             size_of::<ModRack>(),
             MAX_MODULATORS_PER_CHANNEL * size_of::<Option<ModSlot>>()
                 + MAX_MOD_ROUTES_PER_CHANNEL * size_of::<ModRoute>()
                 + size_of::<u32>()
         );
-        assert_eq!(size_of::<ModRack>(), 932);
+        assert_eq!(size_of::<ModRack>(), 996);
 
         // The rack no longer travels, and neither does the ML-P8. That
         // device's parameter block moved this number twice, and the note here

@@ -68,7 +68,10 @@ use mooloop_project::{
 };
 pub use mockup::{load_mockup_layout, wire_mockup};
 use settings::{AppearanceSettings, ThemePalette, ThemeScheme, UiSettings};
-use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
+use slint::{
+    CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode,
+    VecModel,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1936,6 +1939,47 @@ fn osc_wave_from_int(value: i32) -> OscWave {
         3 => OscWave::Pulse,
         _ => OscWave::Saw,
     }
+}
+
+/// Push one ML-P8's authored internal routes onto its face.
+///
+/// The row model carries the durable id rather than the position, so every
+/// edit the face sends back names the route it was drawn for even if a
+/// neighbour has since been removed. Destination names come from core's own
+/// descriptor table, so the face holds no second copy of the parameter list.
+fn refresh_mlp8_routes(window: &MainWindow, routes: &mooloop_core::MlP8Routes) {
+    let rows: Vec<MlP8RouteRow> = routes
+        .iter()
+        .map(|route| MlP8RouteRow {
+            id: i32::from(route.id),
+            source: route.source.to_index(),
+            dest: route.dest.slot().unwrap_or_default() as i32,
+            amount: route.amount,
+            dest_name: route.dest.label().into(),
+            bipolar: route.source.is_bipolar(),
+        })
+        .collect();
+    window.set_mlp8_routes(ModelRc::from(Rc::new(VecModel::from(rows))));
+    let full = routes.len() >= mooloop_core::MLP8_MAX_ROUTES;
+    window.set_mlp8_routes_full(full);
+    window.set_mlp8_routes_status(
+        format!("{} of {}", routes.len(), mooloop_core::MLP8_MAX_ROUTES).into(),
+    );
+}
+
+/// The two picker vocabularies, set once: they are properties of the device,
+/// not of the patch, so nothing that changes while editing can move them.
+fn install_mlp8_route_vocabularies(window: &MainWindow) {
+    let sources: Vec<SharedString> = mooloop_core::MlP8ModSource::ALL
+        .iter()
+        .map(|source| SharedString::from(source.label()))
+        .collect();
+    let dests: Vec<SharedString> = mooloop_core::MlP8ModDest::ALL
+        .iter()
+        .map(|dest| SharedString::from(dest.label()))
+        .collect();
+    window.set_mlp8_route_source_names(ModelRc::from(Rc::new(VecModel::from(sources))));
+    window.set_mlp8_route_dest_names(ModelRc::from(Rc::new(VecModel::from(dests))));
 }
 
 fn osc_wave_to_int(wave: OscWave) -> i32 {
@@ -4213,6 +4257,15 @@ impl UiState {
         window.set_mlp8_filter_decay(mlp8.filter_decay);
         window.set_mlp8_filter_sustain(mlp8.filter_sustain);
         window.set_mlp8_filter_release(mlp8.filter_release);
+        window.set_mlp8_lfo_wave(mlp8.lfo.wave.to_index());
+        window.set_mlp8_lfo_synced(mlp8.lfo.synced);
+        window.set_mlp8_lfo_rate_hz(mlp8.lfo.rate_hz);
+        window.set_mlp8_lfo_division(mlp8.lfo.rate_division.to_index());
+        window.set_mlp8_lfo_phase(mlp8.lfo.phase);
+        window.set_mlp8_lfo_warp(mlp8.lfo.warp);
+        window.set_mlp8_lfo_slew(mlp8.lfo.slew);
+        window.set_mlp8_lfo_retrigger(mlp8.lfo.retrigger.to_index());
+        refresh_mlp8_routes(window, &mlp8.routes);
         let mlm1 = ch.mlm1_params;
         window.set_mlm1_osc1_wave(osc_wave_to_int(mlm1.osc[0].wave));
         window.set_mlm1_osc1_semitones(mlm1.osc[0].semitones);
@@ -4418,6 +4471,9 @@ impl AppUi {
         window.set_pattern_length(DEFAULT_STEPS as i32);
         window.set_current_step(0);
         window.set_editor_page(0);
+        // Two lists the device declares once; nothing about a patch moves
+        // them, so they are installed here rather than on every refresh.
+        install_mlp8_route_vocabularies(&window);
         handle.send(EngineCommand::SetTempo(INITIAL_BPM as f64));
         handle.send(EngineCommand::SetSwing(DEFAULT_SWING_PERCENT));
 
@@ -10692,6 +10748,166 @@ impl AppUi {
         wire_mlp8!(on_mlp8_filter_decay_changed, p8::PARAM_FILTER_DECAY, f32);
         wire_mlp8!(on_mlp8_filter_sustain_changed, p8::PARAM_FILTER_SUSTAIN, f32);
         wire_mlp8!(on_mlp8_filter_release_changed, p8::PARAM_FILTER_RELEASE, f32);
+        // The device's own LFO is eight more descriptor ids, not a second
+        // kind of control, so it takes the same path everything else does.
+        wire_mlp8!(on_mlp8_lfo_wave_changed, p8::PARAM_LFO_WAVE, i32);
+        wire_mlp8!(on_mlp8_lfo_rate_changed, p8::PARAM_LFO_RATE_HZ, f32);
+        wire_mlp8!(on_mlp8_lfo_division_changed, p8::PARAM_LFO_RATE_DIVISION, i32);
+        wire_mlp8!(on_mlp8_lfo_phase_changed, p8::PARAM_LFO_PHASE, f32);
+        wire_mlp8!(on_mlp8_lfo_warp_changed, p8::PARAM_LFO_WARP, f32);
+        wire_mlp8!(on_mlp8_lfo_slew_changed, p8::PARAM_LFO_SLEW, f32);
+        wire_mlp8!(on_mlp8_lfo_retrigger_changed, p8::PARAM_LFO_RETRIGGER, i32);
+        {
+            // Sync is a lamp rather than a selector, so it arrives as a bool
+            // and reaches the same stepped descriptor as everything else.
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_mlp8_lfo_sync_changed(move |on| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                let channel = &mut st.channels[channel_index];
+                let mut params = GeneratorParams::MlP8(channel.mlp8_params);
+                let Some(value) = params.set(p8::PARAM_LFO_SYNC, f32::from(u8::from(on))) else {
+                    return;
+                };
+                if let GeneratorParams::MlP8(updated) = params {
+                    channel.mlp8_params = updated;
+                }
+                let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                    channel: channel_index as u8,
+                    id: p8::PARAM_LFO_SYNC,
+                    value,
+                });
+            });
+        }
+
+        // --- The ML-P8's internal routes ------------------------------------
+        //
+        // Three of these are structural -- add, remove, repoint -- and go to
+        // the engine as whole routes so the audio thread recompiles its flat
+        // table from what a save would write. The fourth, the depth, is an
+        // ordinary continuous value and deliberately takes a narrower command
+        // that does not rebuild anything.
+        //
+        // Every one of them names the route's durable id, never its row: the
+        // face redraws its list from this state, and a row that moves because
+        // a neighbour was removed must still edit the route it was drawn for.
+        macro_rules! mlp8_route_edit {
+            ($callback:ident, |$routes:ident, $channel:ident, $($arg:ident),*| $body:block) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                let weak = window.as_weak();
+                window.$callback(move |$($arg),*| {
+                    let Some(window) = weak.upgrade() else {
+                        return;
+                    };
+                    let mut st = st.borrow_mut();
+                    let index = st.selected;
+                    if st.channels[index].kind != DeviceKind::MlP8 {
+                        return;
+                    }
+                    // A closure so an edit can bail with `?` on an id that
+                    // names no route -- which is what a stale click during a
+                    // list rebuild looks like.
+                    let edit = |$routes: &mut mooloop_core::MlP8Routes,
+                                $channel: u8|
+                     -> Option<EngineCommand> { $body };
+                    let Some(command) = edit(
+                        &mut st.channels[index].mlp8_params.routes,
+                        index as u8,
+                    ) else {
+                        return;
+                    };
+                    let _ = tx.send(command);
+                    let routes = st.channels[index].mlp8_params.routes;
+                    refresh_mlp8_routes(&window, &routes);
+                    st.dirty = true;
+                    st.revision = st.revision.wrapping_add(1);
+                    st.update_document_title(&window);
+                });
+            }};
+        }
+
+        mlp8_route_edit!(on_mlp8_route_added, |routes, channel,| {
+            // Something audible by default would be a surprise; something
+            // that reads nothing would be a dead row. A new route reads the
+            // LFO into the filter, at zero depth.
+            let dest = mooloop_core::MlP8ModDest::Param {
+                id: p8::PARAM_FILTER_CUTOFF,
+            };
+            routes
+                .add(mooloop_core::MlP8ModSource::Lfo, dest)
+                .and_then(|id| routes.get(id).copied())
+                .map(|route| EngineCommand::SetSourceRoute {
+                    channel,
+                    route,
+                })
+        });
+
+        mlp8_route_edit!(on_mlp8_route_removed, |routes, channel, id| {
+            let id = u16::try_from(id).ok()?;
+            routes
+                .remove(id)
+                .then_some(EngineCommand::RemoveSourceRoute {
+                    channel,
+                    route: id,
+                })
+        });
+
+        mlp8_route_edit!(on_mlp8_route_source_changed, |routes, channel, id, index| {
+            let id = u16::try_from(id).ok()?;
+            let existing = *routes.get(id)?;
+            let source = mooloop_core::MlP8ModSource::from_index(index);
+            routes
+                .set_endpoints(id, source, existing.dest)
+                .then_some(EngineCommand::SetSourceRoute {
+                    channel,
+                    route: mooloop_core::MlP8Route { source, ..existing },
+                })
+        });
+
+        mlp8_route_edit!(on_mlp8_route_dest_changed, |routes, channel, id, index| {
+            let id = u16::try_from(id).ok()?;
+            let existing = *routes.get(id)?;
+            let dest = *mooloop_core::MlP8ModDest::ALL.get(index.max(0) as usize)?;
+            routes
+                .set_endpoints(id, existing.source, dest)
+                .then_some(EngineCommand::SetSourceRoute {
+                    channel,
+                    route: mooloop_core::MlP8Route { dest, ..existing },
+                })
+        });
+
+        {
+            // The depth is a drag, so it neither redraws the list nor takes
+            // the structural path: it is the one part of a route that is an
+            // ordinary automatable value.
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_mlp8_route_amount_changed(move |id, amount| {
+                let Ok(id) = u16::try_from(id) else {
+                    return;
+                };
+                let mut st = st.borrow_mut();
+                let channel_index = st.selected;
+                if st.channels[channel_index].kind != DeviceKind::MlP8 {
+                    return;
+                }
+                if !st.channels[channel_index]
+                    .mlp8_params
+                    .routes
+                    .set_amount(id, amount)
+                {
+                    return;
+                }
+                let _ = tx.send(EngineCommand::SetSourceRouteAmount {
+                    channel: channel_index as u8,
+                    route: id,
+                    amount,
+                });
+                st.dirty = true;
+            });
+        }
 
         // Every ML-P8 value field commits through one handler, because the
         // descriptor id travels with the text. `GeneratorParams::set` does

@@ -1,9 +1,196 @@
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { KnobField, ParameterKnob, SectionLabel, SelectorBank } from "controls.slint";
+import { KnobField, ParameterKnob, SectionLabel, SelectorBank, SyncMiniKnob, ToolButton, ValueScale } from "controls.slint";
+import { DevicePageButton } from "device-rack.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { FilterResponseDisplay, OscillatorTrace } from "device-displays.slint";
 
 import { GainMath } from "gain.slint";
+
+// One authored internal route, as the face needs it.
+//
+// The id is the route's durable identity, not its position: every edit names
+// it, so a row that moves because a neighbour was removed still edits the
+// route it was drawn for.
+export struct MlP8RouteRow {
+    id: int,
+    source: int,
+    dest: int,
+    // Signed percent of the destination's full range, `[-100, 100]`.
+    amount: float,
+    // What the destination is called, resolved from its descriptor by Rust so
+    // the face does not carry a second copy of the parameter table.
+    dest-name: string,
+    // Whether the source swings both ways about zero. A property of the
+    // source rather than a control on the route: a unipolar source rests at
+    // zero and the amount's sign chooses which way it goes from there.
+    bipolar: bool,
+}
+
+// A chip that opens a list and reports the index picked.
+//
+// The route list needs two of these against models of six and thirty-one
+// entries, which is past what a cycling chip or a segmented bank can carry.
+component PickerChip inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected-index;
+    in property <string> tooltip;
+    in property <color> text-color: Theme.text;
+    callback picked(int);
+
+    height: 18px;
+    background: touch.has-hover ? Theme.surface-active : Theme.surface;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    Text {
+        x: 5px;
+        width: parent.width - 16px;
+        height: parent.height;
+        text: root.options[root.selected-index];
+        color: root.text-color;
+        font-size: 9px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Text {
+        x: parent.width - 12px;
+        width: 10px;
+        height: parent.height;
+        text: "\u{25be}";
+        color: Theme.text-faint;
+        font-size: 8px;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { menu.show(); }
+    }
+    menu := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: max(root.width, 132px);
+        height: min(220px, list.preferred-height + 8px);
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            ScrollView {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                list := VerticalLayout {
+                    spacing: 1px;
+                    for option[index] in root.options : Rectangle {
+                        height: 18px;
+                        border-radius: Theme.radius-sm;
+                        background: index == root.selected-index
+                            ? Theme.surface-active
+                            : row-touch.has-hover ? Theme.surface-active : transparent;
+                        Text {
+                            x: 6px;
+                            width: parent.width - 12px;
+                            height: parent.height;
+                            text: option;
+                            color: index == root.selected-index ? Theme.accent : Theme.text;
+                            font-size: 9px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        row-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                menu.close();
+                                root.picked(index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One row of the route list: what it reads, what it moves, how much, and a
+// way to take it back out.
+//
+// Polarity is shown rather than chosen. It is a property of the *source* --
+// the LFO and Key swing both ways, an envelope and velocity rest at zero --
+// and the amount's sign already decides which direction a unipolar source
+// travels. A per-route polarity switch would be a second answer to a question
+// the source list has already settled.
+component RouteRow inherits Rectangle {
+    in property <MlP8RouteRow> route;
+    in property <[string]> source-names;
+    in property <[string]> dest-names;
+    callback source-picked(int);
+    callback dest-picked(int);
+    callback amount-changed(float);
+    callback removed();
+
+    height: 20px;
+
+    HorizontalLayout {
+        spacing: 4px;
+        y: 1px;
+        height: 18px;
+        PickerChip {
+            width: 72px;
+            options: root.source-names;
+            selected-index: root.route.source;
+            tooltip: "What this route reads";
+            text-color: Theme.accent;
+            picked(index) => { root.source-picked(index); }
+        }
+        Text {
+            width: 10px;
+            height: parent.height;
+            text: "\u{2192}";
+            color: Theme.text-faint;
+            font-size: 9px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+        PickerChip {
+            horizontal-stretch: 1;
+            options: root.dest-names;
+            selected-index: root.route.dest;
+            tooltip: "What this route moves";
+            picked(index) => { root.dest-picked(index); }
+        }
+        Text {
+            width: 24px;
+            height: parent.height;
+            text: root.route.bipolar ? "BI" : "UNI";
+            color: Theme.text-faint;
+            font-size: 7px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+        KnobField {
+            diameter: 18px;
+            label-width: 0px;
+            field-width: 48px;
+            label: "";
+            tooltip: "Depth, as a share of the destination's range";
+            value: root.route.amount;
+            minimum: -100; maximum: 100; default-value: 0; bipolar: true;
+            display-text: (root.route.amount > 0 ? "+" : "") + round(root.route.amount) + "%";
+            changed(v) => { root.amount-changed(v); }
+        }
+        ToolButton {
+            text: "\u{00d7}";
+            tooltip: "Remove this route";
+            min-width: 18px;
+            max-width: 18px;
+            clicked => { root.removed(); }
+        }
+    }
+}
 
 // One directed relationship in the oscillator network: drag to set, signed
 // percent, zero at the middle.
@@ -232,7 +419,7 @@ component OscEditor inherits Rectangle {
     VerticalLayout {
         spacing: 4px;
         Rectangle {
-            height: 56px;
+            height: 40px;
             background: Theme.panel;
             border-radius: Theme.radius-sm;
             OscillatorTrace {
@@ -345,6 +532,42 @@ export component MlP8DeviceFace inherits Rectangle {
     in-out property <float> filter-cutoff; in-out property <float> filter-resonance; in-out property <float> filter-env; in-out property <float> drive;
     in-out property <float> keytrack; in-out property <float> amp-velocity; in-out property <float> filter-velocity; in-out property <float> voice-feedback;
     in-out property <float> filter-attack; in-out property <float> filter-decay; in-out property <float> filter-sustain; in-out property <float> filter-release;
+    // 0 is the instrument -- SOURCE, NETWORK, VOICE on one screen -- and 1 is
+    // its own modulation. Two pages rather than one screen because step 04
+    // adds a whole second surface, and squeezing it into the first would cost
+    // the network grid the room that makes it readable.
+    in-out property <int> page;
+    in-out property <int> lfo-wave;
+    in-out property <bool> lfo-synced;
+    in-out property <float> lfo-rate-hz;
+    in-out property <int> lfo-division;
+    in-out property <float> lfo-phase;
+    in-out property <float> lfo-warp;
+    in-out property <float> lfo-slew;
+    in-out property <int> lfo-retrigger;
+    in property <[MlP8RouteRow]> routes;
+    /// `MlP8ModSource::ALL` and `MlP8ModDest::ALL`, labelled by Rust so the
+    /// face holds no second copy of either list.
+    in property <[string]> route-source-names;
+    in property <[string]> route-dest-names;
+    /// True when the patch has reached the compiler's measured ceiling. The
+    /// add affordance stops offering itself rather than failing on click.
+    in property <bool> routes-full;
+    in property <string> routes-status;
+    callback lfo-wave-changed(int);
+    callback lfo-sync-changed(bool);
+    callback lfo-rate-changed(float);
+    callback lfo-division-changed(int);
+    callback lfo-phase-changed(float);
+    callback lfo-warp-changed(float);
+    callback lfo-slew-changed(float);
+    callback lfo-retrigger-changed(int);
+    /// Every route edit names the route's durable id, never its row.
+    callback route-source-changed(int, int);
+    callback route-dest-changed(int, int);
+    callback route-amount-changed(int, float);
+    callback route-removed(int);
+    callback route-added();
     in property <bool> modulation-armed;
     // Indexed by descriptor id. ML-P8's ids are its own namespace starting at
     // zero (`mlp8.rs` in mooloop-core), not the shared `SYNTH_PARAM_*` ones
@@ -381,917 +604,1085 @@ export component MlP8DeviceFace inherits Rectangle {
     // octave and the noise's colour live under a tab rather than in a panel
     // of their own -- they are what those two sources *are*, and the grid
     // already says where they go.
-    HorizontalLayout {
-        padding: 7px;
-        spacing: 0px;
-
-        // --- The five sources ---------------------------------------------
-        VerticalLayout {
-            width: 140px;
-            spacing: 4px;
-            SectionLabel { text: "SOURCE"; }
-            HorizontalLayout {
-                spacing: 2px;
-                    OscTab {
-                        text: "1";
-                        width: 20px;
-                        active: root.source-selected == 0;
-                        audible: root.osc1-level > 0.0001;
-                        clicked => { root.source-selected = 0; }
-                    }
-                    OscTab {
-                        text: "2";
-                        width: 20px;
-                        active: root.source-selected == 1;
-                        audible: root.osc2-level > 0.0001;
-                        clicked => { root.source-selected = 1; }
-                    }
-                    OscTab {
-                        text: "3";
-                        width: 20px;
-                        active: root.source-selected == 2;
-                        audible: root.osc3-level > 0.0001;
-                        clicked => { root.source-selected = 2; }
-                    }
-                    OscTab {
-                        text: "SUB";
-                        width: 30px;
-                        active: root.source-selected == 3;
-                        audible: root.sub-level > 0.0001;
-                        clicked => { root.source-selected = 3; }
-                    }
-                    OscTab {
-                        text: "NSE";
-                        width: 30px;
-                        active: root.source-selected == 4;
-                        audible: root.noise-level > 0.0001;
-                        clicked => { root.source-selected = 4; }
-                    }
-                Rectangle { horizontal-stretch: 1; }
-            }
-            if root.source-selected == 0 : OscEditor {
-                index: 0;
-                wave <=> root.osc1-wave;
-                semitones <=> root.osc1-semitones;
-                cents <=> root.osc1-cents;
-                level <=> root.osc1-level;
-                pulse-width <=> root.osc1-pulse-width;
-                modulation-armed: root.modulation-armed;
-                allowed: root.modulation-allowed;
-                depths: root.modulation-depths;
-                offsets: root.modulation-offsets;
-                route-counts: root.modulation-route-counts;
-                wave-changed(v) => { root.osc1-wave-changed(v); }
-                semitones-changed(v) => { root.osc1-semitones-changed(v); }
-                cents-changed(v) => { root.osc1-cents-changed(v); }
-                level-changed(v) => { root.osc1-level-changed(v); }
-                pulse-width-changed(v) => { root.osc1-pulse-width-changed(v); }
-                text-committed(p, t) => { root.text-committed(p, t); }
-                route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                route-edit-started(p) => { root.modulation-edit-started(p); }
-                route-edit-finished(p) => { root.modulation-edit-finished(p); }
-            }
-            if root.source-selected == 1 : OscEditor {
-                index: 1;
-                wave <=> root.osc2-wave;
-                semitones <=> root.osc2-semitones;
-                cents <=> root.osc2-cents;
-                level <=> root.osc2-level;
-                pulse-width <=> root.osc2-pulse-width;
-                modulation-armed: root.modulation-armed;
-                allowed: root.modulation-allowed;
-                depths: root.modulation-depths;
-                offsets: root.modulation-offsets;
-                route-counts: root.modulation-route-counts;
-                wave-changed(v) => { root.osc2-wave-changed(v); }
-                semitones-changed(v) => { root.osc2-semitones-changed(v); }
-                cents-changed(v) => { root.osc2-cents-changed(v); }
-                level-changed(v) => { root.osc2-level-changed(v); }
-                pulse-width-changed(v) => { root.osc2-pulse-width-changed(v); }
-                text-committed(p, t) => { root.text-committed(p, t); }
-                route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                route-edit-started(p) => { root.modulation-edit-started(p); }
-                route-edit-finished(p) => { root.modulation-edit-finished(p); }
-            }
-            if root.source-selected == 2 : OscEditor {
-                index: 2;
-                wave <=> root.osc3-wave;
-                semitones <=> root.osc3-semitones;
-                cents <=> root.osc3-cents;
-                level <=> root.osc3-level;
-                pulse-width <=> root.osc3-pulse-width;
-                modulation-armed: root.modulation-armed;
-                allowed: root.modulation-allowed;
-                depths: root.modulation-depths;
-                offsets: root.modulation-offsets;
-                route-counts: root.modulation-route-counts;
-                wave-changed(v) => { root.osc3-wave-changed(v); }
-                semitones-changed(v) => { root.osc3-semitones-changed(v); }
-                cents-changed(v) => { root.osc3-cents-changed(v); }
-                level-changed(v) => { root.osc3-level-changed(v); }
-                pulse-width-changed(v) => { root.osc3-pulse-width-changed(v); }
-                text-committed(p, t) => { root.text-committed(p, t); }
-                route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                route-edit-started(p) => { root.modulation-edit-started(p); }
-                route-edit-finished(p) => { root.modulation-edit-finished(p); }
-            }
-            // The sub is derived, so it has no tuning of its own: what it has
-            // is which oscillator it divides and by how much.
-            if root.source-selected == 3 : VerticalLayout {
-                spacing: 4px;
-                SelectorBank {
-                    options: ["-1 OCT", "-2 OCT"];
-                    selected-index <=> root.sub-octave;
-                    segment-width: 50px;
-                    tooltip: "How far below its source the sub sits";
-                    selected(i) => { root.sub-octave-changed(i); }
-                }
-                SelectorBank {
-                    options: ["SINE", "SQR"];
-                    selected-index <=> root.sub-wave;
-                    segment-width: 50px;
-                    tooltip: "Sub waveform";
-                    selected(i) => { root.sub-wave-changed(i); }
-                }
-                SelectorBank {
-                    options: ["OSC 1", "OSC 2", "OSC 3"];
-                    selected-index <=> root.sub-source;
-                    segment-width: 40px;
-                    tooltip: "Which oscillator the sub divides";
-                    selected(i) => { root.sub-source-changed(i); }
-                }
-                Rectangle { vertical-stretch: 1; }
-            }
-            if root.source-selected == 4 : VerticalLayout {
-                spacing: 4px;
-                KnobField {
-                    diameter: 24px;
-                    label-width: 40px;
-                    field-width: 62px;
-                    label: "COLOR";
-                    tooltip: "Dark through white to bright";
-                    value <=> root.noise-color; minimum: -100; maximum: 100; default-value: 0; bipolar: true;
-                    display-text: root.noise-color < -1 ? round(-root.noise-color) + "% dark"
-                        : root.noise-color > 1 ? round(root.noise-color) + "% bright" : "white";
-                    modulation-armed: root.modulation-armed;
-                    modulation-allowed: root.modulation-allowed[26];
-                    modulation-depth: root.modulation-depths[26];
-                    modulation-offset: root.modulation-offsets[26];
-                    modulation-route-count: root.modulation-route-counts[26];
-                    changed(v) => { root.noise-color-changed(v); }
-                    text-committed(t) => { root.text-committed(26, t); }
-                    modulation-depth-changed(v) => { root.modulation-depth-changed(26, v); }
-                    modulation-edit-started => { root.modulation-edit-started(26); }
-                    modulation-edit-finished => { root.modulation-edit-finished(26); }
-                }
-                Rectangle { vertical-stretch: 1; }
-            }
-        }
-
-        Rectangle { width: 6px; }
-        Rectangle { width: 1px; background: Theme.border; }
-        Rectangle { width: 6px; }
-
-        // --- The network ----------------------------------------------------
-        //
-        // Every route out of every source, including the one to the mixer: a
-        // level is "this source into the output", which is the same kind of
-        // fact as "this source into that oscillator". The MIX column is
-        // unipolar and reads in dB; the route columns are signed.
-        //
-        // Placed rather than laid out, and every dimension is a constant. A
-        // cell's interaction is a full-size `ParameterKnob`, and a knob sizes
-        // its insides from its width -- so the moment a layout asks a cell how
-        // wide it would like to be, the answer depends on the answer.
-        VerticalLayout {
-            spacing: 0px;
-            SectionLabel { text: "NETWORK"; }
-            grid := Rectangle {
-                property <length> label-w: 40px;
-                property <length> cell-w: 46px;
-                property <length> cell-h: 27px;
-                property <length> gap: 3px;
-                property <length> header-h: 14px;
-                property <length> mix-x: self.label-w + 3 * (self.cell-w + self.gap) + 10px;
-                property <length> sync-y: self.header-h + 5 * (self.cell-h + self.gap) + 4px;
-
-                horizontal-stretch: 0;
-                width: self.mix-x + self.cell-w;
-                height: self.sync-y + 18px;
-
-                // The rule between "into another oscillator" and "into the
-                // output". Two kinds of destination, one grid.
-                Rectangle {
-                    x: grid.mix-x - 6px;
-                    y: 0;
-                    width: 1px;
-                    height: grid.sync-y + 14px;
-                    background: Theme.text-faint.with-alpha(0.5);
-                }
-                Text {
-                    x: grid.mix-x;
-                    y: 0;
-                    width: grid.cell-w;
-                    height: grid.header-h;
-                    text: "MIX";
-                    color: Theme.text-faint;
-                    font-size: 9px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                Text {
-                    x: grid.label-w + 0 * (grid.cell-w + grid.gap);
-                    y: 0;
-                    width: grid.cell-w;
-                    height: grid.header-h;
-                    text: "OSC 1";
-                    color: Theme.text-faint;
-                    font-size: 9px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                Text {
-                    x: grid.label-w + 1 * (grid.cell-w + grid.gap);
-                    y: 0;
-                    width: grid.cell-w;
-                    height: grid.header-h;
-                    text: "OSC 2";
-                    color: Theme.text-faint;
-                    font-size: 9px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                Text {
-                    x: grid.label-w + 2 * (grid.cell-w + grid.gap);
-                    y: 0;
-                    width: grid.cell-w;
-                    height: grid.header-h;
-                    text: "OSC 3";
-                    color: Theme.text-faint;
-                    font-size: 9px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                Text {
-                    x: 0;
-                    y: grid.header-h + 0 * (grid.cell-h + grid.gap);
-                    width: grid.label-w;
-                    height: grid.cell-h;
-                    text: "OSC 1";
-                    color: Theme.text-muted;
-                    font-size: 9px;
-                    vertical-alignment: center;
-                }
-                NetworkCell {
-                    x: grid.label-w + 0 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 0 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 1 self-feedback";
-                    self-route: true;
-                    param-id: 36;
-                    value <=> root.feedback1;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.feedback1-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.label-w + 1 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 0 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 1 phase-modulates 2";
-                    param-id: 27;
-                    value <=> root.xmod12;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.xmod12-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.label-w + 2 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 0 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 1 phase-modulates 3";
-                    param-id: 28;
-                    value <=> root.xmod13;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.xmod13-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.mix-x;
-                    y: grid.header-h + 0 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 1 into the mix";
-                    level: true;
-                    param-id: 3;
-                    value <=> root.osc1-level;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.osc1-level-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                Text {
-                    x: 0;
-                    y: grid.header-h + 1 * (grid.cell-h + grid.gap);
-                    width: grid.label-w;
-                    height: grid.cell-h;
-                    text: "OSC 2";
-                    color: Theme.text-muted;
-                    font-size: 9px;
-                    vertical-alignment: center;
-                }
-                NetworkCell {
-                    x: grid.label-w + 0 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 1 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 2 phase-modulates 1";
-                    param-id: 29;
-                    value <=> root.xmod21;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.xmod21-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.label-w + 1 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 1 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 2 self-feedback";
-                    self-route: true;
-                    param-id: 37;
-                    value <=> root.feedback2;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.feedback2-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.label-w + 2 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 1 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 2 phase-modulates 3";
-                    param-id: 30;
-                    value <=> root.xmod23;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.xmod23-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.mix-x;
-                    y: grid.header-h + 1 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 2 into the mix";
-                    level: true;
-                    param-id: 8;
-                    value <=> root.osc2-level;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.osc2-level-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                Text {
-                    x: 0;
-                    y: grid.header-h + 2 * (grid.cell-h + grid.gap);
-                    width: grid.label-w;
-                    height: grid.cell-h;
-                    text: "OSC 3";
-                    color: Theme.text-muted;
-                    font-size: 9px;
-                    vertical-alignment: center;
-                }
-                NetworkCell {
-                    x: grid.label-w + 0 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 2 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 3 phase-modulates 1";
-                    param-id: 31;
-                    value <=> root.xmod31;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.xmod31-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.label-w + 1 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 2 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 3 phase-modulates 2";
-                    param-id: 32;
-                    value <=> root.xmod32;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.xmod32-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.label-w + 2 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 2 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 3 self-feedback";
-                    self-route: true;
-                    param-id: 38;
-                    value <=> root.feedback3;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.feedback3-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.mix-x;
-                    y: grid.header-h + 2 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Oscillator 3 into the mix";
-                    level: true;
-                    param-id: 13;
-                    value <=> root.osc3-level;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.osc3-level-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                Text {
-                    x: 0;
-                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
-                    width: grid.label-w;
-                    height: grid.cell-h;
-                    text: "SUB";
-                    color: Theme.text-muted;
-                    font-size: 9px;
-                    vertical-alignment: center;
-                }
-                NetworkCell {
-                    x: grid.label-w + 0 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "The sub is derived from an oscillator and cannot modulate one";
-                    inert: true;
-                }
-                NetworkCell {
-                    x: grid.label-w + 1 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "The sub is derived from an oscillator and cannot modulate one";
-                    inert: true;
-                }
-                NetworkCell {
-                    x: grid.label-w + 2 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "The sub is derived from an oscillator and cannot modulate one";
-                    inert: true;
-                }
-                NetworkCell {
-                    x: grid.mix-x;
-                    y: grid.header-h + 3 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Sub into the mix";
-                    level: true;
-                    param-id: 20;
-                    value <=> root.sub-level;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.sub-level-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                Text {
-                    x: 0;
-                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
-                    width: grid.label-w;
-                    height: grid.cell-h;
-                    text: "NOISE";
-                    color: Theme.text-muted;
-                    font-size: 9px;
-                    vertical-alignment: center;
-                }
-                NetworkCell {
-                    x: grid.label-w + 0 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Noise phase-modulates oscillator 1";
-                    param-id: 33;
-                    value <=> root.noise-osc1;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.noise-osc1-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.label-w + 1 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Noise phase-modulates oscillator 2";
-                    param-id: 34;
-                    value <=> root.noise-osc2;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.noise-osc2-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.label-w + 2 * (grid.cell-w + grid.gap);
-                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Noise phase-modulates oscillator 3";
-                    param-id: 35;
-                    value <=> root.noise-osc3;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.noise-osc3-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                NetworkCell {
-                    x: grid.mix-x;
-                    y: grid.header-h + 4 * (grid.cell-h + grid.gap);
-                    width: grid.cell-w;
-                    height: grid.cell-h;
-                    tooltip: "Noise into the mix";
-                    level: true;
-                    param-id: 25;
-                    value <=> root.noise-level;
-                    modulation-armed: root.modulation-armed;
-                    allowed: root.modulation-allowed;
-                    depths: root.modulation-depths;
-                    offsets: root.modulation-offsets;
-                    route-counts: root.modulation-route-counts;
-                    changed(v) => { root.noise-level-changed(v); }
-                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    route-edit-started(p) => { root.modulation-edit-started(p); }
-                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                Text {
-                    x: 0;
-                    y: grid.sync-y;
-                    width: grid.label-w;
-                    height: 18px;
-                    text: "SYNC";
-                    color: Theme.text-muted;
-                    font-size: 9px;
-                    vertical-alignment: center;
-                }
-                SyncChip {
-                    x: grid.label-w + 0 * (grid.cell-w + grid.gap);
-                    y: grid.sync-y;
-                    width: grid.cell-w;
-                    height: 18px;
-                    destination: 0;
-                    source <=> root.sync1;
-                    changed(v) => { root.sync1-changed(v); }
-                }
-                SyncChip {
-                    x: grid.label-w + 1 * (grid.cell-w + grid.gap);
-                    y: grid.sync-y;
-                    width: grid.cell-w;
-                    height: 18px;
-                    destination: 1;
-                    source <=> root.sync2;
-                    changed(v) => { root.sync2-changed(v); }
-                }
-                SyncChip {
-                    x: grid.label-w + 2 * (grid.cell-w + grid.gap);
-                    y: grid.sync-y;
-                    width: grid.cell-w;
-                    height: 18px;
-                    destination: 2;
-                    source <=> root.sync3;
-                    changed(v) => { root.sync3-changed(v); }
-                }
-            }
-            Rectangle { vertical-stretch: 1; }
-        }
-
-        Rectangle { width: 6px; }
-        Rectangle { width: 1px; background: Theme.border; }
-        Rectangle { width: 6px; }
-
-        // --- The voice the network feeds ------------------------------------
-        //
-        // The filter and the amplifier are one stage of the instrument, not
-        // two devices, so they share a region and their two envelopes sit side
-        // by side where the difference between them is the point: a pluck is a
-        // fast filter decay under a flat amplitude.
-        //
-        // Voice Feedback lives here rather than beside the oscillators' own
-        // feedback. Both are feedback, but this one is a loop around the
-        // *filter* and its character comes from the drive inside it, which is
-        // the knob directly above it.
-        VerticalLayout {
-            horizontal-stretch: 1;
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        HorizontalLayout {
             spacing: 3px;
-            HorizontalLayout {
+            DevicePageButton { text: "INSTRUMENT"; active: root.page == 0; clicked => { root.page = 0; } }
+            // Not plain MOD. The common device frame's MOD opens the
+            // *channel* shelf, and a saved instrument route being mistaken
+            // for a channel route is exactly the confusion the plan asks
+            // this name to prevent.
+            DevicePageButton { text: "ML-P8 MOD"; active: root.page == 1; clicked => { root.page = 1; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+
+        if root.page == 0 : HorizontalLayout {
+            vertical-stretch: 1;
+                padding: 1px;
+            spacing: 0px;
+
+            // --- The five sources ---------------------------------------------
+            VerticalLayout {
+                width: 140px;
                 spacing: 4px;
-                SectionLabel { text: "VOICE"; vertical-alignment: center; }
-                Rectangle { horizontal-stretch: 1; }
+                SectionLabel { text: "SOURCE"; }
+                HorizontalLayout {
+                    spacing: 2px;
+                        OscTab {
+                            text: "1";
+                            width: 20px;
+                            active: root.source-selected == 0;
+                            audible: root.osc1-level > 0.0001;
+                            clicked => { root.source-selected = 0; }
+                        }
+                        OscTab {
+                            text: "2";
+                            width: 20px;
+                            active: root.source-selected == 1;
+                            audible: root.osc2-level > 0.0001;
+                            clicked => { root.source-selected = 1; }
+                        }
+                        OscTab {
+                            text: "3";
+                            width: 20px;
+                            active: root.source-selected == 2;
+                            audible: root.osc3-level > 0.0001;
+                            clicked => { root.source-selected = 2; }
+                        }
+                        OscTab {
+                            text: "SUB";
+                            width: 30px;
+                            active: root.source-selected == 3;
+                            audible: root.sub-level > 0.0001;
+                            clicked => { root.source-selected = 3; }
+                        }
+                        OscTab {
+                            text: "NSE";
+                            width: 30px;
+                            active: root.source-selected == 4;
+                            audible: root.noise-level > 0.0001;
+                            clicked => { root.source-selected = 4; }
+                        }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                if root.source-selected == 0 : OscEditor {
+                    index: 0;
+                    wave <=> root.osc1-wave;
+                    semitones <=> root.osc1-semitones;
+                    cents <=> root.osc1-cents;
+                    level <=> root.osc1-level;
+                    pulse-width <=> root.osc1-pulse-width;
+                    modulation-armed: root.modulation-armed;
+                    allowed: root.modulation-allowed;
+                    depths: root.modulation-depths;
+                    offsets: root.modulation-offsets;
+                    route-counts: root.modulation-route-counts;
+                    wave-changed(v) => { root.osc1-wave-changed(v); }
+                    semitones-changed(v) => { root.osc1-semitones-changed(v); }
+                    cents-changed(v) => { root.osc1-cents-changed(v); }
+                    level-changed(v) => { root.osc1-level-changed(v); }
+                    pulse-width-changed(v) => { root.osc1-pulse-width-changed(v); }
+                    text-committed(p, t) => { root.text-committed(p, t); }
+                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                    route-edit-started(p) => { root.modulation-edit-started(p); }
+                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                }
+                if root.source-selected == 1 : OscEditor {
+                    index: 1;
+                    wave <=> root.osc2-wave;
+                    semitones <=> root.osc2-semitones;
+                    cents <=> root.osc2-cents;
+                    level <=> root.osc2-level;
+                    pulse-width <=> root.osc2-pulse-width;
+                    modulation-armed: root.modulation-armed;
+                    allowed: root.modulation-allowed;
+                    depths: root.modulation-depths;
+                    offsets: root.modulation-offsets;
+                    route-counts: root.modulation-route-counts;
+                    wave-changed(v) => { root.osc2-wave-changed(v); }
+                    semitones-changed(v) => { root.osc2-semitones-changed(v); }
+                    cents-changed(v) => { root.osc2-cents-changed(v); }
+                    level-changed(v) => { root.osc2-level-changed(v); }
+                    pulse-width-changed(v) => { root.osc2-pulse-width-changed(v); }
+                    text-committed(p, t) => { root.text-committed(p, t); }
+                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                    route-edit-started(p) => { root.modulation-edit-started(p); }
+                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                }
+                if root.source-selected == 2 : OscEditor {
+                    index: 2;
+                    wave <=> root.osc3-wave;
+                    semitones <=> root.osc3-semitones;
+                    cents <=> root.osc3-cents;
+                    level <=> root.osc3-level;
+                    pulse-width <=> root.osc3-pulse-width;
+                    modulation-armed: root.modulation-armed;
+                    allowed: root.modulation-allowed;
+                    depths: root.modulation-depths;
+                    offsets: root.modulation-offsets;
+                    route-counts: root.modulation-route-counts;
+                    wave-changed(v) => { root.osc3-wave-changed(v); }
+                    semitones-changed(v) => { root.osc3-semitones-changed(v); }
+                    cents-changed(v) => { root.osc3-cents-changed(v); }
+                    level-changed(v) => { root.osc3-level-changed(v); }
+                    pulse-width-changed(v) => { root.osc3-pulse-width-changed(v); }
+                    text-committed(p, t) => { root.text-committed(p, t); }
+                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                    route-edit-started(p) => { root.modulation-edit-started(p); }
+                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                }
+                // The sub is derived, so it has no tuning of its own: what it has
+                // is which oscillator it divides and by how much.
+                if root.source-selected == 3 : VerticalLayout {
+                    spacing: 4px;
+                    SelectorBank {
+                        options: ["-1 OCT", "-2 OCT"];
+                        selected-index <=> root.sub-octave;
+                        segment-width: 50px;
+                        tooltip: "How far below its source the sub sits";
+                        selected(i) => { root.sub-octave-changed(i); }
+                    }
+                    SelectorBank {
+                        options: ["SINE", "SQR"];
+                        selected-index <=> root.sub-wave;
+                        segment-width: 50px;
+                        tooltip: "Sub waveform";
+                        selected(i) => { root.sub-wave-changed(i); }
+                    }
+                    SelectorBank {
+                        options: ["OSC 1", "OSC 2", "OSC 3"];
+                        selected-index <=> root.sub-source;
+                        segment-width: 40px;
+                        tooltip: "Which oscillator the sub divides";
+                        selected(i) => { root.sub-source-changed(i); }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+                if root.source-selected == 4 : VerticalLayout {
+                    spacing: 4px;
+                    KnobField {
+                        diameter: 24px;
+                        label-width: 40px;
+                        field-width: 62px;
+                        label: "COLOR";
+                        tooltip: "Dark through white to bright";
+                        value <=> root.noise-color; minimum: -100; maximum: 100; default-value: 0; bipolar: true;
+                        display-text: root.noise-color < -1 ? round(-root.noise-color) + "% dark"
+                            : root.noise-color > 1 ? round(root.noise-color) + "% bright" : "white";
+                        modulation-armed: root.modulation-armed;
+                        modulation-allowed: root.modulation-allowed[26];
+                        modulation-depth: root.modulation-depths[26];
+                        modulation-offset: root.modulation-offsets[26];
+                        modulation-route-count: root.modulation-route-counts[26];
+                        changed(v) => { root.noise-color-changed(v); }
+                        text-committed(t) => { root.text-committed(26, t); }
+                        modulation-depth-changed(v) => { root.modulation-depth-changed(26, v); }
+                        modulation-edit-started => { root.modulation-edit-started(26); }
+                        modulation-edit-finished => { root.modulation-edit-finished(26); }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            Rectangle { width: 6px; }
+            Rectangle { width: 1px; background: Theme.border; }
+            Rectangle { width: 6px; }
+
+            // --- The network ----------------------------------------------------
+            //
+            // Every route out of every source, including the one to the mixer: a
+            // level is "this source into the output", which is the same kind of
+            // fact as "this source into that oscillator". The MIX column is
+            // unipolar and reads in dB; the route columns are signed.
+            //
+            // Placed rather than laid out, and every dimension is a constant. A
+            // cell's interaction is a full-size `ParameterKnob`, and a knob sizes
+            // its insides from its width -- so the moment a layout asks a cell how
+            // wide it would like to be, the answer depends on the answer.
+            VerticalLayout {
+                spacing: 0px;
+                SectionLabel { text: "NETWORK"; }
+                grid := Rectangle {
+                    property <length> label-w: 40px;
+                    property <length> cell-w: 46px;
+                    property <length> cell-h: 27px;
+                    property <length> gap: 3px;
+                    property <length> header-h: 14px;
+                    property <length> mix-x: self.label-w + 3 * (self.cell-w + self.gap) + 10px;
+                    property <length> sync-y: self.header-h + 5 * (self.cell-h + self.gap) + 4px;
+
+                    horizontal-stretch: 0;
+                    width: self.mix-x + self.cell-w;
+                    height: self.sync-y + 18px;
+
+                    // The rule between "into another oscillator" and "into the
+                    // output". Two kinds of destination, one grid.
+                    Rectangle {
+                        x: grid.mix-x - 6px;
+                        y: 0;
+                        width: 1px;
+                        height: grid.sync-y + 14px;
+                        background: Theme.text-faint.with-alpha(0.5);
+                    }
+                    Text {
+                        x: grid.mix-x;
+                        y: 0;
+                        width: grid.cell-w;
+                        height: grid.header-h;
+                        text: "MIX";
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: grid.label-w + 0 * (grid.cell-w + grid.gap);
+                        y: 0;
+                        width: grid.cell-w;
+                        height: grid.header-h;
+                        text: "OSC 1";
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: grid.label-w + 1 * (grid.cell-w + grid.gap);
+                        y: 0;
+                        width: grid.cell-w;
+                        height: grid.header-h;
+                        text: "OSC 2";
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: grid.label-w + 2 * (grid.cell-w + grid.gap);
+                        y: 0;
+                        width: grid.cell-w;
+                        height: grid.header-h;
+                        text: "OSC 3";
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: 0;
+                        y: grid.header-h + 0 * (grid.cell-h + grid.gap);
+                        width: grid.label-w;
+                        height: grid.cell-h;
+                        text: "OSC 1";
+                        color: Theme.text-muted;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 0 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 0 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 1 self-feedback";
+                        self-route: true;
+                        param-id: 36;
+                        value <=> root.feedback1;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.feedback1-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 1 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 0 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 1 phase-modulates 2";
+                        param-id: 27;
+                        value <=> root.xmod12;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.xmod12-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 2 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 0 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 1 phase-modulates 3";
+                        param-id: 28;
+                        value <=> root.xmod13;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.xmod13-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.mix-x;
+                        y: grid.header-h + 0 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 1 into the mix";
+                        level: true;
+                        param-id: 3;
+                        value <=> root.osc1-level;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.osc1-level-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Text {
+                        x: 0;
+                        y: grid.header-h + 1 * (grid.cell-h + grid.gap);
+                        width: grid.label-w;
+                        height: grid.cell-h;
+                        text: "OSC 2";
+                        color: Theme.text-muted;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 0 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 1 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 2 phase-modulates 1";
+                        param-id: 29;
+                        value <=> root.xmod21;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.xmod21-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 1 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 1 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 2 self-feedback";
+                        self-route: true;
+                        param-id: 37;
+                        value <=> root.feedback2;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.feedback2-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 2 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 1 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 2 phase-modulates 3";
+                        param-id: 30;
+                        value <=> root.xmod23;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.xmod23-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.mix-x;
+                        y: grid.header-h + 1 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 2 into the mix";
+                        level: true;
+                        param-id: 8;
+                        value <=> root.osc2-level;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.osc2-level-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Text {
+                        x: 0;
+                        y: grid.header-h + 2 * (grid.cell-h + grid.gap);
+                        width: grid.label-w;
+                        height: grid.cell-h;
+                        text: "OSC 3";
+                        color: Theme.text-muted;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 0 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 2 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 3 phase-modulates 1";
+                        param-id: 31;
+                        value <=> root.xmod31;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.xmod31-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 1 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 2 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 3 phase-modulates 2";
+                        param-id: 32;
+                        value <=> root.xmod32;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.xmod32-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 2 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 2 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 3 self-feedback";
+                        self-route: true;
+                        param-id: 38;
+                        value <=> root.feedback3;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.feedback3-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.mix-x;
+                        y: grid.header-h + 2 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Oscillator 3 into the mix";
+                        level: true;
+                        param-id: 13;
+                        value <=> root.osc3-level;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.osc3-level-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Text {
+                        x: 0;
+                        y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                        width: grid.label-w;
+                        height: grid.cell-h;
+                        text: "SUB";
+                        color: Theme.text-muted;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 0 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "The sub is derived from an oscillator and cannot modulate one";
+                        inert: true;
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 1 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "The sub is derived from an oscillator and cannot modulate one";
+                        inert: true;
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 2 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "The sub is derived from an oscillator and cannot modulate one";
+                        inert: true;
+                    }
+                    NetworkCell {
+                        x: grid.mix-x;
+                        y: grid.header-h + 3 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Sub into the mix";
+                        level: true;
+                        param-id: 20;
+                        value <=> root.sub-level;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.sub-level-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Text {
+                        x: 0;
+                        y: grid.header-h + 4 * (grid.cell-h + grid.gap);
+                        width: grid.label-w;
+                        height: grid.cell-h;
+                        text: "NOISE";
+                        color: Theme.text-muted;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 0 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 4 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Noise phase-modulates oscillator 1";
+                        param-id: 33;
+                        value <=> root.noise-osc1;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.noise-osc1-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 1 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 4 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Noise phase-modulates oscillator 2";
+                        param-id: 34;
+                        value <=> root.noise-osc2;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.noise-osc2-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.label-w + 2 * (grid.cell-w + grid.gap);
+                        y: grid.header-h + 4 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Noise phase-modulates oscillator 3";
+                        param-id: 35;
+                        value <=> root.noise-osc3;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.noise-osc3-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    NetworkCell {
+                        x: grid.mix-x;
+                        y: grid.header-h + 4 * (grid.cell-h + grid.gap);
+                        width: grid.cell-w;
+                        height: grid.cell-h;
+                        tooltip: "Noise into the mix";
+                        level: true;
+                        param-id: 25;
+                        value <=> root.noise-level;
+                        modulation-armed: root.modulation-armed;
+                        allowed: root.modulation-allowed;
+                        depths: root.modulation-depths;
+                        offsets: root.modulation-offsets;
+                        route-counts: root.modulation-route-counts;
+                        changed(v) => { root.noise-level-changed(v); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Text {
+                        x: 0;
+                        y: grid.sync-y;
+                        width: grid.label-w;
+                        height: 18px;
+                        text: "SYNC";
+                        color: Theme.text-muted;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                    }
+                    SyncChip {
+                        x: grid.label-w + 0 * (grid.cell-w + grid.gap);
+                        y: grid.sync-y;
+                        width: grid.cell-w;
+                        height: 18px;
+                        destination: 0;
+                        source <=> root.sync1;
+                        changed(v) => { root.sync1-changed(v); }
+                    }
+                    SyncChip {
+                        x: grid.label-w + 1 * (grid.cell-w + grid.gap);
+                        y: grid.sync-y;
+                        width: grid.cell-w;
+                        height: 18px;
+                        destination: 1;
+                        source <=> root.sync2;
+                        changed(v) => { root.sync2-changed(v); }
+                    }
+                    SyncChip {
+                        x: grid.label-w + 2 * (grid.cell-w + grid.gap);
+                        y: grid.sync-y;
+                        width: grid.cell-w;
+                        height: 18px;
+                        destination: 2;
+                        source <=> root.sync3;
+                        changed(v) => { root.sync3-changed(v); }
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+
+            Rectangle { width: 6px; }
+            Rectangle { width: 1px; background: Theme.border; }
+            Rectangle { width: 6px; }
+
+            // --- The voice the network feeds ------------------------------------
+            //
+            // The filter and the amplifier are one stage of the instrument, not
+            // two devices, so they share a region and their two envelopes sit side
+            // by side where the difference between them is the point: a pluck is a
+            // fast filter decay under a flat amplitude.
+            //
+            // Voice Feedback lives here rather than beside the oscillators' own
+            // feedback. Both are feedback, but this one is a loop around the
+            // *filter* and its character comes from the drive inside it, which is
+            // the knob directly above it.
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 3px;
+                HorizontalLayout {
+                    spacing: 4px;
+                    SectionLabel { text: "VOICE"; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    SelectorBank {
+                        options: ["LP12", "LP24", "BP", "HP"];
+                        selected-index <=> root.filter-mode;
+                        segment-width: 32px;
+                        tooltip: "Filter response";
+                        selected(i) => { root.filter-mode-changed(i); }
+                    }
+                }
+                FilterResponseDisplay {
+                    height: 38px;
+                    // The display's vocabulary is low/band/high plus a slope,
+                    // which is two of this device's four modes folded into one
+                    // picture: LP24 is the same response one stage steeper.
+                    mode: root.filter-mode == 2 ? 1 : root.filter-mode == 3 ? 2 : 0;
+                    slope: root.filter-mode == 1 ? 1.0 : 0.0;
+                    cutoff: root.filter-cutoff;
+                    resonance: root.filter-resonance;
+                    env-amount: root.filter-env;
+                    point-dragged(x, y) => {
+                        root.filter-cutoff = clamp(x, 0, 1);
+                        root.filter-cutoff-changed(root.filter-cutoff);
+                        root.filter-resonance = clamp(y, 0, 1);
+                        root.filter-resonance-changed(root.filter-resonance);
+                    }
+                    point-scrolled(d) => {
+                        root.filter-resonance = clamp(root.filter-resonance + d, 0, 1);
+                        root.filter-resonance-changed(root.filter-resonance);
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 5px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 1px;
+                        SectionLabel { text: "AMP ENV"; }
+                        EnvelopeEditor {
+                            height: 30px;
+                            attack: root.attack / 2; decay: root.decay / 2; sustain <=> root.sustain; release: root.release / 2;
+                            attack-text: round(root.attack * 1000) + " ms"; decay-text: round(root.decay * 1000) + " ms";
+                            sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 1000) + " ms";
+                            attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
+                            decay-changed(v) => { root.decay = v * 2; root.decay-changed(root.decay); }
+                            sustain-changed(v) => { root.sustain-changed(v); }
+                            release-changed(v) => { root.release = v * 2; root.release-changed(root.release); }
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 1px;
+                        SectionLabel { text: "FILTER ENV"; }
+                        EnvelopeEditor {
+                            height: 30px;
+                            attack: root.filter-attack / 2; decay: root.filter-decay / 2;
+                            sustain <=> root.filter-sustain; release: root.filter-release / 2;
+                            attack-text: round(root.filter-attack * 1000) + " ms";
+                            decay-text: round(root.filter-decay * 1000) + " ms";
+                            sustain-text: round(root.filter-sustain * 100) + "%";
+                            release-text: round(root.filter-release * 1000) + " ms";
+                            attack-changed(v) => { root.filter-attack = v * 2; root.filter-attack-changed(root.filter-attack); }
+                            decay-changed(v) => { root.filter-decay = v * 2; root.filter-decay-changed(root.filter-decay); }
+                            sustain-changed(v) => { root.filter-sustain-changed(v); }
+                            release-changed(v) => { root.filter-release = v * 2; root.filter-release-changed(root.filter-release); }
+                        }
+                    }
+                }
+                // Two columns of a shorter knob rather than four of a
+                // taller one. Four fit the height the page bar left, but
+                // not the width: this region is the first thing a narrow
+                // window clips, and at 960px four of them clipped.
+                HorizontalLayout {
+                    spacing: 4px;
+                    VerticalLayout {
+                        spacing: 0px;
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 48px;
+                            field-width: 40px;
+                            label: "ENV AMT";
+                            tooltip: "How far the filter envelope sweeps the cutoff";
+                            value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true;
+                            display-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[45];
+                            modulation-depth: root.modulation-depths[45];
+                            modulation-offset: root.modulation-offsets[45];
+                            modulation-route-count: root.modulation-route-counts[45];
+                            changed(v) => { root.filter-env-changed(v); }
+                            text-committed(t) => { root.text-committed(45, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(45, v); }
+                            modulation-edit-started => { root.modulation-edit-started(45); }
+                            modulation-edit-finished => { root.modulation-edit-finished(45); }
+                        }
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 48px;
+                            field-width: 40px;
+                            label: "DRIVE";
+                            tooltip: "Pre-filter drive, inside the feedback loop";
+                            value <=> root.drive; minimum: 0; maximum: 1; default-value: 0;
+                            display-text: round(root.drive * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[46];
+                            modulation-depth: root.modulation-depths[46];
+                            modulation-offset: root.modulation-offsets[46];
+                            modulation-route-count: root.modulation-route-counts[46];
+                            changed(v) => { root.drive-changed(v); }
+                            text-committed(t) => { root.text-committed(46, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(46, v); }
+                            modulation-edit-started => { root.modulation-edit-started(46); }
+                            modulation-edit-finished => { root.modulation-edit-finished(46); }
+                        }
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 48px;
+                            field-width: 40px;
+                            label: "FEEDBACK";
+                            tooltip: "Filter output back into its input, bounded by the drive";
+                            value <=> root.voice-feedback; minimum: -1; maximum: 1; default-value: 0; bipolar: true;
+                            display-text: (root.voice-feedback > 0 ? "+" : "") + round(root.voice-feedback * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[54];
+                            modulation-depth: root.modulation-depths[54];
+                            modulation-offset: root.modulation-offsets[54];
+                            modulation-route-count: root.modulation-route-counts[54];
+                            changed(v) => { root.voice-feedback-changed(v); }
+                            text-committed(t) => { root.text-committed(54, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(54, v); }
+                            modulation-edit-started => { root.modulation-edit-started(54); }
+                            modulation-edit-finished => { root.modulation-edit-finished(54); }
+                        }
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 48px;
+                            field-width: 40px;
+                            label: "KEYTRACK";
+                            tooltip: "Cutoff per played octave; 100% is one for one";
+                            value <=> root.keytrack; minimum: 0; maximum: 2; default-value: 0;
+                            display-text: round(root.keytrack * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[47];
+                            modulation-depth: root.modulation-depths[47];
+                            modulation-offset: root.modulation-offsets[47];
+                            modulation-route-count: root.modulation-route-counts[47];
+                            changed(v) => { root.keytrack-changed(v); }
+                            text-committed(t) => { root.text-committed(47, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(47, v); }
+                            modulation-edit-started => { root.modulation-edit-started(47); }
+                            modulation-edit-finished => { root.modulation-edit-finished(47); }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 0px;
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 48px;
+                            field-width: 40px;
+                            label: "AMP VEL";
+                            tooltip: "How much velocity scales the VCA";
+                            value <=> root.amp-velocity; minimum: 0; maximum: 1; default-value: 1;
+                            display-text: round(root.amp-velocity * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[52];
+                            modulation-depth: root.modulation-depths[52];
+                            modulation-offset: root.modulation-offsets[52];
+                            modulation-route-count: root.modulation-route-counts[52];
+                            changed(v) => { root.amp-velocity-changed(v); }
+                            text-committed(t) => { root.text-committed(52, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(52, v); }
+                            modulation-edit-started => { root.modulation-edit-started(52); }
+                            modulation-edit-finished => { root.modulation-edit-finished(52); }
+                        }
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 48px;
+                            field-width: 40px;
+                            label: "FILT VEL";
+                            tooltip: "How much velocity adds to the filter envelope depth";
+                            value <=> root.filter-velocity; minimum: -1; maximum: 1; default-value: 0; bipolar: true;
+                            display-text: (root.filter-velocity > 0 ? "+" : "") + round(root.filter-velocity * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[53];
+                            modulation-depth: root.modulation-depths[53];
+                            modulation-offset: root.modulation-offsets[53];
+                            modulation-route-count: root.modulation-route-counts[53];
+                            changed(v) => { root.filter-velocity-changed(v); }
+                            text-committed(t) => { root.text-committed(53, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(53, v); }
+                            modulation-edit-started => { root.modulation-edit-started(53); }
+                            modulation-edit-finished => { root.modulation-edit-finished(53); }
+                        }
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 48px;
+                            field-width: 40px;
+                            label: "GLIDE";
+                            tooltip: "Portamento between reused voices";
+                            value <=> root.glide; minimum: 0; maximum: 2; default-value: 0;
+                            display-text: round(root.glide * 1000) + " ms";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[19];
+                            modulation-depth: root.modulation-depths[19];
+                            modulation-offset: root.modulation-offsets[19];
+                            modulation-route-count: root.modulation-route-counts[19];
+                            changed(v) => { root.glide-changed(v); }
+                            text-committed(t) => { root.text-committed(19, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(19, v); }
+                            modulation-edit-started => { root.modulation-edit-started(19); }
+                            modulation-edit-finished => { root.modulation-edit-finished(19); }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+        // --- The instrument's own modulation --------------------------------
+        //
+        // The LFO on the left, the routes it and the five per-voice sources
+        // reach through on the right. One surface, in the order a patch is
+        // built: pick a shape, then say where it lands.
+        if root.page == 1 : HorizontalLayout {
+            vertical-stretch: 1;
+            padding: 1px;
+            spacing: 0px;
+
+            VerticalLayout {
+                width: 216px;
+                spacing: 4px;
+                SectionLabel { text: "ML-P8 LFO"; }
                 SelectorBank {
-                    options: ["LP12", "LP24", "BP", "HP"];
-                    selected-index <=> root.filter-mode;
-                    segment-width: 32px;
-                    tooltip: "Filter response";
-                    selected(i) => { root.filter-mode-changed(i); }
+                    options: ["SIN", "TRI", "RMP", "PLS", "S&H", "CHA"];
+                    selected-index <=> root.lfo-wave;
+                    segment-width: 33px;
+                    tooltip: "LFO shape";
+                    selected(i) => { root.lfo-wave-changed(i); }
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    SyncMiniKnob {
+                        label: "RATE";
+                        free-value: root.lfo-rate-hz;
+                        free-minimum: 0.01;
+                        free-maximum: 100;
+                        free-default: 2;
+                        free-scale: ValueScale.logarithmic;
+                        free-value-text: root.lfo-rate-hz < 10
+                            ? round(root.lfo-rate-hz * 100) / 100 + " Hz"
+                            : round(root.lfo-rate-hz * 10) / 10 + " Hz";
+                        synced: root.lfo-synced;
+                        division: root.lfo-division;
+                        free-changed(v) => { root.lfo-rate-changed(v); }
+                        sync-changed(on) => { root.lfo-sync-changed(on); }
+                        division-changed(d) => { root.lfo-division-changed(d); }
+                    }
+                    VerticalLayout {
+                        spacing: 1px;
+                        y: 8px;
+                        height: 45px;
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 42px;
+                            field-width: 42px;
+                            label: "PHASE";
+                            tooltip: "Where the shape is read from, in cycles";
+                            value <=> root.lfo-phase; minimum: 0; maximum: 1; default-value: 0;
+                            display-text: round(root.lfo-phase * 360) + "\u{b0}";
+                            changed(v) => { root.lfo-phase-changed(v); }
+                            text-committed(t) => { root.text-committed(59, t); }
+                        }
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 42px;
+                            field-width: 42px;
+                            label: "WARP";
+                            // Two honest meanings, decided by the wave rather
+                            // than by a second knob, so the tooltip says which
+                            // one is live.
+                            tooltip: root.lfo-wave >= 4
+                                ? "Bias: toward the rails, or toward the centre"
+                                : "Shape skew: which side of the cycle the pivot sits on";
+                            value <=> root.lfo-warp; minimum: -1; maximum: 1; default-value: 0; bipolar: true;
+                            display-text: (root.lfo-warp > 0 ? "+" : "") + round(root.lfo-warp * 100) + "%";
+                            changed(v) => { root.lfo-warp-changed(v); }
+                            text-committed(t) => { root.text-committed(60, t); }
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                KnobField {
+                    diameter: 20px;
+                    label-width: 42px;
+                    field-width: 42px;
+                    label: "SLEW";
+                    tooltip: "Rounding, as a share of the cycle";
+                    value <=> root.lfo-slew; minimum: 0; maximum: 1; default-value: 0;
+                    display-text: round(root.lfo-slew * 100) + "%";
+                    changed(v) => { root.lfo-slew-changed(v); }
+                    text-committed(t) => { root.text-committed(61, t); }
+                }
+                SelectorBank {
+                    options: ["FREE", "CHORD", "NOTE"];
+                    selected-index <=> root.lfo-retrigger;
+                    segment-width: 66px;
+                    tooltip: "When the LFO restarts";
+                    selected(i) => { root.lfo-retrigger-changed(i); }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+
+            Rectangle { width: 6px; }
+            Rectangle { width: 1px; background: Theme.border; }
+            Rectangle { width: 6px; }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 3px;
+                HorizontalLayout {
+                    spacing: 4px;
+                    SectionLabel { text: "ROUTES"; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: root.routes-status;
+                        color: Theme.text-faint;
+                        font-size: 8px;
+                        vertical-alignment: center;
+                    }
+                    // The affordance stops offering itself at the ceiling
+                    // rather than failing on click.
+                    if !root.routes-full : ToolButton {
+                        text: "+ ADD ROUTE";
+                        tooltip: "Add an internal modulation route";
+                        min-width: 88px;
+                        max-width: 88px;
+                        clicked => { root.route-added(); }
+                    }
+                }
+                if root.routes.length == 0 : Text {
+                    height: 22px;
+                    text: "No internal routes. This patch moves only where its knobs are set.";
+                    color: Theme.text-faint;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 1px;
+                        for row in root.routes : RouteRow {
+                            route: row;
+                            source-names: root.route-source-names;
+                            dest-names: root.route-dest-names;
+                            source-picked(index) => { root.route-source-changed(row.id, index); }
+                            dest-picked(index) => { root.route-dest-changed(row.id, index); }
+                            amount-changed(v) => { root.route-amount-changed(row.id, v); }
+                            removed => { root.route-removed(row.id); }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
                 }
             }
-            FilterResponseDisplay {
-                height: 46px;
-                // The display's vocabulary is low/band/high plus a slope,
-                // which is two of this device's four modes folded into one
-                // picture: LP24 is the same response one stage steeper.
-                mode: root.filter-mode == 2 ? 1 : root.filter-mode == 3 ? 2 : 0;
-                slope: root.filter-mode == 1 ? 1.0 : 0.0;
-                cutoff: root.filter-cutoff;
-                resonance: root.filter-resonance;
-                env-amount: root.filter-env;
-                point-dragged(x, y) => {
-                    root.filter-cutoff = clamp(x, 0, 1);
-                    root.filter-cutoff-changed(root.filter-cutoff);
-                    root.filter-resonance = clamp(y, 0, 1);
-                    root.filter-resonance-changed(root.filter-resonance);
-                }
-                point-scrolled(d) => {
-                    root.filter-resonance = clamp(root.filter-resonance + d, 0, 1);
-                    root.filter-resonance-changed(root.filter-resonance);
-                }
-            }
-            HorizontalLayout {
-                spacing: 5px;
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 1px;
-                    SectionLabel { text: "AMP ENV"; }
-                    EnvelopeEditor {
-                        height: 34px;
-                        attack: root.attack / 2; decay: root.decay / 2; sustain <=> root.sustain; release: root.release / 2;
-                        attack-text: round(root.attack * 1000) + " ms"; decay-text: round(root.decay * 1000) + " ms";
-                        sustain-text: round(root.sustain * 100) + "%"; release-text: round(root.release * 1000) + " ms";
-                        attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
-                        decay-changed(v) => { root.decay = v * 2; root.decay-changed(root.decay); }
-                        sustain-changed(v) => { root.sustain-changed(v); }
-                        release-changed(v) => { root.release = v * 2; root.release-changed(root.release); }
-                    }
-                }
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 1px;
-                    SectionLabel { text: "FILTER ENV"; }
-                    EnvelopeEditor {
-                        height: 34px;
-                        attack: root.filter-attack / 2; decay: root.filter-decay / 2;
-                        sustain <=> root.filter-sustain; release: root.filter-release / 2;
-                        attack-text: round(root.filter-attack * 1000) + " ms";
-                        decay-text: round(root.filter-decay * 1000) + " ms";
-                        sustain-text: round(root.filter-sustain * 100) + "%";
-                        release-text: round(root.filter-release * 1000) + " ms";
-                        attack-changed(v) => { root.filter-attack = v * 2; root.filter-attack-changed(root.filter-attack); }
-                        decay-changed(v) => { root.filter-decay = v * 2; root.filter-decay-changed(root.filter-decay); }
-                        sustain-changed(v) => { root.filter-sustain-changed(v); }
-                        release-changed(v) => { root.filter-release = v * 2; root.filter-release-changed(root.filter-release); }
-                    }
-                }
-            }
-            HorizontalLayout {
-                spacing: 4px;
-                VerticalLayout {
-                    spacing: 0px;
-                    KnobField {
-                        diameter: 24px;
-                        label-width: 54px;
-                        field-width: 46px;
-                        label: "ENV AMT";
-                        tooltip: "How far the filter envelope sweeps the cutoff";
-                        value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true;
-                        display-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%";
-                        modulation-armed: root.modulation-armed;
-                        modulation-allowed: root.modulation-allowed[45];
-                        modulation-depth: root.modulation-depths[45];
-                        modulation-offset: root.modulation-offsets[45];
-                        modulation-route-count: root.modulation-route-counts[45];
-                        changed(v) => { root.filter-env-changed(v); }
-                        text-committed(t) => { root.text-committed(45, t); }
-                        modulation-depth-changed(v) => { root.modulation-depth-changed(45, v); }
-                        modulation-edit-started => { root.modulation-edit-started(45); }
-                        modulation-edit-finished => { root.modulation-edit-finished(45); }
-                    }
-                    KnobField {
-                        diameter: 24px;
-                        label-width: 54px;
-                        field-width: 46px;
-                        label: "DRIVE";
-                        tooltip: "Pre-filter drive, inside the feedback loop";
-                        value <=> root.drive; minimum: 0; maximum: 1; default-value: 0;
-                        display-text: round(root.drive * 100) + "%";
-                        modulation-armed: root.modulation-armed;
-                        modulation-allowed: root.modulation-allowed[46];
-                        modulation-depth: root.modulation-depths[46];
-                        modulation-offset: root.modulation-offsets[46];
-                        modulation-route-count: root.modulation-route-counts[46];
-                        changed(v) => { root.drive-changed(v); }
-                        text-committed(t) => { root.text-committed(46, t); }
-                        modulation-depth-changed(v) => { root.modulation-depth-changed(46, v); }
-                        modulation-edit-started => { root.modulation-edit-started(46); }
-                        modulation-edit-finished => { root.modulation-edit-finished(46); }
-                    }
-                    KnobField {
-                        diameter: 24px;
-                        label-width: 54px;
-                        field-width: 46px;
-                        label: "FEEDBACK";
-                        tooltip: "Filter output back into its input, bounded by the drive";
-                        value <=> root.voice-feedback; minimum: -1; maximum: 1; default-value: 0; bipolar: true;
-                        display-text: (root.voice-feedback > 0 ? "+" : "") + round(root.voice-feedback * 100) + "%";
-                        modulation-armed: root.modulation-armed;
-                        modulation-allowed: root.modulation-allowed[54];
-                        modulation-depth: root.modulation-depths[54];
-                        modulation-offset: root.modulation-offsets[54];
-                        modulation-route-count: root.modulation-route-counts[54];
-                        changed(v) => { root.voice-feedback-changed(v); }
-                        text-committed(t) => { root.text-committed(54, t); }
-                        modulation-depth-changed(v) => { root.modulation-depth-changed(54, v); }
-                        modulation-edit-started => { root.modulation-edit-started(54); }
-                        modulation-edit-finished => { root.modulation-edit-finished(54); }
-                    }
-                    KnobField {
-                        diameter: 24px;
-                        label-width: 54px;
-                        field-width: 46px;
-                        label: "KEYTRACK";
-                        tooltip: "Cutoff per played octave; 100% is one for one";
-                        value <=> root.keytrack; minimum: 0; maximum: 2; default-value: 0;
-                        display-text: round(root.keytrack * 100) + "%";
-                        modulation-armed: root.modulation-armed;
-                        modulation-allowed: root.modulation-allowed[47];
-                        modulation-depth: root.modulation-depths[47];
-                        modulation-offset: root.modulation-offsets[47];
-                        modulation-route-count: root.modulation-route-counts[47];
-                        changed(v) => { root.keytrack-changed(v); }
-                        text-committed(t) => { root.text-committed(47, t); }
-                        modulation-depth-changed(v) => { root.modulation-depth-changed(47, v); }
-                        modulation-edit-started => { root.modulation-edit-started(47); }
-                        modulation-edit-finished => { root.modulation-edit-finished(47); }
-                    }
-                }
-                VerticalLayout {
-                    spacing: 0px;
-                    KnobField {
-                        diameter: 24px;
-                        label-width: 54px;
-                        field-width: 46px;
-                        label: "AMP VEL";
-                        tooltip: "How much velocity scales the VCA";
-                        value <=> root.amp-velocity; minimum: 0; maximum: 1; default-value: 1;
-                        display-text: round(root.amp-velocity * 100) + "%";
-                        modulation-armed: root.modulation-armed;
-                        modulation-allowed: root.modulation-allowed[52];
-                        modulation-depth: root.modulation-depths[52];
-                        modulation-offset: root.modulation-offsets[52];
-                        modulation-route-count: root.modulation-route-counts[52];
-                        changed(v) => { root.amp-velocity-changed(v); }
-                        text-committed(t) => { root.text-committed(52, t); }
-                        modulation-depth-changed(v) => { root.modulation-depth-changed(52, v); }
-                        modulation-edit-started => { root.modulation-edit-started(52); }
-                        modulation-edit-finished => { root.modulation-edit-finished(52); }
-                    }
-                    KnobField {
-                        diameter: 24px;
-                        label-width: 54px;
-                        field-width: 46px;
-                        label: "FILT VEL";
-                        tooltip: "How much velocity adds to the filter envelope depth";
-                        value <=> root.filter-velocity; minimum: -1; maximum: 1; default-value: 0; bipolar: true;
-                        display-text: (root.filter-velocity > 0 ? "+" : "") + round(root.filter-velocity * 100) + "%";
-                        modulation-armed: root.modulation-armed;
-                        modulation-allowed: root.modulation-allowed[53];
-                        modulation-depth: root.modulation-depths[53];
-                        modulation-offset: root.modulation-offsets[53];
-                        modulation-route-count: root.modulation-route-counts[53];
-                        changed(v) => { root.filter-velocity-changed(v); }
-                        text-committed(t) => { root.text-committed(53, t); }
-                        modulation-depth-changed(v) => { root.modulation-depth-changed(53, v); }
-                        modulation-edit-started => { root.modulation-edit-started(53); }
-                        modulation-edit-finished => { root.modulation-edit-finished(53); }
-                    }
-                    KnobField {
-                        diameter: 24px;
-                        label-width: 54px;
-                        field-width: 46px;
-                        label: "GLIDE";
-                        tooltip: "Portamento between reused voices";
-                        value <=> root.glide; minimum: 0; maximum: 2; default-value: 0;
-                        display-text: round(root.glide * 1000) + " ms";
-                        modulation-armed: root.modulation-armed;
-                        modulation-allowed: root.modulation-allowed[19];
-                        modulation-depth: root.modulation-depths[19];
-                        modulation-offset: root.modulation-offsets[19];
-                        modulation-route-count: root.modulation-route-counts[19];
-                        changed(v) => { root.glide-changed(v); }
-                        text-committed(t) => { root.text-committed(19, t); }
-                        modulation-depth-changed(v) => { root.modulation-depth-changed(19, v); }
-                        modulation-edit-started => { root.modulation-edit-started(19); }
-                        modulation-edit-finished => { root.modulation-edit-finished(19); }
-                    }
-                }
-                Rectangle { horizontal-stretch: 1; }
-            }
-            Rectangle { vertical-stretch: 1; }
         }
     }
 }
