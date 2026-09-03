@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-02
-- Sessions: 35
+- Sessions: 36
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -534,7 +534,10 @@ work session you can recall being part of, and don't stress over precision.
   is one file rather than nine. Archiving turned out to be the drift's own
   cause -- it had already stranded a dozen `docs/plans/<name>/` references in
   source comments, so those were repointed at `archive/` and a check confirms
-  every plan path in the tree resolves.
+  every plan path in the tree resolves. Graded the engine against an external
+  reference architecture in `docs/ARCHITECTURE_REVIEW.md` -- it holds up, the
+  one real gap is graph-wide latency compensation -- and split the UI question
+  it raised into two plans, `session-layer-extraction/` and `egui-view-layer/`.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

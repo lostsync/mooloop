@@ -12,6 +12,12 @@ and a narrow realtime surface that remains pleasant to extend.
 This document owns the boundary between editable musical state and audio
 execution.
 
+`ARCHITECTURE_REVIEW.md` grades the implementation against an external
+reference and agrees with this document almost everywhere. Its one finding
+against the engine is that migration step 5 below — graph-wide latency
+compensation — is the next infrastructure step and is cheaper now than it will
+ever be again.
+
 ## Design Character
 
 The audio API should make the safe and musically correct operation the easy
