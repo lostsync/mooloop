@@ -18,6 +18,7 @@ pub mod document;
 pub mod effects;
 pub mod history;
 pub mod mixer;
+pub mod modulation;
 pub mod notes;
 pub mod project;
 pub mod rack;

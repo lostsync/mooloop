@@ -2854,53 +2854,22 @@ impl UiState {
         self.sync_effects();
     }
 
-    /// Mirror one modulation edit to the engine, persist the UI-owned base
-    /// state, then re-render the shelf.
+    /// Sends a modulation edit on and re-draws what it changed.
     ///
-    /// The command names one fact — a parameter, a slot, a route — rather
-    /// than the rack it lives in, so the preallocated command ring is sized
-    /// by the widest single module instead of by modulator capacity
-    /// (`docs/plans/archive/modulator-capacity/03-per-slot-commands.md`). The channel
-    /// index is supplied here rather than by the caller so no gesture can
-    /// address a channel other than the one it just edited.
+    /// The session builds the command, since it is the thing that knows which
+    /// channel it is on; what is left here is the projection. Every
+    /// modulation gesture marks the document edited, and the shelf and the
+    /// title both have to show it.
     fn send_modulation(
         &mut self,
         window: &MainWindow,
         tx: &EngineCommandSender,
-        command: impl FnOnce(u8) -> EngineCommand,
+        command: EngineCommand,
     ) {
-        let channel = self.session.selected;
-        if self.session.channels.get(channel).is_none() {
-            return;
-        }
-        let _ = tx.send(command(channel as u8));
-        self.session.dirty = true;
-        self.session.revision = self.session.revision.wrapping_add(1);
+        let _ = tx.send(command);
+        self.session.mark_dirty();
         self.update_document_title(window);
         self.refresh_modulation(window);
-    }
-
-    /// Ship one slot's module entire, identity included. For the edits that
-    /// are not a descriptor parameter — filling an empty slot, or repatching
-    /// the envelope's gate jack — where there is no id to name the change by.
-    fn send_modulator_slot(
-        &mut self,
-        window: &MainWindow,
-        tx: &EngineCommandSender,
-        slot: usize,
-    ) {
-        let Some(rack) = self.session.channels.get(self.session.selected).map(|channel| channel.modulation) else {
-            return;
-        };
-        let (Some(source), Some(params)) = (rack.source_id(slot), rack.params(slot)) else {
-            return;
-        };
-        self.send_modulation(window, tx, |channel| EngineCommand::InstallModulator {
-            channel,
-            slot: slot as u8,
-            source,
-            params,
-        });
     }
 
     fn begin_modulation_edit(&mut self, window: &MainWindow) {
@@ -2941,10 +2910,8 @@ impl UiState {
                 false
             }
             ArmedRoute::Added(route) => {
-                self.send_modulation(window, tx, |channel| EngineCommand::SetModRoute {
-                    channel,
-                    route,
-                });
+                let channel = self.session.selected as u8;
+                self.send_modulation(window, tx, EngineCommand::SetModRoute { channel, route });
                 true
             }
         }
@@ -6125,7 +6092,7 @@ impl AppUi {
             window.on_modulation_shelf_toggled(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let mut state = st.borrow_mut();
-                state.session.modulation_shelf_open = !state.session.modulation_shelf_open;
+                state.session.toggle_modulation_shelf();
                 state.refresh_modulation(&window);
             });
         }
@@ -6133,25 +6100,11 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_modulation_source_selected(move |slot| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), u8::try_from(slot)) else {
-                    return;
-                };
+                let Some(window) = weak.upgrade() else { return };
                 let mut state = st.borrow_mut();
-                let exists = state
-                    .session.channels
-                    .get(state.session.selected)
-                    .is_some_and(|channel| channel.modulation.params(slot as usize).is_some());
-                if !exists {
+                if !state.session.select_modulation_source(slot) {
                     return;
                 }
-                // Selection opens an editor. If assignment is already active,
-                // it follows the newly selected source; otherwise this click
-                // has no effect on ordinary parameter gestures.
-                state.session.modulation_selected_slot.set(Some(slot));
-                if state.session.modulation_armed_slot.get().is_some() {
-                    state.session.modulation_armed_slot.set(Some(slot));
-                }
-                state.session.modulation_shelf_open = true;
                 state.refresh_modulation(&window);
             });
         }
@@ -6164,55 +6117,16 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_source_moved(move |slot, target| {
-                let (Some(window), Ok(slot), Ok(target)) = (
-                    weak.upgrade(),
-                    usize::try_from(slot),
-                    usize::try_from(target),
-                ) else {
-                    return;
-                };
-                let before = {
-                    let state = st.borrow();
-                    project_snapshot(&state, &window)
-                };
-                let moved = {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
                     let mut state = st.borrow_mut();
-                    let selected = state.session.selected;
-                    // Selection and arming follow the module, not the slot it
-                    // used to be in, or a reorder would silently retarget the
-                    // assignment gesture.
-                    let selected_slot = state.session.modulation_selected_slot.get();
-                    let armed_slot = state.session.modulation_armed_slot.get();
-                    let Some(channel) = state.session.channels.get_mut(selected) else {
+                    let Some(command) = state.session.move_modulation_source(slot, target) else {
                         return;
                     };
-                    let source_of = |slot: Option<u8>| {
-                        slot.and_then(|slot| channel.modulation.source_id(slot as usize))
-                    };
-                    let selected_id = source_of(selected_slot);
-                    let armed_id = source_of(armed_slot);
-                    if !channel.modulation.move_module(slot, target) {
-                        return;
-                    }
-                    let next_selected = selected_id.and_then(|id| channel.modulation.slot_of(id));
-                    let next_armed = armed_id.and_then(|id| channel.modulation.slot_of(id));
-                    state.session.modulation_selected_slot.set(next_selected);
-                    state.session.modulation_armed_slot.set(next_armed);
-                    // Both racks run the same permutation, so the engine's
-                    // copy carries routes and a math module's input slot
-                    // across the move exactly as this one did.
-                    state.send_modulation(&window, &tx, |channel| {
-                        EngineCommand::MoveModulator {
-                            channel,
-                            from: slot as u8,
-                            to: target as u8,
-                        }
-                    });
-                    true
-                };
-                if moved {
-                    record_project_history(&commands, before, &st, &window, "Module moved");
+                    state.send_modulation(&window, &tx, command);
                 }
+                record_project_history(&commands, before, &st, &window, "Module moved");
             });
         }
         {
@@ -6221,28 +6135,14 @@ impl AppUi {
             window.on_modulation_assignment_toggled(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let mut state = st.borrow_mut();
-                let next = if state.session.modulation_armed_slot.get().is_some() {
-                    None
-                } else {
-                    state.session.modulation_selected_slot.get()
-                };
-                state.session.modulation_armed_slot.set(next);
-                state.session.modulation_shelf_open = true;
-                let source_name = next.and_then(|slot| {
-                    state
-                        .session.channels
-                        .get(state.session.selected)
-                        .and_then(|channel| channel.modulation.params(slot as usize))
-                        .map(|params| format!("{} {}", params.kind().badge(), slot + 1))
-                });
+                let armed = state.session.toggle_modulation_assignment();
                 state.refresh_modulation(&window);
-                window.set_status_message(if let Some(source_name) = source_name {
-                    format!(
-                        "Assigning {source_name} \u{2014} drag a highlighted control to set route depth"
+                window.set_status_message(match armed {
+                    Some(source) => format!(
+                        "Assigning {source} \u{2014} drag a highlighted control to set route depth"
                     )
-                    .into()
-                } else {
-                    "Modulation assignment off \u{2014} controls edit their base values".into()
+                    .into(),
+                    None => "Modulation assignment off \u{2014} controls edit their base values".into(),
                 });
             });
         }
@@ -6255,65 +6155,43 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_source_added(move |kind| {
-                let (Some(window), Some(kind)) =
-                    (weak.upgrade(), ModulatorKind::from_index(kind))
-                else {
+                let (Some(window), Some(kind)) = (weak.upgrade(), ModulatorKind::from_index(kind)) else {
                     return;
                 };
-                let before = {
-                    let state = st.borrow();
-                    project_snapshot(&state, &window)
-                };
-                let added = {
+                let before = project_snapshot(&st.borrow(), &window);
+                {
                     let mut state = st.borrow_mut();
-                    let selected = state.session.selected;
-                    let Some(channel) = state.session.channels.get_mut(selected) else {
+                    let Some(command) = state.session.add_modulation_source(kind) else {
                         return;
                     };
-                    let Some(slot) = channel.modulation.free_slot() else {
-                        return;
-                    };
-                    let mut params = kind.default_params();
-                    // The envelope's gate is a jack rather than a descriptor
-                    // id, so its only sensible default is set here.
-                    if let ModulatorParams::Envelope(envelope) = &mut params {
-                        envelope.input_channel = selected as u8;
-                    }
-                    channel.modulation.install(slot, params);
-                    state.session.modulation_selected_slot.set(Some(slot as u8));
-                    state.session.modulation_armed_slot.set(None);
-                    state.session.modulation_shelf_open = true;
-                    state.send_modulator_slot(&window, &tx, slot);
-                    true
-                };
-                if added {
-                    // History labels are `&'static str`, so the per-kind
-                    // wording is a match rather than a format.
-                    let (history, status) = match kind {
-                        ModulatorKind::Lfo => (
-                            "LFO added",
-                            "LFO added \u{2014} choose Assign when you are ready to route it",
-                        ),
-                        ModulatorKind::Envelope => (
-                            "Envelope added",
-                            "Envelope added \u{2014} choose its gate input, then Assign a destination",
-                        ),
-                        ModulatorKind::Step => (
-                            "Step sequencer added",
-                            "Step sequencer added \u{2014} drag the columns to draw a pattern",
-                        ),
-                        ModulatorKind::Random => (
-                            "Random source added",
-                            "Random source added \u{2014} choose Assign when you are ready to route it",
-                        ),
-                        ModulatorKind::Math => (
-                            "Math module added",
-                            "Math module added \u{2014} choose the slot it reads, then Assign it",
-                        ),
-                    };
-                    record_project_history(&commands, before, &st, &window, history);
-                    window.set_status_message(status.into());
+                    state.send_modulation(&window, &tx, command);
                 }
+                // History labels are `&'static str`, so the per-kind wording is a
+                // match rather than a format.
+                let (history, status) = match kind {
+                    ModulatorKind::Lfo => (
+                        "LFO added",
+                        "LFO added \u{2014} choose Assign when you are ready to route it",
+                    ),
+                    ModulatorKind::Envelope => (
+                        "Envelope added",
+                        "Envelope added \u{2014} choose its gate input, then Assign a destination",
+                    ),
+                    ModulatorKind::Step => (
+                        "Step sequencer added",
+                        "Step sequencer added \u{2014} drag the columns to draw a pattern",
+                    ),
+                    ModulatorKind::Random => (
+                        "Random source added",
+                        "Random source added \u{2014} choose Assign when you are ready to route it",
+                    ),
+                    ModulatorKind::Math => (
+                        "Math module added",
+                        "Math module added \u{2014} choose the slot it reads, then Assign it",
+                    ),
+                };
+                record_project_history(&commands, before, &st, &window, history);
+                window.set_status_message(status.into());
             });
         }
         // One descriptor-addressed edit path for every modulator parameter.
@@ -6334,41 +6212,18 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_param_changed(move |slot, id, value| {
-                let (Some(window), Ok(slot), Ok(id)) =
-                    (weak.upgrade(), usize::try_from(slot), u32::try_from(id))
-                else {
-                    return;
-                };
-                let before = {
+                let Some(window) = weak.upgrade() else { return };
+                // A knob gesture owns one undo entry, recorded on release; outside one,
+                // every change is its own.
+                let in_gesture = st.borrow().session.modulation_gesture_open();
+                let before = (!in_gesture).then(|| project_snapshot(&st.borrow(), &window));
+                {
                     let mut state = st.borrow_mut();
-                    let in_gesture = state.session.modulation_edit_before.is_some();
-                    let before = (!in_gesture).then(|| project_snapshot(&state, &window));
-                    let selected = state.session.selected;
-                    let Some(params) = state
-                        .session.channels
-                        .get_mut(selected)
-                        .and_then(|channel| channel.modulation.params_mut(slot))
-                    else {
+                    let Some(command) = state.session.set_modulator_param(slot, id, value) else {
                         return;
                     };
-                    let previous = params.get(id);
-                    params.set(id, value);
-                    if params.get(id) == previous {
-                        return;
-                    }
-                    if in_gesture {
-                        state.session.modulation_edit_changed = true;
-                    }
-                    state.send_modulation(&window, &tx, |channel| {
-                        EngineCommand::SetModulatorParam {
-                            channel,
-                            slot: slot as u8,
-                            id,
-                            value,
-                        }
-                    });
-                    before
-                };
+                    state.send_modulation(&window, &tx, command);
+                }
                 if let Some(before) = before {
                     record_project_history(&commands, before, &st, &window, "Modulator edited");
                 }
@@ -6395,40 +6250,16 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_source_removed(move |slot| {
-                let (Some(window), Ok(slot)) = (weak.upgrade(), u8::try_from(slot)) else {
-                    return;
-                };
-                let before = {
-                    let state = st.borrow();
-                    project_snapshot(&state, &window)
-                };
-                let removed = {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
                     let mut state = st.borrow_mut();
-                    let selected = state.session.selected;
-                    let Some(channel) = state.session.channels.get_mut(selected) else {
+                    let Some(command) = state.session.remove_modulation_source(slot) else {
                         return;
                     };
-                    // The rack drops the module's routes by identity, so a
-                    // route aimed at a different module in the same slot
-                    // cannot be caught up in the removal.
-                    if !channel.modulation.clear(slot as usize) {
-                        false
-                    } else {
-                        if state.session.modulation_selected_slot.get() == Some(slot) {
-                            state.session.modulation_selected_slot.set(None);
-                        }
-                        if state.session.modulation_armed_slot.get() == Some(slot) {
-                            state.session.modulation_armed_slot.set(None);
-                        }
-                        state.send_modulation(&window, &tx, |channel| {
-                            EngineCommand::ClearModulator { channel, slot }
-                        });
-                        true
-                    }
-                };
-                if removed {
-                    record_project_history(&commands, before, &st, &window, "Modulator removed");
+                    state.send_modulation(&window, &tx, command);
                 }
+                record_project_history(&commands, before, &st, &window, "Modulator removed");
             });
         }
         {
@@ -6436,22 +6267,14 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_envelope_input_channel_changed(move |slot, channel| {
-                let (Some(window), Ok(slot), Ok(channel)) =
-                    (weak.upgrade(), usize::try_from(slot), u8::try_from(channel))
-                else {
-                    return;
-                };
+                let Some(window) = weak.upgrade() else { return };
                 let mut state = st.borrow_mut();
-                if channel as usize >= state.session.channels.len() {
-                    return;
-                }
-                let Some(envelope) = state.session.modulation_envelope_mut(slot) else {
+                // The gate is a jack rather than a descriptor id, so there is no
+                // parameter to name: the module travels entire.
+                let Some(command) = state.session.set_envelope_input_channel(slot, channel) else {
                     return;
                 };
-                envelope.input_channel = channel;
-                // The gate is a jack rather than a descriptor id, so there is
-                // no parameter to name: the module travels entire.
-                state.send_modulator_slot(&window, &tx, slot);
+                state.send_modulation(&window, &tx, command);
             });
         }
         {
@@ -6460,49 +6283,22 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_route_polarity_changed(move |index, polarity| {
-                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
-                    return;
-                };
-                let before = {
-                    let state = st.borrow();
-                    project_snapshot(&state, &window)
-                };
-                let changed = {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
                     let mut state = st.borrow_mut();
-                    let selected = state.session.selected;
-                    let Some(route) = state
-                        .session.channels
-                        .get_mut(selected)
-                        .and_then(|channel| channel.modulation.routes.get_mut(index))
-                        .and_then(Option::as_mut)
-                    else {
+                    let Some(command) = state.session.set_route_polarity(index, polarity) else {
                         return;
                     };
-                    let next = if polarity == 1 {
-                        ModPolarity::Unipolar
-                    } else {
-                        ModPolarity::Bipolar
-                    };
-                    if route.polarity == next {
-                        false
-                    } else {
-                        route.polarity = next;
-                        let route = *route;
-                        state.send_modulation(&window, &tx, |channel| {
-                            EngineCommand::SetModRoute { channel, route }
-                        });
-                        true
-                    }
-                };
-                if changed {
-                    record_project_history(
-                        &commands,
-                        before,
-                        &st,
-                        &window,
-                        "Modulation polarity changed",
-                    );
+                    state.send_modulation(&window, &tx, command);
                 }
+                record_project_history(
+                    &commands,
+                    before,
+                    &st,
+                    &window,
+                    "Modulation polarity changed",
+                );
             });
         }
         {
@@ -6511,50 +6307,16 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_route_removed(move |index| {
-                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
-                    return;
-                };
-                let before = {
-                    let state = st.borrow();
-                    project_snapshot(&state, &window)
-                };
-                let removed = {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
                     let mut state = st.borrow_mut();
-                    let selected = state.session.selected;
-                    let Some(route) = state
-                        .session.channels
-                        .get_mut(selected)
-                        .and_then(|channel| channel.modulation.routes.get_mut(index))
-                    else {
+                    let Some(command) = state.session.remove_route(index) else {
                         return;
                     };
-                    // The row's durable source is read before it is taken:
-                    // the engine is told which assignment ended, not which
-                    // matrix position emptied, so the two racks cannot drift
-                    // into removing different routes.
-                    match route.take() {
-                        None => false,
-                        Some(removed) => {
-                            state.send_modulation(&window, &tx, |channel| {
-                                EngineCommand::RemoveModRoute {
-                                    channel,
-                                    source: removed.source,
-                                    destination: removed.destination,
-                                }
-                            });
-                            true
-                        }
-                    }
-                };
-                if removed {
-                    record_project_history(
-                        &commands,
-                        before,
-                        &st,
-                        &window,
-                        "Modulation route removed",
-                    );
+                    state.send_modulation(&window, &tx, command);
                 }
+                record_project_history(&commands, before, &st, &window, "Modulation route removed");
             });
         }
 
