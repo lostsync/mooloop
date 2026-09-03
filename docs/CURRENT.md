@@ -1,6 +1,6 @@
 # Current System
 
-Status: implementation snapshot, August 2026.
+Status: implementation snapshot, September 2026.
 
 This document describes the prototype as implemented. It is deliberately
 blunt about gaps so roadmap decisions are based on the system that exists.
@@ -215,7 +215,7 @@ UI commands -> rtrb queue -> shared render state -> transport + sequencer
                          timed events/channel
                                   |
                                   v
-selected source (sampler / drum synth / v1 mono / ML-M1 / poly synth) -> effect chain -> gain/pan/mute
+selected source (sampler / drum synth / v1 mono / ML-M1 / ML-P8 / poly synth) -> effect chain -> gain/pan/mute
                                                            |
                                                            v
                                              assigned mixer bus (0-16)
@@ -470,9 +470,11 @@ land on its own when it starts to matter:
   supplies the base a knob would otherwise supply, and the matrix adds its
   offsets on top, so an LFO wobbles around a drawn curve. Both resolve at the
   32-frame control rate into the destination's existing event path, and no
-  effect needed a change to receive them. The current runtime source is an
-  LFO; the channel-level modulation-shelf UI and broader source taxonomy are
-  still planned rather than shipped.
+  effect needed a change to receive them. A channel carries eight modulator
+  slots, shown as a grid beside the selected module's own surface, and five
+  module kinds fill them: LFO, gate-driven envelope, step, random, and math.
+  Every kind is a descriptor table plus a tick, so the grid speaks one
+  `param-changed` verb rather than one callback per control.
 - The retained-audio buffer is descriptor-addressed: `Offset` places the read
   head behind the writer in beats and `Crossfade` sets the declick length.
   Offset is position mode, the same as a hand scrub — the head chases the
@@ -481,12 +483,17 @@ land on its own when it starts to matter:
   not a parameter: resizing the ring reallocates, which happens off-thread.
   The JUMP/REV/STUT gestures are unchanged and outrank the offset while they
   run; the offset re-asserts on the next control tick after one ends.
-- The sampler, v1 mono synth, ML-M1, and poly synth are descriptor-addressed through
-  `GeneratorParams`, so their parameters automate and modulate like an
-  effect's. The three-oscillator synths reserve ten parameter ids per
-  oscillator, starting at 100. The drum synth is not addressable: its
-  twenty-five fields are three voices' worth of detail, and it is listed in
-  the picker with no parameters rather than with some of them.
+- The sampler, v1 mono synth, ML-M1, ML-P8, and poly synth are
+  descriptor-addressed through `GeneratorParams`, so their parameters automate
+  and modulate like an effect's. The three-oscillator synths reserve ten
+  parameter ids per oscillator, starting at 100; ML-P8's ids are their own
+  namespace starting at zero, because it is not that voice with a different
+  count. The drum synth is the one generator that is not addressable, and the
+  reason is structural rather than unfinished work: `DrumSynthParams` is a
+  mode-union, so a flat descriptor table over it would produce ids whose
+  meaning changes with the Mode switch. `docs/plans/drum-synth-v2/` is the
+  approved answer — a new DS-01 generator beside the v1 device, addressable
+  from its first step.
   `docs/MODULATION_PLAN.md` records the approved design; build order is in
   `docs/plans/buffer-implementation/02-control-and-modulation.md`.
 - Clip automation is per (pattern, channel), lives in the clip that drew it,

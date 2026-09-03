@@ -1,6 +1,6 @@
 # Focus
 
-Status: active working sequence.
+Status: active working sequence, rewritten 2026-09-02.
 
 `ROADMAP.md` orders the whole product by dependency. This document is narrower:
 it names the active sequence and the work that should not interrupt it. Rewrite
@@ -11,13 +11,25 @@ surface. Source and tests settle any disagreement with either document.
 
 ## The line has moved
 
-The previous focus did its job. The command layer and its editing surfaces,
-audio preferences, the effect suite, the gain contract, retained-audio Buffer,
-clip automation, and audible channel modulation all exist. The sample browser
-also loads and previews the formats users are likely to bring to it.
+The previous sequence was Mono, then ML-P8, then Buffer. **Its first step is
+done and its second is half done**, and three things landed beside it that the
+sequence never named:
 
-Those are foundations to use, not projects to restart. Work should now turn
-them into a more distinctive instrument.
+- **ML-M1 exists and has been played.** Adam played the factory bank on
+  2026-08-31 and the verdict was that it sounds very good. One DSP finding came
+  out of it and was fixed; one was diagnosed and deliberately left (see
+  `docs/plans/mono-synth-v2/00-status.md`).
+- **Channel modulation grew up.** Eight slots a channel, five module kinds,
+  durable identity across a reorder, and a capacity number that is now a
+  one-line edit with a measured linear price rather than a hunt through layout
+  code. Both plans are complete and archived.
+- **Positional addressing was a live bug and is now fixed.** Routes and
+  automation lanes named their destination by slot and their channel by index,
+  so any structural edit silently re-aimed them. `mooloop_core::structure`
+  states each edit once as a permutation and runs it over everything that
+  stores a position.
+
+Those are foundations to use, not projects to restart.
 
 ## The rule
 
@@ -31,55 +43,74 @@ reopened, and rendered through the ordinary UI.
 
 ## The sequence
 
-### 1. Make Mono a monosynth
+### 1. Finish ML-P8
 
-Execute `docs/plans/mono-synth-v2/` in order. Start with the shared filter
-envelope and keytracking foundation, then give Mono the note behavior and
-filter path that distinguish it from a one-voice Poly: a held-note stack,
-priority and legato behavior, pre-filter drive, ladder and acid filter models,
-and velocity accent.
+Execute `docs/plans/poly-synth-v2/` steps 04 through 07. Steps 02 and 03 are
+in: the device plays, with the three-oscillator network, all six directed XMOD
+routes, sync, the derived sub, coloured noise, both envelopes, four filter
+modes, and the feedback loop with drive inside it.
 
-Do not split shared descriptor or serialization work into a second instrument
-implementation. Keep ML-M1's authored instrument modulation separate from the
-channel rack's general-purpose and cross-device modulation; neither should
-duplicate the other's routes.
+What remains is unison groups, the internal chorus, oscillator sync's remaining
+surface, and — the one that matters beyond this device — **step 07's internal
+modulation and published outlets**. `origin/feat/mlp8-mod` already carries WIP
+for it (the LFO and internal route model, plus a per-knob command narrowing);
+decide whether to finish that branch or restart from the plan.
 
-Done when: Mono plays bass and lead lines with intentional note priority and
-legato, its filter models are audibly different rather than renamed variants,
-old projects still load conservatively, automation addresses remain stable,
-and a small factory patch set proves the range from the normal UI.
+This step is first because it is half built, its cost is known, and DS-01's own
+step 07 publishes outlets the same way. Doing it here means designing that
+contract once.
 
-### 2. Build ML-P8 as the deep polysynth
+Do not import ML-M1's acid semantics, held-note rules, or character filters. Do
+not let Drift, Unison, Spread, or Chorus carry ML-P8's identity; they are
+finishers around a network that already stands on its own.
 
-Execute `docs/plans/poly-synth-v2/` as a new instrument beside the retained
-original Poly. ML-P8 is exactly eight physical voices built around a
-three-oscillator audio-rate network, derived sub, colored noise, sync,
-cross-modulation, oscillator and filter feedback, separate envelopes, and
-native per-voice modulation. Its useful internal LFO, envelopes, note values,
-gate/trigger, and oscillator taps publish through typed device outlets.
+Done when: eight ordinary notes play, the network stays deterministic and
+bounded under automation, voice groups never strand or click, typed outlets
+obey their rate and latency contracts, old Poly projects are unchanged, and the
+non-unison/non-chorus factory patches prove the character.
 
-Do not import ML-M1's acid semantics, held-note rules, or character filters.
-Do not make Drift, Unison, Spread, or Chorus carry ML-P8's identity; they are
-finishers around an oscillator and modulation architecture that must already
-stand on its own. The channel modulation rack extends the instrument and
-routes its published signals elsewhere; it is not a prerequisite for a
-complete ML-P8 patch.
+### 2. Build DS-01
 
-Done when: ML-P8 plays eight ordinary notes, the oscillator/feedback network
-remains deterministic and bounded under automation, native per-voice routes
-work independently across a chord, voice groups never strand or click, typed
-outlets obey their rate and latency contracts, old Poly projects remain
-unchanged, and the non-unison/non-chorus factory patches prove ML-P8's
-character.
+Execute `docs/plans/drum-synth-v2/` in order. Nothing is built; the plan is
+complete, including three rendered face concepts at the real face size against
+the real widgets, of which two were built and rejected and are checked in as
+the argument for the third.
+
+**The drum synth is the only generator that cannot be modulated at all**, in a
+program whose default new song is a four-channel drum kit. The reason is
+structural — `DrumSynthParams` is a mode-union, so a flat descriptor table over
+it yields ids whose meaning changes with the Mode switch — which is why this is
+a new generator beside the v1 device rather than a table added to it. The v1
+device stays and old projects load unchanged.
+
+Descriptor addressing is step 02, not step 09. It is the reason the instrument
+exists and does not get to be the last thing anyone gets to.
+
+One constraint that binds steps 02 through 07, not just step 08: **DS-01's
+controls do not fit on one face unless the scopes are the envelope editor.**
+Envelope times are handles dragged on the curve, not knobs. A scope without
+handles is not a smaller version of that face; it is a different one that needs
+a page. Build the parameter model knowing the face has already been decided.
+
+Done when: one universal percussion voice covers kick, snare, hat, tom, rim,
+clap and roll from range and factory patches rather than from mode branches;
+every parameter is descriptor-addressed and modulatable; the note-on latch rule
+from step 02 is published and tested; and the kit in step 09 proves the range
+from the normal UI.
 
 ### 3. Turn Buffer into a composition workflow
 
+Unchanged from the previous focus, and still the honest product test.
+
 The retained-audio engine, insert position, collision policy, gestures,
-automation addresses, and UI face already exist. The remaining product test is
-not more Buffer DSP; it is whether a musician can deliberately route a source
-into Buffer, sequence a transformation, understand the active head, and keep
-the result as part of a project without relying on debug controls or a hidden
-MIDI mapping.
+automation addresses, and UI face already exist. The remaining question is not
+more Buffer DSP; it is whether a musician can deliberately route a source into
+Buffer, sequence a transformation, understand the active head, and keep the
+result as part of a project without relying on debug controls or a hidden MIDI
+mapping.
+
+It sits third because its value is a workflow judgement, and that judgement is
+better made against three finished instruments than against one and a half.
 
 Use the shared automation and modulation language. Add only the control
 vocabulary and feedback that a concrete source-to-buffer workflow proves it
@@ -99,39 +130,62 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
+Two carried items are close enough to the sequence to be worth naming, because
+both are small and both will be in the way:
+
+- **The stretching-polyphony cap is not enforced anywhere.** `StretchPool::new`
+  builds a reader for every one of the sampler's sixteen voices and nothing
+  limits how many stretch at once, although the contract in #13 names four.
+- **`poly-v1-mono-mode` is one step and unblocks a deletion.** It is the only
+  thing keeping `DeviceKind::MonoSynth` alive, and that deletion is what lets
+  `MlM1` take the plain name. The held-note stack it needs already exists.
+
 ## Deliberately not now
 
-**More effect kinds or a broad effect-polish pass.** The rack already has ten
-effects and a common host. A synth or Buffer step may fix a concrete defect it
-exposes, but the suite does not need more breadth.
+**More effect kinds or a broad effect-polish pass.** The 2026 effects-feedback
+pass is complete and archived. The rack has ten effects and a common host. A
+synth step may fix a concrete defect it exposes; the suite does not need more
+breadth.
 
-**More modulation taxonomy for its own sake.** LFO and envelope sources,
-direct assignment, visible movement, persistence, and parameter-wide
-destinations are enough for the active sequence. Device outlets, additional
-generators, multiple visible automation lanes, and an expert matrix should be
-pulled in only by a demonstrated workflow.
+**More modulator kinds, or raising the slot count.** Five kinds, eight slots,
+durable identity, and a measured price per slot are enough for this sequence.
+Raising `MAX_MODULATORS_PER_CHANNEL` is now a one-line decision — which is the
+point of the capacity work, not an invitation to make it. Device outlets arrive
+with ML-P8 step 07 because that device needs them, not as a taxonomy exercise.
 
 **Parallel sends, sidechains, and plugin delay compensation.** Compensation is
-required before parallel paths are trustworthy, but none of the active steps
-needs a new graph shape. Build them together when sends or sidechain become the
-actual product task.
+required before parallel paths are trustworthy, but no active step needs a new
+graph shape. Build them together when sends or sidechain become the actual
+product task.
 
 **Broad arrangement and recovery work.** Playlist clip manipulation, explicit
 loop ranges, autosave, crash recovery, and richer missing-sample relinking
-remain important. They do not interrupt the source and Buffer sequence unless
-one becomes necessary to preserve its work.
+remain important. They do not interrupt this sequence unless one becomes
+necessary to preserve its work.
 
-**Metronome, plugin hosting, MIDI configuration, and the graph editor.** None
-is required to prove the active instrument workflows.
+**The preset system revisit.** `docs/plans/preset-system/` is written and
+queued, and its trigger is real: device-level presets were asked for and never
+delivered, and the ML-M1 bank already paid for it once by shipping as channel
+presets. It waits because DS-01's step 09 ships another factory bank, and doing
+the preset work first would be designing against one bank instead of two.
+
+**Metronome, plugin hosting, MIDI configuration, and the graph editor.** None is
+required to prove the active instrument workflows.
 
 ## Working discipline
 
 Keep one audible acceptance case per branch and run it through realtime,
 persistence, and offline rendering where the change crosses those boundaries.
-The plan files define the order inside Mono and Poly; update their status as
+The plan files define the order inside ML-P8 and DS-01; update their status as
 steps land rather than duplicating implementation notes here.
 
 Keep branches small enough to listen to and revert independently. Preserve
 stable parameter IDs, conservative project defaults, deterministic rendering,
 and the realtime rules in `AUDIO_ARCHITECTURE.md`. `AGENTS.md` governs
 worktrees, commits, and verification.
+
+**Listening is a step, not a formality.** The last recorded listening pass was
+the ML-M1 bank on 2026-08-31. A stretch engine, a slice mode, a commit path,
+and most of ML-P8 have landed since, and the gain contract deliberately moved
+every default 12 dB quieter. A step that changes what something sounds like is
+not done when its tests pass.

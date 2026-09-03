@@ -1,6 +1,9 @@
 # Roadmap
 
-Status: dependency-ordered working plan, August 2026.
+Status: dependency-ordered working plan, September 2026.
+
+Phase accuracy swept 2026-09-02. `docs/FOCUS.md` names the active sequence;
+this document only orders the whole product by dependency.
 
 The old labels treated effects as Phase 3 and synths as Phase 4. That order no
 longer reflects the product. Effects depend on a stable parameter event model,
@@ -29,8 +32,11 @@ Scope:
   knob travel should make sub-100 ms percussion easy without making the rest
   of the range feel wrong.
 - Add per-channel meters through the existing strip; volume and pan are exposed.
-- Replace terse implementation-style tooltips with user-facing wording, and
-  consider a status bar for longer hover text.
+- Replace terse implementation-style tooltips with user-facing wording. Done:
+  the docked status bar carries longer hover text through `hover-hint`, and
+  tooltips are value-only per the project convention. Remaining: the sampler
+  face has no `hover-hint` plumbing, which is why its stretch toggle cannot
+  explain why it is inert in Slice mode.
 - Keep the mockup tool's catalog as the interaction contract.
 
 Exit criteria:
@@ -149,6 +155,18 @@ Implement only the bounded insert-device spike in `BUFFER_ENGINE.md`. Do not
 build a general looper, destructive audio editor, or large synth suite during
 this phase.
 
+Implemented foundation:
+
+- Stage 1 is built and merged: the bounded ring, zero-latency bit-transparent
+  Follow, off-thread resize, collision telemetry, the JUMP/REV/STUT gestures,
+  a descriptor-addressed automatable read head, and a device face. Stage 1's
+  acceptance list is complete except RT allocation hygiene, which needs an
+  allocation-tracking harness rather than a reading of the code.
+- The exit criterion below that has *not* been tested is the last one, and it
+  is the whole point: whether the workflow beats bouncing to a sample. That is
+  step 3 of `docs/FOCUS.md`, and `docs/plans/buffer-implementation/` holds the
+  build order.
+
 Exit criteria:
 
 - One inserted buffer device continuously retains a bounded span of its input
@@ -182,26 +200,38 @@ Scope:
 
 Implemented foundation:
 
-- DrumSynth and MonoSynth are selectable channel sources with complete editors,
-  project/preset persistence, realtime playback, and offline rendering.
+- Six selectable channel sources with complete editors, project/preset
+  persistence, realtime playback, and offline rendering: the sampler, the v1
+  `DrumSynth`, the v1 `MonoSynth`, the filter-led `MlM1`, the eight-voice
+  `MlP8`, and `PolySynth`. All but `DrumSynth` are descriptor-addressed, so
+  their parameters automate and modulate like an effect's.
 - New songs start from a randomized kick/snare/closed-hat/open-hat kit.
+- The mixer model exists: channels assign explicitly to buses, the graph is
+  topologically sorted rather than constrained to lower-numbered targets, and
+  a cyclic file flattens to everything-to-master on load rather than refusing
+  to open.
 
-Remaining work in this phase is source-to-buffer workflow, external/internal
-routing, groups, sends, and resampling-source selection.
+Remaining work in this phase is the percussive synth's replacement (`DS-01`,
+which is the only source that cannot be modulated), the source-to-buffer
+workflow, external/internal routing, groups, sends, and resampling-source
+selection.
 
 ## Later, Not Scheduled
 
-- A modulation matrix or zoomed-out control-graph editor. The underlying
-  source, destination, route, rate, and latency model must remain capable of
-  this view, but the normal ordered rack and direct-manipulation modulation UI
-  come first.
+- A zoomed-out control-graph editor. The per-channel matrix itself is built —
+  eight modulator slots, five module kinds, durable identity across a reorder,
+  and routes that survive every structural edit — and direct-manipulation
+  assignment on the knob came first as intended. What remains unscheduled is
+  the graph *view* over it.
 - Node-based patching in the device rack, with devices staying opinionated
   instruments and user-assembled objects wired around them. Recorded in
   `docs/NODE_MODEL.md`, which is a direction rather than a plan: it is wanted
   for its own sake rather than pulled in by a workflow, and the audio domain
   needs latency compensation first. What keeps it reachable is the three
   habits in `COMPOSABLE_DEVICE_UNITS.md`, not infrastructure built ahead of it.
-- MIDI input/output and controller mapping.
+- MIDI output, and general controller mapping. Input exists behind a
+  `MidiBackend` boundary with a buffer control mapping (#9 tracks the
+  cross-platform work); nothing maps a controller to arbitrary parameters yet.
 - Plugin hosting.
 - Multiple time signatures and tempo maps.
 - Stem and bus export.

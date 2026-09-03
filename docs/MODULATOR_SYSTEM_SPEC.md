@@ -1,6 +1,7 @@
 # Mooloop Modulator System
 
-Status: implementation specification, August 2026. This expands the approved
+Status: implementation specification, August 2026; module inventory and
+capacity notes updated September 2026. This expands the approved
 decisions in [MODULATION_PLAN.md](MODULATION_PLAN.md). It formalizes the
 source/outlet metadata and the rack interaction while retaining the existing
 parameter and realtime contracts.
@@ -66,18 +67,34 @@ extends it; it does not replace it.
 | --- | --- |
 | `ParamAddr` | Stable destination address: scope, owner, and a per-kind never-renumbered descriptor ID. It already models sources, effect slots, modulator slots, and strips. |
 | `ParamDescriptor` | Single source of truth for natural range, curve, default, and normalized conversion. Events carry natural values; routes operate in normalized destination space. |
-| `ModRack` | Persisted per-channel source slots and routes. Its current realtime storage is four local source slots and sixteen route rows. |
+| `ModRack` | Persisted per-channel module slots and routes. Realtime storage is eight local module slots and sixteen route rows; a module carries a durable `ModSourceId`, so a route survives the grid being reordered. |
 | `ModRoute` | Current source slot, destination, signed full-range depth, and polarity. Reassigning the same source/destination retunes instead of duplicating it. |
 | Renderer | Sources tick at `CONTROL_RATE_FRAMES = 32`; offsets are summed, clamped, converted through the descriptor, then sent as ordinary timed `Event::ParamValue` events. |
 | Base state | The renderer/chain retains the knob base separately from a device's last resolved value. A lane supplies the base when active; modulation is added after it. |
 | DSP | `AudioNode::process` has an in-place stereo bus and timed events. Effects already split at parameter-event offsets; they need no modulation-specific branch. |
 
-The local LFO and gate-driven ADSR envelope are implemented today. The LFO is
-a bipolar `-1..1` source with sine, triangle, saw, square, and sample-and-hold
-random waves. The envelope is unipolar and currently binds its gate inlet to
-the scheduled Note On/Off stream of an explicitly selected piano-roll channel.
-That note stream is the first adapter for a future typed generator `Gate`
-outlet; envelope destinations already use ordinary routes.
+**Five module kinds are implemented today** (updated 2026-09-02; the spec was
+written when there were two). Each is a descriptor table plus a tick, so the
+grid speaks one `param-changed` verb rather than a callback per control:
+
+- **LFO** — bipolar `-1..1`, with sine, triangle, saw, square, and
+  sample-and-hold random waves, free or tempo-synced rate, and fade-in.
+- **Envelope** — unipolar ADSR, binding its gate inlet to the scheduled Note
+  On/Off stream of an explicitly selected piano-roll channel. That note stream
+  is the first adapter for a future typed generator `Gate` outlet; envelope
+  destinations already use ordinary routes.
+- **Step** — a division-only clocked sequence.
+- **Random** — a promotion of the LFO's hidden sample-and-hold, which kept the
+  LFO's three-id tempo-syncable rate rather than the division-only clock the
+  plan described, because dropping the free rate would be a regression for
+  anything migrating off the waveform.
+- **Math** — combines a lower slot with an operand. It needed no ordering
+  machinery: `outputs` already holds last tick's value everywhere the
+  evaluation pass has not reached, so a module reading a lower slot sees this
+  tick and one reading itself or higher sees the previous, with self-reference
+  bounded by the module's own output clamp rather than by a cycle check. Its
+  `input_slot` is the one slot reference a user never sees, so `move_module`
+  remaps it through the reorder permutation.
 
 This implemented local LFO is a channel-rack source. It does not prohibit a
 future instrument from owning a different LFO as part of its saved synthesis
@@ -99,9 +116,17 @@ the sources it can play and all routes it makes. Project-global modulation is
 not implied; a later global source is a new explicit scope/source kind.
 
 The realtime representation may remain bounded and allocation-free. Capacity is
-an engine protocol boundary, not a UI layout: the UI shows existing sources
-plus **Add source**, never four permanent empty bays. A larger capacity must
-not alter persisted destination or route meaning.
+an engine protocol boundary, not a UI layout: the UI shows existing modules
+plus **Add source**, never a fixed row of permanent empty bays. A larger
+capacity must not alter persisted destination or route meaning.
+
+That is now literally true rather than aspirational. `MAX_MODULATORS_PER_CHANNEL`
+is a constant the layout obeys, modulation edits each name one fact so the
+command ring no longer grows with capacity at all, and durable `ModSourceId`
+means slot numbers are an implementation detail rather than something a saved
+project depends on. Raising the number costs the DSP racks, the control outputs
+and the meters -- all linear and all small. See
+`docs/plans/archive/modulator-capacity/`.
 
 ### Sources and source metadata
 
