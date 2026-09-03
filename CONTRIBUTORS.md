@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-02
-- Sessions: 33
+- Sessions: 34
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -49,7 +49,7 @@ work session you can recall being part of, and don't stress over precision.
   the buffer's own offset/crossfade parameters so a lane can move its read
   head. Rebuilt Preferences > Appearance on three color seeds with derived
   palettes, saveable schemes, and live roundness/contrast scalars. Audited gain and
-  summing end to end and wrote the `docs/plans/gain-structure/` plan: a
+  summing end to end and wrote the `docs/plans/archive/gain-structure/` plan: a
   console fader taper, a -12 dBFS operating level, energy-normalized reverb
   IRs, and IEC 60268-18 metering. Turned the synth v2 direction spec into two
   plans that split Mono and Poly apart: `docs/plans/mono-synth-v2/` (ladder and
@@ -276,7 +276,7 @@ work session you can recall being part of, and don't stress over precision.
   warns about is not the big line -- control outputs are, at twice the ring,
   because every per-channel array is preallocated for `MAX_CHANNELS = 256`
   whether or not those channels exist. So capacity is cheap and dimensioning
-  by the ceiling is expensive, which is now `docs/plans/modulator-capacity/`.
+  by the ceiling is expensive, which is now `docs/plans/archive/modulator-capacity/`.
   Built its first step: the three places that still quietly capped the number
   after step 03 claimed they did not -- a literal row count, a shelf that
   could not scroll, and a per-slot segment bank -- with a test that renders
@@ -508,13 +508,23 @@ work session you can recall being part of, and don't stress over precision.
   which is 13 cells back and takes the face from short to 61 cells for 55
   controls. So the scope being an editor rather than a readout is load-bearing
   rather than a nicety, and `08-the-face.md` says to build the handles in the
-  same step as the scopes.
+  same step as the scopes. Swept the project records after three days of
+  parallel work had outrun them: rewrote `docs/FOCUS.md`, whose sequence still
+  named a finished step and omitted the two workstreams actually consuming
+  time; wrote nine missing days into `docs/JOURNAL.md` and refreshed its open
+  threads, four of six of which had quietly closed; archived the four complete
+  plans; corrected `CURRENT.md` and `ROADMAP.md` where they described a
+  smaller system than exists; and added `docs/plans/README.md` so plan state
+  is one file rather than nine. Archiving turned out to be the drift's own
+  cause -- it had already stranded a dozen `docs/plans/<name>/` references in
+  source comments, so those were repointed at `archive/` and a check confirms
+  every plan path in the tree resolves.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
 - Last seen: 2026-08-31
 - Sessions: 1
-- Notes: Wrote `docs/plans/modulator-modules/` — the modulator-grid plan —
+- Notes: Wrote `docs/plans/archive/modulator-modules/` — the modulator-grid plan —
   and started step 01: modulator params join the descriptor system.
 
 ### Claude Fable 5.1 — Claude Code
