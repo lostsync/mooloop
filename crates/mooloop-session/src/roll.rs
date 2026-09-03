@@ -21,6 +21,21 @@ pub struct NoteEdit {
     pub notes: usize,
 }
 
+/// Whether a gesture takes a note's tail with it when the note lands where the
+/// tail would pass the pattern's logical end.
+///
+/// The pointer drag trims; arrow-key nudging does not. That difference is
+/// preserved from before the two shared this code rather than reasoned about:
+/// a note is allowed to overhang the end -- that is how a shortened pattern
+/// keeps its notes -- so the two gestures disagreeing about it is a question
+/// for whoever decides what nudging past the end should mean, not for a
+/// refactor.
+#[derive(Clone, Copy, PartialEq)]
+enum Tails {
+    Keep,
+    Trim,
+}
+
 /// A pointer drag reports where the *grabbed* note should land. Every other
 /// selected note moves by the same delta, so a chord keeps its shape -- and
 /// the delta is clamped by the group rather than per note, because letting
@@ -138,7 +153,13 @@ impl Session {
     }
 
     /// Applies a (tick, pitch) delta to every note in `moving`.
-    fn shift_notes(&mut self, moving: &HashSet<NoteId>, tick: i64, pitch: i32) -> NoteEdit {
+    fn shift_notes(
+        &mut self,
+        moving: &HashSet<NoteId>,
+        tick: i64,
+        pitch: i32,
+        tails: Tails,
+    ) -> NoteEdit {
         let (channel, pattern) = self.roll();
         let length_ticks = self.pattern_ticks();
         let mut edited = Vec::new();
@@ -148,11 +169,13 @@ impl Session {
             .filter(|note| moving.contains(&note.id))
         {
             cells.push((note.start_tick / TICKS_PER_STEP) as usize);
-            note.start_tick = ((note.start_tick as i64 + tick).max(0) as u32)
-                .min(length_ticks.saturating_sub(1));
-            note.duration_ticks = note
-                .duration_ticks
-                .min(length_ticks.saturating_sub(note.start_tick).max(1));
+            note.start_tick = (note.start_tick as i64 + tick).max(0) as u32;
+            if tails == Tails::Trim {
+                note.start_tick = note.start_tick.min(length_ticks.saturating_sub(1));
+                note.duration_ticks = note
+                    .duration_ticks
+                    .min(length_ticks.saturating_sub(note.start_tick).max(1));
+            }
             note.note = (note.note as i32 + pitch).clamp(0, 127) as u8;
             cells.push((note.start_tick / TICKS_PER_STEP) as usize);
             edited.push(*note);
@@ -175,7 +198,7 @@ impl Session {
         if tick == 0 && pitch == 0 {
             return None;
         }
-        Some(self.shift_notes(&moving, tick, pitch))
+        Some(self.shift_notes(&moving, tick, pitch, Tails::Keep))
     }
 
     /// Moves the selection so the grabbed note lands where the drag says.
@@ -200,7 +223,7 @@ impl Session {
             wanted_tick as i64 - anchor.start_tick as i64,
             wanted_note as i32 - anchor.note as i32,
         );
-        let edit = self.shift_notes(&moving, tick, pitch);
+        let edit = self.shift_notes(&moving, tick, pitch, Tails::Trim);
         if edit.notes == 1 {
             self.select_note(Some(anchor.id));
         }
@@ -868,6 +891,41 @@ mod tests {
         );
         assert_eq!(session.channels[0].notes[0].len(), 9);
         assert_eq!(edit.commands.len(), 3);
+    }
+
+    /// A drag trims a note whose tail would leave the pattern; the arrow keys
+    /// do not. Preserved from before the two shared a code path.
+    #[test]
+    fn a_drag_trims_an_overhanging_tail_where_a_nudge_leaves_it() {
+        let mut session = Session::default();
+        let last = session.pattern_lengths[0] as u32 - 1;
+        let long = session.channels[0]
+            .create_note(0, 0, 4 * TICKS_PER_STEP, 60)
+            .id;
+        session.select_note(Some(long));
+
+        session
+            .move_selection(long, (last * TICKS_PER_STEP) as i32, 60)
+            .expect("the anchor is in the pattern");
+        assert_eq!(
+            session.channels[0].notes[0][0].duration_ticks, TICKS_PER_STEP,
+            "the drag did not trim the tail that left the pattern"
+        );
+
+        let mut session = Session::default();
+        let long = session.channels[0]
+            .create_note(0, (last - 1) * TICKS_PER_STEP, 4 * TICKS_PER_STEP, 60)
+            .id;
+        session.selected_note_ids = [long].into_iter().collect();
+
+        session
+            .nudge_selection(TICKS_PER_STEP as i32, 0)
+            .expect("there is a selection to nudge");
+        assert_eq!(
+            session.channels[0].notes[0][0].duration_ticks,
+            4 * TICKS_PER_STEP,
+            "nudging trimmed a tail it never used to"
+        );
     }
 
     /// Grabbing a note outside the selection acts on that note alone.
