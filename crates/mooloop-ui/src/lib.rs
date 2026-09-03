@@ -31,7 +31,7 @@ use mooloop_core::{
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor, ModEnvelopeParams,
     ModPolarity, ModRack, ModRandomTrigger, ModRoute, ModStepTrigger,
     ModulatorKind, ModulatorParams, MonoSynthParams, MonoSynthState, MlM1Params, MlM1State,
-    MlP8Params, MlP8State,
+    Ds01Params, Ds01State, MlP8Params, MlP8State,
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
@@ -594,6 +594,7 @@ struct ChannelState {
     mono_params: MonoSynthParams,
     mlm1_params: MlM1Params,
     mlp8_params: MlP8Params,
+    ds01_params: Ds01Params,
     poly_params: PolySynthParams,
     sample_name: String,
     sample_description: String,
@@ -650,6 +651,7 @@ impl ChannelState {
             DeviceKind::PolySynth => GeneratorParams::PolySynth(self.poly_params),
             DeviceKind::MlM1 => GeneratorParams::MlM1(self.mlm1_params),
             DeviceKind::MlP8 => GeneratorParams::MlP8(self.mlp8_params),
+            DeviceKind::Ds01 => GeneratorParams::Ds01(self.ds01_params),
             DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
         }
     }
@@ -668,6 +670,7 @@ impl ChannelState {
             mono_params: MonoSynthParams::default(),
             mlm1_params: MlM1Params::default(),
             mlp8_params: MlP8Params::default(),
+            ds01_params: Ds01Params::default(),
             poly_params: PolySynthParams::default(),
             sample_name: String::new(),
             sample_description: String::new(),
@@ -1838,6 +1841,7 @@ fn device_kind_from_int(value: i32) -> DeviceKind {
         3 => DeviceKind::PolySynth,
         4 => DeviceKind::MlM1,
         5 => DeviceKind::MlP8,
+        6 => DeviceKind::Ds01,
         _ => DeviceKind::Sampler,
     }
 }
@@ -1850,6 +1854,7 @@ fn device_kind_to_int(kind: DeviceKind) -> i32 {
         DeviceKind::PolySynth => 3,
         DeviceKind::MlM1 => 4,
         DeviceKind::MlP8 => 5,
+        DeviceKind::Ds01 => 6,
     }
 }
 
@@ -2299,6 +2304,7 @@ impl UiState {
             DeviceKind::PolySynth => format!("Poly {}", index + 1),
             DeviceKind::MlM1 => format!("ML-M1 {}", index + 1),
             DeviceKind::MlP8 => format!("ML-P8 {}", index + 1),
+            DeviceKind::Ds01 => format!("DS-01 {}", index + 1),
         };
         match kind {
             DeviceKind::Sampler => {
@@ -2333,6 +2339,21 @@ impl UiState {
             }
             DeviceKind::MlM1 => {
                 channel.mlm1_params = MlM1Params::default();
+                channel.sample_name.clear();
+                channel.sample_description.clear();
+                channel.sample_duration = 0.0;
+                channel.sample_path = None;
+                channel.sample_embedded = false;
+                channel.sample_data = None;
+                channel.committed_sample = None;
+                channel.commit = None;
+                channel.slices.clear();
+                channel.waveform.clear();
+                channel.can_previous_sample = false;
+                channel.can_next_sample = false;
+            }
+            DeviceKind::Ds01 => {
+                channel.ds01_params = Ds01Params::default();
                 channel.sample_name.clear();
                 channel.sample_description.clear();
                 channel.sample_duration = 0.0;
@@ -2431,6 +2452,9 @@ impl UiState {
                     DeviceKind::MlP8 => ChannelSource::MlP8(MlP8State {
                         params: channel.mlp8_params,
                     }),
+                    DeviceKind::Ds01 => ChannelSource::Ds01(Ds01State {
+                        params: channel.ds01_params,
+                    }),
                 };
                 ProjectChannel {
                     setup: ChannelSetup {
@@ -2511,6 +2535,7 @@ impl UiState {
                 let poly_params = source.poly_synth_state().map(|s| s.params).unwrap_or_default();
                 let mlm1_params = source.mlm1_state().map(|s| s.params).unwrap_or_default();
                 let mlp8_params = source.mlp8_state().map(|s| s.params).unwrap_or_default();
+                let ds01_params = source.ds01_state().map(|s| s.params).unwrap_or_default();
                 let sample = sampler
                     .is_some()
                     .then(|| samples.get(index).cloned().flatten())
@@ -2631,6 +2656,7 @@ impl UiState {
                     poly_params,
                     mlm1_params,
                     mlp8_params,
+                    ds01_params,
                     sample_name,
                     sample_description: description,
                     sample_duration: duration,

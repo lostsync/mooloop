@@ -38,8 +38,8 @@ work session you can recall being part of, and don't stress over precision.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-02
-- Sessions: 37
+- Last seen: 2026-09-03
+- Sessions: 38
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -542,7 +542,11 @@ work session you can recall being part of, and don't stress over precision.
   the case against, and Adam doubted it. He was right. `build.rs` expands
   `ui/main.slint` into a single 39 MB Rust module, so the four minutes and the
   3.4 GB peak that `scripts/cargo-capped` exists to contain are Slint's, and a
-  measured `eframe` probe checks in 1.4s inside 0.2 GB.
+  measured `eframe` probe checks in 1.4s inside 0.2 GB. Then built DS-01, the
+  drum synth whose parameters are descriptor-addressed on day one rather than
+  as a table bolted onto a mode-union: one universal percussion voice, no drum
+  type selector, and a latched-versus-continuous rule published as a contract
+  instead of inherited from wherever the code happened to read a struct.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

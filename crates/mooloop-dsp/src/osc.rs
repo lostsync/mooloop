@@ -122,6 +122,51 @@ impl Osc {
         }
     }
 
+    /// Advance one sample reading a crossfade of two waves at the same phase.
+    ///
+    /// A morph is not two oscillators mixed: they would have to be kept in
+    /// lockstep by the caller, and each would pay its own phase accumulator
+    /// and PolyBLEP. One phase, read twice, is both cheaper and exactly
+    /// continuous — at `mix = 0` and `mix = 1` this is `next_step` on the
+    /// respective wave, sample for sample.
+    ///
+    /// DS-01's tone morph is what wants this: a selector would be a
+    /// structural discrete and so ineligible for modulation, and sweeping
+    /// timbre across a hit is a percussion gesture.
+    pub fn next_step_morph(
+        &mut self,
+        freq_hz: f32,
+        waves: (OscWave, OscWave),
+        mix: f32,
+        pulse_width: f32,
+        phase_offset: f32,
+        sample_rate: u32,
+    ) -> OscStep {
+        let dt = increment(freq_hz, sample_rate);
+        let phase = self.phase;
+        let advanced = phase + dt;
+        self.last_phase = phase;
+        self.phase = advanced.fract();
+        let boundary_dt = if core::mem::take(&mut self.after_sync) {
+            0.0
+        } else {
+            dt
+        };
+        let read = (phase + phase_offset).rem_euclid(1.0);
+        let mix = mix.clamp(0.0, 1.0);
+        let a = wave_value(read, waves.0, pulse_width, dt, boundary_dt);
+        let value = if mix <= 0.0 {
+            a
+        } else {
+            let b = wave_value(read, waves.1, pulse_width, dt, boundary_dt);
+            a + (b - a) * mix
+        };
+        OscStep {
+            value,
+            wrap: (advanced >= 1.0).then(|| ((1.0 - phase) / dt).clamp(0.0, 1.0)),
+        }
+    }
+
     /// Hard-sync this oscillator to a master that wrapped `frac` of the way
     /// through the sample just rendered, and return the step height the reset
     /// introduced.

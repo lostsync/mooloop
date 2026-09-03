@@ -22,7 +22,8 @@ use std::fmt;
 
 use mooloop_core::{
     sanitize_route, strip_descriptor, BusSetup, ChannelSetup, ChannelSource, DeviceKind,
-    DrumSynthParams, EffectKind, EffectSlotState, EffectTarget, MlM1Params, MlP8Params, ModRack,
+    ds01, Ds01Params, DrumSynthParams, EffectKind, EffectSlotState, EffectTarget, MlM1Params,
+    MlP8Params, ModRack,
     ModulatorKind, MonoSynthParams, NoteId, ParamAddr, ParamOwner, PolySynthParams, Project,
     ProjectChannel,
     SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL,
@@ -1396,6 +1397,7 @@ fn check_source(doctor: &mut Doctor, who: &str, source: &mut ChannelSource) {
         ChannelSource::PolySynth(state) => check_poly_synth(doctor, who, &mut state.params),
         ChannelSource::MlM1(state) => check_mlm1(doctor, who, &mut state.params),
         ChannelSource::MlP8(state) => check_mlp8(doctor, who, &mut state.params),
+        ChannelSource::Ds01(state) => check_ds01(doctor, who, &mut state.params),
     }
 }
 
@@ -1820,6 +1822,33 @@ fn check_mlp8(doctor: &mut Doctor, who: &str, params: &mut MlP8Params) {
             min,
             max,
         );
+    }
+}
+
+/// DS-01 is the first source whose every parameter carries a descriptor, so
+/// its repair reads that table instead of restating the ranges beside it.
+///
+/// The older devices list their fields here by hand because their structs
+/// have fields no id names — which is the same gap that made them
+/// unmodulatable. A parameter DS-01 gains in a later step is range-checked
+/// the day it is added, with nothing to remember.
+fn check_ds01(doctor: &mut Doctor, who: &str, params: &mut Ds01Params) {
+    for descriptor in ds01::DESCRIPTORS.iter() {
+        let Some(stored) = ds01::get(params, descriptor.id) else {
+            continue;
+        };
+        let mut value = stored;
+        doctor.fit(
+            "channel.ds01.range",
+            who,
+            &format!("the {} (DS-01)", descriptor.name.to_lowercase()),
+            &mut value,
+            descriptor.min,
+            descriptor.max,
+        );
+        if value != stored {
+            ds01::set(params, descriptor.id, descriptor.clamp_natural(value));
+        }
     }
 }
 

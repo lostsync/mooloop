@@ -550,7 +550,7 @@ export component MainWindow inherits Window {
     in-out property <[float]> browser-info-waveform;
     in-out property <string> browser-info-name;
     in-out property <string> browser-info-stats;
-    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly, 4=ML-M1, 5=ML-P8
+    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly, 4=ML-M1, 5=ML-P8, 6=DS-01
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
     in-out property <int> poly-device-page;
@@ -2443,7 +2443,7 @@ export component MainWindow inherits Window {
                                             vertical-alignment: center;
                                         }
                                         if !root.editing-bus : SelectorBank {
-                                            options: ["Sampler", "Drum", "Mono", "Poly", "ML-M1", "ML-P8"];
+                                            options: ["Sampler", "Drum", "Mono", "Poly", "ML-M1", "ML-P8", "DS-01"];
                                             selected-index <=> root.source-kind;
                                             segment-width: 48px;
                                             tooltip: "Source device";
@@ -2901,13 +2901,47 @@ export component MainWindow inherits Window {
                                                     modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
                                                 }
 
+                                                // DS-01's face is step 08 of
+                                                // `docs/plans/drum-synth-v2/`, and it has three
+                                                // rendered concepts waiting in that step's
+                                                // `mockups/`. The device is fully playable,
+                                                // automatable and modulatable before it: every
+                                                // parameter is descriptor-addressed, so the
+                                                // modulation shelf and the automation lanes reach
+                                                // it without a knob existing. Saying so is more
+                                                // use than an improvised panel step 08 deletes.
+                                                if !root.editing-bus && root.source-kind == 6 : Rectangle {
+                                                    x: DeviceRackMetrics.rail-width;
+                                                    y: DeviceRackMetrics.header-height;
+                                                    width: parent.content-width;
+                                                    height: parent.height - DeviceRackMetrics.header-height;
+                                                    VerticalLayout {
+                                                        alignment: center;
+                                                        spacing: 6px;
+                                                        Text {
+                                                            text: "DS-01";
+                                                            color: Theme.text-faint;
+                                                            font-size: 13px;
+                                                            horizontal-alignment: center;
+                                                        }
+                                                        Text {
+                                                            text: "Playable now. Reach it from the modulation shelf and automation lanes; its face lands with step 08.";
+                                                            color: Theme.text-faint;
+                                                            font-size: 9px;
+                                                            horizontal-alignment: center;
+                                                            wrap: word-wrap;
+                                                        }
+                                                    }
+                                                }
+
                                                 if !root.editing-bus : DeviceHeader {
                                                     x: DeviceRackMetrics.rail-width; y: 0px; width: parent.content-width;
                                                     name: root.source-kind == 0 ? "Sampler"
                                                         : root.source-kind == 1 ? "Drum Synth"
                                                         : root.source-kind == 2 ? "Mono Synth"
                                                         : root.source-kind == 3 ? "Poly Synth"
-                                                        : root.source-kind == 4 ? "ML-M1" : "ML-P8";
+                                                        : root.source-kind == 4 ? "ML-M1"
+                                                        : root.source-kind == 5 ? "ML-P8" : "DS-01";
                                                     kind: "SOURCE / 3U";
                                                     device-color: Theme.accent;
                                                 }

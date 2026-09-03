@@ -97,6 +97,15 @@ impl EventList {
     /// note-offs, parameter changes, then note-ons. This lets a retrigger end
     /// the old voice before starting the new one without allocating a sort
     /// buffer on the realtime thread.
+    ///
+    /// The parameter-before-note-on half of that order is a published
+    /// contract, not an implementation detail. A generator that *latches*
+    /// parameters at note-on — DS-01 does, because a drum hit's shape is
+    /// decided when it begins — depends on it: a route aimed at a hit must
+    /// reach it, and under the opposite order it would land on the next one
+    /// instead. That failure is silent and no synth test would catch it,
+    /// which is why `parameter_changes_precede_note_ons_at_one_offset`
+    /// pins it here rather than leaving it to whichever device noticed.
     pub fn push_ordered(&mut self, event: TimedEvent) -> bool {
         if self.len == MAX_EVENTS {
             return false;
@@ -194,5 +203,36 @@ mod tests {
             list.iter().next().unwrap().event,
             Event::NoteOff { id: 1, .. }
         ));
+    }
+
+    /// The contract `push_ordered` documents, pinned: a parameter event at
+    /// offset `n` is visible to a note-on at offset `n`, whichever order the
+    /// two were pushed in.
+    #[test]
+    fn parameter_changes_precede_note_ons_at_one_offset() {
+        for note_first in [true, false] {
+            let mut list = EventList::empty();
+            let note = TimedEvent {
+                offset: 64,
+                event: Event::NoteOn {
+                    id: 1,
+                    note: 60,
+                    velocity: 100,
+                },
+            };
+            let param = TimedEvent {
+                offset: 64,
+                event: Event::ParamValue { id: 7, value: 0.5 },
+            };
+            if note_first {
+                assert!(list.push_ordered(note));
+                assert!(list.push_ordered(param));
+            } else {
+                assert!(list.push_ordered(param));
+                assert!(list.push_ordered(note));
+            }
+            let kinds: Vec<u8> = list.iter().map(event_sort_key).map(|key| key.1).collect();
+            assert_eq!(kinds, vec![1, 2], "note-on preceded the parameter it needs");
+        }
     }
 }

@@ -31,6 +31,7 @@ pub mod commit;
 pub mod bus;
 pub mod delayline;
 pub mod drumsynth;
+pub mod ds01;
 pub mod dynamics;
 pub mod effects;
 pub mod env;
@@ -63,6 +64,7 @@ pub use modulator::{ModulatorRack, NoteGateEvents, CONTROL_RATE_FRAMES};
 pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;
+pub use ds01::Ds01;
 pub use effects::{
     build_effect, build_effect_at_tempo, BitcrushEffect, CompressorEffect, DelayEffect,
     DriveEffect, FilterEffect, GateEffect, LimiterEffect, ModulationEffect, ReverbEffect,

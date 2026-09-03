@@ -564,6 +564,7 @@ fn kind_slug(kind: DeviceKind) -> &'static str {
         // under presets/generators/mlm1/.
         DeviceKind::MlM1 => "ml1",
         DeviceKind::MlP8 => "mlp8",
+        DeviceKind::Ds01 => "ds01",
     }
 }
 

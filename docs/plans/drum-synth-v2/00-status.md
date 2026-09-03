@@ -1,8 +1,55 @@
 # DS-01 plan status
 
-**Nothing is built.** This directory is the approved design for a second drum
-instrument, written before any code. Read `01-what-ds01-is.md`, then work `02`
-through `09` in order.
+**Step 02 is in.** The device exists and plays: a new `Ds01` generator kind
+beside the v1 drum synth, the tone layer with its wave morph, partial bank and
+FM, the noise layer with four colours, a rate reducer and a morphing
+state-variable filter, the amplitude and pitch envelopes, and the voice pool
+with choke and a Mono retrigger mode. Every one of its parameters is
+descriptor-addressed from the first commit, which is the reason the instrument
+exists. Read `01-what-ds01-is.md`, then work `03` through `09` in order.
+
+Four things the doing turned up that the plan could not have known:
+
+- **The event-ordering rule already held, and held on purpose.**
+  `EventList::push_ordered` has sorted note-offs, then parameter changes, then
+  note-ons at equal offsets since retriggering needed it. What was missing was
+  the *reason a latching generator depends on it*, which is now written there
+  beside a test, because a later reordering would break drum modulation
+  silently and no synth test would notice.
+- **`soft_ceiling`'s numbers are ML-P8's, not a universal bound.** Its knee and
+  asymptote sit at 1.5 and 2.5, calibrated against a voice nominal near 0.7
+  with a channel fader still downstream. DS-01 needs a bound that holds *at the
+  device output* for every control combination, so it states its own in output
+  units and keeps `soft_ceiling` for its actual job, which is catching a
+  resonant state-variable filter before any level scales it.
+- **Step 02's `SetChannelDs01Params` bridge command was not added, deliberately.**
+  Since the plan was written, `SetChannelGeneratorParam` landed for exactly
+  this: every entry in the engine's fixed command ring is as wide as its widest
+  variant, so shipping a whole parameter struct to move one knob makes every
+  unrelated command pay for the largest device. `Ds01Params` will be the
+  largest by step 07. Per-knob edits go through the narrow command and
+  whole-struct installs through `load_source` on the control thread, which is
+  the arrangement ML-P8 already uses.
+- **Three parameters are in neither of `01`'s two tables.** Partials, Noise
+  Colour and Retrigger are all structural discretes, which is how they escaped
+  a pair of tables about what a *sounding* hit follows. `01` says that is a bug
+  in `01` rather than a free choice at the call site, so it is recorded here:
+  Partials is latched, because a hit does not grow an oscillator halfway
+  through; Colour and Retrigger are read where they are used, which step 02's
+  own "fine between hits, undefined mid-hit" makes conformant either way.
+- **Tune is stepped, and therefore not a modulation destination.** The plan
+  marks it "step 1" and does not mark it structural, which reads as a
+  contradiction under the rule that eligibility comes from the descriptor
+  curve. It is not one: Tune is *which note this drum is*, latched with the
+  note itself, and the continuous pitch controls a route wants are Tone Pitch
+  and Pitch Depth. The curve gives the right answer for the right reason.
+
+The device face is **not** part of step 02. DS-01 is selectable, playable,
+automatable and modulatable without one — every parameter is
+descriptor-addressed, so the modulation shelf and the automation lanes reach it
+whether or not a knob exists — and the rack shows a placeholder saying so.
+`08-the-face.md` has three rendered concepts waiting; an improvised panel
+before it would be work that step deletes.
 
 The device is called **DS-01**. It deliberately does not join the `ML-*`
 family: ML-M1 and ML-P8 are keyboard instruments that share a voice lineage
@@ -77,7 +124,7 @@ instrument. Hence DS-01.
 
 | Step | What it lands |
 | --- | --- |
-| `02-the-voice-and-the-descriptor-table.md` | The kind, the params, the ids, the tone and noise sources, and descriptor addressing on day one |
+| `02-the-voice-and-the-descriptor-table.md` | **In.** The kind, the params, the ids, the tone and noise sources, and descriptor addressing on day one |
 | `03-the-envelopes.md` | Four AHD envelopes with curve and optional gate |
 | `04-the-body-resonator.md` | The tuned modal layer — toms, rims, bells, clangs |
 | `05-the-burst.md` | Multi-impulse triggering: clap, flam, roll, buzz |

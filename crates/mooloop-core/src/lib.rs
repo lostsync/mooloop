@@ -7,6 +7,7 @@ pub mod automation;
 pub mod bridge;
 pub mod buffer;
 pub mod channel;
+pub mod ds01;
 pub mod effect;
 pub mod gain;
 pub mod generator;
@@ -31,6 +32,9 @@ pub use automation::{
     MAX_AUTOMATION_POINTS_PER_LANE,
 };
 pub use bridge::{EngineCommand, EngineEvent};
+pub use ds01::{
+    Ds01NoiseColor, Ds01Params, Ds01Retrigger, DS01_MAX_PARTIALS, DS01_VOICES,
+};
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
 pub use mlm1::{EnvTrigger, FilterModel, GlideMode, MlM1Params, NotePriority};
@@ -125,7 +129,7 @@ pub use playlist::{
     STEPS_PER_BAR, TICKS_PER_BAR,
 };
 pub use project::{
-    ChannelPreset, ChannelSetup, ChannelSource, DrumSynthState, Kit, MonoSynthState,
+    ChannelPreset, ChannelSetup, ChannelSource, Ds01State, DrumSynthState, Kit, MonoSynthState,
     MlM1State, MlP8State, PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
     DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };

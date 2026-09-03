@@ -13,7 +13,8 @@
 //! adding an oscillator parameter later does not disturb the others.
 
 use crate::{
-    DeviceKind, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode, MlP8Params,
+    DeviceKind, Ds01Params, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode,
+    MlP8Params,
     MonoSynthParams, MlM1Params,
     NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PlayMode, PolySynthParams,
     RetriggerMode,
@@ -552,10 +553,14 @@ impl DeviceKind {
     /// This generator's parameter table, or empty for a kind that is not
     /// descriptor-addressed yet.
     ///
-    /// The drum synth is the one still empty. Its twenty-five fields are three
-    /// independent voices' worth of detail, and giving it a table is mechanical
-    /// work rather than a design question — see
-    /// `docs/plans/buffer-implementation/02-control-and-modulation.md`.
+    /// The v1 drum synth is the one still empty, and it stays that way. An
+    /// earlier note here called giving it a table mechanical work rather than
+    /// a design question; that was wrong, and `docs/plans/drum-synth-v2/` is
+    /// the correction. `DrumSynthParams` is a mode-union, so a flat table over
+    /// it would hand out ids whose meaning changes with the Mode switch —
+    /// which is a route that addresses a live parameter and then silently
+    /// stops doing anything. [`Self::Ds01`] is that work done as a device
+    /// whose parameters do not depend on a mode.
     pub fn descriptors(self) -> &'static [ParamDescriptor] {
         match self {
             Self::Sampler => &SAMPLER_DESCRIPTORS,
@@ -567,6 +572,9 @@ impl DeviceKind {
             // keeping it here would put two unrelated numbering schemes in one
             // file and invite a collision that neither one can see.
             Self::MlP8 => &crate::mlp8::DESCRIPTORS,
+            // Same reasoning as ML-P8: DS-01's ids are its own namespace, so
+            // its table lives beside the struct it describes.
+            Self::Ds01 => &crate::ds01::DESCRIPTORS,
             Self::DrumSynth => &[],
         }
     }
@@ -649,7 +657,9 @@ pub enum GeneratorParams {
     PolySynth(PolySynthParams),
     MlM1(MlM1Params),
     MlP8(MlP8Params),
-    /// Not addressable yet; every `get`/`set` misses.
+    Ds01(Ds01Params),
+    /// Not addressable, and deliberately so: see [`DeviceKind::descriptors`].
+    /// Every `get`/`set` misses.
     DrumSynth,
 }
 
@@ -661,6 +671,7 @@ impl GeneratorParams {
             Self::PolySynth(_) => DeviceKind::PolySynth,
             Self::MlM1(_) => DeviceKind::MlM1,
             Self::MlP8(_) => DeviceKind::MlP8,
+            Self::Ds01(_) => DeviceKind::Ds01,
             Self::DrumSynth => DeviceKind::DrumSynth,
         }
     }
@@ -784,6 +795,7 @@ impl GeneratorParams {
                 })
             }
             Self::MlP8(p) => crate::mlp8::get(p, id),
+            Self::Ds01(p) => crate::ds01::get(p, id),
             Self::DrumSynth => None,
         }
     }
@@ -943,6 +955,11 @@ impl GeneratorParams {
                     return None;
                 }
             }
+            Self::Ds01(p) => {
+                if !crate::ds01::set(p, id, value) {
+                    return None;
+                }
+            }
             Self::DrumSynth => return None,
         }
         Some(value)
@@ -954,13 +971,14 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn all() -> [GeneratorParams; 5] {
+    fn all() -> [GeneratorParams; 6] {
         [
             GeneratorParams::Sampler(SamplerParams::default()),
             GeneratorParams::MonoSynth(MonoSynthParams::default()),
             GeneratorParams::PolySynth(PolySynthParams::default()),
             GeneratorParams::MlM1(MlM1Params::default()),
             GeneratorParams::MlP8(crate::MlP8Params::default()),
+            GeneratorParams::Ds01(Ds01Params::default()),
         ]
     }
 
@@ -1015,6 +1033,7 @@ mod tests {
             GeneratorParams::PolySynth(PolySynthParams::default()),
             GeneratorParams::MlM1(MlM1Params::default()),
             GeneratorParams::MlP8(crate::MlP8Params::default()),
+            GeneratorParams::Ds01(Ds01Params::default()),
         ] {
             let kind = params.kind();
             for descriptor in kind.descriptors() {

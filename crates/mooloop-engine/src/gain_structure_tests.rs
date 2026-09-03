@@ -83,6 +83,7 @@ fn one_note_channel(kind: DeviceKind) -> ProjectChannel {
         DeviceKind::PolySynth => ProjectChannel::poly_synth(0, 1),
         DeviceKind::MlM1 => ProjectChannel::mlm1(0, 1),
         DeviceKind::MlP8 => ProjectChannel::mlp8(0, 1),
+        DeviceKind::Ds01 => ProjectChannel::ds01(0, 1),
     };
     if let Some(state) = channel.setup.sampler_state_mut() {
         state.sample = SampleReference::Builtin {
@@ -149,6 +150,7 @@ fn source_peak_at_unity_hits_the_reference_level() {
         DeviceKind::PolySynth,
         DeviceKind::MlM1,
         DeviceKind::MlP8,
+        DeviceKind::Ds01,
     ] {
         let peak = peak_dbfs(&single_channel_project(one_note_channel(kind)), 2.0);
         println!("source peak at unity, {kind:?}: {peak:.1} dBFS");
