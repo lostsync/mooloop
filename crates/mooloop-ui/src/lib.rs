@@ -73,7 +73,7 @@ use mooloop_session::document::{
     DocumentResult, LoadTarget, ResolvedDocument,
 };
 use mooloop_session::history::Entry as HistoryEntry;
-use mooloop_session::notes::ScaleBase;
+use mooloop_session::roll::NoteEdit;
 use mooloop_session::project::{
     fresh_starter_seed, normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
 };
@@ -95,7 +95,7 @@ use slint::{
     VecModel,
 };
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -659,28 +659,6 @@ fn length_text(ticks: u32) -> String {
 
 fn notes_have_focus(window: &MainWindow) -> bool {
     window.get_editor_page() == 1 && window.get_has_note_selection()
-}
-
-fn selection_including(
-    state: &UiState,
-    channel: usize,
-    pattern: usize,
-    anchor: NoteId,
-) -> HashSet<NoteId> {
-    let live: HashSet<NoteId> = state.session.channels[channel].notes[pattern]
-        .iter()
-        .map(|note| note.id)
-        .collect();
-    if !state.session.selected_note_ids.contains(&anchor) {
-        return HashSet::from([anchor]);
-    }
-    let mut acting: HashSet<NoteId> = state
-        .session.selected_note_ids
-        .intersection(&live)
-        .copied()
-        .collect();
-    acting.insert(anchor);
-    acting
 }
 
 fn record_project_history(
@@ -2379,6 +2357,20 @@ impl UiState {
     /// after an edit (like a multi-note delete) that can touch notes spread
     /// across many steps, where refreshing one step at a time would miss
     /// the rest.
+    /// Draws a roll edit: the rack cells whose summary changed, then the
+    /// roll and its lanes.
+    fn apply_note_edit(&self, edit: &NoteEdit, window: &MainWindow) {
+        match &edit.cells {
+            Some(cells) => {
+                for cell in cells {
+                    self.refresh_rack_cell(self.session.selected, *cell);
+                }
+            }
+            None => self.refresh_rack_row(self.session.selected),
+        }
+        self.refresh_note_editor(window);
+    }
+
     fn refresh_rack_row(&self, channel: usize) {
         let notes = &self.session.channels[channel].notes[self.session.current_pattern];
         let cells: Vec<StepCell> = (0..self.session.pattern_lengths[self.session.current_pattern])
@@ -5021,58 +5013,15 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_notes_nudged(move |tick_delta, note_delta| {
-                let Some(window) = weak.upgrade() else { return };
+                let Some(window) = weak.upgrade() else { return; };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let moving: HashSet<NoteId> = st.session.selected_note_ids.clone();
-                let (mut min_tick, mut max_tick) = (i64::MAX, i64::MIN);
-                let (mut min_note, mut max_note) = (i32::MAX, i32::MIN);
-                for note in st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .filter(|note| moving.contains(&note.id))
-                {
-                    min_tick = min_tick.min(note.start_tick as i64);
-                    max_tick = max_tick.max(note.start_tick as i64);
-                    min_note = min_note.min(note.note as i32);
-                    max_note = max_note.max(note.note as i32);
-                }
-                if min_tick == i64::MAX {
+                let Some(edit) = st.session.nudge_selection(tick_delta, note_delta) else {
                     return;
-                }
-                let last_start = length_ticks.saturating_sub(1) as i64;
-                let tick_delta =
-                    (tick_delta as i64).clamp(-min_tick, (last_start - max_tick).max(-min_tick));
-                let note_delta = note_delta.clamp(-min_note, (127 - max_note).max(-min_note));
-                if tick_delta == 0 && note_delta == 0 {
-                    return;
-                }
-
-                let mut edited = Vec::new();
-                let mut touched_steps = Vec::new();
-                for note in st.session.channels[channel].notes[pattern]
-                    .iter_mut()
-                    .filter(|note| moving.contains(&note.id))
-                {
-                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
-                    note.start_tick = (note.start_tick as i64 + tick_delta).max(0) as u32;
-                    note.note = (note.note as i32 + note_delta).clamp(0, 127) as u8;
-                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
-                    edited.push(*note);
-                }
-                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                for step in touched_steps {
-                    st.refresh_rack_cell(channel, step as usize);
-                }
-                st.refresh_note_editor(&window);
-                for note in edited {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note,
-                    });
+                };
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Notes nudged");
@@ -5088,44 +5037,24 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let mut copied: Vec<NoteEvent> = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .copied()
-                    .filter(|note| st.session.selected_note_ids.contains(&note.id))
-                    .collect();
-                if copied.is_empty() {
+                let phrase = st.session.selection_phrase();
+                if phrase.is_empty() {
                     return;
                 }
-                // Stored relative to the earliest note, so a paste is a
-                // phrase that can land anywhere rather than a set of
-                // absolute positions that only fit where they came from.
-                let origin = copied.iter().map(|note| note.start_tick).min().unwrap_or(0);
-                for note in &mut copied {
-                    note.start_tick -= origin;
-                }
-                copied.sort_by_key(|note| (note.start_tick, note.note));
-                commands.borrow_mut().note_clipboard = copied.clone();
+                let copied = phrase.len();
+                commands.borrow_mut().note_clipboard = phrase;
                 if !cut {
-                    window.set_status_message(
-                        format!("Copied {} note(s)", copied.len()).into(),
-                    );
+                    window.set_status_message(format!("Copied {copied} note(s)").into());
                     return;
                 }
-                let ids: Vec<NoteId> = st.session.selected_note_ids.iter().copied().collect();
-                st.session.channels[channel].notes[pattern].retain(|note| !ids.contains(&note.id));
-                st.session.prune_note_selection(&ids);
-                st.refresh_rack_row(channel);
-                st.refresh_note_editor(&window);
-                for id in &ids {
-                    let _ = tx.send(EngineCommand::RemoveNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        id: *id,
-                    });
+                let Some(edit) = st.session.delete_selection() else {
+                    return;
+                };
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
-                window.set_status_message(format!("Cut {} note(s)", ids.len()).into());
+                window.set_status_message(format!("Cut {copied} note(s)").into());
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Notes cut");
             });
@@ -5144,52 +5073,15 @@ impl AppUi {
                 }
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                // Land the phrase after whatever is selected, or at the top
-                // of the pattern when nothing is -- pasting on top of the
-                // originals looks like nothing happened.
-                let origin = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .filter(|note| st.session.selected_note_ids.contains(&note.id))
-                    .map(|note| note.end_tick())
-                    .max()
-                    .unwrap_or(0);
-                let mut pasted = Vec::with_capacity(clipboard.len());
-                for note in clipboard {
-                    let start = origin.saturating_add(note.start_tick);
-                    if start >= length_ticks {
-                        continue;
-                    }
-                    let id = st.session.channels[channel].next_note_id;
-                    st.session.channels[channel].next_note_id = id.wrapping_add(1).max(1);
-                    let mut copy = NoteEvent { id, ..note };
-                    copy.start_tick = start;
-                    copy.duration_ticks = copy
-                        .duration_ticks
-                        .min(length_ticks.saturating_sub(start).max(1));
-                    st.session.channels[channel].notes[pattern].push(copy);
-                    pasted.push(copy);
-                }
-                if pasted.is_empty() {
+                let Some(edit) = st.session.paste_phrase(&clipboard) else {
                     window.set_status_message("Nothing fits at the paste position".into());
                     return;
+                };
+                st.apply_note_edit(&edit, &window);
+                for command in &edit.commands {
+                    let _ = tx.send(*command);
                 }
-                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                // Select what was pasted, so it can be moved straight away.
-                st.session.selected_note_ids = pasted.iter().map(|note| note.id).collect();
-                st.session.selected_note_id = (pasted.len() == 1).then(|| pasted[0].id);
-                st.refresh_rack_row(channel);
-                st.refresh_note_editor(&window);
-                for note in &pasted {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note: *note,
-                    });
-                }
-                window.set_status_message(format!("Pasted {} note(s)", pasted.len()).into());
+                window.set_status_message(format!("Pasted {} note(s)", edit.notes).into());
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Notes pasted");
             });
@@ -5223,36 +5115,16 @@ impl AppUi {
                 };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let start_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
-                let mut note = st.session.channels[channel].create_note(
-                    pattern,
-                    start_tick,
-                    duration_ticks.max(1) as u32,
-                    midi_note.clamp(0, 127) as u8,
-                );
-                note.duration_ticks = note
-                    .duration_ticks
-                    .min(length_ticks.saturating_sub(start_tick).max(1));
-                if let Some(stored) = st.session.channels[channel].notes[pattern]
-                    .iter_mut()
-                    .find(|stored| stored.id == note.id)
-                {
-                    *stored = note;
+                let (id, edit) = st
+                    .session
+                    .create_roll_note(start_tick, midi_note, duration_ticks);
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
-                st.session.select_note(Some(note.id));
-                st.refresh_rack_cell(channel, (start_tick / TICKS_PER_STEP) as usize);
-                st.refresh_note_editor(&window);
-                let _ = tx.send(EngineCommand::UpsertNote {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    note,
-                });
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Note created");
-                note.id as i32
+                id as i32
             });
         }
         {
@@ -5276,24 +5148,11 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_piano_note_selected(move |id, mode| {
                 let mut st = st.borrow_mut();
-                let id = id as NoteId;
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                if st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .any(|note| note.id == id)
-                {
-                    // The grid resolves which of the gesture roles the held
-                    // modifiers satisfied; this only applies the result.
-                    match mode {
-                        1 => st.session.toggle_note_selection(id),
-                        2 => st.session.remove_note_from_selection(id),
-                        // A plain click always collapses to just this note.
-                        _ => st.session.select_note(Some(id)),
-                    }
-                    if let Some(window) = weak.upgrade() {
-                        st.refresh_note_editor(&window);
-                    }
+                if !st.session.select_roll_note(id as NoteId, mode) {
+                    return;
+                }
+                if let Some(window) = weak.upgrade() {
+                    st.refresh_note_editor(&window);
                 }
             });
         }
@@ -5304,88 +5163,15 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_moved(move |id, start_tick, midi_note| {
-                let Some(window) = weak.upgrade() else { return };
+                let Some(window) = weak.upgrade() else { return; };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let Some(anchor) = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .copied()
-                    .find(|note| note.id == id as NoteId)
-                else {
+                let Some(edit) = st.session.move_selection(id as NoteId, start_tick, midi_note) else {
                     return;
                 };
-                // The gesture reports where the grabbed note should land; every
-                // other selected note moves by the same delta, so a chord keeps
-                // its shape. A single selection is just the one-note case of
-                // this, which is why there is no separate single-note path.
-                let moving = selection_including(&st, channel, pattern, anchor.id);
-                let wanted_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
-                let wanted_note = midi_note.clamp(0, 127) as u8;
-                let tick_delta = wanted_tick as i64 - anchor.start_tick as i64;
-                let note_delta = wanted_note as i32 - anchor.note as i32;
-                // Clamp the delta by the group, not per note: letting notes
-                // clip individually would silently collapse a chord onto one
-                // pitch at the edge of the range.
-                //
-                // Bound by note *starts*, not by their tails. A note is
-                // allowed to overhang the pattern's logical end -- that is
-                // how a shortened pattern keeps its notes -- so measuring the
-                // tail would refuse to move a selection right the moment any
-                // member overhung, which is not a rule the single-note drag
-                // ever had.
-                let (mut min_tick, mut max_tick) = (i64::MAX, i64::MIN);
-                let (mut min_note, mut max_note) = (i32::MAX, i32::MIN);
-                for note in st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .filter(|note| moving.contains(&note.id))
-                {
-                    min_tick = min_tick.min(note.start_tick as i64);
-                    max_tick = max_tick.max(note.start_tick as i64);
-                    min_note = min_note.min(note.note as i32);
-                    max_note = max_note.max(note.note as i32);
-                }
-                if min_tick == i64::MAX {
-                    return;
-                }
-                let last_start = length_ticks.saturating_sub(1) as i64;
-                let tick_delta =
-                    tick_delta.clamp(-min_tick, (last_start - max_tick).max(-min_tick));
-                let note_delta =
-                    note_delta.clamp(-min_note, (127 - max_note).max(-min_note));
-
-                let mut edited = Vec::with_capacity(moving.len());
-                let mut touched_steps = Vec::with_capacity(moving.len() * 2);
-                for note in st.session.channels[channel].notes[pattern]
-                    .iter_mut()
-                    .filter(|note| moving.contains(&note.id))
-                {
-                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
-                    note.start_tick = (note.start_tick as i64 + tick_delta).max(0) as u32;
-                    note.start_tick = note.start_tick.min(length_ticks.saturating_sub(1));
-                    note.duration_ticks = note
-                        .duration_ticks
-                        .min(length_ticks.saturating_sub(note.start_tick).max(1));
-                    note.note = (note.note as i32 + note_delta).clamp(0, 127) as u8;
-                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
-                    edited.push(*note);
-                }
-                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                if edited.len() == 1 {
-                    st.session.select_note(Some(edited[0].id));
-                }
-                for step in touched_steps {
-                    st.refresh_rack_cell(channel, step as usize);
-                }
-                st.refresh_note_editor(&window);
-                for note in edited {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note,
-                    });
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Note moved");
@@ -5403,53 +5189,19 @@ impl AppUi {
                 };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let anchor_id = anchor_id.max(0) as NoteId;
-                let originals: Vec<NoteEvent> = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .copied()
-                    .filter(|note| note.id == anchor_id || st.session.selected_note_ids.contains(&note.id))
-                    .collect();
-                if originals.is_empty() {
+                let Some((anchor_copy, edit)) = st
+                    .session
+                    .duplicate_selection(anchor_id.max(0) as NoteId)
+                else {
                     return -1;
-                }
-                // The copies land exactly on the originals and the selection
-                // moves to them, so the drag that triggered this continues on
-                // the duplicate with no visible jump.
-                let mut copies = Vec::with_capacity(originals.len());
-                let mut anchor_copy = -1;
-                for original in originals {
-                    let id = st.session.channels[channel].next_note_id;
-                    st.session.channels[channel].next_note_id = id.wrapping_add(1).max(1);
-                    let copy = NoteEvent { id, ..original };
-                    if original.id == anchor_id {
-                        anchor_copy = id as i32;
-                    }
-                    st.session.channels[channel].notes[pattern].push(copy);
-                    copies.push(copy);
-                }
-                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                st.session.selected_note_ids = copies.iter().map(|note| note.id).collect();
-                st.session.selected_note_id = (copies.len() == 1).then(|| copies[0].id);
-                st.refresh_rack_row(channel);
-                st.refresh_note_editor(&window);
-                for note in copies {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note,
-                    });
+                };
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
-                record_project_history(
-                    &commands,
-                    before,
-                    &history_state,
-                    &window,
-                    "Notes duplicated",
-                );
-                anchor_copy
+                record_project_history(&commands, before, &history_state, &window, "Notes duplicated");
+                anchor_copy as i32
             });
         }
         {
@@ -5459,67 +5211,15 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_resized(move |id, duration| {
-                let Some(window) = weak.upgrade() else { return };
+                let Some(window) = weak.upgrade() else { return; };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let Some(anchor) = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .copied()
-                    .find(|note| note.id == id as NoteId)
-                else {
+                let Some(edit) = st.session.resize_selection(id as NoteId, duration) else {
                     return;
                 };
-                // The gesture reports the length the grabbed note should end
-                // up with; every other selected note changes by the same
-                // amount, so a chord keeps its rhythm. This mirrors
-                // `on_piano_note_moved`, which is why a single selection has
-                // no separate path here either.
-                let resizing = selection_including(&st, channel, pattern, anchor.id);
-                let delta = duration.max(1) as i64 - anchor.duration_ticks as i64;
-                // Clamp by the group, not per note: letting members clip
-                // individually would quietly flatten a chord's rhythm at the
-                // limit instead of stopping the whole gesture.
-                let mut floor = i64::MIN;
-                let mut ceiling = i64::MAX;
-                for note in st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .filter(|note| resizing.contains(&note.id))
-                {
-                    floor = floor.max(1 - note.duration_ticks as i64);
-                    ceiling = ceiling.min(
-                        length_ticks.saturating_sub(note.start_tick).max(1) as i64
-                            - note.duration_ticks as i64,
-                    );
-                }
-                if floor == i64::MIN {
-                    return;
-                }
-                let delta = delta.clamp(floor, ceiling.max(floor));
-
-                let mut edited = Vec::with_capacity(resizing.len());
-                for note in st.session.channels[channel].notes[pattern]
-                    .iter_mut()
-                    .filter(|note| resizing.contains(&note.id))
-                {
-                    note.duration_ticks = (note.duration_ticks as i64 + delta).max(1) as u32;
-                    edited.push(*note);
-                }
-                if edited.len() == 1 {
-                    st.session.select_note(Some(edited[0].id));
-                }
-                for note in &edited {
-                    st.refresh_rack_cell(channel, (note.start_tick / TICKS_PER_STEP) as usize);
-                }
-                st.refresh_note_editor(&window);
-                for note in edited {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note,
-                    });
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Note resized");
@@ -5532,63 +5232,15 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_start_resized(move |id, start_tick| {
-                let Some(window) = weak.upgrade() else { return };
+                let Some(window) = weak.upgrade() else { return; };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let Some(anchor) = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .copied()
-                    .find(|note| note.id == id as NoteId)
-                else {
+                let Some(edit) = st.session.resize_selection_start(id as NoteId, start_tick) else {
                     return;
                 };
-                let resizing = selection_including(&st, channel, pattern, anchor.id);
-                let delta = start_tick.max(0) as i64 - anchor.start_tick as i64;
-                // Each note's end tick is what stays put, so the start may
-                // travel until it would reach it. Group-clamped for the same
-                // reason the other two gestures are.
-                let mut floor = i64::MIN;
-                let mut ceiling = i64::MAX;
-                for note in st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .filter(|note| resizing.contains(&note.id))
-                {
-                    floor = floor.max(-(note.start_tick as i64));
-                    ceiling = ceiling.min(note.duration_ticks as i64 - 1);
-                }
-                if floor == i64::MIN {
-                    return;
-                }
-                let delta = delta.clamp(floor, ceiling.max(floor));
-
-                let mut edited = Vec::with_capacity(resizing.len());
-                let mut touched_steps = Vec::with_capacity(resizing.len() * 2);
-                for note in st.session.channels[channel].notes[pattern]
-                    .iter_mut()
-                    .filter(|note| resizing.contains(&note.id))
-                {
-                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
-                    note.start_tick = (note.start_tick as i64 + delta).max(0) as u32;
-                    note.duration_ticks = (note.duration_ticks as i64 - delta).max(1) as u32;
-                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
-                    edited.push(*note);
-                }
-                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                if edited.len() == 1 {
-                    st.session.select_note(Some(edited[0].id));
-                }
-                for step in touched_steps {
-                    st.refresh_rack_cell(channel, step as usize);
-                }
-                st.refresh_note_editor(&window);
-                for note in edited {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note,
-                    });
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Note resized");
@@ -5602,52 +5254,22 @@ impl AppUi {
             // ever grow.
             let st = state.clone();
             window.on_piano_marquee_begin(move |mode| {
-                let mut st = st.borrow_mut();
-                let base = st.session.selected_note_ids.clone();
-                st.session.marquee_base = Some((mode, base));
+                st.borrow_mut().session.begin_marquee(mode);
             });
         }
         {
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_piano_marquee_updated(
-                move |start_tick, end_tick, low_note, high_note| {
-                    let Some(window) = weak.upgrade() else { return };
-                    let mut st = st.borrow_mut();
-                    let Some((mode, base)) = st.session.marquee_base.clone() else {
-                        return;
-                    };
-                    let pattern = st.session.current_pattern;
-                    let channel = st.session.selected;
-                    let (start_tick, end_tick) = (start_tick.min(end_tick), start_tick.max(end_tick));
-                    let (low_note, high_note) = (low_note.min(high_note), low_note.max(high_note));
-                    let caught: HashSet<NoteId> = st.session.channels[channel].notes[pattern]
-                        .iter()
-                        .filter(|note| {
-                            // Overlap, not containment: clipping a long
-                            // note's tail catches it, which is what every
-                            // other editor does and what a band drawn across
-                            // a bar of held chords has to do to be useful.
-                            let note_start = note.start_tick as i32;
-                            let note_end = note.end_tick() as i32;
-                            let pitch = note.note as i32;
-                            note_start <= end_tick
-                                && note_end > start_tick
-                                && pitch >= low_note
-                                && pitch <= high_note
-                        })
-                        .map(|note| note.id)
-                        .collect();
-                    st.session.selected_note_ids = match mode {
-                        1 => base.union(&caught).copied().collect(),
-                        2 => base.difference(&caught).copied().collect(),
-                        _ => caught,
-                    };
-                    st.session.selected_note_id = (st.session.selected_note_ids.len() == 1)
-                        .then(|| *st.session.selected_note_ids.iter().next().unwrap());
+            window.on_piano_marquee_updated(move |start_tick, end_tick, low_note, high_note| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut st = st.borrow_mut();
+                if st
+                    .session
+                    .update_marquee(start_tick, end_tick, low_note, high_note)
+                {
                     st.refresh_note_editor(&window);
-                },
-            );
+                }
+            });
         }
         {
             let tx = cmd_tx.clone();
@@ -5656,54 +5278,15 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_sliced(move |id, tick| {
-                let Some(window) = weak.upgrade() else { return };
+                let Some(window) = weak.upgrade() else { return; };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let Some(original) = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .copied()
-                    .find(|note| note.id == id as NoteId)
-                else {
+                let Some(edit) = st.session.slice_note(id as NoteId, tick) else {
                     return;
                 };
-                let cut = tick.max(0) as u32;
-                // The grid guards this too, but a cut at either end would
-                // silently delete half a note, so it is worth refusing here
-                // as well rather than trusting one caller.
-                if cut <= original.start_tick || cut >= original.end_tick() {
-                    return;
-                }
-                let tail_id = st.session.channels[channel].next_note_id;
-                st.session.channels[channel].next_note_id = tail_id.wrapping_add(1).max(1);
-                let tail = NoteEvent {
-                    id: tail_id,
-                    start_tick: cut,
-                    duration_ticks: original.end_tick() - cut,
-                    ..original
-                };
-                let mut head = original;
-                head.duration_ticks = cut - original.start_tick;
-                for note in st.session.channels[channel].notes[pattern].iter_mut() {
-                    if note.id == head.id {
-                        *note = head;
-                    }
-                }
-                st.session.channels[channel].notes[pattern].push(tail);
-                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                // Both halves selected, so the next gesture can act on the
-                // whole of what used to be one note.
-                st.session.selected_note_ids = HashSet::from([head.id, tail.id]);
-                st.session.selected_note_id = None;
-                st.refresh_rack_row(channel);
-                st.refresh_note_editor(&window);
-                for note in [head, tail] {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note,
-                    });
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Note sliced");
@@ -5716,71 +5299,15 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_selection_joined(move || {
-                let Some(window) = weak.upgrade() else { return };
+                let Some(window) = weak.upgrade() else { return; };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let selected: Vec<NoteEvent> = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .copied()
-                    .filter(|note| st.session.selected_note_ids.contains(&note.id))
-                    .collect();
-                if selected.len() < 2 {
+                let Some(edit) = st.session.join_selection() else {
                     return;
-                }
-                // Per pitch row, not across the whole selection: joining a
-                // chord into one note would throw away every pitch but one.
-                let mut rows: BTreeMap<u8, Vec<NoteEvent>> = BTreeMap::new();
-                for note in selected {
-                    rows.entry(note.note).or_default().push(note);
-                }
-                let mut kept = Vec::new();
-                let mut removed = Vec::new();
-                for (_, mut row) in rows {
-                    if row.len() < 2 {
-                        kept.extend(row.iter().map(|note| note.id));
-                        continue;
-                    }
-                    row.sort_by_key(|note| (note.start_tick, note.id));
-                    let end = row.iter().map(|note| note.end_tick()).max().unwrap_or(0);
-                    let mut merged = row[0];
-                    merged.duration_ticks = end.saturating_sub(merged.start_tick).max(1);
-                    // The earliest note survives, so the join keeps a stable
-                    // id and whatever velocity the phrase started on.
-                    for note in st.session.channels[channel].notes[pattern].iter_mut() {
-                        if note.id == merged.id {
-                            *note = merged;
-                        }
-                    }
-                    kept.push(merged.id);
-                    removed.extend(row[1..].iter().map(|note| note.id));
-                }
-                if removed.is_empty() {
-                    return;
-                }
-                st.session.channels[channel].notes[pattern].retain(|note| !removed.contains(&note.id));
-                let edited: Vec<NoteEvent> = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .copied()
-                    .filter(|note| kept.contains(&note.id))
-                    .collect();
-                st.session.prune_note_selection(&removed);
-                st.refresh_rack_row(channel);
-                st.refresh_note_editor(&window);
-                for id in removed {
-                    let _ = tx.send(EngineCommand::RemoveNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        id,
-                    });
-                }
-                for note in edited {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note,
-                    });
+                };
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Notes joined");
@@ -5796,36 +5323,13 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let start_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
-                let mut note = st.session.channels[channel].create_note(
-                    pattern,
-                    start_tick,
-                    duration_ticks.max(1) as u32,
-                    midi_note.clamp(0, 127) as u8,
-                );
-                note.duration_ticks = note
-                    .duration_ticks
-                    .min(length_ticks.saturating_sub(start_tick).max(1));
-                if let Some(stored) = st.session.channels[channel].notes[pattern]
-                    .iter_mut()
-                    .find(|stored| stored.id == note.id)
-                {
-                    *stored = note;
+                let edit = st
+                    .session
+                    .paint_roll_note(start_tick, midi_note, duration_ticks);
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
-                // A stroke selects what it laid down, so the run can be
-                // moved or lengthened without re-selecting it by hand.
-                st.session.selected_note_ids.insert(note.id);
-                st.session.selected_note_id = (st.session.selected_note_ids.len() == 1).then_some(note.id);
-                st.refresh_rack_cell(channel, (start_tick / TICKS_PER_STEP) as usize);
-                st.refresh_note_editor(&window);
-                let _ = tx.send(EngineCommand::UpsertNote {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    note,
-                });
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Notes painted");
             });
@@ -5833,30 +5337,7 @@ impl AppUi {
         {
             let st = state.clone();
             window.on_piano_scale_begin(move |from_left| {
-                let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let notes: Vec<(NoteId, u32, u32)> = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .filter(|note| st.session.selected_note_ids.contains(&note.id))
-                    .map(|note| (note.id, note.start_tick, note.duration_ticks))
-                    .collect();
-                if notes.len() < 2 {
-                    st.session.scale_base = None;
-                    return;
-                }
-                // Scale about the edge the drag is not moving, so that edge
-                // stays put and only the span changes.
-                let anchor = if from_left {
-                    notes
-                        .iter()
-                        .map(|(_, start, duration)| start + duration)
-                        .max()
-                        .unwrap_or(0)
-                } else {
-                    notes.iter().map(|(_, start, _)| *start).min().unwrap_or(0)
-                };
-                st.session.scale_base = Some(ScaleBase { anchor, notes });
+                st.borrow_mut().session.begin_scale(from_left);
             });
         }
         {
@@ -5866,60 +5347,18 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_selection_scaled(move |factor| {
-                let Some(window) = weak.upgrade() else { return };
+                let Some(window) = weak.upgrade() else { return; };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let Some(base) = st.session.scale_base.take() else {
+                let Some(edit) = st.session.scale_selection(factor) else {
                     return;
                 };
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                let last_start = length_ticks.saturating_sub(1);
-                let factor = factor.clamp(0.02, 64.0) as f64;
-                let anchor = base.anchor as f64;
-
-                let mut edited = Vec::with_capacity(base.notes.len());
-                let mut touched_steps = Vec::with_capacity(base.notes.len() * 2);
-                for (id, start, duration) in &base.notes {
-                    let Some(note) = st.session.channels[channel].notes[pattern]
-                        .iter_mut()
-                        .find(|note| note.id == *id)
-                    else {
-                        continue;
-                    };
-                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
-                    let scaled_start = anchor + (*start as f64 - anchor) * factor;
-                    // Lengths scale with the span, which is the point: double
-                    // a selection's width and an eighth becomes a quarter.
-                    let scaled_duration = *duration as f64 * factor;
-                    note.start_tick = (scaled_start.round().max(0.0) as u32).min(last_start);
-                    note.duration_ticks = (scaled_duration.round().max(1.0) as u32)
-                        .min(length_ticks.saturating_sub(note.start_tick).max(1));
-                    touched_steps.push(note.start_tick / TICKS_PER_STEP);
-                    edited.push(*note);
-                }
-                st.session.channels[channel].notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-                st.session.scale_base = Some(base);
-                for step in touched_steps {
-                    st.refresh_rack_cell(channel, step as usize);
-                }
-                st.refresh_note_editor(&window);
-                for note in edited {
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note,
-                    });
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
                 }
                 drop(st);
-                record_project_history(
-                    &commands,
-                    before,
-                    &history_state,
-                    &window,
-                    "Selection scaled",
-                );
+                record_project_history(&commands, before, &history_state, &window, "Selection scaled");
             });
         }
         {
@@ -5929,26 +5368,16 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_piano_note_removed(move |id| {
-                let Some(window) = weak.upgrade() else { return };
+                let Some(window) = weak.upgrade() else { return; };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let pattern = st.session.current_pattern;
-                let channel = st.session.selected;
-                let Some(index) = st.session.channels[channel].notes[pattern]
-                    .iter()
-                    .position(|note| note.id == id as NoteId)
-                else {
+                let Some(edit) = st.session.remove_roll_note(id as NoteId) else {
                     return;
                 };
-                let removed = st.session.channels[channel].notes[pattern].remove(index);
-                st.session.prune_note_selection(&[removed.id]);
-                st.refresh_rack_cell(channel, (removed.start_tick / TICKS_PER_STEP) as usize);
-                st.refresh_note_editor(&window);
-                let _ = tx.send(EngineCommand::RemoveNote {
-                    pattern: pattern as u8,
-                    channel: channel as u8,
-                    id: removed.id,
-                });
+                st.apply_note_edit(&edit, &window);
+                for command in edit.commands {
+                    let _ = tx.send(command);
+                }
                 drop(st);
                 record_project_history(&commands, before, &history_state, &window, "Note removed");
             });

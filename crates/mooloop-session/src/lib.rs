@@ -18,6 +18,7 @@ pub mod history;
 pub mod notes;
 pub mod project;
 pub mod rack;
+pub mod roll;
 pub mod sample;
 pub mod session;
 pub mod steps;

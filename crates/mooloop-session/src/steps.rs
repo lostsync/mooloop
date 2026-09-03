@@ -91,7 +91,7 @@ impl Session {
         )
     }
 
-    fn upsert(cell: &Cell, note: NoteEvent) -> EngineCommand {
+    fn upsert_in(cell: &Cell, note: NoteEvent) -> EngineCommand {
         EngineCommand::UpsertNote {
             pattern: cell.pattern as u8,
             channel: cell.channel as u8,
@@ -108,7 +108,7 @@ impl Session {
             if cell.channel == self.selected {
                 self.select_note(Some(note.id));
             }
-            vec![Self::upsert(&cell, note)]
+            vec![Self::upsert_in(&cell, note)]
         } else {
             self.erase(&cell, ids)
         };
@@ -152,7 +152,7 @@ impl Session {
             cell.step,
             edited
                 .into_iter()
-                .map(|note| Self::upsert(&cell, note))
+                .map(|note| Self::upsert_in(&cell, note))
                 .collect(),
         ))
     }
@@ -170,7 +170,7 @@ impl Session {
             if cell.channel == self.selected {
                 self.select_note(Some(note.id));
             }
-            vec![Self::upsert(&cell, note)]
+            vec![Self::upsert_in(&cell, note)]
         } else {
             self.erase(&cell, ids)
         };
@@ -191,7 +191,7 @@ impl Session {
                 slice_ticks,
                 60,
             );
-            commands.push(Self::upsert(&cell, note));
+            commands.push(Self::upsert_in(&cell, note));
         }
         Some(StepEdit::one(cell.step, commands))
     }
@@ -235,7 +235,7 @@ impl Session {
         Some(StepEdit {
             commands: edited
                 .into_iter()
-                .map(|note| Self::upsert(&cell, note))
+                .map(|note| Self::upsert_in(&cell, note))
                 .collect(),
             redraw: cell.step..=last_step.min(pattern_length - 1),
         })
