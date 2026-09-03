@@ -33,10 +33,10 @@ pub use automation::{
 };
 pub use bridge::{EngineCommand, EngineEvent};
 pub use ds01::{
-    body_mode_ratio, Ds01Character, Ds01EnvParams, Ds01NoiseColor, Ds01Params,
-    Ds01PitchEnvParams, Ds01Retrigger, DS01_BITS_TRANSPARENT, DS01_BODY_HARMONIC,
-    DS01_BODY_INHARMONIC, DS01_BODY_MODES, DS01_BURST_MAX_S, DS01_MAX_PARTIALS,
-    DS01_MAX_REPEATS, DS01_VOICES,
+    body_mode_ratio, matrix_param, Ds01Character, Ds01EnvParams, Ds01ModSource, Ds01NoiseColor,
+    Ds01Params, Ds01PitchEnvParams, Ds01Retrigger, Ds01Route, DS01_BITS_TRANSPARENT,
+    DS01_BODY_HARMONIC, DS01_BODY_INHARMONIC, DS01_BODY_MODES, DS01_BURST_MAX_S,
+    DS01_DESTINATIONS, DS01_MATRIX_ROWS, DS01_MAX_PARTIALS, DS01_MAX_REPEATS, DS01_VOICES,
 };
 pub use buffer::{BufferDuration, BufferEvent};
 pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};

@@ -99,6 +99,19 @@ pub const PARAM_BIAS: u32 = 92;
 pub const PARAM_BITS: u32 = 93;
 pub const PARAM_OUTPUT_HP: u32 = 94;
 
+/// The matrix's eight rows of four, 100-131.
+pub const PARAM_MATRIX_BASE: u32 = 100;
+pub const MATRIX_OFFSET_SOURCE: u32 = 0;
+pub const MATRIX_OFFSET_DEST: u32 = 1;
+pub const MATRIX_OFFSET_AMOUNT: u32 = 2;
+pub const MATRIX_OFFSET_CURVE: u32 = 3;
+pub const MATRIX_ROW_WIDTH: u32 = 4;
+
+/// First id of `row`'s four controls.
+pub const fn matrix_param(row: usize, offset: u32) -> u32 {
+    PARAM_MATRIX_BASE + row as u32 * MATRIX_ROW_WIDTH + offset
+}
+
 pub const PARAM_AMP_ENV_BASE: u32 = 40;
 pub const PARAM_NOISE_ENV_BASE: u32 = 60;
 pub const PARAM_MOD_ENV_BASE: u32 = 70;
@@ -119,6 +132,17 @@ pub const DS01_VOICES: usize = crate::MAX_DRUM_VOICES as usize;
 
 /// Most partials the tone bank can run.
 pub const DS01_MAX_PARTIALS: u8 = 6;
+
+/// Rows in DS-01's own modulation matrix.
+pub const DS01_MATRIX_ROWS: usize = 8;
+
+/// How many parameters a matrix row may address.
+///
+/// A literal because the Destination control is a `const` stepped descriptor
+/// and [`destination_count`] is not a `const fn`;
+/// `the_destination_list_is_every_continuous_parameter` pins the two
+/// together.
+pub const DS01_DESTINATIONS: u8 = 49;
 
 /// Bit depth at which the reducer is exactly transparent.
 ///
@@ -417,6 +441,113 @@ const NOISE_DESCRIPTORS: [ParamDescriptor; 6] = [
     unit(PARAM_FILTER_RES, "Reso", 0.1),
 ];
 
+/// What a matrix row reads.
+///
+/// Eight sources, all per voice, all evaluated inside the voice. That is the
+/// whole reason DS-01 has a matrix at all: a channel source produces one
+/// number per control tick for the whole channel, and a drum channel can have
+/// eight hits ringing at once, each with its own velocity, its own position in
+/// a burst, and its own envelopes. "This hit's velocity opens this hit's
+/// filter" is not expressible as a channel-rate signal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ds01ModSource {
+    /// The row is off. Rows are not deleted, they are switched off, so a
+    /// patch's eight rows are eight rows for the life of the patch.
+    #[default]
+    None,
+    /// How hard this hit was played. Latched.
+    ///
+    /// A first-class source rather than v1's multiply, so a patch can put
+    /// velocity on pitch, decay, colour, cutoff, drive or burst spacing. This
+    /// is the single control that most decides whether ghost notes read as
+    /// part of the groove or as quiet copies of the same hit.
+    Velocity,
+    /// This hit's note. Latched.
+    Note,
+    AmpEnv,
+    NoiseEnv,
+    /// The contour with no other job.
+    ModEnv,
+    /// `0` at a burst's first impulse and `1` at its last, constant within an
+    /// impulse, `0` throughout at Repeats 1. A shape across a flam or a roll.
+    BurstIndex,
+    /// `+1` and `-1` on successive hits of this channel. Latched.
+    ///
+    /// The 808 open/closed alternation and the every-other-hat ghost, and —
+    /// with [`Self::BurstIndex`] — one of the two sources that are *consistent
+    /// displacement* rather than noise, which is the distinction the taste
+    /// brief draws.
+    HitAlternator,
+    /// One deterministic value per hit, bipolar. Latched.
+    ///
+    /// Not a humanize button and never presented as one: it is off until
+    /// routed, it has an explicit destination and a signed depth like every
+    /// other source, and it is derived from the hit counter and the node seed
+    /// so an offline render and a live take of the same event stream produce
+    /// identical samples. There is no global amount, no dice button, and no
+    /// default route.
+    Random,
+}
+
+impl Ds01ModSource {
+    pub const ALL: [Self; 9] = [
+        Self::None,
+        Self::Velocity,
+        Self::Note,
+        Self::AmpEnv,
+        Self::NoiseEnv,
+        Self::ModEnv,
+        Self::BurstIndex,
+        Self::HitAlternator,
+        Self::Random,
+    ];
+
+    /// Whether this source swings both ways about zero. A unipolar source
+    /// rests at zero and only ever moves in the direction its amount's sign
+    /// chooses.
+    pub fn is_bipolar(self) -> bool {
+        matches!(self, Self::HitAlternator | Self::Random)
+    }
+
+    /// Whether this source has one value for the life of a hit. The live ones
+    /// are the three envelopes and the burst position.
+    pub fn is_latched(self) -> bool {
+        matches!(
+            self,
+            Self::None | Self::Velocity | Self::Note | Self::HitAlternator | Self::Random
+        )
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL
+            .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|source| *source == self)
+            .unwrap_or_default() as i32
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "Off",
+            Self::Velocity => "Velocity",
+            Self::Note => "Note",
+            Self::AmpEnv => "Amp Env",
+            Self::NoiseEnv => "Noise Env",
+            Self::ModEnv => "Mod Env",
+            Self::BurstIndex => "Burst Idx",
+            Self::HitAlternator => "Alternate",
+            Self::Random => "Random",
+        }
+    }
+}
+
 /// Which nonlinearity the shape stage runs.
 ///
 /// The one place DS-01 gets an opinion rather than a range, and four is all
@@ -559,6 +690,142 @@ const SHAPE_DESCRIPTORS: [ParamDescriptor; 5] = [
     hz(PARAM_OUTPUT_HP, "Output HP", 5.0, 2_000.0, 20.0),
 ];
 
+/// The matrix's eight rows, four controls each.
+///
+/// Source and Destination are structural and therefore modulation-ineligible;
+/// **Amount is not**, which is how a channel LFO gets to scale a per-hit
+/// relationship without knowing anything about voices.
+const MATRIX_DESCRIPTORS: [[ParamDescriptor; MATRIX_ROW_WIDTH as usize]; DS01_MATRIX_ROWS] = [
+    [
+        stepped(
+            matrix_param(0, MATRIX_OFFSET_SOURCE),
+            "Row 1 src",
+            Ds01ModSource::ALL.len() as u8,
+            0.0,
+        ),
+        stepped(
+            matrix_param(0, MATRIX_OFFSET_DEST),
+            "Row 1 dest",
+            DS01_DESTINATIONS,
+            0.0,
+        ),
+        bipolar(matrix_param(0, MATRIX_OFFSET_AMOUNT), "Row 1 amt", 0.0),
+        bipolar(matrix_param(0, MATRIX_OFFSET_CURVE), "Row 1 curve", 0.0),
+    ],
+    [
+        stepped(
+            matrix_param(1, MATRIX_OFFSET_SOURCE),
+            "Row 2 src",
+            Ds01ModSource::ALL.len() as u8,
+            0.0,
+        ),
+        stepped(
+            matrix_param(1, MATRIX_OFFSET_DEST),
+            "Row 2 dest",
+            DS01_DESTINATIONS,
+            0.0,
+        ),
+        bipolar(matrix_param(1, MATRIX_OFFSET_AMOUNT), "Row 2 amt", 0.0),
+        bipolar(matrix_param(1, MATRIX_OFFSET_CURVE), "Row 2 curve", 0.0),
+    ],
+    [
+        stepped(
+            matrix_param(2, MATRIX_OFFSET_SOURCE),
+            "Row 3 src",
+            Ds01ModSource::ALL.len() as u8,
+            0.0,
+        ),
+        stepped(
+            matrix_param(2, MATRIX_OFFSET_DEST),
+            "Row 3 dest",
+            DS01_DESTINATIONS,
+            0.0,
+        ),
+        bipolar(matrix_param(2, MATRIX_OFFSET_AMOUNT), "Row 3 amt", 0.0),
+        bipolar(matrix_param(2, MATRIX_OFFSET_CURVE), "Row 3 curve", 0.0),
+    ],
+    [
+        stepped(
+            matrix_param(3, MATRIX_OFFSET_SOURCE),
+            "Row 4 src",
+            Ds01ModSource::ALL.len() as u8,
+            0.0,
+        ),
+        stepped(
+            matrix_param(3, MATRIX_OFFSET_DEST),
+            "Row 4 dest",
+            DS01_DESTINATIONS,
+            0.0,
+        ),
+        bipolar(matrix_param(3, MATRIX_OFFSET_AMOUNT), "Row 4 amt", 0.0),
+        bipolar(matrix_param(3, MATRIX_OFFSET_CURVE), "Row 4 curve", 0.0),
+    ],
+    [
+        stepped(
+            matrix_param(4, MATRIX_OFFSET_SOURCE),
+            "Row 5 src",
+            Ds01ModSource::ALL.len() as u8,
+            0.0,
+        ),
+        stepped(
+            matrix_param(4, MATRIX_OFFSET_DEST),
+            "Row 5 dest",
+            DS01_DESTINATIONS,
+            0.0,
+        ),
+        bipolar(matrix_param(4, MATRIX_OFFSET_AMOUNT), "Row 5 amt", 0.0),
+        bipolar(matrix_param(4, MATRIX_OFFSET_CURVE), "Row 5 curve", 0.0),
+    ],
+    [
+        stepped(
+            matrix_param(5, MATRIX_OFFSET_SOURCE),
+            "Row 6 src",
+            Ds01ModSource::ALL.len() as u8,
+            0.0,
+        ),
+        stepped(
+            matrix_param(5, MATRIX_OFFSET_DEST),
+            "Row 6 dest",
+            DS01_DESTINATIONS,
+            0.0,
+        ),
+        bipolar(matrix_param(5, MATRIX_OFFSET_AMOUNT), "Row 6 amt", 0.0),
+        bipolar(matrix_param(5, MATRIX_OFFSET_CURVE), "Row 6 curve", 0.0),
+    ],
+    [
+        stepped(
+            matrix_param(6, MATRIX_OFFSET_SOURCE),
+            "Row 7 src",
+            Ds01ModSource::ALL.len() as u8,
+            0.0,
+        ),
+        stepped(
+            matrix_param(6, MATRIX_OFFSET_DEST),
+            "Row 7 dest",
+            DS01_DESTINATIONS,
+            0.0,
+        ),
+        bipolar(matrix_param(6, MATRIX_OFFSET_AMOUNT), "Row 7 amt", 0.0),
+        bipolar(matrix_param(6, MATRIX_OFFSET_CURVE), "Row 7 curve", 0.0),
+    ],
+    [
+        stepped(
+            matrix_param(7, MATRIX_OFFSET_SOURCE),
+            "Row 8 src",
+            Ds01ModSource::ALL.len() as u8,
+            0.0,
+        ),
+        stepped(
+            matrix_param(7, MATRIX_OFFSET_DEST),
+            "Row 8 dest",
+            DS01_DESTINATIONS,
+            0.0,
+        ),
+        bipolar(matrix_param(7, MATRIX_OFFSET_AMOUNT), "Row 8 amt", 0.0),
+        bipolar(matrix_param(7, MATRIX_OFFSET_CURVE), "Row 8 curve", 0.0),
+    ],
+];
+
 /// Longest attack or hold. Half a second is already past a drum and into a
 /// swell, which is the point: the top of the range is where the envelope
 /// stops being percussive.
@@ -657,10 +924,10 @@ const MOD_ENV_DESCRIPTORS: [ParamDescriptor; ENV_BLOCK as usize] = env_block(
 );
 
 /// The complete DS-01 table for this step.
-pub static DESCRIPTORS: [ParamDescriptor; 60] = concat();
+pub static DESCRIPTORS: [ParamDescriptor; 92] = concat();
 
-const fn concat() -> [ParamDescriptor; 60] {
-    let mut out = [GLOBAL_DESCRIPTORS[0]; 60];
+const fn concat() -> [ParamDescriptor; 92] {
+    let mut out = [GLOBAL_DESCRIPTORS[0]; 92];
     let mut at = 0;
     let mut i = 0;
     while i < GLOBAL_DESCRIPTORS.len() {
@@ -722,7 +989,128 @@ const fn concat() -> [ParamDescriptor; 60] {
         at += 1;
         i += 1;
     }
+    let mut row = 0;
+    while row < DS01_MATRIX_ROWS {
+        i = 0;
+        while i < MATRIX_ROW_WIDTH as usize {
+            out[at] = MATRIX_DESCRIPTORS[row][i];
+            at += 1;
+            i += 1;
+        }
+        row += 1;
+    }
     out
+}
+
+/// Whether this parameter is resolved once at the hit and not revisited.
+///
+/// `01-what-ds01-is.md`'s two tables, as a function. It is what decides when a
+/// matrix route is evaluated — a route to a latched destination at the
+/// trigger, one to a continuous destination every control tick — and that
+/// falls straight out of the tables rather than needing a rule of its own.
+///
+/// Three of the classifications are not in either table, and are recorded in
+/// the plan's status file rather than decided at a call site: the whole of an
+/// envelope block is latched, because an envelope is one shape and half of it
+/// cannot be; Velocity Amount is latched with the velocity it scales; and
+/// Tone Partials is latched because a hit does not grow an oscillator halfway
+/// through.
+pub fn is_latched(id: u32) -> bool {
+    if env_slot(id, PARAM_AMP_ENV_BASE).is_some()
+        || env_slot(id, PARAM_NOISE_ENV_BASE).is_some()
+        || env_slot(id, PARAM_MOD_ENV_BASE).is_some()
+    {
+        return true;
+    }
+    matches!(
+        id,
+        PARAM_TUNE
+            | PARAM_VELOCITY_AMOUNT
+            | PARAM_TONE_PARTIALS
+            | PARAM_PITCH_ATTACK
+            | PARAM_PITCH_DECAY
+            | PARAM_PITCH_CURVE
+            | PARAM_PITCH_DEPTH
+            | PARAM_BURST_REPEATS
+            | PARAM_BURST_SPACING
+            | PARAM_BURST_SPREAD
+            | PARAM_BURST_LEVEL_STEP
+            | PARAM_BURST_PITCH_STEP
+    )
+}
+
+/// Every parameter a matrix row may address, in table order.
+///
+/// Eligibility is the descriptor's own curve, exactly as it is for a channel
+/// route: a stepped parameter is a structural choice — a waveform, a colour,
+/// a drive character — and flapping one at a control rate is a click rather
+/// than a modulation. Keeping the rule here means a stepped control added
+/// later is excluded the day it is added.
+///
+/// The matrix's own band is excluded on top of that. Source and Destination
+/// are stepped and would be refused anyway; Amount and Curve are not, and a
+/// row modulating another row's amount would make the result depend on the
+/// order the rows happen to be evaluated in. A *channel* route still reaches
+/// Amount, which is how an LFO scales a per-hit relationship without knowing
+/// anything about voices — it is resolved before the block rather than inside
+/// it, so there is no order to depend on.
+pub fn destinations() -> impl Iterator<Item = &'static ParamDescriptor> {
+    DESCRIPTORS
+        .iter()
+        .filter(|d| d.id < PARAM_MATRIX_BASE && !matches!(d.curve, ParamCurve::Stepped(_)))
+}
+
+/// How many destinations there are. The Destination control is a stepped
+/// choice over this list.
+pub fn destination_count() -> usize {
+    destinations().count()
+}
+
+/// The destination at `index`, for the stepped Destination control.
+pub fn destination_at(index: usize) -> Option<&'static ParamDescriptor> {
+    destinations().nth(index)
+}
+
+/// Where `id` sits in the destination list, if it is one.
+pub fn destination_index(id: u32) -> Option<usize> {
+    destinations().position(|d| d.id == id)
+}
+
+/// One matrix row: a source, a destination, a signed depth, and a curve.
+///
+/// Persisted with the destination's *parameter id* rather than its position
+/// in the list, so a patch keeps meaning what it meant even if the list ever
+/// grows. Only the stepped control the UI turns is an index.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Ds01Route {
+    pub source: Ds01ModSource,
+    /// Descriptor id of the destination.
+    pub dest: u32,
+    /// Signed depth, `[-1, 1]`, as a fraction of the destination's full
+    /// range. Routes add an offset in normalized destination space around the
+    /// base value, identical to a channel route — never an absolute write.
+    pub amount: f32,
+    /// Shapes the source before it is scaled, `[-1, 1]`.
+    pub curve: f32,
+}
+
+impl Default for Ds01Route {
+    fn default() -> Self {
+        Self {
+            source: Ds01ModSource::None,
+            dest: PARAM_LEVEL,
+            amount: 0.0,
+            curve: 0.0,
+        }
+    }
+}
+
+impl Ds01Route {
+    /// Whether this row reaches anything.
+    pub fn is_active(&self) -> bool {
+        self.source != Ds01ModSource::None && self.amount != 0.0
+    }
 }
 
 /// This device's descriptor for `id`, if it has one.
@@ -840,6 +1228,44 @@ fn env_set(env: &mut Ds01EnvParams, offset: u32, value: f32) -> bool {
     true
 }
 
+/// Split an id into `(row, offset)` when it lands in the matrix.
+fn matrix_slot(id: u32) -> Option<(usize, u32)> {
+    let offset = id.checked_sub(PARAM_MATRIX_BASE)?;
+    let row = (offset / MATRIX_ROW_WIDTH) as usize;
+    (row < DS01_MATRIX_ROWS).then_some((row, offset % MATRIX_ROW_WIDTH))
+}
+
+fn matrix_get(route: &Ds01Route, offset: u32) -> Option<f32> {
+    Some(match offset {
+        MATRIX_OFFSET_SOURCE => route.source.to_index() as f32,
+        // The stepped control is a position in the destination list; the
+        // route itself keeps the parameter id, which is what makes a saved
+        // patch stable.
+        MATRIX_OFFSET_DEST => destination_index(route.dest).unwrap_or(0) as f32,
+        MATRIX_OFFSET_AMOUNT => route.amount,
+        MATRIX_OFFSET_CURVE => route.curve,
+        _ => return None,
+    })
+}
+
+fn matrix_set(route: &mut Ds01Route, offset: u32, value: f32) -> bool {
+    match offset {
+        MATRIX_OFFSET_SOURCE => route.source = Ds01ModSource::from_index(value.round() as i32),
+        MATRIX_OFFSET_DEST => {
+            let index = value.round().max(0.0) as usize;
+            // A destination out of range keeps the one it had: a route is
+            // never silently re-pointed at whatever happened to be first.
+            if let Some(descriptor) = destination_at(index) {
+                route.dest = descriptor.id;
+            }
+        }
+        MATRIX_OFFSET_AMOUNT => route.amount = value.clamp(-1.0, 1.0),
+        MATRIX_OFFSET_CURVE => route.curve = value.clamp(-1.0, 1.0),
+        _ => return false,
+    }
+    true
+}
+
 /// Split an id into its offset inside the envelope block starting at `base`.
 fn env_slot(id: u32, base: u32) -> Option<u32> {
     let offset = id.checked_sub(base)?;
@@ -943,6 +1369,12 @@ pub struct Ds01Params {
     /// Output high-pass in Hz.
     pub output_hp: f32,
 
+    // --- The instrument's own modulation --------------------------------
+    /// Eight rows. Empty rows are switched off rather than absent, so a
+    /// patch's matrix is the same eight rows for its whole life and a row's
+    /// identity is its position.
+    pub matrix: [Ds01Route; DS01_MATRIX_ROWS],
+
     // --- Envelopes ------------------------------------------------------
     /// The VCA, always.
     pub amp: Ds01EnvParams,
@@ -984,6 +1416,21 @@ impl Default for Ds01Params {
             body_decay: 0.4,
             body_damping: 0.3,
             body_excite: 0.0,
+            // No default route. The step asks for Velocity to Amp at full
+            // amount so the device feels normal unprogrammed — but
+            // `velocity_amount` at id 5 already does exactly that, and the
+            // same paragraph says it stays as the plain control for the
+            // common case. Shipping both would apply velocity twice. See the
+            // plan's status file.
+            matrix: [Ds01Route {
+                source: Ds01ModSource::None,
+                // Wherever the destination list starts. A switched-off row
+                // does not have an opinion about where it would point, and
+                // the descriptor's default has to agree with this one.
+                dest: PARAM_LEVEL,
+                amount: 0.0,
+                curve: 0.0,
+            }; DS01_MATRIX_ROWS],
             drive: 0.0,
             character: Ds01Character::Soft,
             bias: 0.0,
@@ -1012,6 +1459,9 @@ pub fn get(p: &Ds01Params, id: u32) -> Option<f32> {
     }
     if let Some(offset) = env_slot(id, PARAM_MOD_ENV_BASE) {
         return env_get(&p.mod_env, offset);
+    }
+    if let Some((row, offset)) = matrix_slot(id) {
+        return matrix_get(&p.matrix[row], offset);
     }
     Some(match id {
         PARAM_TUNE => p.tune,
@@ -1068,6 +1518,9 @@ pub fn set(p: &mut Ds01Params, id: u32, value: f32) -> bool {
     }
     if let Some(offset) = env_slot(id, PARAM_MOD_ENV_BASE) {
         return env_set(&mut p.mod_env, offset, value);
+    }
+    if let Some((row, offset)) = matrix_slot(id) {
+        return matrix_set(&mut p.matrix[row], offset, value);
     }
     match id {
         PARAM_TUNE => p.tune = value,
@@ -1131,14 +1584,15 @@ mod tests {
         }
     }
 
-    /// Steps 02 through 06 own everything below 100. The matrix's eight rows
-    /// are 100-131 and belong to step 07; reaching into them would be
-    /// spending a later step's reservation.
+    /// The plan reserves 0-131 and this is all of it. Steps 02 through 07 have
+    /// now assigned inside every band they named, so a parameter added after
+    /// this appends past 131 rather than filling a gap someone left.
     #[test]
     fn every_id_lands_in_a_band_these_steps_own() {
         for d in &DESCRIPTORS {
-            let owned = d.id < 100;
-            assert!(owned, "{} ({}) is outside steps 02-06's bands", d.id, d.name);
+            let owned = d.id < PARAM_MATRIX_BASE
+                + DS01_MATRIX_ROWS as u32 * MATRIX_ROW_WIDTH;
+            assert!(owned, "{} ({}) is outside the plan's bands", d.id, d.name);
             assert!(
                 !(54..60).contains(&d.id),
                 "{} ({}) sits in the pitch band's unused tail",
@@ -1146,7 +1600,7 @@ mod tests {
                 d.name
             );
         }
-        assert_eq!(DESCRIPTORS.len(), 60);
+        assert_eq!(DESCRIPTORS.len(), 92);
     }
 
     /// The four envelopes are one type used four times, so their blocks have
@@ -1230,22 +1684,27 @@ mod tests {
             .filter(|d| matches!(d.curve, ParamCurve::Stepped(_)))
             .map(|d| d.id)
             .collect();
-        assert_eq!(
-            stepped,
-            vec![
-                PARAM_TUNE,
-                PARAM_CHOKE_GROUP,
-                PARAM_RETRIGGER,
-                PARAM_TONE_PARTIALS,
-                PARAM_NOISE_COLOR,
-                PARAM_AMP_ENV_BASE + ENV_OFFSET_GATE,
-                PARAM_NOISE_ENV_BASE + ENV_OFFSET_GATE,
-                PARAM_MOD_ENV_BASE + ENV_OFFSET_GATE,
-                PARAM_BURST_REPEATS,
-                PARAM_CHARACTER,
-                PARAM_BITS,
-            ]
-        );
+        let mut want = vec![
+            PARAM_TUNE,
+            PARAM_CHOKE_GROUP,
+            PARAM_RETRIGGER,
+            PARAM_TONE_PARTIALS,
+            PARAM_NOISE_COLOR,
+            PARAM_AMP_ENV_BASE + ENV_OFFSET_GATE,
+            PARAM_NOISE_ENV_BASE + ENV_OFFSET_GATE,
+            PARAM_MOD_ENV_BASE + ENV_OFFSET_GATE,
+            PARAM_BURST_REPEATS,
+            PARAM_CHARACTER,
+            PARAM_BITS,
+        ];
+        // Every row's Source and Destination, and neither of its Amount or
+        // Curve: the two that pick what a route *is* are structural, and the
+        // two that say how much it does are not.
+        for row in 0..DS01_MATRIX_ROWS {
+            want.push(matrix_param(row, MATRIX_OFFSET_SOURCE));
+            want.push(matrix_param(row, MATRIX_OFFSET_DEST));
+        }
+        assert_eq!(stepped, want);
     }
 
     #[test]
@@ -1254,8 +1713,8 @@ mod tests {
         // 6 is inside the global band but unassigned; 36 is the tail of the
         // body one, 47 the tail of the amplitude block, 54 the tail of the
         // pitch one, 85 the tail of the burst, 95 the tail of the shaper, and
-        // 100 the matrix's first row in step 07.
-        for id in [6, 36, 47, 54, 85, 95, 100] {
+        // 132 the first id past the matrix's last row.
+        for id in [6, 36, 47, 54, 85, 95, 132] {
             assert_eq!(get(&params, id), None, "id {id} reads");
             assert!(!set(&mut params, id, 1.0), "id {id} writes");
         }
@@ -1278,6 +1737,99 @@ mod tests {
         for ratio in [0.0, 0.5, 1.0] {
             assert!(body_mode_ratio(1, ratio) < body_mode_ratio(2, ratio));
         }
+    }
+
+    /// The Destination control is a stepped choice over every continuous
+    /// parameter, and `DS01_DESTINATIONS` is a literal because that control's
+    /// descriptor is `const`. Pinned to the list it is a count of.
+    #[test]
+    fn the_destination_list_is_every_continuous_parameter() {
+        assert_eq!(destination_count(), DS01_DESTINATIONS as usize);
+        for descriptor in destinations() {
+            assert!(
+                !matches!(descriptor.curve, ParamCurve::Stepped(_)),
+                "{} is stepped and cannot be a destination",
+                descriptor.name
+            );
+            assert!(
+                descriptor.id < PARAM_MATRIX_BASE,
+                "{} is a matrix control and cannot be a destination",
+                descriptor.name
+            );
+            assert_eq!(
+                destination_at(destination_index(descriptor.id).unwrap()).map(|d| d.id),
+                Some(descriptor.id)
+            );
+        }
+        // Choke Group and another row's Source are the two the step names.
+        assert_eq!(destination_index(PARAM_CHOKE_GROUP), None);
+        assert_eq!(destination_index(matrix_param(0, MATRIX_OFFSET_SOURCE)), None);
+        assert_eq!(destination_index(matrix_param(1, MATRIX_OFFSET_AMOUNT)), None);
+    }
+
+    /// `01-what-ds01-is.md`'s two tables, restated as one function and
+    /// checked for completeness: every parameter is on exactly one side, and
+    /// the sides are the ones the plan named.
+    #[test]
+    fn every_parameter_is_latched_or_continuous() {
+        for d in DESCRIPTORS.iter().filter(|d| d.id < PARAM_MATRIX_BASE) {
+            let latched = is_latched(d.id);
+            let expected = matches!(
+                d.id,
+                PARAM_TUNE | PARAM_VELOCITY_AMOUNT | PARAM_TONE_PARTIALS
+            ) || (40..80).contains(&d.id)
+                || (80..90).contains(&d.id);
+            assert_eq!(latched, expected, "{} ({})", d.id, d.name);
+        }
+        // The four that make a hit's shape, and the four that sweep within
+        // one, as the plan's own examples.
+        for id in [PARAM_AMP_DECAY, PARAM_PITCH_DEPTH, PARAM_BURST_SPACING, PARAM_TUNE] {
+            assert!(is_latched(id), "{id} should be latched");
+        }
+        for id in [
+            PARAM_LEVEL,
+            PARAM_FILTER_CUTOFF,
+            PARAM_TONE_WAVE,
+            PARAM_BODY_DAMPING,
+            PARAM_DRIVE,
+        ] {
+            assert!(!is_latched(id), "{id} should be continuous");
+        }
+    }
+
+    /// A row's destination is persisted as a parameter id, so a patch keeps
+    /// meaning what it meant; only the control the UI turns is a position in
+    /// the list.
+    #[test]
+    fn a_route_keeps_its_destination_as_an_id() {
+        let mut params = Ds01Params::default();
+        let cutoff = destination_index(PARAM_FILTER_CUTOFF).unwrap();
+        assert!(set(&mut params, matrix_param(2, MATRIX_OFFSET_DEST), cutoff as f32));
+        assert_eq!(params.matrix[2].dest, PARAM_FILTER_CUTOFF);
+        assert_eq!(
+            get(&params, matrix_param(2, MATRIX_OFFSET_DEST)),
+            Some(cutoff as f32)
+        );
+
+        // Out of range keeps what it had rather than silently re-pointing.
+        assert!(set(
+            &mut params,
+            matrix_param(2, MATRIX_OFFSET_DEST),
+            DS01_DESTINATIONS as f32 + 10.0
+        ));
+        assert_eq!(params.matrix[2].dest, PARAM_FILTER_CUTOFF);
+    }
+
+    /// The default patch ships no routes. The step asks for Velocity to Amp
+    /// at full amount so the device feels normal unprogrammed, and
+    /// `velocity_amount` at id 5 already does exactly that — the same
+    /// paragraph says it stays as the plain control for the common case, so
+    /// shipping both would apply velocity twice.
+    #[test]
+    fn the_default_patch_ships_no_routes() {
+        let params = Ds01Params::default();
+        assert!(params.matrix.iter().all(|route| !route.is_active()));
+        assert_eq!(params.velocity_amount, 1.0);
     }
 
     #[test]

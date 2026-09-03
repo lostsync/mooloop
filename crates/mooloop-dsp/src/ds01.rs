@@ -56,18 +56,19 @@
 //!   phase across a level move.
 
 use crate::bus::StereoBus;
-use crate::env::{Ahd, AhdShape, DECAY_TAIL_CONSTANTS};
+use crate::env::{shape, Ahd, AhdShape, DECAY_TAIL_CONSTANTS};
 use crate::event::{Event, EventList};
 use crate::filter::{apply_drive, soft_ceiling, OnePoleHp, Svf};
+use crate::modulator::CONTROL_RATE_FRAMES;
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{Noise, Osc};
 use crate::shaper;
 use crate::smooth::Smoothed;
 use mooloop_core::{
-    body_mode_ratio, ds01, Ds01Character, Ds01EnvParams, Ds01NoiseColor, Ds01Params,
-    Ds01Retrigger, DriveCurve, OscWave,
-    DS01_BITS_TRANSPARENT, DS01_BODY_MODES, DS01_BURST_MAX_S, DS01_MAX_PARTIALS,
-    DS01_MAX_REPEATS, DS01_VOICES, MAX_CHOKE_GROUP,
+    body_mode_ratio, ds01, Ds01Character, Ds01EnvParams, Ds01ModSource, Ds01NoiseColor,
+    Ds01Params, Ds01Retrigger, DriveCurve, OscWave, ParamDescriptor,
+    DS01_BITS_TRANSPARENT, DS01_BODY_MODES, DS01_BURST_MAX_S, DS01_MATRIX_ROWS,
+    DS01_MAX_PARTIALS, DS01_MAX_REPEATS, DS01_VOICES, MAX_CHOKE_GROUP,
 };
 
 /// One DS-01 envelope block as the shared envelope's shape.
@@ -233,6 +234,9 @@ const DEVICE_CEILING: f32 = 1.0;
 /// audible as a swell rather than as the absence of a click, so this is sized
 /// to cover a step and nothing more.
 const SMOOTHING_S: f32 = 0.002;
+
+/// The node's noise seed, and the seed the per-hit random is derived from.
+const SEED: u32 = 0x9E37_79B9;
 
 /// The TR-808's six square-oscillator frequencies, as ratios of the lowest.
 ///
@@ -599,6 +603,121 @@ const SPREAD_OCTAVES: f32 = 1.0;
 /// How far Level Step moves each impulse, in octaves of amplitude ratio.
 const LEVEL_STEP_OCTAVES: f32 = 1.0;
 
+/// The eight source values one voice presents to the matrix.
+///
+/// Four are latched at the hit and four are live. Kept as one struct so
+/// "which sources exist" is a single place, and so a route can read one
+/// without the matrix knowing which kind it is.
+#[derive(Clone, Copy, Debug, Default)]
+struct Sources {
+    velocity: f32,
+    note: f32,
+    amp_env: f32,
+    noise_env: f32,
+    mod_env: f32,
+    burst_index: f32,
+    alternator: f32,
+    random: f32,
+}
+
+impl Sources {
+    fn get(&self, source: Ds01ModSource) -> f32 {
+        match source {
+            Ds01ModSource::None => 0.0,
+            Ds01ModSource::Velocity => self.velocity,
+            Ds01ModSource::Note => self.note,
+            Ds01ModSource::AmpEnv => self.amp_env,
+            Ds01ModSource::NoiseEnv => self.noise_env,
+            Ds01ModSource::ModEnv => self.mod_env,
+            Ds01ModSource::BurstIndex => self.burst_index,
+            Ds01ModSource::HitAlternator => self.alternator,
+            Ds01ModSource::Random => self.random,
+        }
+    }
+}
+
+/// The destination descriptors, resolved once when the parameters change so
+/// the audio path never searches a table.
+type MatrixDests = [Option<&'static ParamDescriptor>; DS01_MATRIX_ROWS];
+
+/// Shape a route's source before it is scaled. `0` is the identity.
+///
+/// Deliberately *not* [`shape`]'s own neutral, which is exponential — the
+/// right answer for an envelope, where curve 0 has to be v1's decay law, and
+/// the wrong one for a route, where the middle of a bipolar control has to
+/// mean "no shaping". Reusing it directly makes a route at its default curve
+/// deliver almost nothing until its source is near the top, which looks like
+/// a dead route rather than a shaped one.
+///
+/// The two ends are the same two shapes an envelope has, so a curve means the
+/// same thing to a musician in both places even though its middle does not.
+fn route_shape(position: f32, curve: f32) -> f32 {
+    let linear = position.clamp(0.0, 1.0);
+    let curve = curve.clamp(-1.0, 1.0);
+    let toward = if curve >= 0.0 {
+        shape(linear, 0.0)
+    } else {
+        shape(linear, -1.0)
+    };
+    linear + (toward - linear) * curve.abs()
+}
+
+/// Apply the rows whose destination's latching matches `latched` into a copy
+/// of `base`.
+///
+/// Routes add an offset in *normalized* destination space around the base
+/// value, exactly as a channel route does — never an absolute write — so a
+/// knob and a route compose rather than fight. Rows accumulate, because each
+/// reads the value the ones before it left; addition in normalized space
+/// means the result does not depend on the order they are in.
+///
+/// A route to a latched destination is evaluated at the trigger and one to a
+/// continuous destination every control tick. That is not a separate rule: it
+/// falls straight out of `01-what-ds01-is.md`'s two tables, which
+/// `ds01::is_latched` is.
+fn apply_matrix(
+    base: &Ds01Params,
+    dests: &MatrixDests,
+    sources: &Sources,
+    latched: bool,
+) -> Ds01Params {
+    let mut out = *base;
+    for (route, dest) in base.matrix.iter().zip(dests.iter()) {
+        let Some(dest) = dest else { continue };
+        if !route.is_active() || ds01::is_latched(dest.id) != latched {
+            continue;
+        }
+        let value = sources.get(route.source);
+        // The curve shapes the source before it is scaled. A bipolar source
+        // is shaped by magnitude and keeps its sign, so a curve bends both
+        // halves the same way instead of turning one of them inside out.
+        let shaped = if route.source.is_bipolar() {
+            route_shape(value.abs(), route.curve) * value.signum()
+        } else {
+            route_shape(value, route.curve)
+        };
+        let Some(current) = ds01::get(&out, dest.id) else {
+            continue;
+        };
+        let moved = dest.from_normalized(dest.to_normalized(current) + route.amount * shaped);
+        ds01::set(&mut out, dest.id, moved);
+    }
+    out
+}
+
+/// One deterministic value per hit, bipolar.
+///
+/// A function of the node seed and the hit counter and nothing else, so an
+/// offline render and a live take of the same event stream produce identical
+/// samples. That is the property that separates this from a humanize control.
+fn hit_random(seed: u32, hit: u64) -> f32 {
+    let mut x = seed ^ (hit as u32).wrapping_mul(0x9E37_79B9);
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    (x >> 8) as f32 / 8_388_608.0 - 1.0
+}
+
 /// One trigger's impulse schedule, latched at the hit.
 ///
 /// One voice, not one voice per impulse, for three reasons the plan names: an
@@ -753,6 +872,9 @@ struct Voice {
     /// The shapes the burst re-fires the envelopes with, latched at the hit
     /// alongside everything else the schedule decided.
     shapes: BurstShapes,
+    /// What this voice presents to the matrix. The latched four are set at
+    /// the trigger; the live four are refreshed each control tick.
+    sources: Sources,
     /// Rate-reducer state: the held sample and the fraction of a held period
     /// elapsed.
     held_noise: f32,
@@ -779,6 +901,7 @@ impl Voice {
             body: Body::new(sample_rate),
             burst: Burst::default(),
             shapes: BurstShapes::default(),
+            sources: Sources::default(),
             held_noise: 0.0,
             hold_phase: 1.0,
         }
@@ -802,6 +925,7 @@ impl Voice {
         self.filter.reset();
         self.body.reset();
         self.burst = Burst::default();
+        self.sources = Sources::default();
         self.held_noise = 0.0;
         self.hold_phase = 1.0;
     }
@@ -863,6 +987,16 @@ impl Voice {
         self.mod_env.trigger(ahd_shape(&params.mod_env), sample_rate);
         self.pitch_env.trigger(self.shapes.pitch, sample_rate);
         self.burst.start(params, sample_rate);
+    }
+
+    /// Re-read the four live sources. Called once per control tick, beside
+    /// the body's coefficients, because both are things the voice knows and
+    /// the tick is when the matrix asks.
+    fn refresh_sources(&mut self) {
+        self.sources.amp_env = self.amp_env.level();
+        self.sources.noise_env = self.noise_env.level();
+        self.sources.mod_env = self.mod_env.level();
+        self.sources.burst_index = self.burst.position();
     }
 
     /// Whether this hit still has impulses to fire. A voice is not free while
@@ -1047,6 +1181,12 @@ fn morph3(low: f32, band: f32, high: f32, morph: f32) -> f32 {
     }
 }
 
+/// Resolve every row's destination descriptor. Off the audio path: a matrix
+/// edit is a structural change, and the search belongs with it.
+fn resolve_dests(params: &Ds01Params) -> MatrixDests {
+    std::array::from_fn(|row| ds01::descriptor(params.matrix[row].dest))
+}
+
 /// The DS-01 node.
 pub struct Ds01 {
     params: Ds01Params,
@@ -1060,6 +1200,17 @@ pub struct Ds01 {
     /// One high-pass for the device, not one per voice: it is the output
     /// stage, and the DC that Bias creates sums like everything else.
     output_hp: OnePoleHp,
+    /// Every row's destination descriptor, resolved when the parameters
+    /// change so the audio path never searches the table.
+    matrix_dests: MatrixDests,
+    /// Hits this node has played. Drives the alternator and the per-hit
+    /// random, and is therefore what makes both a function of the event
+    /// stream rather than of the wall clock.
+    hit_count: u64,
+    /// One resolved control set per voice, because the matrix is per voice:
+    /// two hits at different velocities have to be able to disagree about
+    /// where the filter is.
+    voice_continuous: [Continuous; DS01_VOICES],
 }
 
 impl Ds01 {
@@ -1069,7 +1220,7 @@ impl Ds01 {
             params,
             sample_rate,
             voices: std::array::from_fn(|index| {
-                Voice::new(0x9E37_79B9_u32.wrapping_add(index as u32), sample_rate)
+                Voice::new(SEED.wrapping_add(index as u32), sample_rate)
             }),
             next_age: 1,
             tone_level: Smoothed::new(params.tone_level, SMOOTHING_S, sample_rate),
@@ -1077,6 +1228,9 @@ impl Ds01 {
             body_level: Smoothed::new(params.body_level, SMOOTHING_S, sample_rate),
             level: Smoothed::new(params.level, SMOOTHING_S, sample_rate),
             output_hp: OnePoleHp::new(),
+            matrix_dests: resolve_dests(&params),
+            hit_count: 0,
+            voice_continuous: [Continuous::new(&params); DS01_VOICES],
         }
     }
 
@@ -1084,6 +1238,7 @@ impl Ds01 {
     pub fn set_params(&mut self, mut params: Ds01Params) {
         params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
         self.params = params;
+        self.matrix_dests = resolve_dests(&params);
     }
 
     /// Apply one descriptor-addressed parameter, leaving the rest alone.
@@ -1110,6 +1265,7 @@ impl Ds01 {
             voice.reset();
         }
         self.next_age = 1;
+        self.hit_count = 0;
         self.tone_level.reset_to(self.params.tone_level);
         self.noise_level.reset_to(self.params.noise_level);
         self.body_level.reset_to(self.params.body_level);
@@ -1158,11 +1314,28 @@ impl Ds01 {
         let index = self.select_voice();
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1).max(1);
-        let params = self.params;
+        self.hit_count = self.hit_count.wrapping_add(1);
+
+        // The four latched sources, decided here rather than in the voice:
+        // the alternator and the random are properties of *this channel's*
+        // run of hits, so they survive voice stealing and are the same
+        // offline as live.
+        let sources = Sources {
+            velocity: f32::from(velocity.min(127)) / 127.0,
+            note: f32::from(note.min(127)) / 127.0,
+            alternator: if self.hit_count % 2 == 1 { 1.0 } else { -1.0 },
+            random: hit_random(SEED, self.hit_count),
+            ..Sources::default()
+        };
+        // Routes to a latched destination are evaluated once, here, so a hit
+        // whose shape a route decided keeps that shape for its whole life.
+        let params = apply_matrix(&self.params, &self.matrix_dests, &sources, true);
+
         let sr = self.sample_rate;
         let voice = &mut self.voices[index];
         voice.age = age;
         voice.trigger(&params, event_id, note, velocity, sr);
+        voice.sources = sources;
     }
 
     /// Route a note-off to the hit it started. Voices whose envelopes are all
@@ -1177,14 +1350,29 @@ impl Ds01 {
         }
     }
 
+    /// Render `start..end` in control ticks.
+    ///
+    /// The tick is a real interval, not the gap between events. It has to be:
+    /// DS-01's own matrix moves things with nothing arriving from outside —
+    /// an envelope opening a filter, Burst Index walking a pitch across a
+    /// roll — so a range resolved once at its start would hold the first
+    /// tick's values for a whole block. `process` still splits at every event
+    /// offset on top of this, which only makes the grid finer.
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        let mut at = start;
+        while at < end {
+            let tick_end = (at + CONTROL_RATE_FRAMES).min(end);
+            self.render_tick(bus, at, tick_end);
+            at = tick_end;
+        }
+    }
+
+    fn render_tick(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         if start >= end {
             return;
         }
-        // One control tick: the continuous controls are resolved once here
-        // and the smoothers are re-aimed, then every sample in the range runs
-        // against them. `process` splits at every event offset, so this runs
-        // again the moment any of them changes.
+        // The continuous controls are resolved once here and the smoothers
+        // re-aimed, then every sample in the tick runs against them.
         let continuous = Continuous::new(&self.params);
         self.output_hp.set_cutoff(continuous.output_hp, self.sample_rate);
         self.tone_level
@@ -1217,25 +1405,65 @@ impl Ds01 {
         // cleared while skipped, so a level returning from zero starts from
         // the next strike rather than resuming a frozen ring.
         let body_live = self.body_level.value() > 0.0 || self.params.body_level > 0.0;
-        for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+        // A route to a continuous destination is resolved per voice per
+        // tick, which is the whole reason DS-01 has a matrix the channel rack
+        // cannot substitute for: two hits sounding at once have to be able to
+        // disagree about where the filter is. When no row asks for that, all
+        // eight voices share the one resolved set.
+        let per_voice = self
+            .params
+            .matrix
+            .iter()
+            .zip(self.matrix_dests.iter())
+            .any(|(route, dest)| {
+                route.is_active() && dest.is_some_and(|d| !ds01::is_latched(d.id))
+            });
+        for (index, voice) in self.voices.iter_mut().enumerate() {
+            if !voice.active {
+                continue;
+            }
+            voice.refresh_sources();
+            self.voice_continuous[index] = if per_voice {
+                Continuous::new(&apply_matrix(
+                    &self.params,
+                    &self.matrix_dests,
+                    &voice.sources,
+                    false,
+                ))
+            } else {
+                continuous
+            };
+            let voice_continuous = &self.voice_continuous[index];
             if body_live {
-                voice
-                    .body
-                    .prepare(continuous.body_pitch * voice.latched.pitch_factor, &continuous, sr);
+                voice.body.prepare(
+                    voice_continuous.body_pitch * voice.latched.pitch_factor,
+                    voice_continuous,
+                    sr,
+                );
             } else {
                 voice.body.reset();
             }
         }
 
+        let voice_continuous = &self.voice_continuous;
         for frame in start..end {
             let tone_level = self.tone_level.advance();
             let noise_level = self.noise_level.advance();
             let body_level = self.body_level.advance();
             let level = self.level.advance();
             let mut sum = 0.0;
-            for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+            for (index, voice) in self.voices.iter_mut().enumerate() {
+                if !voice.active {
+                    continue;
+                }
                 let body_level = if body_live { body_level } else { 0.0 };
-                sum += voice.render_sample(&continuous, tone_level, noise_level, body_level, sr);
+                sum += voice.render_sample(
+                    &voice_continuous[index],
+                    tone_level,
+                    noise_level,
+                    body_level,
+                    sr,
+                );
                 if voice.amp_env.is_idle() && !voice.burst_pending() {
                     voice.active = false;
                     voice.gate_held = false;
@@ -1415,12 +1643,15 @@ mod tests {
         assert_eq!(size_of::<crate::env::Ahd>(), 48);
         assert_eq!(size_of::<Body>(), 116);
         assert_eq!(size_of::<Burst>(), 36);
-        assert_eq!(size_of::<Voice>(), 624);
-        // Eight of those, plus the parameter block and the four device-wide
-        // smoothers the layers share. The pool is 95% of the node.
-        assert_eq!(size_of::<Ds01Params>(), 224);
-        assert_eq!(size_of::<Ds01>(), 5_288);
-        assert_eq!(size_of::<Voice>() * DS01_VOICES, 4_992);
+        assert_eq!(size_of::<Sources>(), 32);
+        assert_eq!(size_of::<Voice>(), 656);
+        // Eight of those, plus the parameter block — which the matrix's
+        // eight rows dominate — the four device-wide smoothers the layers
+        // share, and one resolved control set per voice, because the matrix
+        // is per voice and two hits have to be able to disagree.
+        assert_eq!(size_of::<Ds01Params>(), 352);
+        assert_eq!(size_of::<Ds01>(), 6_352);
+        assert_eq!(size_of::<Voice>() * DS01_VOICES, 5_248);
     }
 
     #[test]
@@ -2609,6 +2840,258 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A patch with one route and nothing else moving: the tone layer alone,
+    /// quiet enough to stay below the voice ceiling and the device bound so
+    /// two voices sum linearly.
+    fn routed(source: Ds01ModSource, dest: u32, amount: f32) -> Ds01Params {
+        let mut params = Ds01Params {
+            tone_level: 1.0,
+            noise_level: 0.0,
+            level: 0.4,
+            amp: Ds01EnvParams::one_shot(1.0),
+            pitch: Ds01PitchEnvParams {
+                depth: 0.0,
+                ..Ds01PitchEnvParams::default()
+            },
+            ..Ds01Params::default()
+        };
+        params.matrix[0] = mooloop_core::Ds01Route {
+            source,
+            dest,
+            amount,
+            curve: 0.0,
+        };
+        params
+    }
+
+    /// The test the matrix exists for. A channel source produces one number
+    /// per control tick for the whole channel; two hits sounding at once with
+    /// different velocities have to be able to disagree about their pitch,
+    /// and that is not expressible as a channel-rate signal.
+    ///
+    /// Proved as superposition: the two hits together are exactly the two
+    /// hits apart. A per-channel source would give both voices the same
+    /// velocity, so the pair would be two copies of one pitch instead.
+    #[test]
+    fn a_route_is_per_voice_and_not_per_channel() {
+        let params = routed(Ds01ModSource::Velocity, ds01::PARAM_TONE_PITCH, 0.5);
+        let one_hit = |velocity: u8| {
+            let mut node = Ds01::new(params, SR);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 60, velocity));
+            render(&mut node, 12_000, &events)
+        };
+        let soft = one_hit(40);
+        let loud = one_hit(127);
+        assert_ne!(soft, loud, "velocity did not reach the pitch at all");
+
+        let mut node = Ds01::new(params, SR);
+        let mut events = EventList::empty();
+        events.push_ordered(note_on(0, 60, 40));
+        events.push_ordered(note_on(0, 60, 127));
+        let both = render(&mut node, 12_000, &events);
+
+        let worst = both
+            .iter()
+            .zip(soft.iter().zip(loud.iter()))
+            .fold(0.0_f32, |worst, (sum, (a, b))| worst.max((sum - (a + b)).abs()));
+        assert!(
+            worst < 1.0e-5,
+            "the two hits did not keep their own velocities: worst {worst}"
+        );
+    }
+
+    /// Burst Index puts a shape across a flam or a roll: four impulses inside
+    /// one voice, four distinct pitches. Consistent displacement rather than
+    /// noise, which is the distinction the taste brief draws.
+    #[test]
+    fn burst_index_gives_one_voice_four_pitches() {
+        let mut params = routed(Ds01ModSource::BurstIndex, ds01::PARAM_TONE_PITCH, 0.4);
+        params.burst_repeats = 4;
+        params.burst_spacing = 0.05;
+        params.amp = Ds01EnvParams::one_shot(0.04);
+
+        let out = hit(params, 24_000);
+        let per_impulse: Vec<usize> = (0..4)
+            .map(|index| {
+                let start = index * (0.05 * SR as f32) as usize;
+                upward_crossings(&out[start..start + 1_200])
+            })
+            .collect();
+        assert!(
+            per_impulse.windows(2).all(|pair| pair[1] > pair[0]),
+            "one voice gave {per_impulse:?}"
+        );
+    }
+
+    /// The 808 open/closed alternation and the every-other-hat ghost. It is a
+    /// property of the channel's run of hits rather than of a voice, so it
+    /// survives voice stealing.
+    #[test]
+    fn the_hit_alternator_alternates_and_survives_stealing() {
+        let params = Ds01Params {
+            amp: Ds01EnvParams::one_shot(4.0),
+            ..routed(Ds01ModSource::HitAlternator, ds01::PARAM_TONE_PITCH, 0.3)
+        };
+        let mut node = Ds01::new(params, SR);
+        let mut seen = Vec::new();
+        // More hits than the pool has voices, so the last several are steals.
+        for hit in 0..DS01_VOICES as u64 + 6 {
+            node.trigger(hit, 60, 127);
+            let voice = node
+                .voices
+                .iter()
+                .max_by_key(|voice| voice.age)
+                .expect("a voice was allocated");
+            seen.push(voice.sources.alternator);
+        }
+        for (index, value) in seen.iter().enumerate() {
+            let want = if index % 2 == 0 { 1.0 } else { -1.0 };
+            assert_eq!(*value, want, "hit {index} of {seen:?}");
+        }
+    }
+
+    /// Random is deterministic: derived from the node seed and the hit
+    /// counter, so an offline render and a live take of the same event stream
+    /// produce identical samples. That is what separates it from a humanize
+    /// control, and it is why it is safe to route at all.
+    #[test]
+    fn random_renders_identically_for_the_same_event_stream() {
+        let params = routed(Ds01ModSource::Random, ds01::PARAM_TONE_PITCH, 0.5);
+        let stream = |frames: usize| {
+            let mut node = Ds01::new(params, SR);
+            let mut out = Vec::new();
+            for block in 0..4 {
+                let mut events = EventList::empty();
+                events.push(note_on(0, 60 + block, 100));
+                out.extend(render(&mut node, frames, &events));
+            }
+            out
+        };
+        assert_eq!(stream(6_000), stream(6_000));
+
+        // And successive hits do get different values, or the source would be
+        // a constant with a good story.
+        let mut node = Ds01::new(params, SR);
+        node.trigger(1, 60, 100);
+        let first = node.voices.iter().max_by_key(|v| v.age).unwrap().sources.random;
+        node.trigger(2, 60, 100);
+        let second = node.voices.iter().max_by_key(|v| v.age).unwrap().sources.random;
+        assert_ne!(first, second);
+        assert!((-1.0..=1.0).contains(&first) && (-1.0..=1.0).contains(&second));
+    }
+
+    /// A route's curve is neutral in the middle. The envelope's is not — its
+    /// zero is v1's exponential decay law — and reusing that here makes a
+    /// route at its default curve deliver almost nothing until its source is
+    /// near the top.
+    #[test]
+    fn a_route_curve_is_neutral_in_the_middle() {
+        for position in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert!(
+                (route_shape(position, 0.0) - position).abs() < 1.0e-6,
+                "curve 0 moved {position}"
+            );
+        }
+        // The ends are the same two shapes an envelope has.
+        assert!(route_shape(0.5, 1.0) < 0.05, "the exponential end is not steep");
+        assert!(route_shape(0.5, -1.0) > 0.95, "the logarithmic end is not flat");
+        for curve in [-1.0, -0.5, 0.0, 0.5, 1.0] {
+            assert!(route_shape(0.0, curve).abs() < 1.0e-6);
+            assert!((route_shape(1.0, curve) - 1.0).abs() < 1.0e-6);
+        }
+    }
+
+    /// Amount is an ordinary automatable parameter, which is how a channel
+    /// LFO scales a per-hit relationship without knowing anything about
+    /// voices. Source and Destination are structural and are not.
+    #[test]
+    fn a_route_amount_is_an_ordinary_parameter() {
+        let amount_id = mooloop_core::matrix_param(0, ds01::MATRIX_OFFSET_AMOUNT);
+        let params = routed(Ds01ModSource::Velocity, ds01::PARAM_FILTER_CUTOFF, 0.0);
+        let quiet = Ds01Params {
+            tone_level: 0.0,
+            noise_level: 1.0,
+            filter_morph: 0.0,
+            ..params
+        };
+
+        // Scaled by an event mid-render, on a continuous destination, so it
+        // reaches the hit that is already sounding.
+        let mut node = Ds01::new(quiet, SR);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60, 127));
+        events.push(param(4_800, amount_id, 1.0));
+        let scaled = render(&mut node, 24_000, &events);
+
+        let mut untouched = Ds01::new(quiet, SR);
+        let mut plain = EventList::empty();
+        plain.push(note_on(0, 60, 127));
+        let flat = render(&mut untouched, 24_000, &plain);
+
+        assert_eq!(scaled[..4_800], flat[..4_800], "the amount reached backwards");
+        assert_ne!(
+            scaled[12_000..],
+            flat[12_000..],
+            "scaling the amount did nothing"
+        );
+
+        // And Source and Destination refuse the same treatment.
+        for offset in [ds01::MATRIX_OFFSET_SOURCE, ds01::MATRIX_OFFSET_DEST] {
+            let id = mooloop_core::matrix_param(0, offset);
+            let descriptor = ds01::descriptor(id).unwrap();
+            assert!(matches!(
+                descriptor.curve,
+                mooloop_core::ParamCurve::Stepped(_)
+            ));
+        }
+    }
+
+    /// Routes add an offset around the base value rather than writing it, so
+    /// a knob and a route compose instead of fighting — and a route to a
+    /// latched destination is evaluated at the trigger, so the hit it shaped
+    /// keeps that shape.
+    #[test]
+    fn a_route_offsets_the_base_and_latches_where_the_table_says() {
+        // Turning the knob under a route moves the result by the same amount
+        // it moves the knob.
+        let with_pitch = |pitch: f32, amount: f32| {
+            let mut params = routed(Ds01ModSource::Velocity, ds01::PARAM_TONE_PITCH, amount);
+            params.tone_pitch = pitch;
+            upward_crossings(&hit(params, 12_000)[480..9_600])
+        };
+        assert!(with_pitch(320.0, 0.0) > with_pitch(160.0, 0.0));
+        assert!(with_pitch(160.0, 0.3) > with_pitch(160.0, 0.0));
+        assert!(with_pitch(320.0, 0.3) > with_pitch(320.0, 0.0));
+
+        // Amp Decay is latched, so a route onto it decides the hit's shape
+        // once. Moving the route's amount mid-hit reaches the *next* one.
+        let amount_id = mooloop_core::matrix_param(0, ds01::MATRIX_OFFSET_AMOUNT);
+        let params = routed(Ds01ModSource::Velocity, ds01::PARAM_AMP_DECAY, 0.0);
+        let mut node = Ds01::new(params, SR);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60, 127));
+        events.push(param(2_400, amount_id, -1.0));
+        let sounding = render(&mut node, 24_000, &events);
+
+        let mut untouched = Ds01::new(params, SR);
+        let mut plain = EventList::empty();
+        plain.push(note_on(0, 60, 127));
+        assert_eq!(
+            sounding,
+            render(&mut untouched, 24_000, &plain),
+            "a latched destination followed a route mid-hit"
+        );
+
+        let mut next = EventList::empty();
+        next.push(note_on(0, 60, 127));
+        let after = render(&mut node, 24_000, &next);
+        assert!(
+            rms(&after[2_400..4_800]) < rms(&sounding[2_400..4_800]) * 0.5,
+            "the next hit ignored the route"
+        );
     }
 
     #[test]

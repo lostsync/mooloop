@@ -1,6 +1,6 @@
 # DS-01 plan status
 
-**Steps 02 through 06 are in.** The device exists and plays: a new `Ds01` generator kind
+**Steps 02 through 07 are in, except step 07's outlets.** The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
 state-variable filter, the amplitude and pitch envelopes, and the voice pool
@@ -32,7 +32,17 @@ four characters, a bias, a bit reducer, and an output high-pass, with the
 device reference documented as a contract rather than left as a constant doing
 three jobs.
 
-Read `01-what-ds01-is.md`, then work `07` through `09` in order.
+Step 07 added DS-01's own matrix: eight rows of source, destination, signed
+amount and curve, with eight per-voice sources. This is the modulation the
+channel rack *cannot* provide — a channel source produces one number per
+control tick for the whole channel, and a drum channel can have eight hits
+ringing at once, each with its own velocity, its own position in a burst and
+its own envelopes.
+
+**Step 07's published outlets are not built, and are blocked rather than
+skipped.** See below.
+
+Read `01-what-ds01-is.md`, then work `08` and `09` in order.
 
 Four things step 02 turned up that the plan could not have known:
 
@@ -172,7 +182,59 @@ because the identity is load-bearing: the default patch has to reach the gain
 reference through a shaper doing nothing at all, and `(x * 32768).round() /
 32768` is not `x`.
 
-The device face is **not** part of steps 02 through 06. DS-01 is selectable, playable,
+And four from step 07:
+
+- **A route's curve is neutral in the middle; an envelope's is not.** Reusing
+  `env::shape` directly was a real bug, caught by the Burst Index test: that
+  function's zero is v1's exponential decay law, which is the right answer for
+  an envelope and the wrong one for a route, where the middle of a bipolar
+  control has to mean "no shaping". A route at its default curve delivered
+  almost nothing until its source was near the top, which reads as a dead
+  route rather than a shaped one. `route_shape` keeps the same two ends and
+  makes the middle the identity.
+- **The control tick had to become a real interval.** It was the gap between
+  events, which is enough while everything that moves comes from outside. The
+  matrix moves things with nothing arriving — an envelope opening a filter,
+  Burst Index walking a pitch across a roll — so a block with one note-on in
+  it held the first tick's values for its whole length. `render_range` now
+  walks `CONTROL_RATE_FRAMES` at a time and `process` splits on top of that.
+- **No default route ships.** The step asks for Velocity to Amp at full
+  amount, so the device feels normal unprogrammed — and `Velocity Amount` at
+  id 5 already does exactly that, which the same paragraph says stays as the
+  plain control for the common case. Shipping both applies velocity twice.
+  Step 09's factory patches are the better place to demonstrate the mechanism,
+  since they can do it without doubling a control that is already on.
+- **A row cannot address the matrix's own band.** Source and Destination are
+  stepped and would be refused by the descriptor rule anyway; Amount and Curve
+  are not, and a row modulating another row's amount would make the result
+  depend on the order the rows happen to be evaluated in. A *channel* route
+  still reaches Amount — which is how an LFO scales a per-hit relationship
+  without knowing anything about voices — because it is resolved before the
+  block rather than inside it, so there is no order to depend on.
+
+## What is blocked
+
+**Step 07's published outlets are not built.** Both halves need infrastructure
+that does not exist, and building either one for DS-01 alone would be the
+special-case knowledge `COMPOSABLE_DEVICE_UNITS.md` exists to prevent:
+
+- **Control outlets** (`Amp Envelope`, `Mod Envelope`, `Velocity`, `Note`,
+  `Gate`, `Trigger`) need a device-outlet modulator kind and the per-channel
+  published table `MODULATOR_SYSTEM_SPEC.md` describes. `ModulatorKind` has
+  five kinds and none of them is one; that spec lists "Generator outlet" and
+  "Device outlet" as *Planned*. ML-P8's step 06 is blocked on the same thing,
+  which is the argument for building it once rather than twice.
+- **Audio outlets** (`Tone`, `Noise`, `Body`, `Pre-Shape`) need the typed
+  auxiliary audio edges `AUDIO_ARCHITECTURE.md` describes, which
+  `COMPOSABLE_DEVICE_UNITS.md` explicitly says a device may not bypass.
+
+Nothing about DS-01 blocks them, and DS-01 does not need them: the step's own
+rule is that the device makes complete sounds with no channel routes at all,
+and the matrix is what delivers that. `Trigger` is the one worth wanting
+soonest — it is what lets a kick duck a bass or fire an envelope on another
+device without a sidechain graph — and it arrives with the shared mechanism.
+
+The device face is **not** part of steps 02 through 07. DS-01 is selectable, playable,
 automatable and modulatable without one — every parameter is
 descriptor-addressed, so the modulation shelf and the automation lanes reach it
 whether or not a knob exists — and the rack shows a placeholder saying so.
@@ -257,7 +319,7 @@ instrument. Hence DS-01.
 | `04-the-body-resonator.md` | **In.** The tuned modal layer — toms, rims, bells, clangs |
 | `05-the-burst.md` | **In.** Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | **In.** Drive characters, the output stage, the gain contract |
-| `07-internal-modulation-and-outlets.md` | DS-01's own matrix and its published outlets |
+| `07-internal-modulation-and-outlets.md` | **Matrix in; outlets blocked** on the shared device-outlet mechanism |
 | `08-the-face.md` | The device face, with rendered concepts in `mockups/` |
 | `09-the-kit.md` | Factory patches, range tuning, and the listening pass |
 
