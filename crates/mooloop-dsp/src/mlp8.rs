@@ -616,6 +616,25 @@ impl CompiledRoutes {
         }
         false
     }
+
+    /// Take new depths from a route list of the *same* topology.
+    ///
+    /// The compiled rows are a subsequence of the authored routes, in order,
+    /// so this walks both once rather than searching. The caller has already
+    /// established that the topology matches.
+    fn retune(&mut self, routes: &MlP8Routes) {
+        let mut next = 0usize;
+        for authored in routes.iter() {
+            let Some(row) = self.routes[..self.len].get_mut(next) else {
+                break;
+            };
+            if row.id != authored.id {
+                continue;
+            }
+            row.scale = route_scale(authored.amount, row.span);
+            next += 1;
+        }
+    }
 }
 
 /// A route's authored percent, as the offset one unit of its source produces
@@ -1128,16 +1147,19 @@ impl MlP8 {
 
     /// Replace the parameter set. Called from the RT command drain.
     ///
-    /// The route table is recompiled only when the authored routes actually
-    /// differ. That matters because this is also the path every ordinary knob
-    /// takes: a cutoff automation lane must not rebuild the topology sixteen
-    /// times a block.
+    /// The route table is rebuilt only when the *topology* moved, and merely
+    /// retuned when the depths did. That matters because this is also the
+    /// path every ordinary knob takes: a cutoff automation lane must not
+    /// rebuild the topology sixteen times a block, and it would if a differing
+    /// depth counted — which it does, the moment a route amount has been
+    /// automated away from what the arriving parameter block still carries.
     pub fn set_params(&mut self, params: MlP8Params) {
-        let topology_moved = params.routes != self.params.routes;
-        self.params = params;
-        if topology_moved {
-            self.routes.compile(&self.params.routes);
+        if self.params.routes.same_topology(&params.routes) {
+            self.routes.retune(&params.routes);
+        } else {
+            self.routes.compile(&params.routes);
         }
+        self.params = params;
         self.apply_params_to_voices();
     }
 
@@ -1162,9 +1184,17 @@ impl MlP8 {
     /// id is its address. Writing it here rather than through `set_params`
     /// is also what keeps the promise that automating a route amount never
     /// rebuilds the topology.
-    fn apply_route_amount(&mut self, id: u16, amount: f32) {
+    pub fn set_route_amount(&mut self, id: u16, amount: f32) {
         if self.params.routes.set_amount(id, amount) {
-            self.routes.set_amount(id, amount);
+            // Read back rather than reused: the authored setter clamps, and
+            // the compiled scale has to be the value the patch actually holds.
+            let clamped = self
+                .params
+                .routes
+                .get(id)
+                .map(|route| route.amount)
+                .unwrap_or(amount);
+            self.routes.set_amount(id, clamped);
         }
     }
 
@@ -1647,7 +1677,7 @@ impl AudioNode for MlP8 {
                 Event::Choke => self.release_all(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
                 Event::SourceRouteAmount { route, amount } => {
-                    self.apply_route_amount(route, amount)
+                    self.set_route_amount(route, amount)
                 }
                 Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
             }
@@ -2203,7 +2233,7 @@ mod tests {
         assert_eq!(synth.routes.routes[0].scale, before);
 
         // The amount, on the other hand, moves in place.
-        synth.apply_route_amount(id, -50.0);
+        synth.set_route_amount(id, -50.0);
         assert_eq!(synth.routes.len, 1);
         assert_eq!(synth.routes.routes[0].id, id);
         assert_eq!(synth.routes.routes[0].scale, -before);

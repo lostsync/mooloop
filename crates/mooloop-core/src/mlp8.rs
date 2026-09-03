@@ -824,6 +824,57 @@ impl MlP8Routes {
         self.iter().find(|route| route.id == id)
     }
 
+    /// Whether two route lists differ only in their amounts.
+    ///
+    /// The audio path compiles a flat table from the topology and moves the
+    /// depths inside it, so this is the question that decides whether an
+    /// arriving parameter block is a rebuild or a retune. Asked here rather
+    /// than in the DSP because it is a property of the authored list, and
+    /// because answering it by id, source and destination costs sixteen
+    /// comparisons and no descriptor lookups.
+    pub fn same_topology(&self, other: &Self) -> bool {
+        self.routes
+            .iter()
+            .zip(other.routes.iter())
+            .all(|pair| match pair {
+                (Some(a), Some(b)) => a.id == b.id && a.source == b.source && a.dest == b.dest,
+                (None, None) => true,
+                _ => false,
+            })
+    }
+
+    /// Insert or repoint a route under an id the caller already minted.
+    ///
+    /// The authoring side owns the identity — the same rule the modulator
+    /// rack follows — so an edit that arrives twice, or out of order, lands
+    /// on the route it names rather than minting a second one.
+    pub fn upsert(&mut self, route: MlP8Route) -> bool {
+        if !route.dest.is_legal() {
+            return false;
+        }
+        for slot in self.routes.iter_mut() {
+            if slot.is_some_and(|existing| existing.id == route.id) {
+                *slot = Some(route);
+                self.next_id = self.next_id.max(route.id.saturating_add(1));
+                return true;
+            }
+        }
+        let Some(slot) = self.routes.iter_mut().find(|slot| slot.is_none()) else {
+            return false;
+        };
+        *slot = Some(route);
+        self.next_id = self.next_id.max(route.id.saturating_add(1));
+        true
+    }
+
+    /// The id the next authored route will take, without taking it.
+    ///
+    /// The UI mints ids so the engine never has to answer back; this is what
+    /// it mints from.
+    pub fn next_id(&self) -> u16 {
+        self.next_id
+    }
+
     /// Add a route, returning its durable id.
     ///
     /// `None` when the patch is full or the destination is structural. A
@@ -844,6 +895,28 @@ impl MlP8Routes {
             amount: 0.0,
         });
         Some(id)
+    }
+
+    /// Every authored route, mutably. For the load-time repair pass, which
+    /// clamps depths in place rather than rebuilding the list.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut MlP8Route> {
+        self.routes.iter_mut().flatten()
+    }
+
+    /// Drop every route the predicate rejects, returning how many went.
+    ///
+    /// The repair pass is what needs this: a file can carry a route onto a
+    /// destination the device refuses, or two routes claiming one id, and
+    /// neither can be corrected into something meaningful.
+    pub fn retain(&mut self, mut keep: impl FnMut(&MlP8Route) -> bool) -> usize {
+        let mut dropped = 0;
+        for slot in self.routes.iter_mut() {
+            if slot.is_some_and(|route| !keep(&route)) {
+                *slot = None;
+                dropped += 1;
+            }
+        }
+        dropped
     }
 
     pub fn remove(&mut self, id: u16) -> bool {

@@ -1161,6 +1161,10 @@ fn check_effect(doctor: &mut Doctor, who: &str, slot: usize, effect: &mut Effect
 /// while it is consulted.
 struct ChainShape {
     source: DeviceKind,
+    /// The durable ids of the generator's own internal modulation routes.
+    /// Empty for every device that authors none, which is all of them but
+    /// the ML-P8.
+    source_routes: Vec<u16>,
     effects: Vec<EffectKind>,
     modulators: Vec<Option<ModulatorKind>>,
 }
@@ -1169,6 +1173,11 @@ impl ChainShape {
     fn of(setup: &ChannelSetup) -> Self {
         Self {
             source: setup.source.kind(),
+            source_routes: setup
+                .source
+                .mlp8_state()
+                .map(|state| state.params.routes.iter().map(|route| route.id).collect())
+                .unwrap_or_default(),
             effects: setup.effects.iter().map(EffectSlotState::kind).collect(),
             modulators: setup
                 .modulation
@@ -1196,6 +1205,22 @@ impl ChainShape {
                     self.source
                 )
             }),
+            // A route is addressed by its durable id, so an address that
+            // names one the patch no longer has is exactly the orphan the id
+            // exists to make visible rather than silently re-aimable.
+            ParamOwner::SourceRoute { route } if !self.source_routes.contains(&route) => Some(
+                format!(
+                    "it drives internal route {route} of the {:?}, which has no such route",
+                    self.source
+                ),
+            ),
+            ParamOwner::SourceRoute { route } => {
+                self.source.route_descriptor(id).is_none().then(|| {
+                    format!(
+                        "it drives field {id} of internal route {route}, which routes do not have"
+                    )
+                })
+            }
             ParamOwner::Strip => strip_descriptor(id)
                 .is_none()
                 .then(|| format!("it drives strip control {id}, which does not exist")),
@@ -1263,7 +1288,9 @@ fn address_problem(
                         )
                     }),
                 },
-                ParamOwner::Source | ParamOwner::Modulator { .. } => {
+                ParamOwner::Source
+                | ParamOwner::SourceRoute { .. }
+                | ParamOwner::Modulator { .. } => {
                     Some(format!("it drives a generator or modulator on bus {bus}; a bus has neither"))
                 }
             }
@@ -1720,6 +1747,8 @@ fn check_mlm1(doctor: &mut Doctor, who: &str, params: &mut MlM1Params) {
 /// unit ranges the other synths use.
 fn check_mlp8(doctor: &mut Doctor, who: &str, params: &mut MlP8Params) {
     check_oscillators(doctor, who, "ML-P8", &mut params.osc);
+    check_mlp8_lfo(doctor, who, &mut params.lfo);
+    check_mlp8_routes(doctor, who, &mut params.routes);
     let mut fields: Vec<(String, &mut f32, f32, f32)> = vec![
         ("the attack".into(), &mut params.attack, 0.0, 10.0),
         ("the decay".into(), &mut params.decay, 0.0, 10.0),
@@ -1819,6 +1848,96 @@ fn check_mlp8(doctor: &mut Doctor, who: &str, params: &mut MlP8Params) {
             value,
             min,
             max,
+        );
+    }
+}
+
+/// The ML-P8's own LFO, checked against the same descriptors the device
+/// clamps through at runtime rather than against a second copy of its ranges.
+fn check_mlp8_lfo(doctor: &mut Doctor, who: &str, lfo: &mut mooloop_core::MlP8LfoParams) {
+    use mooloop_core::mlp8;
+    for (field, value, id) in [
+        ("the LFO rate", &mut lfo.rate_hz, mlp8::PARAM_LFO_RATE_HZ),
+        ("the LFO phase", &mut lfo.phase, mlp8::PARAM_LFO_PHASE),
+        ("the LFO warp", &mut lfo.warp, mlp8::PARAM_LFO_WARP),
+        ("the LFO slew", &mut lfo.slew, mlp8::PARAM_LFO_SLEW),
+    ] {
+        let Some(descriptor) = mlp8::descriptor(id) else {
+            continue;
+        };
+        doctor.fit(
+            "channel.mlp8.range",
+            who,
+            &format!("{field} (ML-P8)"),
+            value,
+            descriptor.min,
+            descriptor.max,
+        );
+    }
+}
+
+/// The instrument's internal modulation routes.
+///
+/// Two things a file can carry that the editor cannot author: a route onto a
+/// destination the device refuses to flap at audio rate, and two routes
+/// claiming one durable id. Neither can be corrected into something
+/// meaningful -- an id is an address, and two claimants make every automation
+/// lane pointed at it ambiguous -- so both are dropped rather than repaired.
+fn check_mlp8_routes(doctor: &mut Doctor, who: &str, routes: &mut mooloop_core::MlP8Routes) {
+    let illegal = routes.iter().filter(|route| !route.dest.is_legal()).count();
+    if illegal > 0
+        && doctor.correct(
+            "channel.mlp8.route",
+            who,
+            format!(
+                "{illegal} internal modulation {} aimed at a control that cannot be modulated",
+                if illegal == 1 { "route is" } else { "routes are" }
+            ),
+            "drop them".into(),
+        )
+    {
+        routes.retain(|route| route.dest.is_legal());
+    }
+    // Counted after the drop above, so a route that is both illegal and a
+    // duplicate is reported once rather than twice.
+    let mut seen: Vec<u16> = Vec::new();
+    let mut duplicated = 0usize;
+    for route in routes.iter() {
+        if seen.contains(&route.id) {
+            duplicated += 1;
+        } else {
+            seen.push(route.id);
+        }
+    }
+    if duplicated > 0
+        && doctor.correct(
+            "channel.mlp8.route",
+            who,
+            format!(
+                "{duplicated} internal modulation routes reuse an id another route \
+                 already has, so an automation lane pointed at it names two routes"
+            ),
+            "keep the first of each and drop the rest".into(),
+        )
+    {
+        let mut kept: Vec<u16> = Vec::new();
+        routes.retain(|route| {
+            if kept.contains(&route.id) {
+                false
+            } else {
+                kept.push(route.id);
+                true
+            }
+        });
+    }
+    for route in routes.iter_mut() {
+        doctor.fit(
+            "channel.mlp8.range",
+            who,
+            &format!("internal route {}'s amount (ML-P8)", route.id),
+            &mut route.amount,
+            -100.0,
+            100.0,
         );
     }
 }
@@ -1964,6 +2083,131 @@ mod tests {
         let before = project.clone();
         assert!(repair_project(&mut project).is_clean());
         assert_eq!(project, before);
+    }
+
+    /// A lane on an internal route's amount survives a round trip, and one on
+    /// a route the patch no longer has does not. The durable id is what makes
+    /// the second case detectable rather than silently re-aimed at whatever
+    /// route now occupies that position.
+    #[test]
+    fn a_lane_on_an_internal_route_lives_and_dies_with_the_route() {
+        let mut project = Project::default();
+        project.channels[0].setup = ChannelSetup::mlp8("Poly");
+        let route = project.channels[0]
+            .setup
+            .source
+            .mlp8_state_mut()
+            .unwrap()
+            .params
+            .routes
+            .add(
+                mooloop_core::MlP8ModSource::Lfo,
+                mooloop_core::MlP8ModDest::Param {
+                    id: mooloop_core::mlp8::PARAM_FILTER_CUTOFF,
+                },
+            )
+            .unwrap();
+
+        let target = ParamAddr::source_route(
+            EffectTarget::Channel(0),
+            route,
+            mooloop_core::MLP8_ROUTE_PARAM_AMOUNT,
+        );
+        let mut lane = AutomationLane::new(target);
+        lane.upsert(AutomationPoint::new(1, 0, 0.75));
+        project.channels[0].automation[0].push(lane);
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_clean(), "{diagnosis}");
+        assert_eq!(project.channels[0].automation[0].len(), 1);
+
+        // Now drop the route the lane names. The lane is an orphan and is
+        // reported as one.
+        assert!(project.channels[0]
+            .setup
+            .source
+            .mlp8_state_mut()
+            .unwrap()
+            .params
+            .routes
+            .remove(route));
+        let diagnosis = repair_project(&mut project);
+        assert_eq!(codes(&diagnosis), ["channel.automation.destination"]);
+        assert!(project.channels[0].automation[0].is_empty());
+    }
+
+    /// A device with no internal routes cannot carry a lane addressed to one.
+    #[test]
+    fn a_route_lane_on_a_device_without_routes_is_an_orphan() {
+        let mut project = Project::default();
+        project.channels[0].setup = ChannelSetup::poly_synth("Lead");
+        let mut lane = AutomationLane::new(ParamAddr::source_route(
+            EffectTarget::Channel(0),
+            1,
+            mooloop_core::MLP8_ROUTE_PARAM_AMOUNT,
+        ));
+        lane.upsert(AutomationPoint::new(1, 0, 0.5));
+        project.channels[0].automation[0].push(lane);
+
+        let diagnosis = repair_project(&mut project);
+        assert_eq!(codes(&diagnosis), ["channel.automation.destination"]);
+    }
+
+    /// A hand-edited or older file can carry routes the editor could not have
+    /// authored. Both kinds are dropped rather than repaired, because there
+    /// is nothing they could correctly become.
+    #[test]
+    fn unauthorable_internal_routes_are_dropped_and_depths_are_clamped() {
+        let mut project = Project::default();
+        project.channels[0].setup = ChannelSetup::mlp8("Poly");
+        let routes = &mut project.channels[0]
+            .setup
+            .source
+            .mlp8_state_mut()
+            .unwrap()
+            .params
+            .routes;
+
+        // Legal, but with a depth past the end of its range.
+        let good = routes
+            .add(
+                mooloop_core::MlP8ModSource::Lfo,
+                mooloop_core::MlP8ModDest::Param {
+                    id: mooloop_core::mlp8::PARAM_FILTER_CUTOFF,
+                },
+            )
+            .unwrap();
+        assert!(routes.upsert(mooloop_core::MlP8Route {
+            id: good,
+            source: mooloop_core::MlP8ModSource::Lfo,
+            dest: mooloop_core::MlP8ModDest::Param {
+                id: mooloop_core::mlp8::PARAM_FILTER_CUTOFF,
+            },
+            amount: 900.0,
+        }));
+        // A second route that has been made to claim the same id -- which the
+        // editor cannot do, and a file can. Any lane pointed at that id now
+        // names two routes.
+        let other = routes
+            .add(mooloop_core::MlP8ModSource::Gate, mooloop_core::MlP8ModDest::Pan)
+            .unwrap();
+        for route in routes.iter_mut() {
+            if route.id == other {
+                route.id = good;
+            }
+        }
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_usable(), "{diagnosis}");
+        let routes = &project.channels[0]
+            .setup
+            .source
+            .mlp8_state()
+            .unwrap()
+            .params
+            .routes;
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes.get(good).unwrap().amount, 100.0);
     }
 
     #[test]

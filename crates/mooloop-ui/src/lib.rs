@@ -2963,6 +2963,18 @@ impl UiState {
                     .kind()
                     .descriptor(target.param)
             }
+            // A route amount is not in the device's table; its descriptor
+            // belongs to the route.
+            ParamOwner::SourceRoute { .. } => {
+                let EffectTarget::Channel(channel) = target.scope else {
+                    return None;
+                };
+                self.channels
+                    .get(channel as usize)?
+                    .generator_params()
+                    .kind()
+                    .route_descriptor(target.param)
+            }
             ParamOwner::Effect { slot } => {
                 let effects = match target.scope {
                     EffectTarget::Channel(channel) => &self.channels.get(channel as usize)?.effects,
@@ -3445,7 +3457,11 @@ impl UiState {
             ParamOwner::Strip => strip_descriptor(address.param)
                 .map(|descriptor| ("Channel strip".to_string(), descriptor)),
             // Modulators are sources in this first UI pass, not destinations.
-            ParamOwner::Modulator { .. } => None,
+            // An instrument's own routes are not channel destinations either:
+            // the shelf reaches a device's controls, and a route amount
+            // belongs to the patch's internal modulation rather than to the
+            // device's control surface.
+            ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
         }
     }
 
@@ -3647,6 +3663,12 @@ impl UiState {
                     ParamOwner::Strip => -2,
                     ParamOwner::Effect { slot } => slot as i32,
                     ParamOwner::Modulator { slot } => -3 - slot as i32,
+                    // Just past the modulator band, derived rather than
+                    // written out, so growing the rack cannot collide with
+                    // it. Unreachable today -- the shelf cannot address an
+                    // instrument's internal routes -- but the encoding has to
+                    // be total.
+                    ParamOwner::SourceRoute { .. } => -3 - MAX_MODULATORS_PER_CHANNEL as i32,
                 };
                 Some(ModulationRouteRow {
                     route_index: index as i32,

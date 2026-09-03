@@ -574,6 +574,30 @@ impl DeviceKind {
     pub fn descriptor(self, id: u32) -> Option<&'static ParamDescriptor> {
         self.descriptors().iter().find(|d| d.id == id)
     }
+
+    /// The fields of one of this device's own internal modulation routes.
+    ///
+    /// Empty for every device that has none, which is all of them but the
+    /// ML-P8. Separate from [`Self::descriptors`] because these are not
+    /// controls of the device: they belong to a route, they are addressed
+    /// through [`crate::ParamOwner::SourceRoute`] by the route's durable id,
+    /// and a device with sixteen of them does not thereby have sixteen times
+    /// as many parameters.
+    pub fn route_descriptors(self) -> &'static [ParamDescriptor] {
+        match self {
+            Self::MlP8 => &crate::mlp8::ROUTE_DESCRIPTORS,
+            _ => &[],
+        }
+    }
+
+    pub fn route_descriptor(self, param: u32) -> Option<&'static ParamDescriptor> {
+        self.route_descriptors().iter().find(|d| d.id == param)
+    }
+
+    /// Whether this device authors its own internal modulation routes at all.
+    pub fn has_internal_routes(self) -> bool {
+        !self.route_descriptors().is_empty()
+    }
 }
 
 // --- Read/write ------------------------------------------------------------
@@ -654,6 +678,26 @@ pub enum GeneratorParams {
 }
 
 impl GeneratorParams {
+    /// This generator's own internal modulation routes, for the one kind that
+    /// has them.
+    ///
+    /// Typed as the ML-P8's list rather than hidden behind a trait: there is
+    /// exactly one device with internal routes, and a trait with one
+    /// implementor would say less about the design than this does.
+    pub fn internal_routes(&self) -> Option<&crate::mlp8::MlP8Routes> {
+        match self {
+            Self::MlP8(p) => Some(&p.routes),
+            _ => None,
+        }
+    }
+
+    pub fn internal_routes_mut(&mut self) -> Option<&mut crate::mlp8::MlP8Routes> {
+        match self {
+            Self::MlP8(p) => Some(&mut p.routes),
+            _ => None,
+        }
+    }
+
     pub fn kind(&self) -> DeviceKind {
         match self {
             Self::Sampler(_) => DeviceKind::Sampler,

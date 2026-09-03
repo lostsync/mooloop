@@ -11,7 +11,7 @@
 
 use crate::{
     AutomationPoint, BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
-    ModRoute, ModSourceId, ModulatorParams, MonoSynthParams, MlM1Params, NoteEvent,
+    MlP8Route, ModRoute, ModSourceId, ModulatorParams, MonoSynthParams, MlM1Params, NoteEvent,
     NoteId,
     ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams,
 };
@@ -187,6 +187,20 @@ pub enum EngineCommand {
     /// arrive through `load_source` on the control thread, which never
     /// touches this ring.
     SetChannelGeneratorParam { channel: u8, id: u32, value: f32 },
+    /// Add or repoint one of the generator's own internal modulation routes.
+    ///
+    /// Structural: the audio thread recompiles its flat table from it. The
+    /// route carries its durable id because the authoring side mints it, the
+    /// same rule `SetModRoute` follows — an edit that arrives twice or out of
+    /// order lands on the route it names rather than minting a second one.
+    SetSourceRoute { channel: u8, route: MlP8Route },
+    /// Drop one internal route by durable id. Its id is never reissued, so an
+    /// automation lane still pointed at it is orphaned rather than re-aimed.
+    RemoveSourceRoute { channel: u8, route: u16 },
+    /// Move one internal route's depth. The ordinary knob drag, and
+    /// deliberately not structural: it retunes the compiled table in place
+    /// rather than rebuilding it.
+    SetSourceRouteAmount { channel: u8, route: u16, amount: f32 },
     /// Replace a channel's poly synth parameter set.
     SetChannelPolySynthParams {
         channel: u8,
