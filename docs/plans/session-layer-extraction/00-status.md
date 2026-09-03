@@ -1,11 +1,13 @@
 # Session layer extraction — plan status
 
-Steps 01 to 03 done, 2026-09-03. Written 2026-09-02, out of
+All six steps done, 2026-09-03, with two recorded departures (steps 04 and
+05 below). Written 2026-09-02, out of
 `docs/ARCHITECTURE_REVIEW.md`.
 
-`crates/mooloop-session` exists and `crates/mooloop-ui/src/lib.rs` is down from
-14,157 lines to 11,920. The line counts quoted below are the ones the plan was
-written against and are left as written; `UiState::new` has not been touched.
+`crates/mooloop-session` is 23 modules and 87 tests. `crates/mooloop-ui/src/lib.rs`
+is down from 14,157 lines to 9,797, and `UiState::new` from 8,008 to 6,281.
+The line counts quoted below are the ones the plan was written against and are
+left as written.
 
 ## The decision
 
@@ -102,9 +104,9 @@ and projection; the tests that become possible.
 | `01` | Create the crate; move the toolkit-free free functions and `history.rs` | Very low — pure moves — **done** |
 | `02` | Move the plain data types | Low — **done** |
 | `03` | Split `UiState` into `Session` plus view-side models | Medium — **done** |
-| `04` | Break up `UiState::new`; hoist closure bodies onto `Session` | High — the bulk of the work |
-| `05` | Move engine command emission behind a session-owned interface | Medium |
-| `06` | Test the session layer | None; this is the payoff |
+| `04` | Break up `UiState::new`; hoist closure bodies onto `Session` | High — the bulk of the work — **done, one departure** |
+| `05` | Move engine command emission behind a session-owned interface | Medium — **done, one departure** |
+| `06` | Test the session layer | None; this is the payoff — **done** |
 
 Steps 01 and 02 are mechanical and should land quickly. Step 04 is most of the
 plan and is divided by UI area inside its own document, because a single commit
@@ -227,3 +229,110 @@ Three departures:
 One stale comment was dropped rather than carried: `normalized_buses` had a
 first doc line describing `ChannelState`, glued there on `main` long before
 this plan. It says nothing true about the function it was attached to.
+
+### 04 — done, 2026-09-03, in eleven commits
+
+Worked by area, as the step document asks, each its own commit and each
+leaving the application working:
+
+| Area | Session module | Tests |
+| --- | --- | --- |
+| Transport, patterns, playlist | `transport` | 5 |
+| Step grid | `steps` | 6 |
+| Channel rack | `rack` | 5 |
+| Piano roll | `roll` | 9 |
+| Automation lanes | `automation` | 5 |
+| Device rack | `effects` | 6 |
+| Mixer and buses | `mixer` | 4 |
+| Modulation shelf | `modulation` | 5 |
+| Sampler: slices, commit, snapping | `sampler` | 6 |
+| Document: export, presets | `document` | — |
+| Browser navigation | `browser` | — |
+
+The transformation was the one the step prescribes, every time: the closure
+body becomes a named `Session` method taking plain arguments and returning
+plain data or ordered engine commands, and the closure becomes an adapter that
+reads the window, calls it, and projects the result. Roughly 1,600 lines of
+decision-making left the closures.
+
+What came out of it beyond the seam is the repetition it exposed. All six
+step-grid callbacks opened with the same twenty lines of cell resolution
+written six times with the bounds check subtly restated each time. Three of the
+roll's drag gestures each carried their own copy of the group-clamping rule and
+their own paragraph explaining it. The four effect trim knobs were
+near-identical twenty-line blocks differing only in which field they set. Each
+of those is now stated once, next to the test that pins it.
+
+**Gesture tokens survived intact**, which the step document singles out as the
+thing a build will not tell you about. `CommandState::gesture` still lives in
+the view, `record_project_history` still reads it, and
+`tests/piano_drag.rs::a_drag_opens_and_closes_exactly_one_gesture` still
+passes. `tests/ordering.rs` now asserts the same property at the document
+level.
+
+**The departure: `UiState::new` is 6,281 lines, not "a few hundred".** What is
+left in it is 5,228 lines of callback *registration* — 191 blocks of capture
+preamble around adapters that contain no decisions — plus the pump and the
+setup. Splitting the registration into `wire_*` functions needs the shared
+handles gathered into a struct, and that rewrite cannot be done mechanically:
+`window` appears 820 times in the region and `state` 252, and most of those are
+closure-local rebindings (`let Some(window) = weak.upgrade()`,
+`let mut state = st.borrow_mut()`) rather than the captured outer name. A
+textual rewrite would silently capture the wrong one in some closure, and no
+test in this repository would catch it. Every other move in this plan was
+verified by the compiler naming the exact byte span; this one cannot be, so it
+is left for someone doing it by hand, or for the view rewrite that would
+replace the constructor anyway. The step's substantive criterion — every
+extracted edit is a named `Session` method reachable from a menu, a shortcut,
+or a test — is met.
+
+### 05 — done, 2026-09-03, in two commits
+
+`PendingEngineMessage`, the six typed senders, `TelemetryAction`,
+`AudioAction`, `ChannelAudio` and `publish_channel_audio_to` are
+`mooloop-session/src/engine.rs`. `Session::apply_engine_message` drains the
+five queued messages that need nothing but the handle, and
+`Session::transport_position` resolves the position readout's arithmetic.
+
+**The departure: there is no `TickReport`, and the meter, playhead and
+modulator-output polling stayed in the view.** That loop interleaves reading
+the engine with per-row change detection, precisely so that it does *not*
+write a Slint model when a value has not visibly moved;
+`docs/plans/archive/reduce-ui-pump-overhead/` is what tuned it that way and
+this step says in as many words that it must not be undone. Returning those
+readings as plain data would allocate a vector per tick at 125 Hz to feed
+change detection that would then run in the view instead. The step's own
+framing is that the engine's side is already correct and this is only about
+who calls the poll — and for the meters, the caller it already has is the
+right one.
+
+`ProjectEdit` and `Audio` stayed with the view for a smaller reason: both end
+in something the user sees — an installed document, a JACK error in the
+preferences pane — so both belong with the layer that can show it.
+
+### 06 — done, 2026-09-03
+
+`cargo test -p mooloop-session` is 87 tests in 0.27s. Fifty-two were written
+alongside the extraction in steps 04 and 05, next to the behaviour they pin;
+`tests/structure.rs` and `tests/ordering.rs` cover the rest of the step's
+priority list. All five priorities are covered: structural retargeting,
+undo at the document level, document round-trip, command ordering, and note
+editing.
+
+## Where this leaves the boundary
+
+`mooloop-session` has no `slint` in its manifest or its dependency tree, and
+the compiler has enforced that at every step. The session owns the model, the
+edits, the undo unit, and the commands; the view owns the window, the models,
+the callbacks, and the projection into them.
+
+Two things are still on the view's side of the line and are worth naming
+rather than leaving to be discovered:
+
+- **`settings.rs` holds a `slint::Color`**, so the appearance and preferences
+  store cannot move. `quarantine_song` and the preset save path both take the
+  paths they need as arguments because of it.
+- **The pump is a Slint `Timer`**, and the meter polling described above lives
+  inside it.
+
+Neither blocks a view swap; both would be part of one.

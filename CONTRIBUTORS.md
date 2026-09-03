@@ -568,12 +568,14 @@ work session you can recall being part of, and don't stress over precision.
   the face and the kit; its published outlets are blocked on the same
   device-outlet mechanism ML-P8's step 06 needs, so they wait for it to be
   built once rather than twice.
-  Then worked `docs/plans/session-layer-extraction/`: created `mooloop-session`,
-  moved the already-toolkit-free code and the plain data types into it, and
-  split `UiState` into a `Session` that owns the model and a view that owns
-  only the Slint models and the projection into them. The compiler drove the
-  mechanical half -- move the fields, then rewrite the byte spans rustc points
-  at -- which is what made a 900-site change reviewable.
+  Then ran `docs/plans/session-layer-extraction/` end to end: `mooloop-session`
+  now owns the model, the edits, undo and engine command emission, with no
+  `slint` in its dependency tree, and `mooloop-ui/src/lib.rs` is down from
+  14,157 lines to 9,797. The compiler drove the mechanical half -- move the
+  fields, then rewrite the byte spans rustc points at -- which is what made a
+  900-site change reviewable. Eighty-seven tests came with it, the first
+  coverage the edit logic has ever had; two departures from the plan are
+  written down with reasons rather than left to be found.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

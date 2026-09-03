@@ -213,8 +213,8 @@ The reference argues for a command log over the project model, on the grounds
 that snapshots of a large session are too big to take on every fader move.
 
 Mooloop uses snapshots: `History<ProjectSnapshot>`
-(`crates/mooloop-ui/src/history.rs`), where a snapshot is the whole `Project`
-plus a vector of sample handles.
+(`crates/mooloop-session/src/history.rs`), where a snapshot is the whole
+`Project` plus a vector of sample handles.
 
 The reference's objection is about scale, and does not bite yet. Samples are
 `Arc` clones rather than buffer copies, project documents are small, and the
@@ -231,6 +231,11 @@ what exists, properly. The evidence says the opposite: **the engine is the part
 that is already built properly, and the UI layer is the part that is not.** A
 rebuild of both would discard the strongest code in the repository to fix a
 problem located somewhere else.
+
+The measurements below are from this review, before
+`docs/plans/session-layer-extraction/` ran. They are the diagnosis, and are
+left as they were written; what happened next is under "Extraction: done"
+after the recommendation.
 
 The coupling is real, but it is concentrated:
 
@@ -278,6 +283,22 @@ crate out of `lib.rs`; `docs/plans/egui-view-layer/` builds a view against it.
 The first is worth doing whether or not the second ever happens, because it is
 what makes a 13,411-line file testable and what turns "rewrite the app" into
 "write a view layer."
+
+### Extraction: done, 2026-09-03
+
+`mooloop-session` exists and has no `slint` in its dependency tree. It owns the
+model, the edits, undo, and engine command emission; `mooloop-ui` owns the
+window, the models, the callbacks and the projection. `lib.rs` is 9,797 lines,
+`cargo test -p mooloop-session` is 87 tests in under a second, and the third
+measurement above -- session state stored inside toolkit containers -- no
+longer holds: `Session` owns the plain fields and `UiState` keeps only the
+`Rc<VecModel<...>>` projections of them.
+
+Two things stayed on the view's side deliberately, both recorded with reasons
+in `docs/plans/session-layer-extraction/00-status.md`: `UiState::new` is still
+long, but what is left in it is callback registration rather than decisions;
+and the pump's meter polling stayed where it is, because its per-row change
+detection is what keeps the pump cheap.
 
 One tension worth naming rather than discovering later: `docs/FOCUS.md` says to
 prefer changes that produce a musical decision over changes that merely add
