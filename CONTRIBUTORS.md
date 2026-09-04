@@ -39,7 +39,7 @@ work session you can recall being part of, and don't stress over precision.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-03
-- Sessions: 41
+- Sessions: 42
 - Notes: Parameter descriptors, the modulation design, seven effects, the
   mixer bus graph, and the near-term focus sequence. Buffer device stage 1
   follow-up: collision telemetry, debug trigger surface, and the remaining
@@ -576,6 +576,14 @@ work session you can recall being part of, and don't stress over precision.
   900-site change reviewable. Eighty-seven tests came with it, the first
   coverage the edit logic has ever had; two departures from the plan are
   written down with reasons rather than left to be found.
+  Then spent a day on whether to replace Slint with egui, and ended up
+  writing `docs/plans/edit-loop/` instead. The toolkit case measured out in
+  egui's favour on every count and the Slint-side escape hatch does not
+  hold -- but the problem underneath it was never the toolkit, it was that
+  one step forward costs 45 minutes and 44 of them are waiting on builds.
+  Evidence on `spike/egui-view-layer` (a whole-window egui sketch, eight
+  panes) and `spike/slint-split-build` (a device face compiled as its own
+  crate: 31s to 2s), both unmerged, both with their findings written down.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

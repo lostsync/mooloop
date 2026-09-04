@@ -9,7 +9,7 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
-Last swept 2026-09-02.
+Last swept 2026-09-03.
 
 `docs/ARCHITECTURE_REVIEW.md` is where the two newest plans came from, and it
 is worth reading before either.
@@ -23,7 +23,8 @@ is worth reading before either.
 | `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
 | `session-layer-extraction/` | **Done, 2026-09-03.** Lifted `mooloop-session` -- the model, the edits, undo, and engine command emission -- out of `mooloop-ui/src/lib.rs`, which is down from 14,157 lines to 9,797. `cargo test -p mooloop-session` is 87 tests in under a second, and is the first coverage the edit logic has ever had. Two departures are recorded in `00-status.md`: `UiState::new` is still long (callback *registration*, no longer decisions), and the pump's meter polling stayed in the view on purpose. |
-| `egui-view-layer/` | **Written, not decided.** No longer blocked: `session-layer-extraction/` is done, so a view layer would inherit a session rather than reproduce one. Still gated on step 01's spike. `00-status.md` states the case both ways. Compile cost was assumed to be the argument against and measured as an argument for: `build.rs` expands `ui/main.slint` into a single 39 MB Rust module, which is where the four minutes and the 3.4 GB go. What is left to decide is frame time and interaction feel. |
+| `edit-loop/` | **Written 2026-09-03, not started. Pick this up before `egui-view-layer/`.** One step forward currently costs about 45 minutes, of which roughly 44 are waiting on builds. Five steps, cheapest first, each measured, stopping as soon as the pain is gone: measure a real cycle, get the build off the laptop, move failure detection to the cheap layers, split the device faces actually being edited, then decide. Step 01 is not a formality -- the plan was written without knowing what fails on a failed attempt or where the binary is built, and every later step branches on those. |
+| `egui-view-layer/` | **Written, not decided; argument 4 tested and upheld; superseded for now by `edit-loop/`.** No longer blocked: `session-layer-extraction/` is done, so a view layer would inherit a session rather than reproduce one. Still gated on step 01's spike. `00-status.md` states the case both ways. Compile cost was assumed to be the argument against and measured as an argument for: `build.rs` expands `ui/main.slint` into a single 39 MB Rust module, which is where the four minutes and the 3.4 GB go. What is left to decide is frame time and interaction feel. |
 
 ## Queued, not started
 
