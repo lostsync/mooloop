@@ -191,8 +191,16 @@ if [[ $PRUNE -eq 1 ]]; then
   freed=0
   unmarked=0
   foreign=0
+  # The list is read into an array first, deliberately. Every judgement below
+  # needs its own ssh call, and ssh reads stdin -- so a `while read` fed by
+  # the listing would have its remaining slugs swallowed by the first `cat`,
+  # and the loop would exit after one cache having freed nothing.
+  slugs=()
   while IFS= read -r slug; do
     [[ -n "$slug" ]] || continue
+    slugs+=("$slug")
+  done < <(ssh_run "ls -1 \"$REMOTE_BASE/targets\" 2>/dev/null" || true)
+  for slug in ${slugs+"${slugs[@]}"}; do
     origin="$(ssh_run "cat \"$REMOTE_BASE/targets/$slug/.antibox-origin\" 2>/dev/null" || true)"
     # The marker is "<host><tab><path>". A cache belonging to a different
     # machine cannot be judged from this one -- the path may well exist over
@@ -229,7 +237,7 @@ if [[ $PRUNE -eq 1 ]]; then
     size="$(ssh_run "du -sm \"$REMOTE_BASE/targets/$slug\" 2>/dev/null | cut -f1" || echo 0)"
     freed=$(( freed + ${size:-0} ))
     ssh_run "rm -rf \"$REMOTE_BASE/targets/$slug\" \"$REMOTE_BASE/checkouts/$slug\""
-  done < <(ssh_run "ls -1 \"$REMOTE_BASE/targets\" 2>/dev/null" || true)
+  done
   echo "antibox: freed ${freed} MB" >&2
   if [[ $foreign -gt 0 ]]; then
     echo "antibox: kept $foreign cache(s) belonging to another machine" >&2
