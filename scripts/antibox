@@ -11,6 +11,7 @@
 #   scripts/antibox --release-bin          # stripped release binary -> ./bin/mooloop-test
 #   scripts/antibox --dev-bin              # dev-profile binary -> ./bin/mooloop-dev
 #   scripts/antibox --prune                # drop remote caches for checkouts that are gone
+#   scripts/antibox --timeout 30m cargo test --workspace
 #
 # The working tree is mirrored with rsync (gitignored paths excluded), so
 # uncommitted work is tested as-is and nothing needs pushing first. Each local
@@ -35,6 +36,7 @@ DEV_BIN=""
 KEEP_SYMBOLS=0
 PRUNE=0
 PRUNE_AGE=30
+TIMEOUT="${MOOLOOP_REMOTE_TIMEOUT:-45m}"
 RELEASE_DEST="$PWD/bin/mooloop-test"
 DEV_DEST="$PWD/bin/mooloop-dev"
 
@@ -76,6 +78,14 @@ Options:
                   older than --prune-age.
   --prune-age N   How many days an unmarked cache must have gone untouched
                   before --prune will remove it (default: 30).
+  --timeout DUR   Kill the remote command after DUR (a `timeout` duration,
+                  default 45m, or $MOOLOOP_REMOTE_TIMEOUT). 0 disables it.
+                  A run that stalls should cost minutes, not a night: one
+                  measured `cargo test` compiled in 1m52s, ran its tests, and
+                  then sat for two hours before returning. Nothing in its
+                  output accounted for the gap, and no build in this workspace
+                  legitimately takes that long -- a cold full workspace test
+                  build is about 7 minutes.
   -h, --help      Show this help.
 
 $MOOLOOP_REMOTE_TARGET overrides this checkout's remote Cargo target
@@ -127,6 +137,7 @@ while [[ $# -gt 0 ]]; do
     --keep-symbols) KEEP_SYMBOLS=1; shift ;;
     --prune) PRUNE=1; shift ;;
     --prune-age) PRUNE_AGE="${2:?--prune-age needs a value}"; shift 2 ;;
+    --timeout) TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     -*) echo "antibox: unknown option $1" >&2; usage >&2; exit 2 ;;
@@ -320,6 +331,13 @@ elif [[ $# -eq 0 ]]; then
   set -- cargo test --workspace
 fi
 
+# `timeout` returns 124 when it fires, which is distinguishable from any exit
+# code the build itself produces.
+TIMEOUT_PREFIX=""
+if [[ -n "$TIMEOUT" && "$TIMEOUT" != 0 ]]; then
+  TIMEOUT_PREFIX="timeout $TIMEOUT "
+fi
+
 QUOTED=""
 for arg in "$@"; do
   QUOTED+=" $(printf '%q' "$arg")"
@@ -336,8 +354,13 @@ ssh_run "
   export CARGO_BUILD_JOBS=\"\$(nproc)\"
   export CARGO_TERM_COLOR=never
   cd \"$REMOTE_DIR\"
-  exec$QUOTED
+  exec $TIMEOUT_PREFIX$QUOTED
 " || STATUS=$?
+
+if [[ $STATUS -eq 124 ]]; then
+  echo "antibox: the remote command hit the $TIMEOUT timeout and was killed." >&2
+  echo "         Raise it with --timeout, or 0 to disable." >&2
+fi
 
 for path in ${PULL+"${PULL[@]}"}; do
   if [[ -n "$RELEASE_BIN$DEV_BIN" && "$path" = "$REMOTE_STAGE" ]]; then

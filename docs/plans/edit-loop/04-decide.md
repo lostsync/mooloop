@@ -85,7 +85,58 @@ change than view layers. `main.slint` is still 8.7 minutes and still
 unreachable from inside Slint -- but 8.7 minutes you are not sitting through
 is a different complaint from 8.7 minutes you are.
 
-## The one number still missing
+## The number arrived — 2026-09-04
+
+`feat/device-presets` is the first long session run under the new defaults.
+`scripts/loop-profile b9107524`:
+
+| | Blocking share | Workspace runs |
+| --- | --- | --- |
+| the nineteen sessions this plan was written from | 57% | 21, in the worst |
+| the preset session | **10%** | 4 |
+
+**Under this step's own 25% threshold**, and the ladder is visibly in use: the
+failures it hit — four failing test runs and one that did not compile — were
+caught at rung 2, `cargo test -p mooloop-ui` at 17-45 s, not by a workspace
+run. That is the discipline the plan asked for, doing exactly what it was
+supposed to do.
+
+### What the same session disproved
+
+One run took **2 h 10 m**, and the obvious explanation was wrong.
+
+The guess was cold-start: a new worktree gets an empty target directory, this
+plan's flag turns sccache off for dev builds, so the first build compiles
+every dependency from source. Plausible, and false. Measured on a deliberately
+emptied target directory, `cargo test --workspace --no-run`:
+
+| | |
+| --- | --- |
+| cold, sccache | **431 s** |
+| cold, incremental | **431 s** |
+
+Identical. sccache makes no measurable difference to a cold build of this
+workspace, so **the profile rule needs no cold-start exception** — incremental
+is never worse, and on a warm tree it is 332 s against 118 s. A change to add
+that exception was written, measured, found to buy nothing, and reverted.
+
+The real shape of the slow run, from its own output: it compiled 38 crates in
+**1 m 52 s**, ran its tests in 0.07 s, pulled its snapshot, and exited 0 --
+with **two hours between its last line of output and its exit**. No concurrent
+cargo job was on the box. Nothing in the log accounts for the gap. It was not
+work; it was a stall.
+
+So `scripts/antibox` now takes `--timeout`, default 45 minutes. The cause is
+still unknown and one occurrence is not a pattern, but a run that stalls
+should cost minutes rather than a night, and no build in this workspace
+legitimately runs that long.
+
+**This does not change the headline.** The session backgrounded that run, so
+two hours of stall cost 10% blocking rather than an evening. The habit finding
+covered for the failure, which is the strongest thing that could be said for
+it.
+
+## The one number that was still missing
 
 Every figure above is measured against *past* sessions or against the build
 itself. What has not happened yet is a long session run *under* the new
@@ -98,6 +149,8 @@ scripts/loop-profile              # the share of active time spent on cargo
 It was 61% across the nineteen sessions this plan was written from, and the
 count to watch beside it is workspace-wide runs in a single session, which was
 twenty-one. Run it after the next long session and write the answer here.
+
+The three outcomes it was written to choose between, with the answer now in:
 
 - **Under 25%, and the session was UI-heavy.** The loop is fine; archive
   `egui-view-layer/` and record that its case was good and the problem went
@@ -112,8 +165,16 @@ twenty-one. Run it after the next long session and write the answer here.
   port.
 
 The honest reading of the evidence in hand *was* the second. The
-backgrounding finding makes it less clear-cut, which is exactly why the
-remaining measurement is worth taking rather than pre-empting. This step should not
+backgrounding finding made it less clear-cut, and **the measurement came back
+as the first**: 10%, on a session that was as UI-heavy as they get — a rack
+row, a popup menu, a `main.slint` crossing, and two snapshot suites.
+
+That is the outcome this step named as "archive `egui-view-layer/`". Before
+doing that, one honest caveat: 10% is one session, and it is one whose worst
+build was backgrounded rather than fast. `main.slint` is still 8.7 minutes and
+still unreachable from inside Slint. What changed is that nobody sat through
+it. Whether that is "the loop is fine" or "the loop is hidden" is a judgement,
+and it is Adam's — but the number he set as the test has been met. This step should not
 pre-empt it on Adam's behalf, because a toolkit replacement is a product
 decision and one more measurement is cheap — but it should say plainly that
 the evidence points one way, and it does.
