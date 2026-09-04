@@ -9,6 +9,8 @@
 #     env MOOLOOP_PLAYLIST_SNAPSHOT=/tmp/window.ppm \
 #     cargo test -p mooloop-ui --test playlist_snapshot
 #   scripts/antibox --release-bin          # stripped release binary -> ./bin/mooloop-test
+#   scripts/antibox --dev-bin              # dev-profile binary -> ./bin/mooloop-dev
+#   scripts/antibox --prune                # drop remote caches for checkouts that are gone
 #
 # The working tree is mirrored with rsync (gitignored paths excluded), so
 # uncommitted work is tested as-is and nothing needs pushing first. Each local
@@ -26,9 +28,15 @@ HOST="${MOOLOOP_REMOTE_HOST:-antibox}"
 SYNC=1
 CLEAN=0
 NO_SCCACHE=0
+INCREMENTAL=""
 PULL=()
 RELEASE_BIN=""
+DEV_BIN=""
+KEEP_SYMBOLS=0
+PRUNE=0
+PRUNE_AGE=30
 RELEASE_DEST="$PWD/bin/mooloop-test"
+DEV_DEST="$PWD/bin/mooloop-dev"
 
 usage() {
   awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
@@ -40,6 +48,9 @@ Options:
   --clean         Delete the remote checkout and target cache, then re-sync.
                   The sccache dependency cache is left alone.
   --no-sccache    Do not wrap rustc with sccache for this run.
+  --incremental, --no-incremental
+                  Force incremental compilation on or off, overriding the
+                  choice made from the profile (see below).
   --pull PATH     After the run, copy PATH back from the remote. Relative
                   paths resolve inside the remote checkout; the file lands in
                   the same relative spot locally, absolute paths land in the
@@ -48,12 +59,38 @@ Options:
                   Build the `mooloop` binary with --release, strip it, and
                   copy it to PATH (default: ./bin/mooloop-test, relative to
                   the current directory). Takes no trailing command.
+  --dev-bin [PATH]
+                  The same, on the dev profile, to PATH (default:
+                  ./bin/mooloop-dev). The workspace's dev profile is tuned to
+                  be playable (opt-level = 1), and it rebuilds far faster than
+                  release, so this is the one to reach for while iterating.
+  --keep-symbols  Do not strip the binary. Costs size and gains backtraces;
+                  use it when something is crashing rather than when
+                  something is being listened to.
+  --prune         Delete remote checkouts and target caches whose local
+                  checkout no longer exists, then exit. Every run records the
+                  local path it came from, so this only removes directories
+                  belonging to worktrees that have since been deleted, and
+                  only ones this machine built. A directory with no record --
+                  one built before this existed -- is kept unless it is also
+                  older than --prune-age.
+  --prune-age N   How many days an unmarked cache must have gone untouched
+                  before --prune will remove it (default: 30).
   -h, --help      Show this help.
 
 $MOOLOOP_REMOTE_TARGET overrides this checkout's remote Cargo target
-directory. If sccache is on the remote PATH it wraps rustc, so dependencies
-compiled by one checkout are reused by every other; without it the script
-still works, just colder. $MOOLOOP_NO_SCCACHE=1 turns that off.
+directory. $MOOLOOP_NO_SCCACHE=1 keeps sccache off entirely, and
+$MOOLOOP_INCREMENTAL=1 or =0 forces the compilation mode for every run.
+
+sccache and incremental compilation are mutually exclusive -- rustc will not
+hand sccache an incremental compilation unit -- so this picks one per run from
+the profile, measured on the box after a one-line edit in mooloop-session:
+
+  dev builds (check/test/clippy)   incremental   test --workspace 332s -> 118s
+  release builds                   sccache       release build    672s -> 522s
+
+Dev builds are the edit loop and want the incremental cache; release builds
+gain little from it and lose sccache's cross-checkout dependency cache.
 
 Exits with the remote command's exit status.
 USAGE
@@ -65,6 +102,8 @@ while [[ $# -gt 0 ]]; do
     --no-sync) SYNC=0; shift ;;
     --clean) CLEAN=1; shift ;;
     --no-sccache) NO_SCCACHE=1; shift ;;
+    --incremental) INCREMENTAL=1; shift ;;
+    --no-incremental) INCREMENTAL=0; shift ;;
     --pull) PULL+=("${2:?--pull needs a path}"); shift 2 ;;
     --release-bin)
       RELEASE_BIN=1
@@ -76,6 +115,18 @@ while [[ $# -gt 0 ]]; do
       fi
       shift
       ;;
+    --dev-bin)
+      DEV_BIN=1
+      if [[ $# -gt 1 && "$2" != -* ]]; then
+        DEV_DEST="$2"
+        [[ "$DEV_DEST" = /* ]] || DEV_DEST="$PWD/$DEV_DEST"
+        shift
+      fi
+      shift
+      ;;
+    --keep-symbols) KEEP_SYMBOLS=1; shift ;;
+    --prune) PRUNE=1; shift ;;
+    --prune-age) PRUNE_AGE="${2:?--prune-age needs a value}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     -*) echo "antibox: unknown option $1" >&2; usage >&2; exit 2 ;;
@@ -83,8 +134,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "$RELEASE_BIN" && $# -gt 0 ]]; then
-  echo "antibox: --release-bin runs its own build; drop the trailing command" >&2
+if [[ -n "$RELEASE_BIN" && -n "$DEV_BIN" ]]; then
+  echo "antibox: pick one of --release-bin and --dev-bin" >&2
+  exit 2
+fi
+if [[ -n "$RELEASE_BIN$DEV_BIN" && $# -gt 0 ]]; then
+  echo "antibox: --release-bin and --dev-bin run their own build; drop the trailing command" >&2
   exit 2
 fi
 
@@ -115,6 +170,66 @@ if ! ssh_run 'PATH="$HOME/.cargo/bin:$PATH" command -v cargo >/dev/null'; then
   exit 1
 fi
 
+# Every run leaves an origin marker beside its target directory naming the
+# local checkout it came from, because the remote directory is keyed by a hash
+# of that path and the hash cannot be reversed. Pruning is therefore decided
+# here, on the machine that can still answer whether a path exists: worktrees
+# are created and deleted constantly, and each one left 10-20 GB behind
+# forever, which is what filled the box at 436 GB.
+if [[ $PRUNE -eq 1 ]]; then
+  freed=0
+  unmarked=0
+  foreign=0
+  while IFS= read -r slug; do
+    [[ -n "$slug" ]] || continue
+    origin="$(ssh_run "cat \"$REMOTE_BASE/targets/$slug/.antibox-origin\" 2>/dev/null" || true)"
+    # The marker is "<host><tab><path>". A cache belonging to a different
+    # machine cannot be judged from this one -- the path may well exist over
+    # there -- so leave it alone and let that machine prune its own.
+    if [[ "$origin" == *$'\t'* ]]; then
+      origin_host="${origin%%$'\t'*}"
+      origin_path="${origin#*$'\t'}"
+    else
+      # Written before the host was recorded; assume it is this machine's.
+      origin_host=""
+      origin_path="$origin"
+    fi
+    if [[ -n "$origin_host" && "$origin_host" != "$(hostname)" ]]; then
+      foreign=$(( foreign + 1 ))
+      continue
+    fi
+    if [[ -n "$origin_path" && -d "$origin_path" ]]; then
+      continue
+    fi
+    if [[ -z "$origin" ]]; then
+      # Predates the marker, or a build that never got far enough to write
+      # one. An unmarked directory cannot be proved dead, so fall back to age:
+      # a live worktree's target directory is written on every build, so
+      # nothing in current use can be this old.
+      stale="$(ssh_run "find \"$REMOTE_BASE/targets\" -maxdepth 1 -name \"$slug\" -mtime +$PRUNE_AGE" || true)"
+      if [[ -z "$stale" ]]; then
+        unmarked=$(( unmarked + 1 ))
+        continue
+      fi
+      echo "antibox: pruning $slug (unmarked, untouched for $PRUNE_AGE days)" >&2
+    else
+      echo "antibox: pruning $slug ($origin_path is gone)" >&2
+    fi
+    size="$(ssh_run "du -sm \"$REMOTE_BASE/targets/$slug\" 2>/dev/null | cut -f1" || echo 0)"
+    freed=$(( freed + ${size:-0} ))
+    ssh_run "rm -rf \"$REMOTE_BASE/targets/$slug\" \"$REMOTE_BASE/checkouts/$slug\""
+  done < <(ssh_run "ls -1 \"$REMOTE_BASE/targets\" 2>/dev/null" || true)
+  echo "antibox: freed ${freed} MB" >&2
+  if [[ $foreign -gt 0 ]]; then
+    echo "antibox: kept $foreign cache(s) belonging to another machine" >&2
+  fi
+  if [[ $unmarked -gt 0 ]]; then
+    echo "antibox: kept $unmarked unmarked cache(s) newer than $PRUNE_AGE days;" >&2
+    echo "         each is claimed by its checkout the next time that checkout builds" >&2
+  fi
+  exit 0
+fi
+
 if [[ $CLEAN -eq 1 ]]; then
   # sccache survives on purpose: the point of --clean is to rule out stale
   # build state, and re-fetching every dependency from source is not part of
@@ -123,23 +238,49 @@ if [[ $CLEAN -eq 1 ]]; then
   ssh_run "rm -rf \"$REMOTE_DIR\" \"$REMOTE_TARGET\""
 fi
 
+# rustc refuses to hand sccache an incremental compilation unit, so exactly one
+# of the two caches can be on. Which one is worth more depends entirely on the
+# profile: the dev-profile edit loop recompiles a crate it has already built,
+# which is what incremental is for, while a release build starts from scratch
+# every time and wants sccache's shared dependency cache instead.
+WANTS_RELEASE=0
+[[ -n "$RELEASE_BIN" ]] && WANTS_RELEASE=1
+for arg in "$@"; do
+  case "$arg" in
+    --release|-r|--profile=release) WANTS_RELEASE=1 ;;
+  esac
+done
+
+USE_INCREMENTAL="${INCREMENTAL:-${MOOLOOP_INCREMENTAL:-}}"
+if [[ -z "$USE_INCREMENTAL" ]]; then
+  USE_INCREMENTAL=$(( 1 - WANTS_RELEASE ))
+fi
+
 # sccache caches individual rustc invocations keyed on hashed inputs, so it is
 # shared across checkouts safely: a miss costs a compile, never a wrong rlib.
 SCCACHE_SETUP=""
-if [[ -z "${MOOLOOP_NO_SCCACHE:-}" ]] && [[ $NO_SCCACHE -eq 0 ]] \
+if [[ "$USE_INCREMENTAL" == 1 ]]; then
+  SCCACHE_SETUP="
+  export CARGO_INCREMENTAL=1
+"
+elif [[ -z "${MOOLOOP_NO_SCCACHE:-}" ]] && [[ $NO_SCCACHE -eq 0 ]] \
   && ssh_run 'PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" command -v sccache >/dev/null'; then
   SCCACHE_SETUP="
   export RUSTC_WRAPPER=sccache
   export SCCACHE_DIR=\"$REMOTE_SCCACHE\"
   export SCCACHE_CACHE_SIZE=\"${MOOLOOP_SCCACHE_SIZE:-40G}\"
-  # rustc refuses to hand sccache an incremental compilation unit, so an
-  # incremental build would silently bypass the cache entirely.
   export CARGO_INCREMENTAL=0
 "
 fi
 
 if [[ $SYNC -eq 1 ]]; then
-  ssh_run "mkdir -p \"$REMOTE_DIR\" \"$REMOTE_TARGET\""
+  ssh_run "mkdir -p \"$REMOTE_DIR\" \"$REMOTE_TARGET\" \
+    && printf '%s\t%s' \"$(hostname)\" \"$ROOT\" > \"$REMOTE_TARGET/.antibox-origin\""
+  # A full box blocks every remote command, and it fills silently.
+  USED="$(ssh_run "df --output=pcent \"$REMOTE_BASE\" 2>/dev/null | tr -dc 0-9" || echo 0)"
+  if [[ -n "$USED" && "$USED" -ge 90 ]]; then
+    echo "antibox: warning -- $HOST is ${USED}% full; run 'scripts/antibox --prune'" >&2
+  fi
   # --filter=':- .gitignore' honours every .gitignore in the tree, so build
   # output and scratch files stay local while untracked source does get sent.
   rsync -az --delete \
@@ -151,14 +292,29 @@ if [[ $SYNC -eq 1 ]]; then
 fi
 
 REMOTE_STAGE="$REMOTE_DIR/.tmp/mooloop-test"
-if [[ -n "$RELEASE_BIN" ]]; then
+if [[ -n "$RELEASE_BIN$DEV_BIN" ]]; then
+  if [[ -n "$RELEASE_BIN" ]]; then
+    BIN_FLAGS="--release"
+    BIN_SUBDIR="release"
+  else
+    # The dev profile is arranged so this is worth having: opt-level = 1
+    # workspace-wide keeps the per-sample code in mooloop-dsp and
+    # mooloop-engine fast enough for JACK, while mooloop-ui alone drops to 0
+    # because optimising the Slint glue buys nothing. So the crate that is
+    # slow to build is the one not being optimised, and the crates that need
+    # the optimisation still get it.
+    BIN_FLAGS=""
+    BIN_SUBDIR="debug"
+  fi
   # Strip a copy rather than the artifact itself: Cargo would keep handing back
-  # the stripped binary on the next build, and `cargo run --release` on the box
-  # would lose its backtraces.
-  set -- sh -c "cargo build --release -p mooloop-app --bin mooloop \
+  # the stripped binary on the next build, and `cargo run` on the box would
+  # lose its backtraces.
+  STRIP_STEP="&& strip \"$REMOTE_STAGE\""
+  [[ $KEEP_SYMBOLS -eq 1 ]] && STRIP_STEP=""
+  set -- sh -c "cargo build $BIN_FLAGS -p mooloop-app --bin mooloop \
     && mkdir -p \"\$(dirname \"$REMOTE_STAGE\")\" \
-    && install -m 755 \"\$CARGO_TARGET_DIR/release/mooloop\" \"$REMOTE_STAGE\" \
-    && strip \"$REMOTE_STAGE\""
+    && install -m 755 \"\$CARGO_TARGET_DIR/$BIN_SUBDIR/mooloop\" \"$REMOTE_STAGE\" \
+    $STRIP_STEP"
   PULL+=("$REMOTE_STAGE")
 elif [[ $# -eq 0 ]]; then
   set -- cargo test --workspace
@@ -184,11 +340,11 @@ ssh_run "
 " || STATUS=$?
 
 for path in ${PULL+"${PULL[@]}"}; do
-  if [[ -n "$RELEASE_BIN" && "$path" = "$REMOTE_STAGE" ]]; then
+  if [[ -n "$RELEASE_BIN$DEV_BIN" && "$path" = "$REMOTE_STAGE" ]]; then
     # A failed build leaves no binary to fetch, and the compiler error is the
     # useful output; do not bury it under a pull failure.
     [[ $STATUS -eq 0 ]] || continue
-    dest="$RELEASE_DEST"
+    if [[ -n "$RELEASE_BIN" ]]; then dest="$RELEASE_DEST"; else dest="$DEV_DEST"; fi
   elif [[ "$path" = /* ]]; then
     dest="$path"
   else

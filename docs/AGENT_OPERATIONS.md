@@ -69,6 +69,23 @@ keyed by absolute path, so worktrees do not fight over one cache and two of
 them may build remotely at the same time. Cargo's job cap is lifted to the
 remote core count.
 
+### Which cache a run gets
+
+sccache and incremental compilation cannot both be on -- `rustc` will not hand
+sccache an incremental compilation unit -- so `antibox` picks one per run from
+the profile. Measured on the box after a one-line edit in `mooloop-session`:
+
+| Command | sccache | incremental |
+| --- | --- | --- |
+| `cargo test -p mooloop-session` | 31 s | **18 s** |
+| `cargo test --workspace --exclude mooloop-ui` | 141 s | **43 s** |
+| `cargo test --workspace` | 332 s | **118 s** |
+| `cargo build --release -p mooloop-app` | **522 s** | 672 s |
+
+Dev-profile `check`, `test` and `clippy` therefore get incremental
+compilation, and release builds get sccache. `--incremental` and
+`--no-incremental`, or `$MOOLOOP_INCREMENTAL=1|0`, override that.
+
 Dependencies are shared across checkouts by sccache rather than by a shared
 target directory. sccache caches individual `rustc` invocations under a hash
 of their inputs, so a checkout whose sources differ gets a cache miss and a
@@ -102,8 +119,33 @@ scripts/antibox --release-bin
 scripts/antibox --release-bin /tmp/mooloop-candidate   # somewhere else
 ```
 
-The binary is stripped, so it has no backtrace symbols; use it for listening
-and interaction checks, not for diagnosing a crash.
+`--dev-bin` does the same on the dev profile, to `./bin/mooloop-dev`. The
+workspace's dev profile is tuned to be playable (`opt-level = 1` workspace
+wide) and rebuilds in a fraction of release's time, so it is the one to reach
+for while iterating; keep `--release-bin` for judging performance.
+
+Both strip the binary, so it has no backtrace symbols; that is the right
+default for listening and the wrong one for diagnosing a crash, which is what
+`--keep-symbols` is for.
+
+`scripts/mooloop-run` wraps the whole cycle into one command -- build on the
+box, copy the binary down, run it here against JACK -- and falls back to a
+capped local build if the box is unreachable:
+
+```sh
+scripts/mooloop-run              # dev profile
+scripts/mooloop-run --release
+scripts/mooloop-run --local      # never touch the box
+```
+
+### Keeping the box from filling up
+
+Remote directories are keyed by the absolute path of the local checkout, and
+every worktree ever built used to leave 10-20 GB behind forever; the box hit
+436 GB and blocked every remote command. Each run now records the checkout it
+came from, and `scripts/antibox --prune` deletes the caches whose checkout no
+longer exists. A run that finds the box above 90% full says so and points at
+it.
 
 ## Software-rendered UI checks
 
