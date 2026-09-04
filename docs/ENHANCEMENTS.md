@@ -1,4 +1,17 @@
+# Enhancements
+
+Adam's standing wish list, in his own words. It is not a plan and not
+ordered; items leave it by becoming a plan under `docs/plans/` or by being
+built. Indented notes are agent annotations recording what has landed against
+an item — they are the only additions to Adam's text, and they should be kept
+short. Last audited September 2026.
+
+---
+
 Anything that can be muted should also be able to be soloed.
+  STILL OPEN: solo is a button style with nothing behind it. `MIXER_PLAN.md`
+  specifies the behaviour (an AFL-style monitor tap, not a routing change) as
+  part of its v0.1 pass.
 
 
 Piano roll:
@@ -26,6 +39,13 @@ where it goes once there is a key worth giving it.
 
 Tooltip audit:
 
+PARTLY DONE: the status bar exists, fed by a `hover-hint` property that about
+forty sites now set, and it takes priority over the standing status message.
+What has not happened is the audit itself — deciding per control which half
+of the rule below it falls under, and plumbing the surfaces that were missed
+(the sampler face has no `hover-hint` at all, which is why its stretch toggle
+cannot explain why it is lit while nothing stretches).
+
 This has to happen. Almost every tooltip in the whole application should just show up in the app's statusbar. Tooltips are not code comments for users. This should be the general rule:
 
 - If you want to explain something, use the message area in the statusbar
@@ -42,6 +62,10 @@ Keyboard shortcuts:
 I feel like we probably should have paid more attention to this from the beginning. Ideally, I'd like to have super robust action and shortcut support a la REAPER. We'll have to make our way there, I suppose. Partly, I feel like it would have been a good piece of foundation for some of the more advanced stuff I want to do because we would have been setting up an action engine, could've made a console for that engine, then if you build nodes that use the engine and let them pass control and audio data...pretty much kinda have max/msp, reaktor, bidule, etc. we were supposed to have built this with some sort of passing awareness that maybe an MCP server would be cool, or at least useful during dev. that'd run off of the same underlying system, i'd think. 
 
 At this point, minimally, we just need to add the ability to configure some common keyboard commands in the prefs page.
+  DONE: `docs/ACTIONS.md` is the contract, `mooloop-ui/src/actions.rs` is the
+  registry, and Preferences > Shortcuts rebinds all 39 of them. The console
+  and MCP surfaces this paragraph wants are still hypothetical, but they now
+  have one seam to hang off rather than needing their own wiring.
 
 GUI focus issues:
 
@@ -52,7 +76,13 @@ General application design:
 GUI:
 
 we're ending up with a fair number of panes. currently the layout is totally static. we might want to allow the user to customize their layout.
+  PARTLY: the lower dock is resizable by a splitter and can collapse, and the
+  browser sidebar has its own grip. Neither is a dockable-pane system; panes
+  still cannot be moved or torn off.
 
 on a 1080p monitor, in a 16 step pattern there is plenty of room to the right of the seq steps for us to split the pane and have the playlist seq beside it. this is what made me think we might want to kinda ape REAPER's dockable dialogs thing.
 
-In appearance prefs, we should be able to set up different shading options. Like, right now i think every 4th step in the step seq is brighter. Let the user configure that by setting a pattern. Maybe I want to brighten every 3rd step, or 6th. Maybe I want 8 bright, 8 dark, 8 bright, 8 dark. Maybe this shading could extend to the piano roll's grid? It would help a lot with editing sequences.
+In appearance prefs, we should be able to set up different shading options.
+  STILL OPEN. Appearance prefs now derive the whole palette from three seeds
+  plus roundness and contrast scalars, so there is a place for this to live,
+  but no shading pattern is configurable. Like, right now i think every 4th step in the step seq is brighter. Let the user configure that by setting a pattern. Maybe I want to brighten every 3rd step, or 6th. Maybe I want 8 bright, 8 dark, 8 bright, 8 dark. Maybe this shading could extend to the piano roll's grid? It would help a lot with editing sequences.

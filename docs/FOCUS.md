@@ -1,6 +1,6 @@
 # Focus
 
-Status: active working sequence.
+Status: active working sequence, September 2026.
 
 `ROADMAP.md` orders the whole product by dependency. This document is narrower:
 it names the active sequence and the work that should not interrupt it. Rewrite
@@ -33,6 +33,14 @@ reopened, and rendered through the ordinary UI.
 
 ### 1. Make Mono a monosynth
 
+**Substantially done.** Steps 02-07 are in, the six-patch factory bank is in,
+and Adam played it on 2026-08-31 and found it very good. What is left is
+taste, not structure: the accent, pre-drive and filter-compensation constants
+still stand where measurement put them, and Acid's cutoff corner is
+deliberately left three quarters of an octave below the other two models
+pending Adam's call on whether it should track them at all. See
+`docs/plans/mono-synth-v2/00-status.md`.
+
 Execute `docs/plans/mono-synth-v2/` in order. Start with the shared filter
 envelope and keytracking foundation, then give Mono the note behavior and
 filter path that distinguish it from a one-voice Poly: a held-note stack,
@@ -50,6 +58,12 @@ old projects still load conservatively, automation addresses remain stable,
 and a small factory patch set proves the range from the normal UI.
 
 ### 2. Build ML-P8 as the deep polysynth
+
+**In progress.** Steps 02 and 03 are in: the device plays, with the
+three-oscillator network, sync, sub, noise, eight voices, two envelopes, and
+the multimode filter. Steps 04-07 — its native LFO and internal routes,
+allocation and the finishers, typed outlets, and the listening pass — are
+next, in order.
 
 Execute `docs/plans/poly-synth-v2/` as a new instrument beside the retained
 original Poly. ML-P8 is exactly eight physical voices built around a
@@ -74,6 +88,8 @@ character.
 
 ### 3. Turn Buffer into a composition workflow
 
+**Not started.**
+
 The retained-audio engine, insert position, collision policy, gestures,
 automation addresses, and UI face already exist. The remaining product test is
 not more Buffer DSP; it is whether a musician can deliberately route a source
@@ -92,6 +108,13 @@ show what the read head is doing, survive save and reload, and render the same
 result offline. If that workflow is not materially better than bouncing a
 sample and loading it again, record why before expanding the device.
 
+### Queued, not yet placed in this sequence
+
+`docs/plans/drum-synth-v2/` is an approved design for **DS-01**, a second drum
+instrument, written in full before any code. Nothing is built. It is not
+numbered above because Adam has not said where it goes against the three
+steps; treat it as ready to start rather than as next.
+
 ## Fixes that may interrupt the sequence
 
 Take a fix immediately when it blocks hearing, playing, saving, loading, or
@@ -101,14 +124,18 @@ work instead of folding it into the current branch.
 
 ## Deliberately not now
 
-**More effect kinds or a broad effect-polish pass.** The rack already has ten
-effects and a common host. A synth or Buffer step may fix a concrete defect it
+**More effect kinds or a broad effect-polish pass.** The rack already has
+twelve effects and a common host, and the whole `EFFECTS_FEEDBACK` pass has
+landed and been archived. A synth or Buffer step may fix a concrete defect it
 exposes, but the suite does not need more breadth.
 
-**More modulation taxonomy for its own sake.** LFO and envelope sources,
-direct assignment, visible movement, persistence, and parameter-wide
-destinations are enough for the active sequence. Device outlets, additional
-generators, multiple visible automation lanes, and an expert matrix should be
+**More modulation taxonomy for its own sake.** Superseded in part, and only
+in part: Adam pulled in the module grid on 2026-08-31, and
+`docs/plans/modulator-modules/` and `docs/plans/modulator-capacity/` have both
+completed, so the rack now has LFO, envelope, step, random, and math modules,
+eight slots, and durable route identities. The deferral still stands for
+everything they did not cover — device outlets, cross-channel sources,
+multiple visible automation lanes, and an expert matrix — which should be
 pulled in only by a demonstrated workflow.
 
 **Parallel sends, sidechains, and plugin delay compensation.** Compensation is

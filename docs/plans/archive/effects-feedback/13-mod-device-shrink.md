@@ -1,8 +1,15 @@
 # Mod: shrink the footprint and drop redundant labels
 
+**Status: done, 2026-09-02** (`87d18f8`, `5013ad9`). The face is 2U,
+`modulation-device.slint` is 134 lines, the redundant text panel is gone, and
+the knobs come off the shared instrument-panel composition rather than being
+seven full-size `ParameterKnob`s. `modulation_uses_two_rack_units` in
+`mooloop-ui/src/lib.rs` pins the width. The line references below are to the
+file as it was before that work.
+
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Mod: visually similar to Reverb in many
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Mod: visually similar to Reverb in many
 ways and suffering many of the same layout issues. It is very large
 compared to what it does. The scope does not need to be that big. doesnt
 need to say 'stereo variable delay' or have the rate and depth shown

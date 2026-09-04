@@ -1,6 +1,6 @@
 # Action Registry
 
-Status: active design contract, August 2026.
+Status: active design contract, September 2026.
 
 ## Why this exists
 
@@ -9,6 +9,9 @@ console (Quake-style command entry), a future MCP server, and eventually
 node-based devices that pass control data around, should all be surfaces
 over the *same* underlying set of operations — not each grow their own
 bespoke wiring to the same internal state. This document is that contract.
+The eight shortcuts Adam originally asked for are in
+`docs/archive/SHORTCUTS.md`; all eight exist, so that list is history and
+this is the live rule.
 
 ## The rule
 
@@ -29,12 +32,16 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. As of this writing it covers transport,
-file, edit, view (pane switching and piano-roll zoom), channel, and pattern
-operations — the set `SHORTCUTS.md` asked for, plus the shortcuts that
-already existed before this registry (Ctrl+O/S/Z/etc.), migrated in so the
+this document for the current list. As of this writing it holds 39 actions in
+seven categories: Transport, File, Edit, Notes (arrow-key nudge and
+transpose, the five pointer tools on keys 1-5, and the snap toggle on 6),
+View (pane switching and piano-roll zoom), Channel, and Pattern. That is what
+`docs/archive/SHORTCUTS.md` asked for, plus the shortcuts that already
+existed before this registry (Ctrl+O/S/Z/etc.), migrated in so the
 Preferences > Shortcuts page is a complete, reassignable list rather than a
-partial one.
+partial one. One entry, `pattern.clear`, is registered with no default chord:
+every nearby Pattern action already claims a Ctrl+modifier combination, and
+it is still listed so it can be bound.
 
 ## How a new action is added
 
@@ -78,4 +85,5 @@ comments at both call sites before touching either. Adding a new
 Ctrl+letter *action* never requires touching that decode branch; only a
 genuinely new *key* (one not already decoded) would.
 
-No F-keys are used for default bindings, by product decision (`SHORTCUTS.md`).
+No F-keys are used for default bindings, by product decision
+(`docs/archive/SHORTCUTS.md`).

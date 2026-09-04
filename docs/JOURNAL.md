@@ -1,6 +1,6 @@
 # Mooloop — dev journal
 
-*Reconstructed from the commit log. Dates are derived from relative timestamps, so treat them as approximate; a few commits are out of chronological order in the log itself (rebase/cherry-pick noise), and I've placed them by content rather than by position.*
+*The early entries were reconstructed from the commit log; dates there are derived from relative timestamps, so treat them as approximate. A few commits are out of chronological order in the log itself (rebase/cherry-pick noise) and are placed by content rather than by position. From the modulation-grid entry onward it is kept live — a dated section per arc of work, not per commit.*
 
 ---
 
@@ -118,7 +118,7 @@ Last: the channel-settings save validator still checked volume against the old `
 
 Appearance prefs had been a single-purpose dialog; folding Audio settings into it as a second tab would have meant a second bespoke dialog shape. Rebuilt it as a general two-pane `PreferencesDialog` — a page nav list down the left, page content on the right — with Appearance as its first page (`76634ce`). JACK device controls landed as the second: driver select (JACK only, ALSA later), an output-device picker read from the live JACK port graph, buffer size, a read-only sample-rate readout, and auto-reconnect for when the port graph changes underneath the app. The JACK surface is its own Slint component rather than a driver-agnostic one, because JACK's client API has no sample-rate setter and buffer size is server-wide, not per-client — a future ALSA page is a sibling, not a rewrite, since the two drivers expose genuinely different controls (`35b4084`). Settled a few days of build/doc loose ends alongside it: portable Cargo target output, linker requirements documented, dev setup instructions trimmed (`4d36c04`, `9d94853`, `ee8a1fd`), and a later pass tightened the dialog's own layout now that it had two real pages to balance (`73aca0f`).
 
-Two of today's doc commits are process, not content: an `AGENTS.md` exception letting an untracked Markdown file under `docs/` be committed alongside doc work without asking each time (`fdfff4e`), and preserving a couple of Adam's own working notes — dockable-pane and step-shading ideas for `ENHANCEMENTS.md`, a `SHORTCUTS.md` stub — that had been sitting uncommitted (`37f46d3`). Also today: the journal's own do-not-edit guard came off, since keeping it updated live turned out to be fine (see the note at the top of this file — no commit hash, just Adam's call).
+Two of today's doc commits are process, not content: an `AGENTS.md` exception letting an untracked Markdown file under `docs/` be committed alongside doc work without asking each time (`fdfff4e`), and preserving a couple of Adam's own working notes — dockable-pane and step-shading ideas for `ENHANCEMENTS.md`, a `SHORTCUTS.md` stub (since consumed, now `docs/archive/SHORTCUTS.md`) — that had been sitting uncommitted (`37f46d3`). Also today: the journal's own do-not-edit guard came off, since keeping it updated live turned out to be fine (see the note at the top of this file — no commit hash, just Adam's call).
 
 The effect suite grew three devices in one day. Seven-band parametric EQ: peak/shelf/pass biquads per band plus dedicated high/low-pass filters, sample-timed coefficient updates, no allocation in `process` (`4a7cf6f`). Then a compact allocation-free `SpectrumAnalyzer` — a fixed Goertzel bank over a mono sum, 48 log-spaced bands, computed once per 2048-sample hop and only when a device display subscribes — so a device host can show a spectrum without ever handing PCM to the UI thread (`f6ffc1a`). Convolution reverb followed: an IR player first, a room generator second, meeting at one `StereoIr` boundary so a future WAV/AIFF loader is just another producer of the same type. Rooms combine a small image-source early-reflection model (shape controls reflection density) with a material-filtered deterministic diffuse tail; the direct sound is deliberately absent since the host already owns dry/wet blending (`385a765`). Preparing a room's FFT partitions runs off the audio thread on a worker that coalesces control edits for 80ms, and the resulting prepared resource carries a fingerprint so a slot refuses a stale swap — a generic mechanism meant to serve future resource-backed devices, not just reverb (`16c7b48`). And a unified modulation effect: chorus, flange, ensemble, and ADT as policies over one short fractional stereo delay line, plus a phaser sharing the same LFO and parameter contract even though its all-pass cascade is a different signal path underneath — one device rather than four, because a user thinks of them as one knob-turn apart (`76c8730`).
 
@@ -140,6 +140,165 @@ The plan's third step was explicitly to *attempt* collapsing the sampler's own i
 
 Last two of the day: both the EQ band handle and the reverb capture-point dot re-centered under the pointer mid-drag because their position was bound to the value it controlled, turning the drag into a sign-flipping recurrence — the same pitfall already worked around on the mixer fader. Switched both to the same delta-from-press-point pattern (`f0da9d5`). And keyboard shortcuts became reassignable: a named `ActionSpec`/`KeyChord`/`ShortcutTable` registry that transport, file, edit, view, channel, and pattern operations all dispatch through, so a future console or MCP server has one seam to hang off instead of each growing bespoke wiring; `main.slint`'s key handling collapsed from a hardcoded chain to generic decode-and-dispatch, and a Preferences > Shortcuts page does (re)binding with conflict handling. Manual testing caught a real bug along the way: a bare Ctrl keypress reports the same key code as Ctrl+Q in Slint's key model, so every Ctrl-chorded shortcut was misfiring quit until standalone modifier presses were explicitly rejected (`faa66eb`).
 
+## Aug 31 – Sep 1 — The modulation rack becomes a grid
+
+The modulation shelf existed but only had two source kinds and no way to grow.
+Adam pulled the rest in explicitly: the rack becomes the power plant of the
+app, a grid of small modules each a discrete control-signal device. Four
+commits, in the order the plan (`docs/plans/modulator-modules/`) asked for.
+
+First the foundation refactor (`c6f32eb`): modulators adopt the descriptor/
+`get`/`set` paradigm effects already had, so the UI glue collapses from
+per-field plumbing to one `param-changed` verb — net −351 lines — param edits
+become undoable, and sources become deletable. Then three new kinds on top of
+it (`2c57d66`): step, random, and math, each a descriptor table plus a tick,
+which is the whole point of having done the refactor first. Two things
+resolved themselves in the doing. The slot-order rule needed no machinery:
+`outputs` already holds last tick's value everywhere the evaluation pass has
+not reached, so a math module reading a lower slot sees this tick and one
+reading itself or a higher slot sees the previous — self-reference bounded by
+the module's own output clamp rather than by a cycle check. And Random kept
+the LFO's tempo-syncable free rate rather than the division-only clock the
+plan described, because it is a promotion of that LFO's hidden sample-and-hold
+and dropping the free rate would regress anything migrating off the waveform.
+One bug the new kind exposed immediately: every Random module on a channel
+drew the same numbers (`25a8ac4`).
+
+Then the grid itself (`f90d36c`, `626264f`, `e749cf9`): capacity from four to
+eight, and durable `ModSourceId`s on routes. The reorder hazard turned out not
+to be the routes — those resolve by identity — but the math module's
+`input_slot`, a slot reference the user never sees; `move_module` remaps it
+through the permutation.
+
+## Sep 1 — Capacity stops being a memory argument
+
+`docs/plans/modulator-capacity/` set out to make raising the module count a
+constant edit rather than a hunt through layout code. Its first version
+measured only the modulator arrays, concluded control outputs were the biggest
+line, and drew the wrong conclusion. Measuring the whole render graph
+(`ffbaa98`) said otherwise: 42.8 MiB before a project existed, of which
+modulation was one percent and `EffectChain` was 140 KiB per channel —
+because `MAX_CHANNELS` and `MAX_EFFECTS_PER_CHANNEL` are both the `u8` index
+space, so the graph reserved the *product*: 65,536 effect slots, each with a
+320-byte pending queue, for a project that will populate a few dozen.
+
+So the lesson inverted. Capacity is not expensive; **dimensioning by ceilings
+is**, and it is expensive whether or not the number ever moves. Boxing the
+effect slot state took the graph to 11.6 MiB (`7a131d7`); materializing
+channels from the project instead of reserving 256 of everything took a
+sixteen-channel project to 1.1 MiB (`2815585`); addressing rack edits one fact
+at a time took `EngineCommand` from 936 to 136 bytes, so the command ring
+stopped growing with capacity at all (`5554cce`). Both ceilings are untouched
+throughout — a project may still have 256 channels of 256 effects, it just
+does not pay for them in advance. The arithmetic is pinned in a test rather
+than left in a commit message, because the number was invisible at every
+individual definition and only appeared when they were multiplied.
+
+`EngineCommand::AddChannel` did not survive: adding a channel allocates, so it
+is structural by nature, and leaving it POD on the realtime ring would have
+meant it silently did nothing in exactly the case it was needed.
+
+## Aug 30 – Sep 2 — The sampler learns to stretch, then to slice
+
+A spike first (`c1626f4` → `ae05137`), which is the point: WSOLA and a phase
+vocoder implemented against the same `Stretcher` trait, shaped like the
+sampler's real situation — an immutable resident sample, a region, an optional
+loop, a pull-style render into whatever block the executor asked for — and
+scored on synthetic fixtures generated from a seeded PRNG so runs are
+byte-reproducible and no audio enters the repository. `spikes/time-stretch/RESULTS.md` holds
+the numbers; WSOLA won, and the trait shape was itself part of the finding.
+
+Then the unit the spike chose (`e530062`), a grain mode because the artifact is
+the point (`446a8b0`), composition with transposition (`03d237c`), state the
+sampler does not pay for when stretch is off (`549ef0b`), and persistence with
+repair (`7789c61`). Tempo-fitted loops freed pitch from duration (`6bfb447`),
+and a sounding voice retunes live rather than on its next trigger (`8b9d361`).
+
+Slicing followed on the same buffer machinery (`f41aea7`, `a42e9aa`): a marker
+list normalised on load rather than refused, a slice per note, backwards if
+asked. The interesting piece is the commit (`46a759f`, `15345fe`): a committed
+stretch stores its *spec*, not its audio — mode, resolved ratio and grain, the
+region fractions, and the markers the editor held — so loading decodes the
+source as usual and re-renders. That is what keeps a project text-sized, and
+it is also the known hole: nothing checks the source file, so a sample
+replaced on disk re-renders new audio under the old spec.
+
+## Sep 2 — ML-P8, and a mockup tool with one catalog
+
+The ML-P8 is a new device beside the retained v1 poly, not a migration of it.
+Its parameter ids are their own namespace starting at zero, and its descriptor
+table lives in `mlp8.rs` rather than `generator.rs`, because the shared
+`SYNTH_PARAM_*` ids exist for Mono and Poly being the same voice with a
+different count and this device is not that voice (`da4a658`). The oscillator
+network, sub and noise landed first (`f2de216`), then the two envelopes, the
+multimode filter, and the per-voice feedback loop (`060f684`).
+
+Three things the plan could not have known, all from step 02 and 03:
+
+- **The sync BLEP made aliasing worse until two mistakes were fixed.** The
+  step height has to be measured on the *naive* waveform, and the oscillator's
+  own cycle-boundary residual has to stand down for the sample after a reset.
+  Neither is visible without building it, and neither shows up in a test that
+  looks for energy in a high band — a hard-synced oscillator is exactly
+  periodic at its master's rate, so every alias product folds back onto the
+  master's own harmonic grid. The test compares harmonic magnitudes against an
+  eight-times-oversampled render instead.
+- **Clearing the feedback loop on `restart()` was not enough.** That only runs
+  for a fresh slot, and stealing a sounding voice deliberately keeps its
+  oscillator phases; it was keeping the loop with them.
+- **"Skip an oscillator nothing reads" needed a caveat.** The skip is decided
+  once per block from target levels, but levels are smoothed — so a level knob
+  reaching zero un-needs an oscillator while its smoother is still
+  milliseconds from silence, and skipping it there replaces the ramp with a
+  step.
+
+The face draws the voice as what it is: a source-by-destination grid, rows are
+sources, columns the oscillators they reach, the diagonal an oscillator on
+itself (`0b57044`). A mix level went into the same grid rather than beside it,
+because a level is a route to the output (`249ff65`). The cells are
+`ParameterKnob` with `show-dial: false` rather than a second draggable
+control — arming a modulation source changes what every gesture *means*, and a
+hand-rolled cell would have been a second implementation of that contract.
+
+Beside that, the mockup tool collapsed onto one catalog (`79b57a0`,
+`179d183`), which made an audit possible: exported widgets with no catalog row
+show up in an UNCATALOGUED group, so the standing list of what the tool cannot
+compose with maintains itself. Three fixtures that existed only to render
+controls — the control gallery, the widget sheet, the rack row — were retired
+in favour of placing a control in the tool (`60e4d4d`, `bb7db8b`, `9401988`).
+The converse list, UI patterns that recur with no component behind them at
+all, became `docs/WIDGET_INVENTORY.md` (`4f4957d`).
+
+And the build loop got faster where it hurt most: `scripts/slint-sketch`
+type-checks a scratch `.slint` against the real widgets in ~0.05s and
+screenshots it in ~0.2s, where `cargo build -p mooloop-ui` is about four
+minutes for any edit at all, because rustc recompiles the whole generated
+module either way (`b87d51b`). `slint-viewer` is deliberately not a workspace
+dependency; the build never refers to it.
+
+## Sep 2 — Addresses follow their device
+
+The last one is the kind of bug that is obvious in hindsight and invisible
+until something moves. A modulation route and an automation lane name their
+destination by effect slot, and a channel by its index. Reordering, inserting
+or removing an effect left every route and lane pointing at the old number, so
+the LFO drawn on a filter's cutoff started driving whatever slid into that
+slot and the filter went dry. Deleting a channel from the middle did the same
+one level up.
+
+`mooloop_core::structure` states each structural edit once as a permutation —
+`SlotRemap` for a chain, `ChannelEdit` for the channel list — and runs it over
+everything that stores a position: the matrix, every lane in every pattern,
+and the lane the editor is showing. The UI model and the engine apply the same
+table for the same command, so neither can point at a different device than
+the other. `SwapEffectSlots` became `MoveEffect`, a pointer rotation the
+engine follows with the same retarget, and a removed device takes its routes
+and lanes with it. Effect add, move and remove became undoable; they were the
+only rack edits that were not (`0c60828`). The same hole existed one level
+down inside the rack — a route aimed at a modulator's own parameter — and
+closed the same way (`c1765e9`). The integrity pass repairs what earlier
+versions left in saved songs.
+
 ---
 
 ## Patterns worth noticing
@@ -154,6 +313,12 @@ Last two of the day: both the EQ band handle and the reverb capture-point dot re
 
 **Constraints get relaxed as soon as they're cheap.** The lower-numbered bus rule lasted about a day, and removing it took a topological sort over fixed-size arrays. Worth asking of the remaining rules which ones are still load-bearing.
 
+**A ceiling costs nothing; dimensioning by it costs everything.** Nothing about `MAX_CHANNELS` or `MAX_EFFECTS_PER_CHANNEL` being 256 was wrong. Reserving their *product* before a project existed was, and it cost 42.8 MiB that no individual definition made visible — the number only appeared when they were multiplied. The fix left both ceilings exactly where they were.
+
+**Names are the thing that has to be reachable, not values.** `Osc.phase` was private with no reset and no wrap event, which is why `COMPOSABLE_DEVICE_UNITS.md` used it as its live counter-example. Hard sync for the ML-P8 needed all three, and adding them was mechanical *because the value already existed as a field*. The habit is cheap precisely when it looks unnecessary.
+
+**A position is not an identity.** Routes and lanes named a device by its slot and a channel by its index, and every structural edit silently repointed them. Stating each edit once as a permutation and running it over everything that stores a position is the fix; so is minting durable ids for modules so a grid reorder means nothing at all.
+
 **Deferrals are recorded with reasons.** Limiter lookahead waits on plugin-delay compensation. `ParamAddr`, inter-channel data and audio sidechain are named as deliberate absences. The README states what the mixer deliberately is *not* yet.
 
 **A comment that states a fact can outlive the reason for it.** The sampler's inline SVF and ADSR carried comments justifying why they weren't the shared primitives; asked to actually attempt the merge and measure rather than trust the comments, both conclusions held but for different, sharper reasons than what was written (`5d82121`). Worth periodically re-deriving *why*, not just re-reading it.
@@ -162,9 +327,33 @@ Last two of the day: both the EQ band handle and the reverb capture-point dot re
 
 ## Open threads
 
-- Modulation groundwork exists; nothing drives it yet.
-- The retained-audio buffer device in `docs/BUFFER_ENGINE.md` — the primitive is built and proven, the device isn't.
-- Reverb only generates rooms; loading a measured WAV/AIFF impulse response is designed for (`StereoIr` is the shared boundary) but not built.
-- Mixer: inserts only, no sends, sidechain, solo, stem export, or bus renaming.
-- No plugin-delay compensation, so no lookahead anywhere.
-- Undo and clipboard are menu placeholders waiting on a command layer.
+As of 2026-09-04. Four of the previous six closed; what replaced them sits
+one level further out.
+
+- **The Buffer's product question.** The device is built and is an ordinary
+  insert. Whether routing a source into it and sequencing the result beats
+  bouncing to a sample is untested, and that is what `docs/FOCUS.md` step 3
+  and `VERSIONS.md`'s 0.3.0 are for.
+- **MIDI input is wired to nothing.** A JACK port, a decoder, and a
+  `BufferMidiMap` the render state will apply — with no caller installing one,
+  and no controls on the MIDI preferences page.
+- **Mixer: inserts only.** No sends, sidechain, audible solo, stem export, or
+  bus renaming. `MIXER_PLAN.md` is the design and needs a project format
+  version to land.
+- **No plugin-delay compensation**, so no lookahead anywhere, and no parallel
+  paths that can be trusted to stay aligned.
+- **Realtime hygiene is reasoned, not measured.** No allocation-detector
+  harness around the callback; the buffer spike's last acceptance test is open
+  on exactly that.
+- **The tooltip audit.** The status bar exists and about forty sites feed it;
+  deciding per control which half of the rule it falls under has not happened,
+  and the sampler face is not plumbed in at all.
+- **The v1 mono synth cannot be deleted** until its channels have somewhere to
+  land, which is the poly mono/legato toggle in
+  `docs/plans/poly-v1-mono-mode/`. Until then the picker shows six sources
+  where the plan wants five.
+
+Closed since the last audit: modulation drives real destinations through five
+module kinds; the buffer device exists; the reverb is an FDN and the IR player
+is gone (a convolution device may return as its own thing, not as a mode);
+undo and the clipboard are real, behind one action registry.

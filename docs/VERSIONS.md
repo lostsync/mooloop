@@ -1,6 +1,6 @@
 # Version Targets
 
-Status: working release targets, August 2026.
+Status: working release targets, September 2026.
 
 These are outcome-based milestones, not dates or promises. `CURRENT.md` says
 what has actually shipped in the code; `ROADMAP.md` explains the dependency
@@ -18,19 +18,27 @@ next architectural step.
 
 Milestones:
 
-- Command surfaces share the undo-recorded action path: menus, shortcuts, and
-  context menus do not bypass it.
-- Pattern editing is complete enough for ordinary use: multi-selection,
-  clear, clone, delete, and their keyboard/context-menu paths work, while
-  unfinished actions remain visibly disabled rather than pretending to exist.
-- Preferences expose the current audio, appearance, and shortcut choices, and
-  persist them correctly.
-- The sampler, piano roll, device controls, and tooltips receive the
-  interaction and responsive-layout polish needed for common work without a
-  separate DAW.
+- **Done.** Command surfaces share the undo-recorded action path: menus,
+  shortcuts, and context menus do not bypass it. 39 actions in one registry,
+  one keyboard dispatcher, one Preferences page.
+- **Done.** Pattern editing is complete enough for ordinary use:
+  multi-selection, clear, clone, delete, and their keyboard/context-menu paths
+  work, while unfinished actions remain visibly disabled rather than
+  pretending to exist.
+- **Done.** Preferences expose the current audio, appearance, and shortcut
+  choices, and persist them correctly.
+- **Partly.** The sampler, piano roll, and device controls have had the
+  interaction pass; slicing, stretch, and the commit path landed with it. The
+  status bar the tooltip audit in `ENHANCEMENTS.md` asked for exists and is
+  fed by a `hover-hint` property, but only some surfaces are plumbed into it —
+  the sampler face is not — so tooltips still explain in places where they
+  should only name. Responsive layout still has edge cases.
 - The current effect and performance work is validated as a release: focused
   checks throughout development, then the integration suite in `CURRENT.md`
   before tagging.
+
+The effect suite is finished for this release: twelve kinds, the whole
+`EFFECTS_FEEDBACK` pass landed, and the gain contract measured and pinned.
 
 This release does not claim general automation, retained audio, sends,
 sidechains, recording, or a metronome.
@@ -41,20 +49,26 @@ Status: next feature milestone.
 
 Milestones:
 
-- One modulator controls one real destination end-to-end—initially LFO to
-  filter cutoff—with a result that is visible, audible, saveable, and stable
-  on reload.
-- The parameter address and modulation model expands from that vertical slice
-  without creating a separate automation language.
-- The parameter lane becomes a useful editor for selected targets rather than
-  a velocity-only placeholder.
+- **Done.** One modulator controls one real destination end-to-end, visible,
+  audible, saveable, and stable on reload.
+- **Done, further than the milestone asked.** The model expanded from that
+  slice without a separate automation language: five module kinds, eight
+  slots, durable route identities, and an assign gesture on ordinary
+  controls. `MODULATOR_SYSTEM_SPEC.md` records what is left — device outlets,
+  cross-channel sources, macros.
+- **Partly.** The parameter lane addresses every effect parameter on the
+  channel and on every bus rather than velocity alone, but only one lane is
+  visible at a time.
 
 This milestone follows the approved design in `MODULATION_PLAN.md`; it is not
-a commitment to every possible modulator or tracker command at once.
+a commitment to every possible modulator or tracker command at once. What now
+gates the release is less the modulation model than what still has to be
+audible through it.
 
 ## 0.3.0 — Decide the retained-audio thesis
 
-Status: planned experiment.
+Status: device built, decision outstanding. The first two milestones below are
+met; the third is what remains.
 
 Milestones:
 
@@ -64,7 +78,9 @@ Milestones:
   read head into retained history, loop a window, change rate, reverse, and
   return live.
 - Its memory, read/write collision behavior, reset/persistence semantics, and
-  deferred reclamation are specified and tested.
+  deferred reclamation are specified and tested. Collisions are counted and
+  published; the allocation-detector harness that would settle realtime
+  hygiene by measurement rather than by reading is still missing.
 - Hands-on use establishes that the workflow is materially more immediate or
   distinct than bounce-to-sample; otherwise the product hypothesis is revised
   or rejected.

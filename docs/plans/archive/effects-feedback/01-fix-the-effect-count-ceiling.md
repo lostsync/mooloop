@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Adding more than 8 effects seems to
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Adding more than 8 effects seems to
 still be disabled. I thought this restriction had been dealt with. An
 internal limit is fine but it should be high enough that your cpu would
 choke from DSP before you hit it. Might just be UI lagging behind

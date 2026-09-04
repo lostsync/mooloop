@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Can we antialias the splines/lines used
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Can we antialias the splines/lines used
 to draw filter shapes, etc? If yes, lets put that in and tie it to an
 appearance option in prefs."
 

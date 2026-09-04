@@ -1,8 +1,8 @@
 # Outcome: done
 
-Closed August 2026. Thirteen of the fourteen plans that came out of
-`docs/EFFECTS_FEEDBACK.md` landed; the status audit for each is preserved in
-the files here. Two notes that outlive the individual plans:
+Closed September 2026. All fourteen plans that came out of
+`docs/archive/EFFECTS_FEEDBACK.md` landed; the status audit for each is
+preserved in the files here. Two notes that outlive the individual plans:
 
 - The display dim/darken option deferred from `12-reverb-scope-rework.md` is
   an appearance-prefs item, not a reverb item. The prefs mechanism it should
@@ -14,5 +14,5 @@ the files here. Two notes that outlive the individual plans:
   draggable marker on a curve should use it rather than a bespoke
   `TouchArea`.
 
-`13-mod-device-shrink.md` is the one plan still open and lives in the active
-`docs/plans/effects-feedback/` directory.
+`13-mod-device-shrink.md` was the last one open and landed on 2026-09-02;
+the active `docs/plans/effects-feedback/` directory is gone with it.

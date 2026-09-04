@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Comp/Gate/Limiter: All 3 need to show
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Comp/Gate/Limiter: All 3 need to show
 the input signal on their scopes such that it is possible to have a
 visual idea of where to set things. we could also show the threshold
 point on the curve in the scope. it should probably be draggable."

@@ -1,6 +1,9 @@
 # Roadmap
 
-Status: dependency-ordered working plan, August 2026.
+Status: dependency-ordered working plan, September 2026.
+
+This orders the whole product by dependency. `FOCUS.md` is the narrower
+active sequence and outranks this document on what to work on next.
 
 The old labels treated effects as Phase 3 and synths as Phase 4. That order no
 longer reflects the product. Effects depend on a stable parameter event model,
@@ -20,15 +23,19 @@ Scope:
   scroll sync, single-click selection without accidental note creation,
   double-click note insertion, double-click-drag length entry, independent
   piano-roll snap with an on/off toggle, pointer tools, marquee selection,
-  and a selection that moves, resizes, and time-scales as one object.
-  Remaining: cut/copy/paste of notes, and keyboard-driven selection.
+  and a selection that moves, resizes, and time-scales as one object;
+  cut/copy/paste of notes; Select All; arrow-key nudge and transpose.
+  Remaining: keyboard-driven selection and navigation — the arrow keys move
+  a selection, they do not build one.
 - Establish consistent right-click removal and keyboard navigation.
 - Make labeled knobs draggable from their labels as well as from the knob body.
 - Finish sampler voice controls that do not require the new event model.
 - Audit drum synth time ranges and parameter scaling; defaults and useful
   knob travel should make sub-100 ms percussion easy without making the rest
   of the range feel wrong.
-- Add per-channel meters through the existing strip; volume and pan are exposed.
+- Feed the per-channel meters. Volume and pan are exposed and the meters are
+  drawn, but nothing publishes a per-channel level into them; per-bus peaks
+  reach the GUI through a shared atomics array and per-channel peaks do not.
 - Replace terse implementation-style tooltips with user-facing wording, and
   consider a status bar for longer hover text.
 - Keep the mockup tool's catalog as the interaction contract.
@@ -97,10 +104,15 @@ Implemented foundation:
 - Persistent global sixteenth-note swing shared by realtime and offline
   scheduling.
 
-Remaining work in this phase includes autosave/recovery, undo, richer missing-
-sample relinking, pattern management, playlist manipulation, cut/copy/paste,
-shortcut keys, context menus, explicit loop ranges, per-pattern swing/groove
-templates, and realtime/offline comparison tolerances.
+Since landed: a project-snapshot undo/redo stack behind channel, pattern,
+note, effect, and modulation edits; cut/copy/paste for notes and channels; a
+reassignable action registry driving both the menu bar and shortcuts
+(`ACTIONS.md`); and right-click context menus.
+
+Remaining work in this phase is autosave/recovery, richer missing-sample
+relinking, pattern management, playlist clip manipulation, explicit loop
+ranges, per-pattern swing and groove templates, and realtime/offline
+comparison tolerances.
 
 Different pattern lengths:
 
@@ -149,6 +161,12 @@ Implement only the bounded insert-device spike in `BUFFER_ENGINE.md`. Do not
 build a general looper, destructive audio editor, or large synth suite during
 this phase.
 
+The device shipped; the decision has not been made. The first four exit
+criteria below hold. The fifth — whether the workflow beats bouncing to a
+sample — is untested, because routing a source into the Buffer and sequencing
+the result is not yet a workflow a musician can reach. That is `FOCUS.md`
+step 3, and it is what decides this phase.
+
 Exit criteria:
 
 - One inserted buffer device continuously retains a bounded span of its input
@@ -182,12 +200,17 @@ Scope:
 
 Implemented foundation:
 
-- DrumSynth and MonoSynth are selectable channel sources with complete editors,
-  project/preset persistence, realtime playback, and offline rendering.
+- Five generators beside the sampler are selectable channel sources with
+  complete editors, project/preset persistence, realtime playback, and offline
+  rendering: the drum synth, the v1 mono and poly synths, the ML-M1, and the
+  ML-P8. `docs/plans/drum-synth-v2/` designs a sixth, DS-01, which is not
+  built.
 - New songs start from a randomized kick/snare/closed-hat/open-hat kit.
 
 Remaining work in this phase is source-to-buffer workflow, external/internal
-routing, groups, sends, and resampling-source selection.
+routing, groups, sends, and resampling-source selection. `MIXER_PLAN.md` is
+the design for the routing half of that, and replaces the fixed
+master-plus-16-bus bank rather than extending it.
 
 ## Later, Not Scheduled
 

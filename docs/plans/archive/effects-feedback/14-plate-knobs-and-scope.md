@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Plate: Knobs extend outside of frame.
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Plate: Knobs extend outside of frame.
 Unclear what should be in scope - doesnt really show anything. Scope
 should probably show the shape of the reverb. Maybe we could try to make
 this look cool, maybe a spectral display that kinda lets you 'see' the

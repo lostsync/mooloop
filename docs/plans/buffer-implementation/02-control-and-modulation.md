@@ -34,10 +34,14 @@ it), STUT (latching, 1/16 window, eight repeats). Collisions show on the face.
 - **MIDI.** The engine registers a `midi_in` port and decodes it, and
   `BufferMidiMap` maps note/velocity/CC onto the buffer. There is no way to
   *configure* a mapping — only `EngineHandle::set_buffer_midi_map`
-  programmatically. Adam has said MIDI *device* input is not a near-term
-  priority; the value here is the event vocabulary, not the port.
-- **Modulation.** `ParamAddr`, `ModRack`, and `ModulatorRack` (LFO) exist and
-  are tested. Nothing ticks them. This is the next step.
+  programmatically — and as of 2026-09-04 nothing outside its own tests calls
+  that, so decoded MIDI is dropped. Adam has said MIDI *device* input is not a
+  near-term priority; the value here is the event vocabulary, not the port.
+- **Modulation.** *(Landed since.)* `ParamAddr`, `ModRack` and
+  `ModulatorRack` existed and nothing ticked them when this was written. The
+  renderer ticks them at 32 frames now, five module kinds ship, and the
+  Buffer's `Offset` and `Crossfade` are ordinary modulation destinations like
+  any other effect parameter.
 
 *(Superseded: step 1 landed in `9323f7e`, and step 4's automation half landed
 after it. See the build order below.)*

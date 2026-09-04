@@ -3,8 +3,9 @@
 //! parameter one authoritative range and normalization.
 //!
 //! Effects are chainable units that run after a channel's generator; see
-//! `docs/EFFECTS_PLAN.md` for the plumbing and `docs/MODULATION_PLAN.md` for
-//! why descriptors exist and what the parameter model is going to become.
+//! `docs/archive/EFFECTS_PLAN.md` for the plumbing and
+//! `docs/MODULATION_PLAN.md` for why descriptors exist and what the parameter
+//! model is going to become.
 
 /// Effect kind. The tag for [`EffectParams`], mirroring how `ChannelSource`
 /// tags its per-source state.

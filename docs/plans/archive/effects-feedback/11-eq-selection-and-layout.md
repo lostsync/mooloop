@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Has a lot of UI quirks, mostly around
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Has a lot of UI quirks, mostly around
 point selection. Clicking a point doesn't reliably select it, especially
 if there are multiple on top of each other. There is a row of buttons
 from Low -> LP under the scope. They toggle on and off, but i dont think

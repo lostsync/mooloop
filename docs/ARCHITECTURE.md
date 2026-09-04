@@ -1,6 +1,6 @@
 # Application Structure And Flow
 
-Status: implementation map, August 2026.
+Status: implementation map, September 2026.
 
 This is the high-level map of Mooloop as it exists today. Arrows label the
 kind of data or control crossing a boundary. The diagram deliberately keeps
@@ -36,8 +36,9 @@ flowchart LR
     end
 
     subgraph DSP[DSP library: mooloop-dsp]
-        Sources["Sampler, drum synth,<br/>mono synth, poly synth"]
+        Sources["Sampler, drum synth,<br/>v1 mono, ML-M1,<br/>v1 poly, ML-P8"]
         Effects["Insert effects<br/>and device host"]
+        Modulators["ModulatorRack<br/>control-rate sources"]
         AudioNode["AudioNode<br/>in-place stereo processing"]
         Sources -. "implements" .-> AudioNode
         Effects -. "implements" .-> AudioNode
@@ -61,6 +62,7 @@ flowchart LR
     Queues -->|"EngineEvent and meters"| Handle
     Project -->|"install / update"| Prepare
     Sequencer -->|"NoteOn, NoteOff,<br/>ParamValue"| Sources
+    Modulators -->|"resolved ParamValue<br/>every 32 frames"| Effects
     Sources -->|"channel audio"| Effects
     Effects -->|"processed audio"| Mixer
     Project <-->|"load / save"| Documents
@@ -80,7 +82,11 @@ flowchart LR
   work, such as project installation and sample decoding, happens before a
   complete `RenderState` is swapped into the realtime executor.
 - `mooloop-dsp` supplies sources and insert effects through `AudioNode`. The
-  engine schedules their events and owns their routing and buffers.
+  engine schedules their events and owns their routing and buffers. Its
+  modulator rack is not an `AudioNode`: it produces control values every 32
+  frames, which the engine resolves against each destination's base and emits
+  as ordinary sample-timed `ParamValue` events, so no device knows it is
+  being modulated.
 - Realtime and offline export share the render path. JACK is an output adapter
   for the realtime path, while `mooloop-project` owns durable documents and
   sample-asset handling.

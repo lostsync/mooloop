@@ -1,6 +1,6 @@
 # Composable Device Units
 
-Status: target design contract, August 2026.
+Status: target design contract, September 2026.
 
 This document defines how reusable DSP pieces present themselves for
 composition. It complements `AUDIO_ARCHITECTURE.md`, which owns preparation,
@@ -402,10 +402,13 @@ second real use makes the shared unit honest.
 ## What we actually do now
 
 Everything above is a target. Most of it is unimplemented: there is no port
-table, no `unit.inputs()`, no published outlet, and `AudioNode` is still just
-latency plus an in-place stereo process call. That gap is deliberate — the
-contract is a design rule, and building its infrastructure ahead of a
-demonstrated workflow is how it would turn into ceremony.
+table, no `unit.inputs()`, and no published outlet. `AudioNode` is an
+in-place stereo process call, two declared latencies, and two best-effort
+telemetry readers (`buffer_collisions`, `dynamics_frame`) — and those two are
+observation, deliberately not the outlet contract this document describes.
+That gap is deliberate: the contract is a design rule, and building its
+infrastructure ahead of a demonstrated workflow is how it would turn into
+ceremony.
 
 Three of its habits are load-bearing today, though, and they are cheap. They
 are the difference between a contract that stays reachable and one that has to
@@ -419,10 +422,14 @@ expression that computed it. Naming a value later is cheap when it is already
 a field with a defined meaning, and impossible when it only ever existed
 halfway through a line of arithmetic.
 
-`Osc` is the live counter-example: its `phase` is private with no reset, no
-wrap event, and no way to read it. That is why hard sync cannot be built on
-it without changing the primitive, and why sine and saw cannot be tapped from
-one phase at the same time.
+`Osc` used to be the live counter-example: its `phase` was private with no
+reset, no wrap event, and no way to read it, which is exactly why hard sync
+could not be built on it. Building the ML-P8 forced the change this habit
+predicted — `Osc` now exposes `phase()`, `reset_to`, a reported cycle wrap,
+and a `sync_reset` that corrects the step with a BLEP — and the change was
+mechanical because the value already existed as a field. That is the whole
+argument for the habit: the retrofit cost one commit rather than a rewrite of
+every consumer.
 
 **2. Do not fuse topology that costs nothing to keep separable.**
 A voice may hold oscillator, filter, and amplifier in a fixed internal order

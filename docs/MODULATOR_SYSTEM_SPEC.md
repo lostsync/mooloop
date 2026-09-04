@@ -1,9 +1,15 @@
 # Mooloop Modulator System
 
-Status: implementation specification, August 2026. This expands the approved
-decisions in [MODULATION_PLAN.md](MODULATION_PLAN.md). It formalizes the
-source/outlet metadata and the rack interaction while retaining the existing
-parameter and realtime contracts.
+Status: implementation specification, September 2026. This expands the
+approved decisions in [MODULATION_PLAN.md](MODULATION_PLAN.md). It formalizes
+the source/outlet metadata and the rack interaction while retaining the
+existing parameter and realtime contracts.
+
+Delivery steps 1 through 3 of the order at the end of this document have
+landed: `docs/plans/modulator-modules/` built the module grid and five module
+kinds, and `docs/plans/modulator-capacity/` made capacity a constant with a
+measured price. Steps 4 and 5 — device outlets, then typed auxiliary edges —
+have not.
 
 ## Purpose
 
@@ -66,18 +72,26 @@ extends it; it does not replace it.
 | --- | --- |
 | `ParamAddr` | Stable destination address: scope, owner, and a per-kind never-renumbered descriptor ID. It already models sources, effect slots, modulator slots, and strips. |
 | `ParamDescriptor` | Single source of truth for natural range, curve, default, and normalized conversion. Events carry natural values; routes operate in normalized destination space. |
-| `ModRack` | Persisted per-channel source slots and routes. Its current realtime storage is four local source slots and sixteen route rows. |
-| `ModRoute` | Current source slot, destination, signed full-range depth, and polarity. Reassigning the same source/destination retunes instead of duplicating it. |
+| `ModRack` | Persisted per-channel module slots and routes. Realtime storage is `MAX_MODULATORS_PER_CHANNEL` (8) slots and `MAX_MOD_ROUTES_PER_CHANNEL` (16) route rows. Both are compile-time constants; raising the first is one edit with a linear, measured cost. |
+| `ModRoute` | Durable `ModSourceId`, its resolved runtime slot, destination, signed full-range depth, and polarity. Reassigning the same source/destination retunes instead of duplicating it. An unresolvable source parks the route's slot out of range, where it contributes nothing. |
 | Renderer | Sources tick at `CONTROL_RATE_FRAMES = 32`; offsets are summed, clamped, converted through the descriptor, then sent as ordinary timed `Event::ParamValue` events. |
 | Base state | The renderer/chain retains the knob base separately from a device's last resolved value. A lane supplies the base when active; modulation is added after it. |
 | DSP | `AudioNode::process` has an in-place stereo bus and timed events. Effects already split at parameter-event offsets; they need no modulation-specific branch. |
 
-The local LFO and gate-driven ADSR envelope are implemented today. The LFO is
+Five module kinds are implemented today: LFO, Envelope, Step, Random, and
+Math. Each is a descriptor table plus a tick, so a module's own parameters are
+addressed, edited, undone, and persisted exactly like an effect's. The LFO is
 a bipolar `-1..1` source with sine, triangle, saw, square, and sample-and-hold
-random waves. The envelope is unipolar and currently binds its gate inlet to
-the scheduled Note On/Off stream of an explicitly selected piano-roll channel.
-That note stream is the first adapter for a future typed generator `Gate`
-outlet; envelope destinations already use ordinary routes.
+random waves. The envelope is unipolar and binds its gate inlet to the
+scheduled Note On/Off stream of an explicitly selected piano-roll channel;
+that note stream is the first adapter for a future typed generator `Gate`
+outlet, and envelope destinations already use ordinary routes. Step is
+division-only clocked; Random kept the LFO's free-or-synced rate, because it
+is a promotion of that LFO's hidden sample-and-hold and dropping the free
+rate would regress anything migrating off the waveform. Math reads one other
+module through a named input jack — evaluation order is slot order, so a Math
+module reading a lower slot sees this tick and one reading itself or a higher
+slot sees the previous, which bounds self-reference without a cycle check.
 
 This implemented local LFO is a channel-rack source. It does not prohibit a
 future instrument from owning a different LFO as part of its saved synthesis
@@ -99,9 +113,11 @@ the sources it can play and all routes it makes. Project-global modulation is
 not implied; a later global source is a new explicit scope/source kind.
 
 The realtime representation may remain bounded and allocation-free. Capacity is
-an engine protocol boundary, not a UI layout: the UI shows existing sources
-plus **Add source**, never four permanent empty bays. A larger capacity must
-not alter persisted destination or route meaning.
+an engine protocol boundary, not a UI layout: the UI shows existing modules
+plus **Add source**, never a fixed row of permanent empty bays. The grid's
+rows follow the capacity constant and scroll, which is pinned by a test that
+renders the shelf at eight and at sixteen. A larger capacity must not alter
+persisted destination or route meaning.
 
 ### Sources and source metadata
 
@@ -121,18 +137,21 @@ struct ModSourceDescriptor {
 }
 ```
 
-`ModSourceId` is the durable source identity. The existing `source_slot: u8`
-is a good initial runtime locator, but must not become the long-term persisted
-vocabulary for an extensible source collection. Resolve a durable source ID to
-a bounded runtime slot off the audio thread. When added, legacy routes decode
-as their corresponding local-slot source and preserve their current behavior.
+`ModSourceId` is the durable source identity, and it landed. It is minted when
+a module is added, carried through reorders, and never reused. `source_slot`
+survives only as the bounded runtime locator the realtime path indexes; it is
+derived from `source` whenever the rack changes and is never authored. Legacy
+routes saved before the id existed decode from their slot number. Reordering
+the grid therefore moves a module without changing what any route means — the
+one thing that did have to be remapped through the permutation is the Math
+module's `input_slot`, a slot reference the user never sees.
 
 | Kind | Meaning | Status |
 | --- | --- | --- |
-| LFO | Free-running or note-restarted periodic movement. Random is initially a sample-and-hold LFO wave. | Implemented as local slots. |
+| LFO | Free-running or note-restarted periodic movement. | Implemented. |
 | Envelope | Gate-driven attack, decay, sustain, and release contour. | Implemented with an explicit channel-note gate adapter; typed device gate outlets are planned. |
-| Step / random generator | Clocked patterns, probability, and controlled variation. | Planned. |
-| Macro / internal value | User macro, transport phase, velocity, key track, pressure, or another declared channel value. | Planned. |
+| Step / random generator | Clocked patterns, probability, and controlled variation. | Implemented as the Step and Random modules. |
+| Macro / internal value | User macro, transport phase, velocity, key track, pressure, or another declared channel value. | Planned. The Math module covers user arithmetic over an existing module's output, not a channel value source. |
 | Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Planned. |
 | Device outlet | Named effect signals such as gain reduction, envelope-following level, or gate state. | Planned. |
 | Audio-derived control | Explicit envelope follower, transient detector, or another control extractor. | Deferred until it has an outlet contract. |
@@ -358,14 +377,15 @@ cross-device signal through the ordinary outlet contract. Transitional synth
 LFOs that are merely generic channel modulators should still migrate instead
 of growing a parallel system.
 
-1. Preserve `ModRack`/`ParamAddr`; add destination metadata and expose LFO
-   routes in the channel shelf.
-2. Complete direct assignment, base/excursion feedback, destination inspector,
-   and undo as the normal workflow.
-3. Add durable source references with a legacy local-slot adapter, then step,
-   random, macro, and note-derived sources.
+1. **Done.** Preserve `ModRack`/`ParamAddr`; add destination metadata and
+   expose LFO routes in the channel shelf.
+2. **Done.** Complete direct assignment, base/excursion feedback, destination
+   inspector, and undo as the normal workflow.
+3. **Done** for durable references and the step/random/math modules; macro and
+   note-derived sources are not built. See
+   `docs/plans/modulator-modules/00-status.md`.
 4. Add declared generator/effect/Buffer outlets through the one-block control
-   table.
+   table. **Next.**
 5. After typed auxiliary graph edges and compensation exist, evaluate true
    sidechain and external routing. A graph UI, if useful, comes last.
 

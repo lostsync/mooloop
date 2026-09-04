@@ -28,7 +28,7 @@ is `EffectChain` at 140 KiB.
 
 `MAX_CHANNELS` and `MAX_EFFECTS_PER_CHANNEL` are both `u8::MAX + 1 = 256`.
 Each is defensible on its own — the limit is the width of the index, and
-`EFFECTS_FEEDBACK.md` explicitly asked for an effect ceiling "high enough
+`docs/archive/EFFECTS_FEEDBACK.md` explicitly asked for an effect ceiling "high enough
 that your cpu would choke from DSP before you hit it". Neither array looks
 unreasonable at its own definition.
 
