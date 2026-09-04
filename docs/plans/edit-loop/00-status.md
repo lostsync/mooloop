@@ -23,6 +23,32 @@ hands to `docs/plans/egui-view-layer/`.
 > failed again, ok that time it worked. so now for 1 step forward it took 45
 > minutes instead of the 45 seconds it took to actually generate the code.
 
+## The measurement was wrong, and the correction is the finding — 2026-09-04
+
+`scripts/loop-profile` scored a backgrounded build as free: it measured the
+gap between a tool call and its result, and a backgrounded call returns
+immediately. Fixed, it recovers **10.1 hours** of compiler time the original
+61% never saw, and it splits the number in two -- time that *stopped* the
+session, and time that overlapped other work.
+
+| | Blocking share | Backgrounded cargo |
+| --- | --- | --- |
+| the 8 sessions under 40% | 3-38% | **76% of their cargo time** |
+| the 10 sessions over 60% | 65-92% | **5%** |
+
+Correlation between the two: **-0.73**.
+
+**The good sessions did not have faster builds. They had builds nobody was
+watching.** That is available today, costs nothing, needs no flag and no
+toolkit, and it is a larger effect than anything else in this plan. It is
+now the third rule in `AGENTS.md`'s ladder.
+
+The session that wrote this ran 19 minutes of compiler time at **0% blocking**.
+
+Corrected totals across the nineteen sessions: 27.9 h of cargo, of which
+17.8 h blocking against 31.3 h active -- **57% blocking**, not 61%, with
+10.1 h already overlapped.
+
 ## The problem, measured
 
 Nineteen sessions in this repository's transcript history, counting only
@@ -38,6 +64,10 @@ counted as the loop being slow:
 
 **Six of every ten working hours are spent waiting for a build.** That is
 the plan.
+
+(Corrected above: 57% once backgrounded runs are measured rather than scored
+as free. The figures in this section are the original ones, kept because the
+rest of the plan was written from them.)
 
 ## Where it goes, and it is not where anyone guessed
 

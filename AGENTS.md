@@ -111,6 +111,25 @@ you are about to stop.**
 Rung 3 earns its place because `mooloop-ui`'s seven test binaries are most of
 what a workspace run compiles and links; excluding them is 70% off.
 
+### Background anything above rung 2
+
+**This is the single largest difference between a fast session and a slow
+one, and it is free.** Across nineteen measured sessions, the ones that spent
+under 40% of their time blocked on `cargo` had backgrounded 76% of their
+compiler time; the ones over 60% had backgrounded 5%. Correlation -0.73. The
+good sessions did not have faster builds -- they had builds that were not
+being watched.
+
+So run rungs 3 and 4 with `run_in_background: true` and keep working; the
+harness notifies on exit. Do not poll the output file -- a run piped through
+`tail` writes nothing until it finishes, so polling reads an empty file and
+learns only that time has passed.
+
+The exception is when the very next thing you do depends on the result and
+there is nothing else to usefully do. That is rarer than it feels: there is
+almost always another file to read, another edit to prepare, or a measurement
+to take.
+
 ### Order device work so the face contract comes last
 
 A device has three parts and they differ by four orders of magnitude:

@@ -63,6 +63,28 @@ It is stronger here than the plan anticipated, because step 03 did not have to
 be built to find it out. The coupling measurement cost an hour and answered
 the same question the split would have answered after four days.
 
+## The finding that arrived while writing this
+
+`scripts/loop-profile` was measuring backgrounded builds as free, and fixing
+it changed the answer more than any step in this plan did. Across the same
+nineteen sessions: the eight that spent under 40% of their time blocked had
+backgrounded 76% of their compiler time, the ten over 60% had backgrounded 5%,
+and the correlation is -0.73.
+
+**The difference between a good session and a bad one was never how fast the
+build was. It was whether anyone was watching it.**
+
+That reframes the whole question this step asks. Two of the three levers here
+-- the profile flag and the ladder -- make the compiler do less work. This one
+makes the wait stop counting, and it is bigger than both, free, and already
+available. It is now a rule in `AGENTS.md`.
+
+It also weakens the argument for the port, honestly. A large part of what
+looked like a toolkit problem was a *habit* problem, and habits are cheaper to
+change than view layers. `main.slint` is still 8.7 minutes and still
+unreachable from inside Slint -- but 8.7 minutes you are not sitting through
+is a different complaint from 8.7 minutes you are.
+
 ## The one number still missing
 
 Every figure above is measured against *past* sessions or against the build
@@ -79,7 +101,9 @@ twenty-one. Run it after the next long session and write the answer here.
 
 - **Under 25%, and the session was UI-heavy.** The loop is fine; archive
   `egui-view-layer/` and record that its case was good and the problem went
-  away by other means.
+  away by other means. Note that the number to read is now **`block`**, not
+  total cargo time -- and that six of the nineteen original sessions were
+  already under 25% by that measure, entirely through backgrounding.
 - **Still bad, and the remaining time is `mooloop-ui`.** That is what
   everything above predicts. `egui-view-layer/`'s step 02 starts, with this
   paragraph written into it.
@@ -87,7 +111,9 @@ twenty-one. Run it after the next long session and write the answer here.
   diagnosis was wrong somewhere; go back to `00-status.md` before starting a
   port.
 
-The honest reading of the evidence in hand is the second. This step should not
+The honest reading of the evidence in hand *was* the second. The
+backgrounding finding makes it less clear-cut, which is exactly why the
+remaining measurement is worth taking rather than pre-empting. This step should not
 pre-empt it on Adam's behalf, because a toolkit replacement is a product
 decision and one more measurement is cheap — but it should say plainly that
 the evidence points one way, and it does.
