@@ -592,7 +592,11 @@ work session you can recall being part of, and don't stress over precision.
   them passing. The plan follows the measurement. The release-build numbers
   landed last and re-ranked it: on the box a runnable binary is 12s away
   after a Rust edit and 522s away after a `main.slint` one, so the build
-  machinery was never the problem and the shell's markup always was.
+  machinery was never the problem and the shell's markup always was. Last
+  and cheapest: `scripts/antibox` turns incremental compilation off so
+  sccache can wrap rustc, which is right for a cold checkout and wrong for
+  the loop every verification run goes through -- `cargo test --workspace`
+  is 332s that way and 118s with it on.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

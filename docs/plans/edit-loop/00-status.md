@@ -92,8 +92,10 @@ cheaper.**
 | `03` | Split the device faces actually being edited | two to four days; the only thing that touches UI iteration |
 | `04` | Decide whether `egui-view-layer/` still has a case | an hour |
 
-Step 01 is expected to be most of the win for Rust work, and it changes no
-code. Step 03 is the only one that touches UI work. They fix different
+Step 01 is expected to be most of the win for Rust work. Most of it is a
+flag: `scripts/antibox` disables incremental compilation so sccache can
+work, which costs 64% on a workspace test run and is measured in that
+step. Step 03 is the only one that touches UI work. They fix different
 sessions and neither fixes both.
 
 ## What this plan cannot fix
