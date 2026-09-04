@@ -1,8 +1,21 @@
 # Fix the edit loop — plan status
 
-Not started. Written 2026-09-03, out of a session that went looking for
-whether to replace Slint with egui and found the toolkit was the wrong
-question to be asking first.
+**Steps 01 and 02 landed 2026-09-04. Step 03 is closed unstarted, on a
+measurement. Step 04 waits on one number that only a future session can
+produce.** Written 2026-09-03, out of a session that went looking for whether
+to replace Slint with egui and found the toolkit was the wrong question to be
+asking first.
+
+What changed: `scripts/antibox` picks incremental compilation for dev builds
+and sccache for release builds instead of always sccache (64% off a workspace
+test run), `AGENTS.md` carries the verification ladder and the rule to batch
+face-contract edits, the mockup tool is behind a Cargo feature (12.6% of the
+window's generated module, out of every build), and `scripts/mooloop-run` is
+one command from edit to running application.
+
+What did not change, and cannot from inside Slint: `main.slint`, which is 29%
+of all `.slint` edits and coupled into 79% of the rest. That is what step 04
+hands to `docs/plans/egui-view-layer/`.
 
 ## The problem, in Adam's words
 
@@ -89,7 +102,7 @@ cheaper.**
 | --- | --- | --- |
 | `01` | The verification ladder: rules for when to climb it, and a cheaper top rung | a day |
 | `02` | Get the build, and the run, off the laptop | a day |
-| `03` | Split the device faces actually being edited | two to four days; the only thing that touches UI iteration |
+| `03` | Split the device faces actually being edited | **not worth starting — measured below** |
 | `04` | Decide whether `egui-view-layer/` still has a case | an hour |
 
 Step 01 is expected to be most of the win for Rust work. Most of it is a
@@ -97,6 +110,43 @@ flag: `scripts/antibox` disables incremental compilation so sccache can
 work, which costs 64% on a workspace test run and is measured in that
 step. Step 03 is the only one that touches UI work. They fix different
 sessions and neither fixes both.
+
+## The mockup tool, out of the shipping build — measured 2026-09-04
+
+Step 01's smaller win turned out to be three times its estimate. Moving the
+mockup tool to its own Slint entry point behind a Cargo feature takes the
+window's generated module from **43.9 MB to 38.4 MB** -- 5.5 MB, 12.6%, out of
+every build including release. The spike had estimated 1.78 MB and 4.3% from
+its own rig.
+
+## Where the UI edits actually go — measured 2026-09-04
+
+Step 03 is days of work on a Slint feature the vendor disowns, so before
+starting it, the question of which files the UI work is *in*. Three months of
+`.slint` history, 502 file-touches:
+
+| File | Touches | Share |
+| --- | --- | --- |
+| `main.slint` | 145 | 29% |
+| `controls.slint` | 32 | 6% |
+| the twenty-one device faces, together | 178 | 35% |
+
+The faces look like a good target until the coupling is measured:
+
+- **61 of 77 commits that touch a device face also touch `main.slint`** — 79%.
+- **Only 10 of 78 touch no other `.slint` file at all.**
+- Of the `main.slint` lines those commits change, **25% are forwarding
+  property declarations and `root.*` bindings** — the boilerplate a split
+  deletes. **The other 75% is shell work a split does not touch.**
+
+So the 13 s-against-522 s headline applies to about one face commit in eight.
+For the rest, the split removes a quarter of the coupling and the `main.slint`
+rebuild is still paid. **Step 03 should not be started**; the reasoning is
+written into it, and it is what step 04 decides on.
+
+(The 25% is a regex over diff lines — property declarations and `root.*`
+bindings — so multi-line and callback forwards are undercounted. The direction
+is not in doubt; the exact figure is a proxy.)
 
 ## What this plan cannot fix
 

@@ -1,5 +1,10 @@
 # 01 — The verification ladder
 
+**Landed 2026-09-04.** `scripts/antibox` picks its cache from the profile,
+`AGENTS.md` carries the ladder, and the mockup tool is behind the `mockup`
+Cargo feature. What is left is the re-measurement at the bottom, which needs a
+session that has not happened yet.
+
 Read `00-status.md` first. This step changes no application code and is
 expected to be most of the win.
 
@@ -107,18 +112,30 @@ transcript shows:
 
 ## Two smaller wins while in here
 
-- **Take the developer tooling out of the shipping build.**
-  `crates/mooloop-ui/ui/main.slint:50` and `:53` re-export `MockupCanvas` and
-  `MockupCatalog` so `mockup.rs` can construct them, which pulls the mockup
-  tool into the same compilation unit as the window: 1.78 MB of generated
-  Rust, 4.3% of the module, in every build including release. Put it behind
-  a Cargo feature.
-- **Check whether `cargo-nextest` helps.** It is not installed and may not
+- **Take the developer tooling out of the shipping build. Done, and it was
+  bigger than the estimate.** `main.slint` re-exported `MockupCanvas` and
+  `MockupCatalog` so `mockup.rs` could construct them, which pulled the tool
+  into the same compilation unit as the window. The tool now has its own
+  entry point, `ui/mockup-tool.slint`, compiled only when the `mockup` Cargo
+  feature asks for it. Measured on the box, the window's generated module:
+
+  | | Generated Rust |
+  | --- | --- |
+  | with the tool exported | 43.9 MB |
+  | without | **38.4 MB** |
+
+  **5.5 MB, 12.6% of the module, out of every build including release** --
+  where the spike's estimate from its own rig was 1.78 MB and 4.3%. The
+  Developer preferences page hides its tools row when the feature is absent,
+  so the button never offers to open something that is not there.
+- **`cargo-nextest`: not taken.** It is not installed and may not
   be worth a dependency, but `cargo test --workspace` at five minutes is
   dominated by building and linking seven `mooloop-ui` test binaries, and a
-  runner that shares one binary is worth ten minutes of investigation. Rung
-  3 already gets 70% of this by excluding them; nextest would have to beat
-  that to be worth a dependency.
+  runner that shares one binary is worth ten minutes of investigation. Rung 3
+  already gets 70% of this by excluding them and the profile flag another 64%
+  of what remains, so nextest would have to beat both to be worth adding a
+  dependency. Left alone; revisit only if the workspace run is still the
+  complaint after those two.
 
 ## Done when
 

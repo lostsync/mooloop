@@ -1,62 +1,107 @@
-# 03 — Make the cheap checks catch what the expensive ones are catching now
+# 03 — Split the device faces actually being edited
 
-Read `01-measure-the-loop.md` first. This step only makes sense if its
-question 1 came back as "test failures" or "behaves wrong" -- if the answer
-was "compile errors", that step already has the fix and it is free.
+Read `00-status.md` first, and
+`docs/plans/egui-view-layer/slint-split-experiment.md`, which is where every
+number below comes from.
 
-## The idea
+This is the only step in the plan that touches UI iteration. Steps 01 and 02
+fix Rust sessions and do nothing at all for a session spent on a device face.
 
-There are five verification layers and they differ by three orders of
-magnitude:
+## The finding it acts on
 
-| Layer | Cost | Catches |
-| --- | --- | --- |
-| `scripts/slint-sketch` | 0.05 s | markup that does not type-check, and how a widget looks |
-| `cargo test -p mooloop-session` | under 1 s, 87 tests | every edit, undo, and engine command the model makes |
-| `cargo check` on a small crate | seconds | Rust that does not compile |
-| `cargo test -p mooloop-ui` | minutes | the window, its snapshots, its interaction |
-| build and run it | minutes plus a human | everything else |
+On the box, a release rebuild costs **12 s after a Rust edit** and **522 s
+after a `main.slint` edit**. A device face compiled as its own crate rebuilds
+in **13 s**, and checks in **2 s against 31 s**. The prototype is real and
+running: `crates/mooloop-ui-ds01` on `spike/slint-split-build`, reached from
+`main.slint` through a `ComponentContainer`, with `cargo test --workspace`
+green at 1083 passing.
 
-Every failure that reaches the bottom row and could have been caught in the
-top two is pure waste, and it is the waste that makes a cycle 45 minutes.
-The work here is moving failure detection upward.
+So the mechanism works and the win is an order of magnitude. This step is
+about whether to buy it, because it is not free and the price is not compile
+time.
 
-## Three concrete moves
+## What it costs
 
-**Push logic down into `mooloop-session`.** It has no `slint` dependency, its
-87 tests run in under a second, and it already owns the model, the edits,
-undo, and engine command emission. Anything currently decided in
-`mooloop-ui/src/lib.rs` that is not about drawing belongs there instead --
-the same reasoning `docs/plans/session-layer-extraction/` used, applied to
-whatever the measured cycle in step 01 shows going wrong. Start from the
-actual failures, not from a survey.
+**An experimental feature the vendor disowns.** `ComponentContainer` and the
+`component-factory` type are deliberately removed from Slint's standard type
+register (`i-slint-compiler-1.17.1/typeregister.rs:675`) and come back only
+under `SLINT_ENABLE_EXPERIMENTAL_FEATURES=1`, whose own doc comment says *"Do
+not use in production code!"*. It has been in that state since 1.5.0, it is
+still in that state on the unreleased 1.18, and it appears nowhere in any
+changelog between 1.1.0 and now. Two years available and disowned.
 
-**Take the developer tooling out of the shipping build.**
-`crates/mooloop-ui/ui/main.slint:50` and `:53` re-export `MockupCanvas` and
-`MockupCatalog` so `mockup.rs` can construct them, which pulls the mockup
-tool into the same compilation unit as the window: measured at 1.78 MB of
-generated Rust, 4.3% of the module, in every build including release. Put it
-behind a Cargo feature. It is a small win on its own and it is the cleanest
-possible demonstration that the module's size is a thing anyone can move.
+This is the sentence step 04 has to weigh, and it is a different kind of cost
+from a slow build: a slow build is paid in minutes and an experimental
+dependency is paid in some future release that removes it.
 
-**Make the headless harness reachable for the thing that broke.** If step
-01's cycle failed on behaviour, ask what test would have caught it and
-whether that test could have run in a second rather than a minute.
-`crates/mooloop-ui/tests` drives the real window in-process through
-`i-slint-backend-testing`; `mooloop-session`'s tests need no window at all.
-The question to answer for each real failure is which of those two it should
-have been.
+**Two to four days of rewiring.** Each face is instantiated in `main.slint`
+with its properties bound from `root.*` — `Ds01DeviceFace` at `main.slint:2994`
+binds seventeen properties and seven callbacks. A split crate cannot be bound
+to, because the shell cannot see a type in another compilation unit, so every
+binding becomes Rust setting a property on a held handle.
 
-## What not to do
+**A factory that rebuilds on kind change.** Switching a channel's source kind
+has to rebuild the embedded component, which loses its state, so each kind
+needs a push-everything refresh. Most of those exist already (`refresh_ds01`
+and friends).
 
-Do not write a test suite. This step is not "improve coverage" -- it is
-"stop the same failure from costing a four-minute build twice". Take the
-failures step 01 actually recorded, one at a time, and move each one up a
-layer. If there were only two failures and both were behavioural and
-unavoidable, this step is finished and should say so.
+## What it is worth beyond the build
+
+**230 of `main.slint`'s 447 property declarations exist only to forward a
+value into a device face.** They would go away. That is a simplification the
+project would want on its own terms, and it is the part of this step that is
+not a trade.
+
+## What it does not reach
+
+`main.slint` and `controls.slint` stay exactly where they are: 30 s to check,
+8.7 minutes to a release binary. The measured breakdown says why — removing
+all twenty-one faces cuts the generated module by 41% and peak RSS by only
+15%, because what is left is `MainWindow` itself with 217 properties and 296
+callbacks. The shell is the floor, and no arrangement of Slint crates gets
+under it.
+
+So this step makes *device face* work fast and leaves *shell* work exactly as
+slow as it is today. Which of those two a session is depends on the session.
+
+## The measurement that settles it — run 2026-09-04
+
+The split is days of work on a disowned feature, so before starting it, the
+question of which files the UI work is actually in. Three months of `.slint`
+history, 502 file-touches: `main.slint` 145 (29%), `controls.slint` 32 (6%),
+the twenty-one faces together 178 (35%).
+
+The faces look like a good target on that alone. The coupling is what kills
+it:
+
+- **61 of the 77 commits that touch a device face also touch `main.slint`** —
+  79%.
+- **Only 10 of 78 touch no other `.slint` file at all** — one in eight.
+- Of the `main.slint` lines those commits change, **25% are forwarding
+  property declarations and `root.*` bindings**, which a split deletes. **The
+  remaining 75% is shell work, which a split leaves exactly where it is.**
+
+A face in its own crate rebuilds in 13 s instead of 522 s, but only for a
+commit that touches nothing else — and that is one commit in eight. For the
+other seven the `main.slint` rebuild is still paid, and three quarters of what
+forced it is work the split cannot remove.
+
+(The 25% is a regex over diff lines, so multi-line bindings and callback
+forwards are undercounted. The direction is not in doubt; the number is a
+proxy.)
+
+## Verdict: do not start this
+
+Two to four days, on a feature Slint has left disowned for two years, to make
+one commit in eight fast. Closed unstarted.
+
+The evidence stays: `crates/mooloop-ui-ds01` on `spike/slint-split-build`
+works, and if the shell were ever broken up for other reasons the mechanism is
+proven and the measurements are here.
+
+**This is also the finding step 04 decides on.** The thing that makes UI work
+slow is `main.slint` itself, and no arrangement of Slint crates reaches it.
 
 ## Done when
 
-Each failure recorded in step 01 has either been moved to a cheaper layer or
-been written down as genuinely needing the expensive one, and the mockup tool
-no longer compiles into release builds.
+Done. This step is closed with the reason above; step 04 carries it forward.

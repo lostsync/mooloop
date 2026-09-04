@@ -1,5 +1,10 @@
 # 02 — Get the build off the laptop
 
+**Landed 2026-09-04.** `scripts/mooloop-run` is the one command, `--dev-bin`
+and `--keep-symbols` are on `scripts/antibox`, and `--prune` stops the box
+filling itself up. The one part not done is the listening test: whether a dev
+binary holds up under JACK with a real song is Adam's ear, not a measurement.
+
 Read `00-status.md` and `01-the-verification-ladder.md` first.
 
 The transcript analysis shows the heavy verification already runs on the box
@@ -36,7 +41,16 @@ a day tuning it.
 
 What is left here is small and worth doing anyway:
 
-- **A dev-profile equivalent.** `--release-bin` only builds release. The
+- **A dev-profile equivalent. Done, and it is the one to use.** Measured on
+  the box: `--dev-bin` produced a runnable 107 MB binary in **1 m 52 s**,
+  against **522 s** for `--release-bin`. The profile is arranged for this --
+  `opt-level = 1` workspace-wide keeps `mooloop-dsp` and `mooloop-engine`
+  meeting JACK deadlines, and only `mooloop-ui` drops to 0, where optimising
+  Slint's generated glue buys nothing. Whether it holds up under JACK with a
+  real song is Adam's ear, and is the one thing here still open.
+
+  The original note, kept because it is what the step was asked:
+  `--release-bin` only builds release. The
   workspace's dev profile is deliberately tuned to be playable --
   `opt-level = 1` workspace-wide, with a comment in `Cargo.toml` saying the
   ordinary `cargo run` path is the one used to play the instrument -- so a

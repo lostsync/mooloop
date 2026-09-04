@@ -74,10 +74,54 @@ See `docs/AGENT_OPERATIONS.md`.
 
 ## Verification and operations
 
-Choose the smallest verification that covers the change: targeted validation
-for documentation, the affected Rust test/check for isolated code, and the
-specific software-rendered UI snapshot for UI work. Do not run Cargo commands
-concurrently. Read [docs/AGENT_OPERATIONS.md](docs/AGENT_OPERATIONS.md) before
-running Cargo, UI snapshots, or the live application; it contains this
-machine's memory limits and rendering procedures; heavier runs belong on the
-remote build box via `scripts/antibox`.
+Do not run Cargo commands concurrently. Read
+[docs/AGENT_OPERATIONS.md](docs/AGENT_OPERATIONS.md) before running Cargo, UI
+snapshots, or the live application; it contains this machine's memory limits
+and rendering procedures.
+
+### The verification ladder
+
+Sixty-one percent of Adam's working time goes on `cargo`, and almost all of it
+on workspace-wide runs reached for out of caution rather than need. **Stay on
+the lowest rung that can see the thing you just changed, and climb only when
+you are about to stop.**
+
+| Rung | Command | Cost | Use it |
+| --- | --- | --- | --- |
+| 1 | `cargo check -p <crate>` | ~1 s | after every edit |
+| 2 | `cargo test -p <crate>` | 4 s laptop / 18 s box | after every edit that changes behaviour |
+| 3 | `cargo test --workspace --exclude mooloop-ui` | 43 s | before handing work over |
+| 4 | `cargo test --workspace` + `cargo clippy --workspace --all-targets` | 118 s + ~88 s | before committing, and nothing smaller than a milestone |
+
+- **`cargo test --workspace` is a commit-time command, not an iteration-time
+  command.** One measured session spent 104 minutes on twenty-one of them,
+  and sixty-one of its sixty-five test runs passed. The time went on
+  confirming nothing had broken, not on finding anything.
+- **Never run rung 4 to find out whether something compiles.** That is
+  rung 1, and it is a hundred times cheaper.
+- **Iterate on the laptop, verify on the box.** Rungs 1 and 2 on a single
+  small crate are eightfold faster locally. Rungs 3 and 4, and anything
+  touching `mooloop-ui`, need memory the laptop does not have -- send them to
+  the remote build box with `scripts/antibox`, which picks incremental
+  compilation for dev builds and sccache for release builds on its own.
+- **`.slint` edits do not need a build at all.** `scripts/slint-sketch`
+  type-checks against the real widgets in about 0.05 s, where a
+  `mooloop-ui` build is minutes.
+
+Rung 3 earns its place because `mooloop-ui`'s seven test binaries are most of
+what a workspace run compiles and links; excluding them is 70% off.
+
+### Order device work so the face contract comes last
+
+A device has three parts and they differ by four orders of magnitude:
+
+| Part | Cost to see it | Where |
+| --- | --- | --- |
+| DSP and engine code | 1-4 s | laptop |
+| Face markup, visual only | 0.05 s via `scripts/slint-sketch` | laptop |
+| The face *contract* — a new property or callback crossing `main.slint` and `lib.rs` | 30 s to check, 8.7 min to a release binary | box |
+
+So get the DSP right against unit tests, iterate the face visually with
+`slint-sketch`, and cross into `main.slint` **once**, with every new property
+and callback batched into that one pass. The eight-minute build belongs once
+per device feature, not once per knob.
