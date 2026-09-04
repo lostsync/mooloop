@@ -21,6 +21,7 @@ use mooloop_core::{
     MonoSynthParams, MonoSynthState, NoteId, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerParams, SamplerState,
+    modulation::CONTROL_SOURCE_SLOTS,
     SlotRemap, MAX_MODULATORS_PER_CHANNEL, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
     TICKS_PER_STEP,
 };
@@ -72,7 +73,7 @@ pub struct Session {
     /// The selected channel's latest modulator outputs, refreshed from the
     /// engine on the pump tick. Held here rather than recomputed per knob
     /// so one read of the audio thread's cells feeds every destination.
-    pub modulation_outputs: Cell<[f32; MAX_MODULATORS_PER_CHANNEL]>,
+    pub modulation_outputs: Cell<[f32; CONTROL_SOURCE_SLOTS]>,
     /// Channel that owns the transient selection/assignment state. Changing
     /// channels clears both even when the new channel happens to occupy the
     /// same runtime slot.
@@ -152,7 +153,7 @@ impl Default for Session {
             modulation_shelf_open: false,
             modulation_selected_slot: Cell::new(None),
             modulation_armed_slot: Cell::new(None),
-            modulation_outputs: Cell::new([0.0; MAX_MODULATORS_PER_CHANNEL]),
+            modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
             modulation_ui_channel: Cell::new(None),
             modulation_edit_before: None,
             modulation_edit_changed: false,
@@ -1154,13 +1155,21 @@ impl Session {
         let Some(channel) = self.channels.get(self.selected) else {
             return offsets;
         };
+        // The engine publishes one flat row a block; a route reads it as two
+        // halves, because they are captured at different rates. Split once
+        // here rather than per descriptor.
         let outputs = self.modulation_outputs.get();
+        let (modulators, outlets) = outputs.split_at(MAX_MODULATORS_PER_CHANNEL);
+        let sources = mooloop_core::modulation::ControlSources {
+            modulators: modulators.try_into().expect("the rack's half"),
+            outlets: outlets.try_into().expect("the outlet band"),
+        };
         for descriptor in descriptors {
             let policy = ModDestinationDescriptor::for_param(descriptor);
             offsets[descriptor.id as usize] =
                 channel
                     .modulation
-                    .offset_for(address(descriptor.id), &outputs, &policy);
+                    .offset_for(address(descriptor.id), sources, &policy);
         }
         offsets
     }

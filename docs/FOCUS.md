@@ -62,11 +62,11 @@ genuinely blocked: the audio outlets need the typed auxiliary audio edges
 `AUDIO_ARCHITECTURE.md` describes, which do not exist, so 06 lands in the two
 slices the step already names.
 
-Its first slice has begun. `mooloop_core::outlet` is the vocabulary and ML-P8
-declares fourteen outlets and publishes its seven control values; what is not
-built is the part that makes one routable, because a route names its source by
-a rack module's identity and an outlet is not a rack module. That is the piece
-DS-01's step 07 also waits on — see the plan status.
+Its first slice is most of the way in. `mooloop_core::outlet` is the
+vocabulary, ML-P8 declares fourteen outlets and publishes its seven control
+values, and a route can name one: the mechanism DS-01's step 07 also waits on
+is built and tested. What is left of the slice is the source picker offering
+them, so such a route can be made by hand rather than only by a project file.
 
 This step is first because it is most of the way built, its cost is known, and
 DS-01's own step 07 publishes outlets the same way. Doing it here means

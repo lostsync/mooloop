@@ -40,16 +40,35 @@ Three things that half turned up:
   Declaring the coarser rate honestly is what leaves that upgrade open — a
   consumer told `PerBlock` cannot come to depend on more.
 
-**What 06 still needs**, and why it is a separate piece rather than the rest of
-an afternoon: a route cannot yet name an outlet. `ModRoute` stores
-`source: ModSourceId`, which is a *rack module's* identity, and resolves it
-against the rack's slot table; an outlet is neither. Making one routable means
-`ModRoute` referring to a source through `ModSourceRef` — which
-`mod_metadata.rs` has been shipping unconsumed for exactly this — widening the
-per-channel control table by an outlet band, publishing into it one block
-behind, and teaching the source picker and the persisted route form about it.
-That is the mechanism DS-01's step 07 also waits on, so it is worth doing once
-and deliberately rather than as the tail of this one.
+**Outlets are routable.** A route names its source through `ModSourceRef`
+rather than a bare `ModSourceId`, because a generator outlet is not a rack
+module and has no identity the rack could mint for it. It resolves into a flat
+control address space — the rack's eight slots, then the generator's eight
+outlets — so `offset_for` never learns there are two kinds of source, and the
+persisted form carries an outlet id where a module route carries an identity.
+An engine test drives a filter cutoff from ML-P8's `Gate` and asserts the
+value is still at its base in the block the note lands in and moved in the
+block after: the one block of declared latency, observed rather than assumed.
+
+Two things that came out of wiring it:
+
+- **The one-block latency is an ordering fact, not a delay.** The control
+  table is filled before the strips render, so what a route reads is
+  necessarily what the generator published at the end of the previous block.
+  Nothing schedules it and nothing can forget to, which is what makes an
+  offline render agree with a live take.
+- **The two halves are captured at different rates, and pretending otherwise
+  cost 8 KB a live channel.** The first shape put the outlet band in the
+  per-tick control table, which stored eight block-constant values in all 256
+  tick rows. `ControlSources` keeps the flat address space that routes and
+  projects depend on while storing each half at the rate it is actually
+  captured; the whole cost of routable outlets is now 32 bytes a live channel
+  and 16 KiB of the reserved figure. The engine's footprint test is what asked
+  the question, for the second time in two steps.
+
+**What 06 still needs:** the source picker does not list outlets, so a route to
+one can be built in code and by a project file but not by hand. That and the
+audio outlets are what is left.
 
 The audio outlets stay declared and unconnectable, which is the split the step
 itself offers. Materialising seven stereo taps with nothing able to read them

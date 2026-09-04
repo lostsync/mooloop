@@ -18,7 +18,7 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use jack::{AudioOut, Client, ClientOptions, MidiIn};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
-    MAX_MODULATORS_PER_CHANNEL,
+    modulation::CONTROL_SOURCE_SLOTS,
     DeviceKind, SliceMap,
 };
 use mooloop_dsp::{
@@ -599,7 +599,7 @@ impl EngineHandle {
     /// each destination's live offset, rather than the engine publishing a
     /// value per parameter: a channel has at most
     /// `MAX_MODULATORS_PER_CHANNEL` sources but many more destinations.
-    pub fn modulator_outputs(&self, channel: usize) -> [f32; MAX_MODULATORS_PER_CHANNEL] {
+    pub fn modulator_outputs(&self, channel: usize) -> [f32; CONTROL_SOURCE_SLOTS] {
         self.modulator_meters.read(channel)
     }
 

@@ -1212,11 +1212,17 @@ pub enum ModPolarity {
 /// One matrix row: a modulator slot driving one parameter.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModRoute {
-    /// Which module drives this route, durably. Stamped by
-    /// [`ModRack::add_route`] from the slot the route was authored against,
-    /// and the only form that persists: a route must not mean "slot 2" once
-    /// modules can be reordered in a grid.
-    pub source: ModSourceId,
+    /// What drives this route, durably.
+    ///
+    /// A rack module is named by the identity [`ModRack::add_route`] stamps
+    /// from the slot the route was authored against — a route must not mean
+    /// "slot 2" once modules can be reordered in a grid. A generator outlet
+    /// is named by its outlet id, which is a device-interface identifier and
+    /// is not a rack identity at all: nothing mints it, nothing reorders it,
+    /// and the device that publishes it is whichever generator the channel
+    /// currently holds. That is why this is a reference rather than an id,
+    /// and it is the case `ModSourceRef` was written for.
+    pub source: ModSourceRef,
     /// The same source as a bounded runtime slot, which is what the realtime
     /// path indexes. Derived from `source` whenever the rack changes and
     /// never authored directly; an unresolvable source parks it out of range,
@@ -1241,8 +1247,28 @@ impl ModRoute {
         polarity: ModPolarity,
     ) -> Self {
         Self {
-            source: ModSourceId(0),
+            source: ModSourceRef::LocalSlot(source_slot),
             source_slot,
+            destination,
+            depth,
+            polarity,
+        }
+    }
+
+    /// A route driven by one of the channel generator's published outlets.
+    ///
+    /// Unlike [`Self::to_slot`] this needs no stamping: an outlet id is
+    /// already durable, so the route is complete as authored and its runtime
+    /// locator is a function of the id rather than a lookup in the rack.
+    pub const fn from_outlet(
+        outlet: u16,
+        destination: ParamAddr,
+        depth: f32,
+        polarity: ModPolarity,
+    ) -> Self {
+        Self {
+            source: ModSourceRef::GeneratorOutlet(outlet),
+            source_slot: outlet_slot(outlet),
             destination,
             depth,
             polarity,
@@ -1262,6 +1288,59 @@ pub const MAX_MODULATORS_PER_CHANNEL: usize = 8;
 /// Ceiling on matrix rows per channel. Bounded so evaluation is a fixed cost
 /// and the whole rack stays `Copy`.
 pub const MAX_MOD_ROUTES_PER_CHANNEL: usize = 16;
+
+/// How many control outlets one channel's generator may publish.
+///
+/// A ceiling on the *address space*, not on any device: ML-P8 publishes seven
+/// and DS-01's plan names six, and a device that wanted more would be saying
+/// something about its interface rather than hitting a limit here. Raising it
+/// costs one `f32` per channel per control tick, which is the same linear
+/// price `MAX_MODULATORS_PER_CHANNEL` carries and is measured in the engine's
+/// footprint test.
+pub const MAX_GENERATOR_OUTLETS: usize = 8;
+
+/// The channel's whole control-source address space: its modulator slots
+/// first, then its generator's published outlets.
+///
+/// One flat array rather than two, because a route's runtime locator is an
+/// index into it and `offset_for` should not care which kind of source it
+/// found. That is also what makes an outlet route cost the realtime path
+/// nothing it was not already paying.
+pub const CONTROL_SOURCE_SLOTS: usize = MAX_MODULATORS_PER_CHANNEL + MAX_GENERATOR_OUTLETS;
+
+/// The runtime slot a generator outlet occupies in that space.
+pub const fn outlet_slot(outlet: u16) -> u8 {
+    (MAX_MODULATORS_PER_CHANNEL + outlet as usize) as u8
+}
+
+/// One channel's control sources, as a route resolves them.
+///
+/// Two slices rather than one array, because the two halves are captured at
+/// different rates and pretending otherwise is expensive. The rack's outputs
+/// are per control tick; a generator's outlets are published once a block, so
+/// copying them into all 256 tick rows would store the same eight numbers 256
+/// times — 8 KB a live channel for a value that does not change. The flat
+/// address space survives as the *addressing*, which is the part routes and
+/// persistence depend on; only the storage is split.
+#[derive(Clone, Copy)]
+pub struct ControlSources<'a> {
+    pub modulators: &'a [f32; MAX_MODULATORS_PER_CHANNEL],
+    pub outlets: &'a [f32; MAX_GENERATOR_OUTLETS],
+}
+
+impl ControlSources<'_> {
+    /// The value at a route's runtime locator, or `None` when it names
+    /// nothing — an unresolved route reads no output and contributes
+    /// nothing, which is how a route to a departed module already behaves.
+    #[inline]
+    pub fn get(&self, slot: u8) -> Option<f32> {
+        let slot = slot as usize;
+        match slot.checked_sub(MAX_MODULATORS_PER_CHANNEL) {
+            None => self.modulators.get(slot).copied(),
+            Some(outlet) => self.outlets.get(outlet).copied(),
+        }
+    }
+}
 
 /// A slot number that resolves to no module. Routes whose source is gone
 /// park here: `offset_for` finds no output for it and adds nothing, which
@@ -1320,6 +1399,10 @@ struct SavedModRoute {
     source: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_slot: Option<u8>,
+    /// A generator outlet's device-interface id. Mutually exclusive with
+    /// `source`: an outlet is not a rack module and has no `ModSourceId`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outlet: Option<u16>,
     destination: ParamAddr,
     depth: f32,
     polarity: ModPolarity,
@@ -1349,12 +1432,26 @@ impl serde::Serialize for ModRack {
             .routes
             .iter()
             .flatten()
-            .map(|route| SavedModRoute {
-                source: Some(route.source.0),
-                source_slot: None,
-                destination: route.destination,
-                depth: route.depth,
-                polarity: route.polarity,
+            .map(|route| {
+                // A rack module persists its durable identity and derives its
+                // slot on load; an outlet persists its outlet id and derives
+                // nothing, because the id already is the durable form.
+                let (source, outlet) = match route.source {
+                    ModSourceRef::Id(id) => (Some(id.0), None),
+                    ModSourceRef::GeneratorOutlet(outlet) => (None, Some(outlet)),
+                    // Only an unstamped route is still a bare slot, and
+                    // `add_route` is the only way in. Saving one would write
+                    // a reference that means something different next load.
+                    ModSourceRef::LocalSlot(_) => (None, None),
+                };
+                SavedModRoute {
+                    source,
+                    source_slot: None,
+                    outlet,
+                    destination: route.destination,
+                    depth: route.depth,
+                    polarity: route.polarity,
+                }
             })
             .collect();
         SavedModRack { slots, routes }.serialize(serializer)
@@ -1385,18 +1482,29 @@ impl<'de> serde::Deserialize<'de> for ModRack {
         // against, so build it once and read both route forms through it.
         let sources = crate::mod_metadata::local_slot_sources(&rack);
         for saved_route in saved.routes {
-            let reference = match (saved_route.source, saved_route.source_slot) {
-                (Some(id), _) => ModSourceRef::Id(ModSourceId(id)),
-                (None, Some(slot)) => ModSourceRef::LocalSlot(slot),
-                (None, None) => continue,
+            let reference = match (
+                saved_route.outlet,
+                saved_route.source,
+                saved_route.source_slot,
+            ) {
+                (Some(outlet), _, _) => ModSourceRef::GeneratorOutlet(outlet),
+                (None, Some(id), _) => ModSourceRef::Id(ModSourceId(id)),
+                (None, None, Some(slot)) => ModSourceRef::LocalSlot(slot),
+                (None, None, None) => continue,
             };
             let Some(source_slot) = reference.to_local_slot(&sources) else {
                 continue;
             };
-            let Some(source) = rack.source_id(source_slot as usize) else {
-                continue;
+            // A module route resolves to the identity now in that slot; an
+            // outlet route is already durable and needs no lookup.
+            let source = match reference {
+                ModSourceRef::GeneratorOutlet(outlet) => ModSourceRef::GeneratorOutlet(outlet),
+                _ => match rack.source_id(source_slot as usize) {
+                    Some(id) => ModSourceRef::Id(id),
+                    None => continue,
+                },
             };
-            let _ = rack.add_route(ModRoute {
+            let _ = rack.apply_route(ModRoute {
                 source,
                 source_slot,
                 destination: saved_route.destination,
@@ -1447,6 +1555,22 @@ impl ModRack {
             .copied()
             .flatten()
             .map(|entry| entry.id)
+    }
+
+    /// Where a route's source currently sits in the control address space.
+    ///
+    /// A module is looked up, because it moves; an outlet is arithmetic,
+    /// because it does not. Both land in the one flat space `offset_for`
+    /// indexes, which is what keeps an outlet route from costing the
+    /// realtime path a second kind of lookup.
+    pub fn slot_for(&self, source: ModSourceRef) -> Option<u8> {
+        match source {
+            ModSourceRef::Id(id) => self.slot_of(id),
+            ModSourceRef::LocalSlot(slot) => Some(slot),
+            ModSourceRef::GeneratorOutlet(outlet) => {
+                (usize::from(outlet) < MAX_GENERATOR_OUTLETS).then(|| outlet_slot(outlet))
+            }
+        }
     }
 
     /// Where a durable id currently lives. The inverse of `source_id`, and
@@ -1522,7 +1646,7 @@ impl ModRack {
             // that drove *it*. A destination left on an emptied slot would
             // be inherited by whatever module is installed there next.
             if route.is_some_and(|route| {
-                route.source == removed.id
+                route.source == ModSourceRef::Id(removed.id)
                     || route.destination.owner == ParamOwner::Modulator { slot: slot as u8 }
             }) {
                 *route = None;
@@ -1635,7 +1759,7 @@ impl ModRack {
             let Some(route) = self.routes[index] else {
                 continue;
             };
-            let slot = self.slot_of(route.source).unwrap_or(UNRESOLVED_SLOT);
+            let slot = self.slot_for(route.source).unwrap_or(UNRESOLVED_SLOT);
             if let Some(route) = self.routes[index].as_mut() {
                 route.source_slot = slot;
             }
@@ -1661,7 +1785,12 @@ impl ModRack {
     /// knows; the durable identity is stamped here, from the rack that owns
     /// both sides of the fact.
     pub fn add_route(&mut self, route: ModRoute) -> Option<usize> {
-        let source = self.source_id(route.source_slot as usize)?;
+        // An outlet route arrives already durable: there is no slot to read
+        // an identity out of, and stamping one would be inventing a module.
+        if let ModSourceRef::GeneratorOutlet(_) = route.source {
+            return self.apply_route(route);
+        }
+        let source = ModSourceRef::Id(self.source_id(route.source_slot as usize)?);
         let route = ModRoute {
             source,
             source_slot: route.source_slot,
@@ -1692,7 +1821,7 @@ impl ModRack {
     /// `UNRESOLVED_SLOT`, so a command that arrives ahead of the module it
     /// names is inert instead of misaimed.
     pub fn apply_route(&mut self, route: ModRoute) -> Option<usize> {
-        let source_slot = self.slot_of(route.source)?;
+        let source_slot = self.slot_for(route.source)?;
         let route = ModRoute {
             source_slot,
             ..route
@@ -1714,7 +1843,7 @@ impl ModRack {
     /// by matrix position. Returns whether one was there — a removal that
     /// names a route this rack no longer holds is a no-op, not an error, so
     /// the same command can arrive twice without consequence.
-    pub fn remove_route_by_source(&mut self, source: ModSourceId, destination: ParamAddr) -> bool {
+    pub fn remove_route_by_source(&mut self, source: ModSourceRef, destination: ParamAddr) -> bool {
         let mut removed = false;
         for route in self.routes.iter_mut() {
             if route.is_some_and(|route| route.source == source && route.destination == destination)
@@ -1789,7 +1918,7 @@ impl ModRack {
     pub fn offset_for(
         &self,
         destination: ParamAddr,
-        outputs: &[f32; MAX_MODULATORS_PER_CHANNEL],
+        outputs: ControlSources<'_>,
         policy: &ModDestinationDescriptor,
     ) -> f32 {
         if !policy.allowed {
@@ -1800,14 +1929,14 @@ impl ModRack {
             if route.destination != destination {
                 continue;
             }
-            let Some(output) = outputs.get(route.source_slot as usize) else {
+            let Some(output) = outputs.get(route.source_slot) else {
                 continue;
             };
             let shaped = match route.polarity {
-                ModPolarity::Bipolar => *output,
+                ModPolarity::Bipolar => output,
                 // Half the swing, lifted, so the base value is the floor
                 // rather than the midpoint.
-                ModPolarity::Unipolar => (*output + 1.0) * 0.5,
+                ModPolarity::Unipolar => (output + 1.0) * 0.5,
             };
             total += shaped * policy.clamp_depth(route.depth);
         }
@@ -1848,6 +1977,17 @@ mod tests {
             rack.install(slot, ModulatorParams::Lfo(ModLfoParams::default()));
         }
         rack
+    }
+
+    /// A flat control row, split into the two halves `offset_for` reads.
+    /// Tests still author one array because the *address space* is flat; only
+    /// the runtime storage is split.
+    fn sources(row: &[f32; CONTROL_SOURCE_SLOTS]) -> ControlSources<'_> {
+        let (modulators, outlets) = row.split_at(MAX_MODULATORS_PER_CHANNEL);
+        ControlSources {
+            modulators: modulators.try_into().unwrap(),
+            outlets: outlets.try_into().unwrap(),
+        }
     }
 
     fn open(param: u32) -> ModDestinationDescriptor {
@@ -1936,21 +2076,21 @@ retrigger = true
         let mut rack = rack_with_sources(2);
         rack.add_route(ModRoute::to_slot(0, addr(1), 0.5, ModPolarity::Bipolar));
         rack.add_route(ModRoute::to_slot(1, addr(1), 1.0, ModPolarity::Unipolar));
-        let mut outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
+        let mut outputs = [0.0; CONTROL_SOURCE_SLOTS];
 
         // Both sources at full negative: bipolar swings down, unipolar rests
         // on the base value.
         outputs[0] = -1.0;
         outputs[1] = -1.0;
-        assert_eq!(rack.offset_for(addr(1), &outputs, &open(1)), -0.5);
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &open(1)), -0.5);
 
         // Both at full positive.
         outputs[0] = 1.0;
         outputs[1] = 1.0;
-        assert_eq!(rack.offset_for(addr(1), &outputs, &open(1)), 1.5);
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &open(1)), 1.5);
 
         // An unrelated destination is untouched.
-        assert_eq!(rack.offset_for(addr(2), &outputs, &open(2)), 0.0);
+        assert_eq!(rack.offset_for(addr(2), sources(&outputs), &open(2)), 0.0);
     }
 
     /// The destination's declaration is the gate. A route parked on a
@@ -1962,14 +2102,14 @@ retrigger = true
     fn the_destination_policy_gates_and_clamps_its_routes() {
         let mut rack = rack_with_sources(2);
         rack.add_route(ModRoute::to_slot(0, addr(1), 1.0, ModPolarity::Bipolar));
-        let mut outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
+        let mut outputs = [0.0; CONTROL_SOURCE_SLOTS];
         outputs[0] = 1.0;
 
         let refused = ModDestinationDescriptor {
             allowed: false,
             ..open(1)
         };
-        assert_eq!(rack.offset_for(addr(1), &outputs, &refused), 0.0);
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &refused), 0.0);
         assert!(!rack.modulates(addr(1), &refused));
         // The route is still authored work: the inspector must be able to
         // show it, so it stays in the rack's destination list.
@@ -1979,7 +2119,7 @@ retrigger = true
             depth_limit: (-0.2, 0.2),
             ..open(1)
         };
-        assert_eq!(rack.offset_for(addr(1), &outputs, &narrowed), 0.2);
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &narrowed), 0.2);
         assert!(rack.modulates(addr(1), &narrowed));
     }
 
@@ -2036,7 +2176,7 @@ retrigger = true
         for slot in 0..2u8 {
             rack.add_route(ModRoute::to_slot(slot, addr(1), 1.0, ModPolarity::Bipolar));
         }
-        rack.remove_route_by_source(rack.source_id(0).unwrap(), addr(1));
+        rack.remove_route_by_source(ModSourceRef::Id(rack.source_id(0).unwrap()), addr(1));
         let remaining: Vec<_> = rack.routes.iter().flatten().collect();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].source_slot, 1);
@@ -2163,6 +2303,70 @@ retrigger = true
     /// If this test fails, something changed the width of a command. That is
     /// allowed — but confirm the new ring size is one you meant to pay for
     /// before updating the number.
+    /// An outlet route survives the round trip through a project file. Its
+    /// source is not a rack module, so it persists as an outlet id rather
+    /// than through the identity table module routes use, and a rack with no
+    /// modules at all still has to bring it back.
+    #[test]
+    fn an_outlet_route_round_trips_without_a_rack_to_resolve_against() {
+        let mut rack = ModRack::default();
+        assert!(rack
+            .add_route(ModRoute::from_outlet(1, addr(3), -0.6, ModPolarity::Unipolar))
+            .is_some());
+
+        let text = toml::to_string(&rack).expect("a rack serializes");
+        let decoded: ModRack = toml::from_str(&text).expect("and comes back");
+        let route = decoded
+            .routes
+            .iter()
+            .flatten()
+            .next()
+            .expect("the route survived");
+        assert_eq!(route.source, ModSourceRef::GeneratorOutlet(1));
+        assert_eq!(route.destination, addr(3));
+        assert_eq!(route.depth, -0.6);
+        // Resolved into the outlet band rather than onto a module slot,
+        // which is the arithmetic that replaces the identity lookup.
+        assert_eq!(route.source_slot, outlet_slot(1));
+    }
+
+    /// An outlet drives a destination through exactly the same summing path
+    /// a module does. The band is above the modulator slots in one flat
+    /// array, so `offset_for` never learns there are two kinds of source.
+    #[test]
+    fn an_outlet_sums_into_a_destination_like_any_other_source() {
+        let mut rack = rack_with_sources(1);
+        assert!(rack
+            .add_route(ModRoute::to_slot(0, addr(1), 0.5, ModPolarity::Bipolar))
+            .is_some());
+        assert!(rack
+            .add_route(ModRoute::from_outlet(0, addr(1), 0.25, ModPolarity::Bipolar))
+            .is_some());
+
+        let mut outputs = [0.0; CONTROL_SOURCE_SLOTS];
+        outputs[0] = 1.0;
+        outputs[outlet_slot(0) as usize] = -1.0;
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &open(1)), 0.25);
+    }
+
+    /// A route naming an outlet the address space cannot hold is inert
+    /// rather than aimed at whatever happens to sit at that index. The rack
+    /// keeps it, because the spec says an unresolvable route stays as
+    /// inspectable authored work.
+    #[test]
+    fn an_out_of_range_outlet_resolves_to_nothing() {
+        let mut rack = ModRack::default();
+        assert!(rack
+            .add_route(ModRoute::from_outlet(
+                MAX_GENERATOR_OUTLETS as u16,
+                addr(1),
+                1.0,
+                ModPolarity::Bipolar,
+            ))
+            .is_none());
+        assert!(rack.routes.iter().flatten().next().is_none());
+    }
+
     #[test]
     fn capacity_no_longer_moves_the_command_ring() {
         use core::mem::size_of;
@@ -2177,14 +2381,20 @@ retrigger = true
         // kilobyte across the whole project -- and, crucially, not on the
         // command ring, which the rack stopped travelling on.
         assert_eq!(size_of::<ParamAddr>(), 12);
-        assert_eq!(size_of::<ModRoute>(), 24);
+        // The route itself grew four the same way and for the same kind of
+        // reason: its source is a `ModSourceRef` rather than a bare
+        // `ModSourceId`, because a generator outlet is not a rack module and
+        // has no identity the rack could mint. Four bytes a route, 64 a
+        // channel, 16 KiB across the reserved channel count -- the same
+        // price and the same argument as the address above.
+        assert_eq!(size_of::<ModRoute>(), 28);
         assert_eq!(
             size_of::<ModRack>(),
             MAX_MODULATORS_PER_CHANNEL * size_of::<Option<ModSlot>>()
                 + MAX_MOD_ROUTES_PER_CHANNEL * size_of::<ModRoute>()
                 + size_of::<u32>()
         );
-        assert_eq!(size_of::<ModRack>(), 996);
+        assert_eq!(size_of::<ModRack>(), 1_060);
 
         // The rack no longer travels, and neither does the ML-P8. That
         // device's parameter block moved this number twice, and the note here
@@ -2240,7 +2450,7 @@ retrigger = true
             .routes
             .iter()
             .flatten()
-            .find(|route| route.source == lfo)
+            .find(|route| route.source == ModSourceRef::Id(lfo))
             .unwrap();
         assert_eq!(lfo_route.destination, addr(7));
         assert_eq!(lfo_route.source_slot, 1);
@@ -2248,7 +2458,7 @@ retrigger = true
             .routes
             .iter()
             .flatten()
-            .find(|route| route.source == envelope)
+            .find(|route| route.source == ModSourceRef::Id(envelope))
             .unwrap();
         assert_eq!(env_route.destination, addr(9));
         assert_eq!(env_route.source_slot, 0);
@@ -2256,11 +2466,11 @@ retrigger = true
         // And the offsets follow, which is the part a listener would hear:
         // the LFO's route reads slot 1 now, and the envelope's reads slot 0,
         // where an idle envelope's `-1` lifts to no offset at all.
-        let mut outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
+        let mut outputs = [0.0; CONTROL_SOURCE_SLOTS];
         outputs[0] = -1.0;
         outputs[1] = 1.0;
-        assert_eq!(rack.offset_for(addr(7), &outputs, &open(7)), 0.5);
-        assert_eq!(rack.offset_for(addr(9), &outputs, &open(9)), 0.0);
+        assert_eq!(rack.offset_for(addr(7), sources(&outputs), &open(7)), 0.5);
+        assert_eq!(rack.offset_for(addr(9), sources(&outputs), &open(9)), 0.0);
     }
 
     /// Reordering compacts the grid, and everything that named a slot is
@@ -2303,7 +2513,7 @@ retrigger = true
             .routes
             .iter()
             .flatten()
-            .find(|route| route.source == lfo)
+            .find(|route| route.source == ModSourceRef::Id(lfo))
             .unwrap();
         assert_eq!(lfo_route.destination, addr(7));
         assert_eq!(lfo_route.source_slot, 2);
@@ -2311,7 +2521,7 @@ retrigger = true
             .routes
             .iter()
             .flatten()
-            .find(|route| route.source == math)
+            .find(|route| route.source == ModSourceRef::Id(math))
             .unwrap();
         assert_eq!(math_route.destination, addr(8));
         assert_eq!(math_route.source_slot, 1);
@@ -2348,7 +2558,7 @@ retrigger = true
 
         rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
         assert_ne!(rack.source_id(0), Some(departed));
-        assert_eq!(rack.offset_for(addr(7), &[1.0; MAX_MODULATORS_PER_CHANNEL], &open(7)), 0.0);
+        assert_eq!(rack.offset_for(addr(7), sources(&[1.0; CONTROL_SOURCE_SLOTS]), &open(7)), 0.0);
     }
 
     /// Editing a module in place keeps its identity, so retuning an LFO does
@@ -2369,7 +2579,7 @@ retrigger = true
         );
         assert_eq!(rack.source_id(0), Some(id));
         assert_eq!(rack.routes.iter().flatten().count(), 1);
-        assert_eq!(rack.routes[0].unwrap().source, id);
+        assert_eq!(rack.routes[0].unwrap().source, ModSourceRef::Id(id));
     }
 
     /// A route authored against an empty slot is refused rather than stored
@@ -2421,7 +2631,7 @@ param = 7
         assert_eq!(rack.next_source_id, 3);
 
         let route = rack.routes[0].unwrap();
-        assert_eq!(route.source, ModSourceId(2));
+        assert_eq!(route.source, ModSourceRef::Id(ModSourceId(2)));
         assert_eq!(route.source_slot, 2);
         assert_eq!(route.destination, addr(7));
 
@@ -2446,7 +2656,7 @@ param = 7
 
         assert_eq!(rack.routes[0].unwrap().source_slot, UNRESOLVED_SLOT);
         assert_eq!(
-            rack.offset_for(addr(7), &[1.0; MAX_MODULATORS_PER_CHANNEL], &open(7)),
+            rack.offset_for(addr(7), sources(&[1.0; CONTROL_SOURCE_SLOTS]), &open(7)),
             0.0
         );
     }

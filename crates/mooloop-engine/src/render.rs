@@ -15,6 +15,7 @@ use mooloop_core::{
     DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
+use mooloop_core::modulation::{CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS};
 #[cfg(test)]
 use mooloop_dsp::build_effect;
 use mooloop_dsp::{
@@ -71,6 +72,15 @@ const MAX_PENDING_EFFECT_PARAMS: usize = 8;
 /// effect in a channel read the exact same LFO timeline without allocating or
 /// advancing the source more than once.
 const MAX_CONTROL_TICKS_PER_BLOCK: usize = MAX_BLOCK_SIZE / CONTROL_RATE_FRAMES;
+
+/// One channel's modulator outputs for one block, captured at each control
+/// subdivision.
+///
+/// Only the rack: a generator's outlets are published once a block, so they
+/// ride beside this table rather than in it. Copying eight block-constant
+/// values into all 256 tick rows would be 8 KB a live channel for numbers
+/// that do not change, and `ControlSources` is what puts the two halves back
+/// into one flat address space at the point a route reads them.
 type ControlOutputs = [[f32; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK];
 
 fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
@@ -105,7 +115,21 @@ struct PendingEffectParams {
 struct ModulationBlock<'a> {
     rack: &'a ModRack,
     outputs: &'a ControlOutputs,
+    /// What this channel's generator published at the end of the *previous*
+    /// block, constant for the whole of this one. Held here rather than in
+    /// `outputs` because it is per block, not per tick.
+    outlets: &'a [f32; MAX_GENERATOR_OUTLETS],
     ticks: usize,
+}
+
+impl ModulationBlock<'_> {
+    /// The channel's control sources at one tick, as one flat address space.
+    fn sources(&self, tick: usize) -> mooloop_core::modulation::ControlSources<'_> {
+        mooloop_core::modulation::ControlSources {
+            modulators: &self.outputs[tick],
+            outlets: self.outlets,
+        }
+    }
 }
 
 /// The clip automation covering this block. Unlike modulation this is not
@@ -557,7 +581,7 @@ impl EffectChain {
                     (true, Some(modulation)) => {
                         modulation
                             .rack
-                            .offset_for(destination, &modulation.outputs[tick], &policy)
+                            .offset_for(destination, modulation.sources(tick), &policy)
                     }
                     _ => 0.0,
                 };
@@ -810,7 +834,7 @@ fn resolve_strip_segments(
             let offset_normalized = if modulated {
                 modulation
                     .rack
-                    .offset_for(destination, &modulation.outputs[tick], &policy)
+                    .offset_for(destination, modulation.sources(tick), &policy)
             } else {
                 0.0
             };
@@ -934,6 +958,16 @@ pub struct ChannelStrip {
     mlp8: MlP8,
     ds01: Ds01,
     active_source: DeviceKind,
+    /// What this channel's generator published during the block just
+    /// rendered, indexed by outlet id.
+    ///
+    /// Read at the *start* of the next block, which is where the one
+    /// declared block of outlet latency physically lives: it is not a delay
+    /// line or a scheduling rule anybody has to remember, it is the fact
+    /// that the control table is filled before the strips run. That is also
+    /// what makes an offline render agree with a live take and stops graph
+    /// order deciding what a route hears.
+    published_outlets: [f32; MAX_GENERATOR_OUTLETS],
     /// The knob value for the active generator's parameters. The device
     /// retains only the value it was last sent, so this is what lets a knob
     /// move underneath an active lane without the two fighting -- the same
@@ -961,6 +995,7 @@ impl ChannelStrip {
             mlp8: MlP8::new(MlP8Params::default(), sample_rate),
             ds01: Ds01::new(Ds01Params::default(), sample_rate),
             active_source: DeviceKind::Sampler,
+            published_outlets: [0.0; MAX_GENERATOR_OUTLETS],
             source_base: GeneratorParams::Sampler(SamplerParams::default()),
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
@@ -1111,6 +1146,23 @@ impl ChannelStrip {
             DeviceKind::MlM1 => self.mlm1.process(context, &mut self.bus, events, None),
             DeviceKind::MlP8 => self.mlp8.process(context, &mut self.bus, events, None),
             DeviceKind::Ds01 => self.ds01.process(context, &mut self.bus, events, None),
+        }
+        self.publish_outlets();
+    }
+
+    /// Take the generator's published control outlets for this block.
+    ///
+    /// Only the active generator publishes, and the rest of the band is
+    /// zeroed rather than left holding the last device's values: replacing a
+    /// source must not leave a route reading a signal from an instrument that
+    /// is no longer there. A generator with nothing to publish clears the
+    /// band, which is the same thing said for a device that has not
+    /// implemented outlets yet.
+    fn publish_outlets(&mut self) {
+        self.published_outlets = [0.0; MAX_GENERATOR_OUTLETS];
+        if let DeviceKind::MlP8 = self.active_source {
+            let published = self.mlp8.publish_outlets();
+            self.published_outlets[..published.len()].copy_from_slice(&published);
         }
     }
 }
@@ -1821,6 +1873,7 @@ impl RenderState {
         let Some(outputs) = self.control_outputs.get_mut(channel) else {
             return 0;
         };
+
         let mut tick = 0;
         for offset in (0..frames).step_by(CONTROL_RATE_FRAMES) {
             let span = (frames - offset).min(CONTROL_RATE_FRAMES);
@@ -2580,9 +2633,20 @@ impl RenderState {
             // Published before the mute check: a muted channel's modulators
             // still run, so its knobs should still animate rather than freeze
             // on whatever the last audible block left behind.
+            // The generator's outlets, as published at the end of the block
+            // before this one. Taken before the strip renders, so nothing in
+            // this block can read its own publication and the one declared
+            // block of latency is a fact about the order rather than a rule.
+            let outlets = self.strips[index].published_outlets;
             if ticks > 0 {
-                self.modulator_meters
-                    .publish(index, &self.control_outputs[index][ticks - 1]);
+                let mut row = [0.0; CONTROL_SOURCE_SLOTS];
+                row[..MAX_MODULATORS_PER_CHANNEL]
+                    .copy_from_slice(&self.control_outputs[index][ticks - 1]);
+                row[MAX_MODULATORS_PER_CHANNEL..].copy_from_slice(&outlets);
+                // The whole row, so the view can resolve a knob driven by an
+                // outlet as well as one driven by a module. One snapshot a
+                // block, unlike the per-tick table this is taken from.
+                self.modulator_meters.publish(index, &row);
             }
             if self.strips[index].output.muted {
                 continue;
@@ -2590,6 +2654,7 @@ impl RenderState {
             let modulation = ModulationBlock {
                 rack: &self.modulation[index],
                 outputs: &self.control_outputs[index],
+                outlets: &outlets,
                 ticks,
             };
             // The generator's control events go into the channel's own note
@@ -2628,7 +2693,7 @@ impl RenderState {
                         let offset_normalized = if modulated {
                             modulation.rack.offset_for(
                                 destination,
-                                &modulation.outputs[tick],
+                                modulation.sources(tick),
                                 &policy,
                             )
                         } else {
@@ -2678,7 +2743,7 @@ impl RenderState {
                             let offset_normalized = if modulated {
                                 modulation.rack.offset_for(
                                     destination,
-                                    &modulation.outputs[tick],
+                                    modulation.sources(tick),
                                     &policy,
                                 )
                             } else {
@@ -3372,6 +3437,7 @@ mod tests {
         let modulation = ModulationBlock {
             rack: &rack,
             outputs: &outputs,
+            outlets: &[0.0; MAX_GENERATOR_OUTLETS],
             ticks: 2,
         };
 
@@ -3398,6 +3464,7 @@ mod tests {
         let modulation = ModulationBlock {
             rack: &ModRack::default(),
             outputs: &outputs,
+            outlets: &[0.0; MAX_GENERATOR_OUTLETS],
             ticks: 2,
         };
         assert!(
@@ -3740,6 +3807,68 @@ mod tests {
         (synth_project(channel), source)
     }
 
+    /// A generator outlet reaching another device's parameter: the whole
+    /// point of step 06, and the thing that could not be authored at all
+    /// before a route could name something that is not a rack module.
+    ///
+    /// `Gate` is used rather than an envelope because it is a step, which is
+    /// what makes the *timing* legible: the block the note lands in must show
+    /// the cutoff still at its base, and the block after it must show the
+    /// gate. That one-block gap is not a scheduling accident to be tolerated
+    /// — it is the declared contract from `MODULATOR_SYSTEM_SPEC.md`, and it
+    /// is what makes an offline render agree with a live take.
+    #[test]
+    fn a_generator_outlet_drives_another_device_one_block_later() {
+        use mooloop_core::mlp8::OUTLET_GATE;
+
+        let mut channel = filter_channel(1_000.0);
+        channel.setup.source = mooloop_core::ChannelSource::MlP8(mooloop_core::MlP8State::default());
+        assert!(channel
+            .setup
+            .modulation
+            .add_route(mooloop_core::ModRoute::from_outlet(
+                OUTLET_GATE,
+                CUTOFF,
+                0.4,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
+            .is_some());
+
+        let mut project = mooloop_core::Project {
+            channels: vec![channel],
+            ..mooloop_core::Project::default()
+        };
+        // One long note from the top of the pattern, so the gate goes high on
+        // the first block and stays there.
+        project.channels[0].notes[0].push(NoteEvent::new(1, 0, 384, 60, 127));
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+
+        // Block one: the note starts here, so the gate the control table is
+        // holding is still the silence from before it.
+        render.process_block(128);
+        let first: Vec<f32> = cutoff_events(&render).iter().map(|(_, v)| *v).collect();
+        // Not vacuous: a routed destination resolves every control tick, so
+        // an empty list would mean the route was not running at all rather
+        // than that it was running and reading silence.
+        assert_eq!(first.len(), 4, "the route was not resolving: {first:?}");
+        assert!(
+            first.iter().all(|value| (value - 1_000.0).abs() < 1.0),
+            "the outlet arrived in its own block: {first:?}"
+        );
+
+        // Block two: the gate published at the end of block one is what this
+        // block's routes read.
+        render.process_block(128);
+        let second: Vec<f32> = cutoff_events(&render).iter().map(|(_, v)| *v).collect();
+        assert_eq!(second.len(), 4, "the route stopped resolving: {second:?}");
+        assert!(
+            second.iter().all(|value| *value > 1_100.0),
+            "the gate never reached the cutoff: {second:?}"
+        );
+    }
+
     /// The property a narrow command could get wrong rather than merely
     /// cheap: dropping one route has to hand the device back its knob value.
     /// Without it the filter would hold whatever the LFO last resolved, until
@@ -3763,7 +3892,7 @@ mod tests {
 
         render.apply_command(EngineCommand::RemoveModRoute {
             channel: 0,
-            source,
+            source: mooloop_core::ModSourceRef::Id(source),
             destination: CUTOFF,
         });
         render.process_block(128);
@@ -3920,7 +4049,7 @@ mod tests {
         render.apply_command(EngineCommand::SetModRoute {
             channel: 0,
             route: mooloop_core::ModRoute {
-                source: mooloop_core::ModSourceId(7),
+                source: mooloop_core::ModSourceRef::Id(mooloop_core::ModSourceId(7)),
                 source_slot: 0,
                 destination: CUTOFF,
                 depth: 1.0,
@@ -5635,22 +5764,29 @@ mod footprint {
         // above, and once for `source_base`, whose `GeneratorParams` is as
         // wide as its widest variant and the ML-P8 is that variant. Step 05's
         // sixteen bytes of new parameters are therefore paid twice, which is
-        // why the strip moved by 1,000 where the node moved by 984.
-        assert_eq!(size_of::<ChannelStrip>(), 41_640);
+        // why the strip moved by 1,000 where the node moved by 984. Step
+        // 06's routable outlets added 32 more, and none of it is in the node:
+        // it is the eight `f32` the strip holds of what its generator
+        // published last block, which is where the one block of declared
+        // outlet latency physically lives.
+        assert_eq!(size_of::<ChannelStrip>(), 41_672);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
         // Sixteen KiB of the rise is `ParamAddr` growing four bytes to carry
         // a durable internal-route id, paid once per stored route across the
-        // reserved channel count.
+        // reserved channel count. Another sixteen is `ModRoute` growing four
+        // the same way and for the same kind of reason: its source became a
+        // `ModSourceRef`, because a generator outlet is not a rack module and
+        // has no identity the rack could mint for it.
         let fixed = (size_of::<ModRack>() + size_of::<ModulatorRack>()) * MAX_CHANNELS
             + MAX_CHANNELS * size_of::<usize>() * 3;
-        assert_eq!(fixed / 1024, 455);
+        assert_eq!(fixed / 1024, 471);
 
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_080);
+        assert_eq!(per_live, 60_112);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -5668,8 +5804,18 @@ mod footprint {
         // the figure the 512-frame chunk exists to keep small. Step 06's
         // published outlets moved it by one more KiB across sixteen channels,
         // which is what a device's whole published interface costs when
-        // publication is a reduction of state that already exists.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_393);
+        // publication is a reduction of state that already exists. Making
+        // them routable moved it by half of one more: 32 bytes a live channel
+        // for the published row, and 16 KiB of the reserved figure above for
+        // the wider route.
+        //
+        // It nearly cost 8 KiB a live channel instead. Putting the outlet
+        // band in the per-tick control table would have stored eight
+        // block-constant values in all 256 tick rows; `ControlSources` keeps
+        // the flat *address space* routes and projects depend on while
+        // storing each half at the rate it is actually captured. This test
+        // is what asked the question.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_410);
     }
 }
 

@@ -264,6 +264,18 @@ The plan asks the step to stay inside the realtime budget, and nothing in this r
 
 ---
 
+## Sep 4 (later) — a device's outlets become something you can route
+
+Step 06 of `docs/plans/poly-synth-v2/`, in two sittings: the vocabulary first, then the mechanism.
+
+**An outlet is not a modulator, and the route type had to admit it.** `ModRoute` stored a `ModSourceId` — a rack module's durable identity, minted when the module is added and resolved against the rack's slot table. A generator outlet has none of that: nothing mints it, nothing reorders it, and it belongs to whichever generator the channel currently holds rather than to the rack. So the route's source became a `ModSourceRef`, which `mod_metadata.rs` has been shipping unconsumed since the spec landed, for exactly this. Four bytes a route, and the same argument `ParamAddr` already made when it grew four to carry a durable route id.
+
+**The one-block latency turned out to be an ordering fact rather than a delay.** The control table is filled before the strips render. So what a route reads is *necessarily* what the generator published at the end of the previous block — there is nothing to schedule, and nothing that can forget to. That is what makes an offline render agree with a live take, and it is why the test for it asserts the cutoff is still at its base in the block the note lands in.
+
+**The two halves of the control space are captured at different rates, and pretending otherwise cost 8 KB a live channel.** The first shape widened the per-tick control table to hold the outlet band, which stored eight block-constant values in all 256 tick rows. The footprint test caught it, for the second time in two steps — the first was step 05's chorus scratch. `ControlSources` is the fix: routes and projects still see one flat address space, because that is the part they depend on, while each half is stored at the rate it is actually captured. The cost of routable outlets came down from 8,224 bytes a live channel to 32.
+
+That test has now paid for itself twice in a day, and both times the same way: not by finding a bug, but by turning "this seems fine" into a number somebody has to justify in a comment.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
@@ -303,7 +315,7 @@ The plan asks the step to stay inside the realtime budget, and nothing in this r
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.
 
 - The drum synth is the only generator that cannot be modulated, and the fix is a new instrument rather than a table. `docs/plans/drum-synth-v2/` is approved and unbuilt.
-- ML-P8 stops after step 05. The published outlets are open: step 06's audio half is blocked on typed auxiliary audio edges rather than merely unbuilt, and step 07 is a listening pass that needs Adam's ear. Nothing added since the ML-M1 bank on 2026-08-31 has been listened to, this step included.
+- ML-P8 stops inside step 06. Its control outlets are declared, published and routable; what is missing is the source picker offering them, so such a route can be written by a project file but not built by hand. The audio half is blocked on typed auxiliary audio edges rather than merely unbuilt, and step 07 is a listening pass that needs Adam's ear. Nothing added since the ML-M1 bank on 2026-08-31 has been listened to, these steps included.
 - Buffer Stage 1's acceptance test 8 — no allocations or locks in the callback — is still unverified. It needs an allocation-tracking harness, not a reading of the code.
 - The sampler's four-voice stretching polyphony cap is not enforced anywhere: `StretchPool::new` builds a reader for all sixteen voices.
 - Acid's Cutoff knob means a different frequency from the other two ML-M1 models — 0.41x nominal against 0.65–0.68x. The compensation constant is load-bearing, not a typo; correcting it lines the corners up and breaks the filter. Lining them up means re-deriving it, and whether it *should* track the others is a taste question Adam has not been asked.

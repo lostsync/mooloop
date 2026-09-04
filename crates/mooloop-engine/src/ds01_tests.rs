@@ -142,7 +142,7 @@ fn a_channel_lfo_sweeps_ds01s_filter() {
         .add_route(ModRoute {
             // `add_route` stamps the durable id from the slot, so the one
             // written here is a placeholder rather than an authored value.
-            source: mooloop_core::ModSourceId(0),
+            source: mooloop_core::ModSourceRef::Id(mooloop_core::ModSourceId(0)),
             source_slot: 0,
             destination: ParamAddr {
                 scope: EffectTarget::Channel(0),

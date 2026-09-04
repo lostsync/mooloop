@@ -300,6 +300,15 @@ impl ModDestinationDescriptor {
 pub enum ModSourceRef {
     LocalSlot(u8),
     Id(ModSourceId),
+    /// One of the channel generator's published control outlets, by its
+    /// device-interface id.
+    ///
+    /// Not a [`ModSourceId`]: nothing mints an outlet, nothing reorders it,
+    /// and it belongs to whichever generator the channel holds rather than to
+    /// the rack. Replacing the generator therefore leaves this route
+    /// authored and unresolved rather than silently re-aimed, which is the
+    /// same fate a route naming a departed module gets.
+    GeneratorOutlet(u16),
 }
 
 impl ModSourceRef {
@@ -315,6 +324,14 @@ impl ModSourceRef {
                 .iter()
                 .find(|(_, source)| source.id == id)
                 .map(|(slot, _)| *slot),
+            // An outlet's locator is arithmetic on its id rather than a
+            // lookup: the outlet band sits above the modulator slots at a
+            // fixed offset, so there is no table for it to fall out of.
+            // Whether the *generator* actually publishes it is a separate
+            // question, and the one the route surface asks.
+            Self::GeneratorOutlet(outlet) => (usize::from(outlet)
+                < crate::modulation::MAX_GENERATOR_OUTLETS)
+                .then(|| crate::modulation::outlet_slot(outlet)),
         }
     }
 }

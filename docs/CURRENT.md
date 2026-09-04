@@ -553,15 +553,20 @@ land on its own when it starts to matter:
   the curves rather than dialled. Its published outlets are not built and are
   blocked on the same device-outlet mechanism ML-P8's step 06 needs; its
   factory bank and listening pass are step 09 and have not happened.
-- **What a device publishes** has a declaration but no consumer.
+- **A device's published outlets can drive other devices.**
   `mooloop_core::outlet` states the vocabulary — control versus audio domain,
   the tap point an audio outlet is taken at, and the one-block latency every
-  control outlet carries — and the ML-P8 declares fourteen outlets and computes
-  its seven control values, reduced through the group of its most recent note.
-  Nothing reads them: a route names its source by a rack module's identity, and
-  an outlet is not a rack module, so no picker lists them and no project can
-  save one. That mechanism is what both ML-P8's step 06 and DS-01's step 07
-  are waiting on.
+  control outlet carries — and the ML-P8 declares fourteen outlets and
+  publishes its seven control values, reduced through the group of its most
+  recent note. A modulation route names its source through `ModSourceRef`, so
+  it may be a rack module or a generator outlet; both resolve into one flat
+  control address space, and an outlet route persists by outlet id. The
+  latency is an ordering fact rather than a delay: the control table is filled
+  before the strips render, so a route necessarily reads what the generator
+  published in the previous block, live and offline alike.
+  What is missing is the *surface*: the source picker does not list outlets,
+  so such a route can be written by a project file but not built by hand. The
+  audio outlets are declared and not connectable, pending typed audio edges.
 - The ML-P8 allocates its eight physical voices as *groups*. Unison at 1x, 2x,
   4x and 8x spends the pool rather than growing it, leaving 8, 4, 2 and 1 notes
   of polyphony; a note allocates a complete group and steals complete older

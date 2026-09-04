@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use mooloop_core::MAX_BUSES;
 use mooloop_core::{
-    MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_MODULATORS_PER_CHANNEL, MAX_SAMPLER_VOICES,
+    modulation::CONTROL_SOURCE_SLOTS, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_SAMPLER_VOICES,
 };
 use mooloop_dsp::dynamics::db_to_lin;
 use mooloop_dsp::{DynamicsFrame, SPECTRUM_BINS};
@@ -351,19 +351,24 @@ pub struct ModulatorMeters {
 impl ModulatorMeters {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            cells: (0..MAX_CHANNELS * MAX_MODULATORS_PER_CHANNEL)
+            cells: (0..MAX_CHANNELS * CONTROL_SOURCE_SLOTS)
                 .map(|_| AtomicU32::new(0.0f32.to_bits()))
                 .collect(),
         })
     }
 
     fn base(channel: usize) -> Option<usize> {
-        (channel < MAX_CHANNELS).then_some(channel * MAX_MODULATORS_PER_CHANNEL)
+        (channel < MAX_CHANNELS).then_some(channel * CONTROL_SOURCE_SLOTS)
     }
 
-    /// Publish `channel`'s modulator outputs. Called on the audio thread,
-    /// once per block.
-    pub fn publish(&self, channel: usize, outputs: &[f32; MAX_MODULATORS_PER_CHANNEL]) {
+    /// Publish `channel`'s control sources. Called on the audio thread, once
+    /// per block.
+    ///
+    /// The whole row, modulator slots and generator outlets alike, because
+    /// this is what the view resolves a knob's live modulation offset from:
+    /// carrying only the rack would leave a knob driven by an outlet sitting
+    /// still while it audibly moves.
+    pub fn publish(&self, channel: usize, outputs: &[f32; CONTROL_SOURCE_SLOTS]) {
         let Some(base) = Self::base(channel) else {
             return;
         };
@@ -372,9 +377,9 @@ impl ModulatorMeters {
         }
     }
 
-    /// `channel`'s latest modulator outputs. Called on the GUI thread.
-    pub fn read(&self, channel: usize) -> [f32; MAX_MODULATORS_PER_CHANNEL] {
-        let mut out = [0.0; MAX_MODULATORS_PER_CHANNEL];
+    /// `channel`'s latest control sources. Called on the GUI thread.
+    pub fn read(&self, channel: usize) -> [f32; CONTROL_SOURCE_SLOTS] {
+        let mut out = [0.0; CONTROL_SOURCE_SLOTS];
         let Some(base) = Self::base(channel) else {
             return out;
         };

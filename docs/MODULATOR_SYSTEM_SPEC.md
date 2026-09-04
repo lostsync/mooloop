@@ -169,7 +169,7 @@ module's `input_slot`, a slot reference the user never sees.
 | Envelope | Gate-driven attack, decay, sustain, and release contour. | Implemented with an explicit channel-note gate adapter; typed device gate outlets are planned. |
 | Step / random generator | Clocked patterns, probability, and controlled variation. | Implemented as the Step and Random modules. |
 | Macro / internal value | User macro, transport phase, velocity, key track, pressure, or another declared channel value. | Planned. The Math module covers user arithmetic over an existing module's output, not a channel value source. |
-| Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Declared. `mooloop_core::outlet` is the vocabulary and the ML-P8 publishes seven; no route can name one yet. |
+| Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Implemented for the ML-P8's seven, through `ModSourceRef::GeneratorOutlet` and the one-block control table. Not yet offered by the source picker. |
 | Device outlet | Named effect signals such as gain reduction, envelope-following level, or gate state. | Planned. The vocabulary is shared with generator outlets; no effect declares one. |
 | Audio-derived control | Explicit envelope follower, transient detector, or another control extractor. | Deferred until it has an outlet contract. |
 | External / cross-channel control | Another channel's note gate is an explicit source-inlet adapter. MIDI/CV, buses, global sources, and general cross-channel outlets remain deferred by routing policy. | Note-gate adapter implemented; general routing deferred. |

@@ -11,7 +11,8 @@
 
 use crate::{
     AutomationPoint, BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
-    MlP8Route, ModRoute, ModSourceId, ModulatorParams, MonoSynthParams, MlM1Params, NoteEvent,
+    MlP8Route, ModRoute, ModSourceId, ModSourceRef, ModulatorParams, MonoSynthParams, MlM1Params,
+    NoteEvent,
     NoteId,
     ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams,
 };
@@ -286,7 +287,11 @@ pub enum EngineCommand {
     /// next block.
     RemoveModRoute {
         channel: u8,
-        source: ModSourceId,
+        /// What drove the route being removed. A reference rather than a
+        /// module id, because a route may name a generator outlet, and a
+        /// route that can be created and not deleted is worse than one that
+        /// cannot be created at all.
+        source: ModSourceRef,
         destination: ParamAddr,
     },
     /// Fire one complete retained-audio edit at the start of the next block.
