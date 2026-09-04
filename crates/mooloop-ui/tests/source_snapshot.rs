@@ -1073,6 +1073,10 @@ fn render_mlp8_source_editor() {
     ui.set_selected_channel_name(SharedString::from("ML-P8"));
     ui.set_editor_page(0);
     ui.set_source_kind(5);
+    // The pool's own arithmetic, which the face is given rather than deriving.
+    ui.set_mlp8_unison_note_counts(ModelRc::from(Rc::new(VecModel::from(vec![
+        8_i32, 4, 2, 1,
+    ]))));
 
     // One screen: oscillators, the whole network, and the other two sources
     // are all on it at once, so this first shot is the entire face.
@@ -1154,6 +1158,40 @@ fn render_mlp8_source_editor() {
     let driven = ui.window().take_snapshot().unwrap();
     assert_ne!(last, driven.as_bytes());
     write_snapshot(&driven, "MOOLOOP_MLP8_FEEDBACK_SNAPSHOT");
+
+    // Allocation, character, and the finisher share the VOICE region's last
+    // two columns, which is past the clip at 960 -- so is the filter mode
+    // selector, and the rack scrolls to reach both. Widen the window rather
+    // than scroll it, so the shot shows the region the way a maximized
+    // window does and the assertions below are looking at drawn pixels.
+    ui.window().set_size(LogicalSize::new(1440.0, 760.0));
+    let wide = ui.window().take_snapshot().unwrap();
+
+    // Eight is fixed information; what moves beside the Unison selector is
+    // how many notes are left, and at 8x that is one.
+    ui.set_mlp8_unison(3);
+    ui.set_mlp8_detune(0.55);
+    ui.set_mlp8_drift(0.4);
+    ui.set_mlp8_spread(0.8);
+    ui.set_mlp8_chorus(3);
+    let voiced = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        wide.as_bytes(),
+        voiced.as_bytes(),
+        "the step 05 controls drew nothing"
+    );
+    write_snapshot(&voiced, "MOOLOOP_MLP8_VOICE_SNAPSHOT");
+
+    // The derived note count is a number on the face, so changing Unison has
+    // to change the picture even with every other control where it was.
+    ui.set_mlp8_unison(0);
+    let unison_1x = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        voiced.as_bytes(),
+        unison_1x.as_bytes(),
+        "the note count did not follow Unison"
+    );
+    ui.set_mlp8_unison(3);
 
     ui.window().set_size(LogicalSize::new(720.0, 760.0));
     let narrow = ui.window().take_snapshot().unwrap();

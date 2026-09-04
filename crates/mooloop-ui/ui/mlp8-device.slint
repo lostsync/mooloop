@@ -532,6 +532,14 @@ export component MlP8DeviceFace inherits Rectangle {
     in-out property <float> filter-cutoff; in-out property <float> filter-resonance; in-out property <float> filter-env; in-out property <float> drive;
     in-out property <float> keytrack; in-out property <float> amp-velocity; in-out property <float> filter-velocity; in-out property <float> voice-feedback;
     in-out property <float> filter-attack; in-out property <float> filter-decay; in-out property <float> filter-sustain; in-out property <float> filter-release;
+    // Step 05. Unison and Chorus are indices into their own selectors; the
+    // other three are unit values read as percentages.
+    in-out property <float> drift; in-out property <int> unison; in-out property <float> detune; in-out property <float> spread; in-out property <int> chorus;
+    /// `MlP8Unison::note_polyphony()` for each option, in `MlP8Unison::ALL`
+    /// order. Supplied by Rust rather than derived here: eight over the group
+    /// size is the pool's own arithmetic, and a face that restates it is a
+    /// second place for it to be wrong.
+    in property <[int]> unison-note-counts;
     // 0 is the instrument -- SOURCE, NETWORK, VOICE on one screen -- and 1 is
     // its own modulation. Two pages rather than one screen because step 04
     // adds a whole second surface, and squeezing it into the first would cost
@@ -590,6 +598,7 @@ export component MlP8DeviceFace inherits Rectangle {
     callback filter-cutoff-changed(float); callback filter-resonance-changed(float); callback filter-env-changed(float); callback drive-changed(float);
     callback keytrack-changed(float); callback amp-velocity-changed(float); callback filter-velocity-changed(float); callback voice-feedback-changed(float);
     callback filter-attack-changed(float); callback filter-decay-changed(float); callback filter-sustain-changed(float); callback filter-release-changed(float);
+    callback drift-changed(float); callback unison-changed(int); callback detune-changed(float); callback spread-changed(float); callback chorus-changed(int);
     callback text-committed(int, string);
     callback modulation-depth-changed(int, float);
     callback modulation-edit-started(int);
@@ -1530,6 +1539,112 @@ export component MlP8DeviceFace inherits Rectangle {
                             modulation-depth-changed(v) => { root.modulation-depth-changed(19, v); }
                             modulation-edit-started => { root.modulation-edit-started(19); }
                             modulation-edit-finished => { root.modulation-edit-finished(19); }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    // Allocation, character, and the finisher: two more
+                    // columns of the same knob row rather than a band under
+                    // the region, because the region has no height left.
+                    // Narrower knobs than the two columns to their left,
+                    // because the width they cost is what took the face from
+                    // three rack units to four and the margin at four is
+                    // twenty pixels, not two hundred.
+                    VerticalLayout {
+                        spacing: 0px;
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 40px;
+                            field-width: 32px;
+                            label: "DETUNE";
+                            value <=> root.detune; minimum: 0; maximum: 1; default-value: 0;
+                            display-text: round(root.detune * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[66];
+                            modulation-depth: root.modulation-depths[66];
+                            modulation-offset: root.modulation-offsets[66];
+                            modulation-route-count: root.modulation-route-counts[66];
+                            changed(v) => { root.detune-changed(v); }
+                            text-committed(t) => { root.text-committed(66, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(66, v); }
+                            modulation-edit-started => { root.modulation-edit-started(66); }
+                            modulation-edit-finished => { root.modulation-edit-finished(66); }
+                        }
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 40px;
+                            field-width: 32px;
+                            label: "DRIFT";
+                            value <=> root.drift; minimum: 0; maximum: 1; default-value: 0;
+                            display-text: round(root.drift * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[64];
+                            modulation-depth: root.modulation-depths[64];
+                            modulation-offset: root.modulation-offsets[64];
+                            modulation-route-count: root.modulation-route-counts[64];
+                            changed(v) => { root.drift-changed(v); }
+                            text-committed(t) => { root.text-committed(64, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(64, v); }
+                            modulation-edit-started => { root.modulation-edit-started(64); }
+                            modulation-edit-finished => { root.modulation-edit-finished(64); }
+                        }
+                        KnobField {
+                            diameter: 20px;
+                            label-width: 40px;
+                            field-width: 32px;
+                            label: "SPREAD";
+                            value <=> root.spread; minimum: 0; maximum: 1; default-value: 0;
+                            display-text: round(root.spread * 100) + "%";
+                            modulation-armed: root.modulation-armed;
+                            modulation-allowed: root.modulation-allowed[67];
+                            modulation-depth: root.modulation-depths[67];
+                            modulation-offset: root.modulation-offsets[67];
+                            modulation-route-count: root.modulation-route-counts[67];
+                            changed(v) => { root.spread-changed(v); }
+                            text-committed(t) => { root.text-committed(67, t); }
+                            modulation-depth-changed(v) => { root.modulation-depth-changed(67, v); }
+                            modulation-edit-started => { root.modulation-edit-started(67); }
+                            modulation-edit-finished => { root.modulation-edit-finished(67); }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    // Eight is instrument information, not a control: it is
+                    // the pool, and nothing on this face can change it. What
+                    // Unison chooses is how much of it one note takes, so the
+                    // number that moves is the one beside it -- how many
+                    // notes are left to play.
+                    VerticalLayout {
+                        spacing: 1px;
+                        HorizontalLayout {
+                            spacing: 3px;
+                            SectionLabel { text: "VOICES 8"; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text {
+                                // Silent rather than wrong when the
+                                // vocabulary has not been installed: a "0
+                                // NOTES" on a working instrument would be a
+                                // face inventing a number it was not given.
+                                text: root.unison-note-counts.length > root.unison
+                                    ? root.unison-note-counts[root.unison] + (root.unison-note-counts[root.unison] == 1 ? " NOTE" : " NOTES")
+                                    : "";
+                                color: Theme.text-muted;
+                                font-size: 9px;
+                                height: 12px;
+                            }
+                        }
+                        SelectorBank {
+                            options: ["1x", "2x", "4x", "8x"];
+                            selected-index <=> root.unison;
+                            segment-width: 24px;
+                            tooltip: "Unison";
+                            selected(i) => { root.unison-changed(i); }
+                        }
+                        SectionLabel { text: "CHORUS"; }
+                        SelectorBank {
+                            options: ["OFF", "I", "II", "ENS"];
+                            selected-index <=> root.chorus;
+                            segment-width: 24px;
+                            tooltip: "Chorus";
+                            selected(i) => { root.chorus-changed(i); }
                         }
                         Rectangle { vertical-stretch: 1; }
                     }

@@ -1113,6 +1113,14 @@ fn install_mlp8_route_vocabularies(window: &MainWindow) {
         .collect();
     window.set_mlp8_route_source_names(ModelRc::from(Rc::new(VecModel::from(sources))));
     window.set_mlp8_route_dest_names(ModelRc::from(Rc::new(VecModel::from(dests))));
+    // Eight over the group size is the pool's own arithmetic. The face shows
+    // it beside the Unison selector and does not compute it: a second copy of
+    // that division is a second place for it to disagree with the allocator.
+    let polyphony: Vec<i32> = mooloop_core::MlP8Unison::ALL
+        .iter()
+        .map(|unison| unison.note_polyphony() as i32)
+        .collect();
+    window.set_mlp8_unison_note_counts(ModelRc::from(Rc::new(VecModel::from(polyphony))));
 }
 
 fn osc_wave_to_int(wave: OscWave) -> i32 {
@@ -2850,6 +2858,11 @@ impl UiState {
         window.set_mlp8_filter_decay(mlp8.filter_decay);
         window.set_mlp8_filter_sustain(mlp8.filter_sustain);
         window.set_mlp8_filter_release(mlp8.filter_release);
+        window.set_mlp8_drift(mlp8.drift);
+        window.set_mlp8_unison(mlp8.unison.to_index());
+        window.set_mlp8_detune(mlp8.detune);
+        window.set_mlp8_spread(mlp8.spread);
+        window.set_mlp8_chorus(mlp8.chorus.to_index());
         window.set_mlp8_lfo_wave(mlp8.lfo.wave.to_index());
         window.set_mlp8_lfo_synced(mlp8.lfo.synced);
         window.set_mlp8_lfo_rate_hz(mlp8.lfo.rate_hz);
@@ -8014,6 +8027,11 @@ impl AppUi {
         wire_mlp8!(on_mlp8_filter_decay_changed, p8::PARAM_FILTER_DECAY, f32);
         wire_mlp8!(on_mlp8_filter_sustain_changed, p8::PARAM_FILTER_SUSTAIN, f32);
         wire_mlp8!(on_mlp8_filter_release_changed, p8::PARAM_FILTER_RELEASE, f32);
+        wire_mlp8!(on_mlp8_drift_changed, p8::PARAM_DRIFT, f32);
+        wire_mlp8!(on_mlp8_unison_changed, p8::PARAM_UNISON, i32);
+        wire_mlp8!(on_mlp8_detune_changed, p8::PARAM_DETUNE, f32);
+        wire_mlp8!(on_mlp8_spread_changed, p8::PARAM_SPREAD, f32);
+        wire_mlp8!(on_mlp8_chorus_changed, p8::PARAM_CHORUS, i32);
         // The device's own LFO is eight more descriptor ids, not a second
         // kind of control, so it takes the same path everything else does.
         wire_mlp8!(on_mlp8_lfo_wave_changed, p8::PARAM_LFO_WAVE, i32);

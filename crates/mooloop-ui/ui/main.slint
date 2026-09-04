@@ -1033,6 +1033,19 @@ export component MainWindow inherits Window {
     in-out property <float> mlp8-filter-decay: 0.2;
     in-out property <float> mlp8-filter-sustain: 0.7;
     in-out property <float> mlp8-filter-release: 0.15;
+    // ---- Allocation, character, and the finisher ----
+    in-out property <float> mlp8-drift;
+    in-out property <int> mlp8-unison;
+    in-out property <float> mlp8-detune;
+    in-out property <float> mlp8-spread;
+    in-out property <int> mlp8-chorus;
+    /// `MlP8Unison::note_polyphony()` per option, installed once by Rust.
+    in property <[int]> mlp8-unison-note-counts;
+    callback mlp8-drift-changed(float);
+    callback mlp8-unison-changed(int);
+    callback mlp8-detune-changed(float);
+    callback mlp8-spread-changed(float);
+    callback mlp8-chorus-changed(int);
     callback mlp8-osc1-wave-changed(int); callback mlp8-osc1-semitones-changed(float); callback mlp8-osc1-cents-changed(float); callback mlp8-osc1-level-changed(float); callback mlp8-osc1-pulse-width-changed(float);
     callback mlp8-osc2-wave-changed(int); callback mlp8-osc2-semitones-changed(float); callback mlp8-osc2-cents-changed(float); callback mlp8-osc2-level-changed(float); callback mlp8-osc2-pulse-width-changed(float);
     callback mlp8-osc3-wave-changed(int); callback mlp8-osc3-semitones-changed(float); callback mlp8-osc3-cents-changed(float); callback mlp8-osc3-level-changed(float); callback mlp8-osc3-pulse-width-changed(float);
@@ -2591,9 +2604,17 @@ export component MainWindow inherits Window {
                                                 // because it is one screen with no pages: its
                                                 // four columns and two bands are the whole
                                                 // instrument, and three units is the width at
-                                                // which that stops being true.
-                                                property <int> source-units:
-                                                    root.editing-bus ? 2 : (root.source-kind == 6 ? 5 : 3);
+                                                // which that stops being true. The ML-P8 is
+                                                // four for the same reason and at the same
+                                                // boundary: three fitted its VOICE region
+                                                // exactly, with no slack at all, until step 05
+                                                // put allocation and character in there beside
+                                                // the filter. Widening the face was the only
+                                                // one of those that did not mean taking width
+                                                // from the network grid.
+                                                property <int> source-units: root.editing-bus
+                                                    ? 2
+                                                    : (root.source-kind == 6 ? 5 : root.source-kind == 5 ? 4 : 3);
                                                 width: DeviceRackMetrics.unit-width * self.source-units
                                                     + DeviceRackMetrics.half-gap
                                                     + DeviceRackMetrics.rail-width * 2;
@@ -2982,6 +3003,17 @@ export component MainWindow inherits Window {
                                                     filter-decay <=> root.mlp8-filter-decay;
                                                     filter-sustain <=> root.mlp8-filter-sustain;
                                                     filter-release <=> root.mlp8-filter-release;
+                                                    drift <=> root.mlp8-drift;
+                                                    unison <=> root.mlp8-unison;
+                                                    detune <=> root.mlp8-detune;
+                                                    spread <=> root.mlp8-spread;
+                                                    chorus <=> root.mlp8-chorus;
+                                                    unison-note-counts: root.mlp8-unison-note-counts;
+                                                    drift-changed(v) => { root.mlp8-drift-changed(v); }
+                                                    unison-changed(v) => { root.mlp8-unison-changed(v); }
+                                                    detune-changed(v) => { root.mlp8-detune-changed(v); }
+                                                    spread-changed(v) => { root.mlp8-spread-changed(v); }
+                                                    chorus-changed(v) => { root.mlp8-chorus-changed(v); }
                                                     filter-mode-changed(v) => { root.mlp8-filter-mode-changed(v); }
                                                     filter-cutoff-changed(v) => { root.mlp8-filter-cutoff-changed(v); }
                                                     filter-resonance-changed(v) => { root.mlp8-filter-resonance-changed(v); }
