@@ -6,7 +6,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use mooloop_core::{ChannelSetup, ChannelSource, DeviceKind, Kit, Project, SampleReference};
+use mooloop_core::{
+    ChannelSetup, ChannelSource, DeviceKind, EffectKind, EffectSlotState, Kit, Project,
+    SampleReference,
+};
 use serde::{Deserialize, Serialize};
 
 pub mod factory;
@@ -32,6 +35,8 @@ pub enum DocumentKind {
     Kit,
     Channel,
     Generator,
+    /// One rack row: an [`EffectSlotState`] and nothing else.
+    Effect,
 }
 
 impl DocumentKind {
@@ -41,9 +46,20 @@ impl DocumentKind {
             Self::Kit => "kit",
             Self::Channel => "channel",
             Self::Generator => "generator",
+            Self::Effect => "effect",
         }
     }
 }
+
+/// What an effect preset bundle holds, recorded in its manifest's `contains`
+/// list. A reader that meets an entry it does not know refuses the bundle
+/// rather than loading the half it understands.
+///
+/// This is the record `docs/plans/preset-system/00-status.md` made a
+/// condition of building the device-level preset first: a later fragment
+/// format can tell a one-row preset from a run of rows by reading this,
+/// instead of guessing from the document type.
+pub const EFFECT_PRESET_CONTAINS: &[&str] = &["effect_params"];
 
 /// Indexable metadata for a saved preset, carried alongside the document so
 /// a future preset browser can list/group/filter without opening every
@@ -57,6 +73,19 @@ pub struct PresetInfo {
     pub tags: Vec<String>,
 }
 
+/// Which class of preset a bundle is, and which device it is for.
+///
+/// Three classes rather than a bare [`DeviceKind`], because a bare kind could
+/// not name an effect at all and could not tell a whole-channel preset from a
+/// generator-only one. This is the structural half of the browser taxonomy:
+/// the list can be grouped by it before any browser exists to show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetKind {
+    Generator(DeviceKind),
+    Channel(DeviceKind),
+    Effect(EffectKind),
+}
+
 /// Summary of a preset bundle found by [`list_presets`], cheap to compute
 /// because it only reads the manifest header and preset metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,7 +94,7 @@ pub struct PresetSummary {
     pub name: String,
     pub category: String,
     pub tags: Vec<String>,
-    pub kind: DeviceKind,
+    pub kind: PresetKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +119,7 @@ pub enum LoadedDocument {
     Kit(Kit),
     Channel(Box<ChannelSetup>),
     Generator(Box<ChannelSource>),
+    Effect(Box<EffectSlotState>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +146,10 @@ pub enum Error {
     InvalidDocument(Box<Diagnosis>),
     UnsupportedVersion(u32),
     UnsupportedDocument(String),
+    /// The manifest's `contains` list names something this reader does not
+    /// understand. Refused whole rather than loaded in part: a preset that
+    /// arrives missing half of itself is worse than one that does not open.
+    UnsupportedContents(String),
 }
 
 impl Error {
@@ -141,6 +175,9 @@ impl fmt::Display for Error {
                 write!(f, "unsupported format version {version}")
             }
             Self::UnsupportedDocument(kind) => write!(f, "unsupported document type {kind:?}"),
+            Self::UnsupportedContents(entry) => {
+                write!(f, "this preset contains {entry:?}, which this version cannot load")
+            }
         }
     }
 }
@@ -178,6 +215,12 @@ struct Envelope<T> {
     asset_mode: AssetMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     preset: Option<PresetInfo>,
+    /// What the document holds, for readers that need to know before they
+    /// parse it. Empty for the document kinds that predate the field: their
+    /// contents are implied by `document_type` and nothing else has ever
+    /// been written under it. See [`EFFECT_PRESET_CONTAINS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    contains: Vec<String>,
     document: T,
 }
 
@@ -187,6 +230,8 @@ struct Header {
     document_type: String,
     #[serde(default)]
     preset: Option<PresetInfo>,
+    #[serde(default)]
+    contains: Vec<String>,
 }
 
 /// Writes `project` to `path`, correcting on the way out anything that can be
@@ -232,12 +277,20 @@ pub fn save_kit(path: &Path, kit: &Kit, mode: AssetMode) -> Result<SaveReport, E
     if !diagnosis.is_usable() {
         return Err(diagnosis.into());
     }
-    let mut report = save_with_assets(path, DocumentKind::Kit, kit, mode, None, |kit| {
-        kit.channels
-            .iter_mut()
-            .map(|setup| &mut setup.source)
-            .collect()
-    })?;
+    let mut report = save_with_assets(
+        path,
+        DocumentKind::Kit,
+        kit,
+        mode,
+        None,
+        Vec::new(),
+        |kit| {
+            kit.channels
+                .iter_mut()
+                .map(|setup| &mut setup.source)
+                .collect()
+        },
+    )?;
     report.repairs = diagnosis.issues;
     Ok(report)
 }
@@ -279,6 +332,7 @@ fn save_channel_with_preset(
         channel,
         mode,
         preset,
+        Vec::new(),
         |channel| vec![&mut channel.source],
     )?;
     report.repairs = diagnosis.issues;
@@ -304,7 +358,48 @@ pub fn save_generator_preset(
         source,
         mode,
         Some(info),
+        Vec::new(),
         |source| vec![source],
+    )?;
+    report.repairs = diagnosis.issues;
+    Ok(report)
+}
+
+/// Saves one rack row as a preset: the [`EffectSlotState`] alone.
+///
+/// The effect's kind is not stored separately, because
+/// [`EffectParams::kind`](mooloop_core::EffectParams::kind) derives it from
+/// the payload and a preset whose kind is implied by its parameters cannot
+/// disagree with itself. No route and no [`mooloop_core::EffectTarget`] is
+/// carried either, so nothing in the bundle names a channel and nothing has
+/// to be re-scoped when it lands on another one.
+///
+/// An effect references no samples -- [`mooloop_core::BufferParams`] holds a
+/// length in bars, a read offset and a crossfade, not audio -- so the asset
+/// closure has nothing to prepare and `mode` only records itself in the
+/// manifest.
+pub fn save_effect_preset(
+    path: &Path,
+    effect: &EffectSlotState,
+    info: PresetInfo,
+    mode: AssetMode,
+) -> Result<SaveReport, Error> {
+    let mut effect = *effect;
+    let diagnosis = integrity::repair_effect(DocumentKind::Effect, &mut effect);
+    if !diagnosis.is_usable() {
+        return Err(diagnosis.into());
+    }
+    let mut report = save_with_assets(
+        path,
+        DocumentKind::Effect,
+        effect,
+        mode,
+        Some(info),
+        EFFECT_PRESET_CONTAINS
+            .iter()
+            .map(|entry| (*entry).to_string())
+            .collect(),
+        |_| Vec::new(),
     )?;
     report.repairs = diagnosis.issues;
     Ok(report)
@@ -348,6 +443,7 @@ fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<Sav
             document_type: DocumentKind::Song.as_str().into(),
             asset_mode: mode,
             preset: None,
+            contains: Vec::new(),
             document,
         };
         fs::write(&staging_file, toml::to_string_pretty(&envelope)?)?;
@@ -531,6 +627,7 @@ fn save_with_assets<T, F>(
     mut document: T,
     mode: AssetMode,
     preset: Option<PresetInfo>,
+    contains: Vec<String>,
     setups: F,
 ) -> Result<SaveReport, Error>
 where
@@ -578,6 +675,7 @@ where
             document_type: kind.as_str().into(),
             asset_mode: mode,
             preset,
+            contains,
             document,
         };
         let manifest = toml::to_string_pretty(&envelope)?;
@@ -734,6 +832,19 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
                 envelope.asset_mode,
             )
         }
+        "effect" => {
+            // Checked before the document is parsed at all: a `contains`
+            // entry this reader does not know means the bundle holds more
+            // than an `EffectSlotState`, and parsing that part alone would
+            // be exactly the partial load the list exists to prevent.
+            validate_contains(&header.contains, EFFECT_PRESET_CONTAINS)?;
+            let envelope: Envelope<EffectSlotState> = toml::from_str(&manifest)?;
+            validate_envelope(&envelope, "effect")?;
+            (
+                LoadedDocument::Effect(Box::new(envelope.document)),
+                envelope.asset_mode,
+            )
+        }
         other => return Err(Error::UnsupportedDocument(other.into())),
     };
 
@@ -766,6 +877,8 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             resolve_setup_asset(path, 0, source, &mut warnings)?;
             integrity::repair_source(DocumentKind::Generator, source)
         }
+        // Nothing to resolve: an effect carries no sample reference.
+        LoadedDocument::Effect(effect) => integrity::repair_effect(DocumentKind::Effect, effect),
     };
     if !diagnosis.is_usable() {
         return Err(diagnosis.into());
@@ -779,11 +892,11 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
 }
 
 /// Scans `dir` for one level of preset bundles (`*.mooloop-generator` /
-/// `*.mooloop-channel` directories) and returns a summary for each,
-/// sorted by `(category, name)`. Bundles that fail to parse, are missing
-/// preset metadata, or aren't a `generator`/`channel` document are
-/// silently skipped rather than failing the whole scan. Returns an empty
-/// list if `dir` doesn't exist yet.
+/// `*.mooloop-channel` / `*.mooloop-effect` directories) and returns a
+/// summary for each, sorted by `(category, name)`. Bundles that fail to
+/// parse, are missing preset metadata, or aren't a
+/// `generator`/`channel`/`effect` document are silently skipped rather than
+/// failing the whole scan. Returns an empty list if `dir` doesn't exist yet.
 pub fn list_presets(dir: &Path) -> Vec<PresetSummary> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -810,11 +923,18 @@ fn summarize_preset(path: &Path) -> Option<PresetSummary> {
     let kind = match header.document_type.as_str() {
         "generator" => {
             let envelope: Envelope<ChannelSource> = toml::from_str(&manifest).ok()?;
-            envelope.document.kind()
+            PresetKind::Generator(envelope.document.kind())
         }
         "channel" => {
             let envelope: Envelope<ChannelSetup> = toml::from_str(&manifest).ok()?;
-            envelope.document.kind()
+            PresetKind::Channel(envelope.document.kind())
+        }
+        "effect" => {
+            // A bundle this version could not load is left out of the list
+            // rather than offered and then refused.
+            validate_contains(&header.contains, EFFECT_PRESET_CONTAINS).ok()?;
+            let envelope: Envelope<EffectSlotState> = toml::from_str(&manifest).ok()?;
+            PresetKind::Effect(envelope.document.kind())
         }
         _ => return None,
     };
@@ -827,7 +947,21 @@ fn summarize_preset(path: &Path) -> Option<PresetSummary> {
     })
 }
 
+/// Every entry in a manifest's `contains` list must be one this reader
+/// understands. An empty list is accepted for compatibility with bundles
+/// written before the field existed, though every effect preset carries one.
+fn validate_contains(contains: &[String], known: &[&str]) -> Result<(), Error> {
+    match contains
+        .iter()
+        .find(|entry| !known.contains(&entry.as_str()))
+    {
+        Some(unknown) => Err(Error::UnsupportedContents(unknown.clone())),
+        None => Ok(()),
+    }
+}
+
 fn validate_envelope<T>(envelope: &Envelope<T>, expected: &str) -> Result<(), Error> {
+
     if envelope.format_version != FORMAT_VERSION {
         return Err(Error::UnsupportedVersion(envelope.format_version));
     }
@@ -1307,6 +1441,7 @@ mod tests {
             document_type: "song".into(),
             asset_mode: AssetMode::Embedded,
             preset: None,
+            contains: Vec::new(),
             document: project,
         };
         fs::write(&bundle, toml::to_string_pretty(&envelope).unwrap()).unwrap();
@@ -1419,6 +1554,7 @@ mod tests {
             document_type: "song".into(),
             asset_mode: AssetMode::Embedded,
             preset: None,
+            contains: Vec::new(),
             document: project,
         };
         fs::write(
@@ -1459,6 +1595,7 @@ mod tests {
             document_type: "song".into(),
             asset_mode: AssetMode::Referenced,
             preset: None,
+            contains: Vec::new(),
             document: project.clone(),
         };
         fs::write(
@@ -2074,7 +2211,11 @@ id = "default_kick"
         assert_eq!(summaries.len(), 2);
         assert_eq!(summaries[0].name, "Alpha");
         assert_eq!(summaries[1].name, "Zeta");
-        assert_eq!(summaries[0].kind, mooloop_core::DeviceKind::MonoSynth);
+        assert_eq!(
+            summaries[0].kind,
+            PresetKind::Generator(mooloop_core::DeviceKind::MonoSynth)
+        );
+
     }
 
     #[test]
@@ -2206,6 +2347,7 @@ id = "default_kick"
             document_type: "song".into(),
             asset_mode: AssetMode::Referenced,
             preset: None,
+            contains: Vec::new(),
             document: project.clone(),
         };
         let manifest = toml::to_string_pretty(&envelope).unwrap();
@@ -2220,5 +2362,211 @@ id = "default_kick"
         let loaded = load_bundle(&bundle).unwrap();
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
+
+    // --- Effect presets (docs/plans/preset-system/01) ---------------------
+
+    fn effect_info(name: &str) -> PresetInfo {
+        PresetInfo {
+            name: name.into(),
+            category: "Space".into(),
+            tags: vec!["wide".into()],
+        }
+    }
+
+    /// The whole point of the format: a row saved from one channel loads on
+    /// any other with nothing to re-scope, because nothing in it names a
+    /// channel to begin with.
+    #[test]
+    fn an_effect_preset_round_trips() {
+        let temp = tempdir().unwrap();
+        let mut effect = EffectSlotState::of_kind(EffectKind::Delay);
+        if let mooloop_core::EffectParams::Delay(delay) = &mut effect.params {
+            delay.feedback = 0.71;
+            delay.mode = mooloop_core::DelayMode::Tape;
+            delay.tempo_sync = true;
+            delay.time_division = mooloop_core::DelayTimeDivision::DottedEighth;
+        }
+        let path = temp.path().join("tape.mooloop-effect");
+        let report =
+            save_effect_preset(&path, &effect, effect_info("Tape"), AssetMode::Embedded).unwrap();
+        assert!(report.warnings.is_empty());
+        assert!(report.repairs.is_empty());
+
+        let loaded = load_bundle(&path).unwrap();
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.document, LoadedDocument::Effect(Box::new(effect)));
+    }
+
+    /// One loop over every kind is what catches a `serde` attribute missing
+    /// from one params struct, which no single-kind test would.
+    #[test]
+    fn effect_presets_round_trip_for_every_kind() {
+        let temp = tempdir().unwrap();
+        for kind in EffectKind::ALL {
+            let effect = EffectSlotState::of_kind(kind);
+            let path = temp.path().join(format!("{kind:?}.mooloop-effect"));
+            save_effect_preset(&path, &effect, effect_info("Default"), AssetMode::Embedded)
+                .unwrap_or_else(|error| panic!("{kind:?} did not save: {error}"));
+            let loaded = load_bundle(&path).unwrap_or_else(|error| panic!("{kind:?}: {error}"));
+            let LoadedDocument::Effect(back) = loaded.document else {
+                panic!("{kind:?} did not load as an effect");
+            };
+            assert_eq!(*back, effect, "{kind:?} changed on the way through disk");
+            assert_eq!(back.kind(), kind);
+        }
+    }
+
+    /// These four default on load, so a bug that dropped them would be
+    /// silent: the preset would open, at the wrong settings.
+    #[test]
+    fn host_settings_survive_an_effect_preset() {
+        let temp = tempdir().unwrap();
+        let effect = EffectSlotState {
+            bypassed: true,
+            wet_dry: 0.4,
+            input_trim: 0.5,
+            output_trim: 1.75,
+            ..EffectSlotState::of_kind(EffectKind::Reverb)
+        };
+        let path = temp.path().join("hosted.mooloop-effect");
+        save_effect_preset(&path, &effect, effect_info("Hosted"), AssetMode::Embedded).unwrap();
+        let LoadedDocument::Effect(back) = load_bundle(&path).unwrap().document else {
+            panic!("not an effect");
+        };
+        assert!(back.bypassed);
+        assert_eq!(back.wet_dry, 0.4);
+        assert_eq!(back.input_trim, 0.5);
+        assert_eq!(back.output_trim, 1.75);
+    }
+
+    #[test]
+    fn list_presets_names_an_effect_preset_by_its_kind() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("effects");
+        for (name, kind) in [("Bright", EffectKind::Filter), ("Warm", EffectKind::Drive)] {
+            save_effect_preset(
+                &dir.join(format!("{name}.mooloop-effect")),
+                &EffectSlotState::of_kind(kind),
+                PresetInfo {
+                    name: name.into(),
+                    category: String::new(),
+                    tags: Vec::new(),
+                },
+                AssetMode::Embedded,
+            )
+            .unwrap();
+        }
+        let listed = list_presets(&dir);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].name, "Bright");
+        assert_eq!(listed[0].kind, PresetKind::Effect(EffectKind::Filter));
+        assert_eq!(listed[1].name, "Warm");
+        assert_eq!(listed[1].kind, PresetKind::Effect(EffectKind::Drive));
+    }
+
+    /// Matches `summarize_preset`'s contract for the other kinds: a bundle
+    /// from another format version is left out of the list, not an error.
+    #[test]
+    fn list_presets_skips_an_effect_preset_from_another_format_version() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("effects");
+        let path = dir.join("future.mooloop-effect");
+        save_effect_preset(
+            &path,
+            &EffectSlotState::of_kind(EffectKind::Gate),
+            effect_info("Future"),
+            AssetMode::Embedded,
+        )
+        .unwrap();
+        let manifest_path = path.join(MANIFEST_FILE);
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        let bumped = manifest.replacen(
+            &format!("format_version = {FORMAT_VERSION}"),
+            &format!("format_version = {}", FORMAT_VERSION + 1),
+            1,
+        );
+        assert_ne!(manifest, bumped, "the manifest did not carry its version");
+        fs::write(&manifest_path, bumped).unwrap();
+
+        assert!(list_presets(&dir).is_empty());
+        assert!(matches!(
+            load_bundle(&path),
+            Err(Error::UnsupportedVersion(version)) if version == FORMAT_VERSION + 1
+        ));
+    }
+
+    /// The explicit record that lets a later fragment reader tell one row
+    /// from a run of rows. Read back as data rather than through the loader,
+    /// because the loader is what a future reader will not be.
+    #[test]
+    fn an_effect_preset_records_what_it_contains() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("recorded.mooloop-effect");
+        save_effect_preset(
+            &path,
+            &EffectSlotState::of_kind(EffectKind::Compressor),
+            effect_info("Recorded"),
+            AssetMode::Embedded,
+        )
+        .unwrap();
+        let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
+        let header: Header = toml::from_str(&manifest).unwrap();
+        assert_eq!(header.document_type, "effect");
+        assert_eq!(header.contains, vec!["effect_params".to_string()]);
+        assert_eq!(header.preset, Some(effect_info("Recorded")));
+    }
+
+    /// The forward-compatibility promise: a bundle holding more than this
+    /// version understands is refused whole, not opened at half strength.
+    /// The generator and channel loaders are not made to honour it, because
+    /// nothing has ever written the field for them.
+    #[test]
+    fn an_effect_preset_containing_something_unknown_is_refused() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("effects");
+        let path = dir.join("fragment.mooloop-effect");
+        save_effect_preset(
+            &path,
+            &EffectSlotState::of_kind(EffectKind::Plate),
+            effect_info("Fragment"),
+            AssetMode::Embedded,
+        )
+        .unwrap();
+        let manifest_path = path.join(MANIFEST_FILE);
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        let widened = manifest.replacen(
+            "contains = [\"effect_params\"]",
+            "contains = [\"effect_params\", \"mod_routes\"]",
+            1,
+        );
+        assert_ne!(manifest, widened, "the manifest did not carry its contains list");
+        fs::write(&manifest_path, widened).unwrap();
+
+        match load_bundle(&path) {
+            Err(Error::UnsupportedContents(entry)) => assert_eq!(entry, "mod_routes"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        // And it is not offered in the list only to be refused on the click.
+        assert!(list_presets(&dir).is_empty());
+    }
+
+    /// A non-finite host setting is corrected on the way out, as it is for
+    /// every other document, and the correction is reported.
+    #[test]
+    fn an_effect_preset_with_a_bad_trim_is_repaired_on_save() {
+        let temp = tempdir().unwrap();
+        let effect = EffectSlotState {
+            wet_dry: f32::NAN,
+            ..EffectSlotState::of_kind(EffectKind::Bitcrush)
+        };
+        let path = temp.path().join("nan.mooloop-effect");
+        let report =
+            save_effect_preset(&path, &effect, effect_info("NaN"), AssetMode::Embedded).unwrap();
+        assert_eq!(report.repairs.len(), 1);
+        let LoadedDocument::Effect(back) = load_bundle(&path).unwrap().document else {
+            panic!("not an effect");
+        };
+        assert_eq!(back.wet_dry, 1.0);
     }
 }

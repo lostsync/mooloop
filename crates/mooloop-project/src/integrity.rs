@@ -229,8 +229,21 @@ pub fn repair_setups(document: DocumentKind, setups: &mut [ChannelSetup]) -> Dia
     walk_setups(document, setups, true)
 }
 
+/// Correct a lone effect slot's settings in place. Used by effect presets,
+/// which carry one rack row and nothing that could address anything else.
+pub fn repair_effect(document: DocumentKind, effect: &mut EffectSlotState) -> Diagnosis {
+    let mut doctor = Doctor::new(true);
+    check_effect(&mut doctor, "This preset", 0, effect);
+    Diagnosis {
+        document,
+        issues: doctor.issues,
+        context: Vec::new(),
+    }
+}
+
 /// Correct a lone generator's parameters in place.
 pub fn repair_source(document: DocumentKind, source: &mut ChannelSource) -> Diagnosis {
+
     let mut doctor = Doctor::new(true);
     check_source(&mut doctor, "This preset", source);
     Diagnosis {

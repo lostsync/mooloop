@@ -52,8 +52,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Fable 5.1 — Claude Code
 - First seen: 2026-09-02
-- Last seen: 2026-09-02
-- Sessions: 2
+- Last seen: 2026-09-04
+- Sessions: 3
 - Notes: Sanity pass over the sampler slice/commit push (commit bakes the
   stored ratio, revert re-provisions the stretch pool, slice-mode seed and
   rate fixes, slice note-offs, one-click re-bake). Then device ordering:

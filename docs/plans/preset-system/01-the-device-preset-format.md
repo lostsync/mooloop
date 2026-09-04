@@ -56,6 +56,13 @@ proceed ahead of the decision. Do not skip it.
    `EffectKind::Buffer`**, whose `BufferParams` is the one candidate for
    carrying something. If it does reference audio, say so in this file and
    handle it; do not assume either way.
+
+   *Verified 2026-09-04:* `BufferParams` is `bars`, `offset_beats` and
+   `crossfade_ms` — an allocation size, a read offset and a fade. The
+   retained audio itself is runtime state the engine allocates on install and
+   never persists, so a Buffer preset carries no asset and the empty closure
+   is correct for every kind.
+
 4. **Load** through the existing `load_bundle` path, validating the envelope
    against `"effect"` like the other kinds.
 5. **Widen `PresetSummary.kind`.** It is a `DeviceKind` today (`:68`), which

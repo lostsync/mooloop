@@ -104,7 +104,8 @@ pub fn rescope_modulation(setup: &mut ChannelSetup, channel: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{list_presets, load_bundle, LoadedDocument};
+    use crate::{list_presets, load_bundle, LoadedDocument, PresetKind};
+
     use mooloop_core::modulation::{ModPolarity, ModRoute, ParamAddr, ParamOwner};
     use mooloop_core::EffectTarget;
     use mooloop_core::{ChannelSource, DeviceKind};
@@ -125,7 +126,7 @@ mod tests {
         assert_eq!(listed.len(), 6);
         for summary in &listed {
             assert_eq!(summary.category, "ML-M1");
-            assert_eq!(summary.kind, DeviceKind::MlM1);
+            assert_eq!(summary.kind, PresetKind::Channel(DeviceKind::MlM1));
         }
 
         for patch in mlm1_factory::patches() {
