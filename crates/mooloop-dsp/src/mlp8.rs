@@ -60,7 +60,11 @@ use crate::osc::{sync_blep, Noise, Osc};
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
-use mooloop_core::mlp8::{MlP8Routes, MLP8_MAX_ROUTES, MLP8_MOD_DESTS};
+use mooloop_core::mlp8::{
+    MlP8ControlOutlets, MlP8Routes, MLP8_CONTROL_OUTLETS, MLP8_MAX_ROUTES, MLP8_MOD_DESTS,
+    OUTLET_AMP_ENV, OUTLET_FILTER_ENV, OUTLET_GATE, OUTLET_LFO, OUTLET_NOTE, OUTLET_TRIGGER,
+    OUTLET_VELOCITY,
+};
 use mooloop_core::{
     mlp8::xmod_index, MlP8Chorus, MlP8FilterMode, MlP8LfoParams, MlP8LfoRetrigger, MlP8LfoWave,
     MlP8ModDest, MlP8ModSource, MlP8Params, ModulationMode, ModulationParams, OscWave, SubWave,
@@ -415,6 +419,16 @@ impl MlP8Lfo {
             slewed: 0.0,
             primed: false,
         }
+    }
+
+    /// The value this LFO last emitted.
+    ///
+    /// The same number the voices were driven with, not a second evaluation
+    /// of the shape: the `LFO` outlet's contract is that it publishes the
+    /// signal the instrument actually used, and re-deriving it here would be
+    /// a way for the two to disagree.
+    fn value(&self) -> f32 {
+        self.slewed
     }
 
     /// Restart the cycle. The accumulator goes to zero rather than to the
@@ -1006,6 +1020,14 @@ struct Voice {
     noise_tap: f32,
     current_freq: f32,
     target_freq: f32,
+    /// The velocity this voice's note was played at, in `[0, 1]`.
+    ///
+    /// Kept beside the smoothed gain because they answer different
+    /// questions. The smoother is what the VCA uses, and on a stolen slot it
+    /// is still sliding from the previous note; the `Velocity` outlet
+    /// publishes the note's own velocity, which is a fact about the event
+    /// rather than about the ramp.
+    velocity: f32,
     /// Velocity gain, smoothed so a stolen retrigger at a different velocity
     /// slides rather than steps.
     velocity_amp: Smoothed,
@@ -1068,6 +1090,7 @@ impl Voice {
             noise_tap: 0.0,
             current_freq: 0.0,
             target_freq: 0.0,
+            velocity: 0.0,
             velocity_amp: smoothed(0.0),
             osc_level: [smoothed(0.0); 3],
             sub_level: smoothed(0.0),
@@ -1449,6 +1472,20 @@ pub struct MlP8 {
     lfo: MlP8Lfo,
     /// The authored routes, flattened. Rebuilt only when the topology moves.
     routes: CompiledRoutes,
+    /// The age of the **focus group**: the group created by the most recent
+    /// Note On, which is what the per-voice control outlets reduce over.
+    ///
+    /// It stays the focus through its release, so an envelope outlet has a
+    /// coherent tail rather than snapping to an older chord note that
+    /// happens to still be held. Zero means nothing has played yet, and no
+    /// group ever carries that age.
+    focus: u64,
+    /// Whether a Note On has arrived since the outlets were last published.
+    ///
+    /// `Trigger` is "a note started since you last looked", so it is defined
+    /// by the publication cadence rather than by a length in samples. That
+    /// is also why publishing is the thing that clears it.
+    triggered: bool,
     /// ML-P8's own summed output, before the finisher, and the chorus's wet
     /// copy of it.
     ///
@@ -1468,6 +1505,8 @@ impl MlP8 {
             voices: std::array::from_fn(|slot| Voice::new(slot as u32, sample_rate)),
             next_age: 1,
             lfo: MlP8Lfo::new(),
+            focus: 0,
+            triggered: false,
             routes: CompiledRoutes::new(),
             scratch: StereoBus::with_capacity(CHORUS_CHUNK),
             wet: StereoBus::with_capacity(CHORUS_CHUNK),
@@ -1573,6 +1612,8 @@ impl MlP8 {
             *voice = Voice::new(slot as u32, self.sample_rate);
         }
         self.next_age = 1;
+        self.focus = 0;
+        self.triggered = false;
         self.lfo.reset();
         self.chorus.reset(self.params.chorus, self.sample_rate);
         self.routes.compile(&self.params.routes);
@@ -1655,6 +1696,11 @@ impl MlP8 {
         let velocity_amp = f32::from(velocity) / 127.0;
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1).max(1);
+        // The newest group is always the focus, which is also what makes
+        // stealing need no rule of its own: the stealing Note On is the new
+        // focus event.
+        self.focus = age;
+        self.triggered = true;
         let drift = self.params.drift.clamp(0.0, 1.0);
 
         // A stolen group can be larger than the one taking its place — a
@@ -1677,6 +1723,7 @@ impl MlP8 {
             voice.member = member as u8;
             voice.members = size as u8;
             voice.target_freq = note_to_freq(note);
+            voice.velocity = velocity_amp;
             voice.active = true;
             voice.gate = true;
 
@@ -1731,6 +1778,68 @@ impl MlP8 {
     /// comes out — the bit-identity tests below cover exactly that. What it
     /// buys is a finisher that costs kilobytes a channel rather than
     /// [`crate::bus::MAX_BLOCK_SIZE`] ones.
+    /// The instrument's published control signals, in outlet-id order.
+    ///
+    /// Reading is what clears `Trigger`, because a trigger is "a note started
+    /// since you last looked" rather than a pulse of some length in samples:
+    /// its width is the publication cadence, and only the caller knows that.
+    /// The engine publishes once a block, which is what the outlet table
+    /// declares; two Note Ons inside one block therefore raise `Trigger`
+    /// once, and that is the documented rate rather than a dropped event.
+    /// Every other outlet is a level, and reading one changes nothing.
+    ///
+    /// This is publication, not telemetry. The values are the ones the voices
+    /// were actually driven with — the LFO reports what it emitted rather
+    /// than re-deriving its shape — and nothing here is smoothed, sampled or
+    /// dropped for display's sake.
+    pub fn publish_outlets(&mut self) -> MlP8ControlOutlets {
+        // The focus group, reduced. A group is allocated whole, so its
+        // members share an age; averaging over them is what makes a unison
+        // group publish one envelope rather than eight.
+        let mut members = 0.0_f32;
+        let mut amp = 0.0_f32;
+        let mut filter = 0.0_f32;
+        let mut velocity = 0.0_f32;
+        let mut note = 0.0_f32;
+        for voice in self.voices.iter().filter(|voice| voice.active) {
+            if voice.age != self.focus {
+                continue;
+            }
+            members += 1.0;
+            amp += voice.env.level();
+            filter += voice.filter_env.level();
+            // The group's members share a note and a velocity, so these are
+            // the same value however many times they are added.
+            velocity = voice.velocity;
+            note = f32::from(voice.note) / 127.0;
+        }
+        // When the focus group falls idle its outlets return to zero rather
+        // than jumping backward to an older held note. That is the plan's
+        // rule and it is what makes the tail readable: a decay that ends is
+        // a decay, not a step to whatever else is down.
+        let (amp, filter) = if members > 0.0 {
+            (amp / members, filter / members)
+        } else {
+            (0.0, 0.0)
+        };
+        let triggered = std::mem::take(&mut self.triggered);
+
+        let mut outlets: MlP8ControlOutlets = [0.0; MLP8_CONTROL_OUTLETS];
+        outlets[OUTLET_LFO as usize] = self.lfo.value();
+        outlets[OUTLET_AMP_ENV as usize] = amp;
+        outlets[OUTLET_FILTER_ENV as usize] = filter;
+        outlets[OUTLET_VELOCITY as usize] = if members > 0.0 { velocity } else { 0.0 };
+        outlets[OUTLET_NOTE as usize] = if members > 0.0 { note } else { 0.0 };
+        // Gate is deliberately not the focus group's gate. "Any note is
+        // held" is the useful channel-level fact and it does not fall when
+        // the newest note of a chord is released while an older one is still
+        // down. It follows the scheduled Note On/Off, not the VCA's release
+        // tail, so it is `gate` rather than `active`.
+        outlets[OUTLET_GATE as usize] = f32::from(u8::from(self.any_gate_held()));
+        outlets[OUTLET_TRIGGER as usize] = f32::from(u8::from(triggered));
+        outlets
+    }
+
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize, bpm: f64) {
         let limit = self.scratch.capacity().max(1);
         let mut pos = start;
@@ -4118,6 +4227,232 @@ mod tests {
         assert_eq!(params.drift, 0.0);
         assert_eq!(params.detune, 0.0);
         assert_eq!(params.spread, 0.0);
+    }
+
+    // --- Step 06: what the instrument publishes ---------------------------
+
+    fn note_off(offset: u32, id: u64, note: u8) -> TimedEvent {
+        TimedEvent {
+            offset,
+            event: Event::NoteOff { id, note },
+        }
+    }
+
+    /// Render one block of `frames` with `events`, then publish. Returns the
+    /// outlets as they stand at the end of that block.
+    fn outlets_after(synth: &mut MlP8, events: EventList, frames: usize) -> MlP8ControlOutlets {
+        let mut bus = StereoBus::with_capacity(frames);
+        synth.process(&ctx(frames), &mut bus, &events, None);
+        synth.publish_outlets()
+    }
+
+    /// The published LFO is the signal the voices were driven with, not a
+    /// second evaluation of the same shape. Re-deriving it is exactly how the
+    /// two would come to disagree, so the test compares against a bare LFO
+    /// advanced over the same span.
+    #[test]
+    fn the_lfo_outlet_is_the_signal_the_instrument_used() {
+        let mut params = init_saw();
+        params.lfo.rate_hz = 3.0;
+        let mut synth = MlP8::new(params, SR);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        let published = outlets_after(&mut synth, events, 4096)[OUTLET_LFO as usize];
+
+        let mut reference = MlP8Lfo::new();
+        for _ in 0..4096 {
+            reference.next_sample(&params.lfo, 120.0, SR);
+        }
+        assert_eq!(published, reference.value());
+        // And it is not vacuously zero.
+        assert!(published.abs() > 1.0e-3, "the LFO published {published}");
+    }
+
+    /// A unison group publishes one envelope, not eight. The reduction is the
+    /// mean over the focus group, which is the thing that makes the outlet
+    /// usable at any Unison setting.
+    #[test]
+    fn the_envelope_outlets_reduce_over_the_focus_group() {
+        let mut params = sine_bed();
+        params.unison = MlP8Unison::X4;
+        params.drift = 1.0;
+        let mut synth = MlP8::new(params, SR);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        let outlets = outlets_after(&mut synth, events, 12_000);
+
+        // Drift moves the four members' envelope times apart, so their levels
+        // genuinely differ and the mean is doing work rather than averaging
+        // four copies of one number.
+        let levels: Vec<f32> = synth
+            .voices
+            .iter()
+            .filter(|voice| voice.active && voice.age == synth.focus)
+            .map(|voice| voice.env.level())
+            .collect();
+        assert_eq!(levels.len(), 4);
+        let mean = levels.iter().sum::<f32>() / 4.0;
+        assert!(
+            (outlets[OUTLET_AMP_ENV as usize] - mean).abs() < 1.0e-6,
+            "published {} against a group mean of {mean}",
+            outlets[OUTLET_AMP_ENV as usize]
+        );
+        assert!(outlets[OUTLET_AMP_ENV as usize] > 0.0);
+    }
+
+    /// The focus is the newest group and it stays the focus through its own
+    /// release. When it falls idle its outlets go to zero rather than
+    /// jumping backward to an older note that is still held.
+    #[test]
+    fn the_focus_follows_the_newest_note_and_falls_to_zero_rather_than_backward() {
+        let mut params = sine_bed();
+        params.release = 0.05;
+        let mut synth = MlP8::new(params, SR);
+
+        // An old note, held for the whole test.
+        let mut held = EventList::empty();
+        held.push(note_on(0, 1, 36));
+        let low = outlets_after(&mut synth, held, 4096);
+        assert!((low[OUTLET_NOTE as usize] - 36.0 / 127.0).abs() < 1.0e-6);
+
+        // A newer note takes the focus immediately.
+        let mut newer = EventList::empty();
+        newer.push(note_on(0, 2, 84));
+        let high = outlets_after(&mut synth, newer, 4096);
+        assert!((high[OUTLET_NOTE as usize] - 84.0 / 127.0).abs() < 1.0e-6);
+
+        // Released, it stays the focus through its tail: the envelope is
+        // still falling rather than already zero.
+        let mut release = EventList::empty();
+        release.push(note_off(0, 2, 84));
+        let tail = outlets_after(&mut synth, release, 512);
+        assert!((tail[OUTLET_NOTE as usize] - 84.0 / 127.0).abs() < 1.0e-6);
+        assert!(tail[OUTLET_AMP_ENV as usize] > 0.0, "the tail was cut short");
+        assert!(tail[OUTLET_AMP_ENV as usize] < high[OUTLET_AMP_ENV as usize]);
+
+        // Idle, its outlets return to zero. The low note is still held, and
+        // the point is that Note does *not* go back to it.
+        let quiet = outlets_after(&mut synth, EventList::empty(), 12_000);
+        assert_eq!(quiet[OUTLET_NOTE as usize], 0.0);
+        assert_eq!(quiet[OUTLET_AMP_ENV as usize], 0.0);
+        assert_eq!(quiet[OUTLET_VELOCITY as usize], 0.0);
+        // But Gate is not the focus's gate: the older note is still down.
+        assert_eq!(quiet[OUTLET_GATE as usize], 1.0);
+    }
+
+    /// Gate and Trigger say different things, which is the reason for having
+    /// both. Gate stays high across overlapping held notes; Trigger fires
+    /// once per Note On and is cleared by being published.
+    #[test]
+    fn gate_spans_overlapping_notes_while_trigger_fires_once_each() {
+        let mut synth = MlP8::new(sine_bed(), SR);
+
+        let mut first = EventList::empty();
+        first.push(note_on(0, 1, 48));
+        let a = outlets_after(&mut synth, first, 512);
+        assert_eq!(a[OUTLET_GATE as usize], 1.0);
+        assert_eq!(a[OUTLET_TRIGGER as usize], 1.0);
+
+        // No new note: the gate holds, the trigger does not repeat.
+        let b = outlets_after(&mut synth, EventList::empty(), 512);
+        assert_eq!(b[OUTLET_GATE as usize], 1.0);
+        assert_eq!(b[OUTLET_TRIGGER as usize], 0.0);
+
+        // A second note overlapping the first fires again.
+        let mut second = EventList::empty();
+        second.push(note_on(0, 2, 55));
+        let c = outlets_after(&mut synth, second, 512);
+        assert_eq!(c[OUTLET_TRIGGER as usize], 1.0);
+
+        // Releasing the newer note leaves the gate high, because the older
+        // one is still held. This is the case a focus-following gate would
+        // get wrong.
+        let mut release_new = EventList::empty();
+        release_new.push(note_off(0, 2, 55));
+        let d = outlets_after(&mut synth, release_new, 512);
+        assert_eq!(d[OUTLET_GATE as usize], 1.0);
+
+        // Only the last Note Off lowers it, and it follows the scheduled
+        // event rather than the VCA's release tail.
+        let mut release_old = EventList::empty();
+        release_old.push(note_off(0, 1, 48));
+        let e = outlets_after(&mut synth, release_old, 64);
+        assert_eq!(e[OUTLET_GATE as usize], 0.0);
+        assert!(e[OUTLET_AMP_ENV as usize] > 0.0, "the tail ended with the gate");
+    }
+
+    /// Velocity publishes the note's own velocity, not the smoothed VCA
+    /// gain. On a stolen slot the smoother is still sliding from the
+    /// previous note, and publishing that would make the outlet a fact about
+    /// the ramp rather than about the event.
+    #[test]
+    fn velocity_publishes_the_event_not_the_ramp() {
+        let mut synth = MlP8::new(sine_bed(), SR);
+        let mut loud = EventList::empty();
+        loud.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn { id: 1, note: 60, velocity: 127 },
+        });
+        assert_eq!(outlets_after(&mut synth, loud, 4096)[OUTLET_VELOCITY as usize], 1.0);
+
+        // Fill the pool, then steal with a quiet note. The stolen slot's
+        // smoother is mid-slide; the outlet is not.
+        let mut chord = EventList::empty();
+        for index in 1..MLP8_VOICES as u64 + 1 {
+            chord.push(TimedEvent {
+                offset: 0,
+                event: Event::NoteOn {
+                    id: index + 1,
+                    note: 48 + index as u8,
+                    velocity: 127,
+                },
+            });
+        }
+        outlets_after(&mut synth, chord, 4096);
+
+        let mut quiet = EventList::empty();
+        quiet.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn { id: 99, note: 72, velocity: 32 },
+        });
+        let stolen = outlets_after(&mut synth, quiet, 8);
+        let expected = 32.0 / 127.0;
+        assert!(
+            (stolen[OUTLET_VELOCITY as usize] - expected).abs() < 1.0e-6,
+            "published {} rather than {expected}",
+            stolen[OUTLET_VELOCITY as usize]
+        );
+        // The smoother really is still elsewhere, so the two are distinct.
+        let focus = synth
+            .voices
+            .iter()
+            .find(|voice| voice.active && voice.age == synth.focus)
+            .unwrap();
+        assert!((focus.velocity_amp.value() - expected).abs() > 0.05);
+    }
+
+    /// Publication is deterministic: the same event stream publishes the same
+    /// values twice, which is what makes an offline render agree with a live
+    /// take once the engine reads these.
+    #[test]
+    fn the_outlets_publish_identically_across_instances() {
+        let run = || {
+            let mut params = sine_bed();
+            params.unison = MlP8Unison::X2;
+            params.drift = 0.5;
+            params.lfo.rate_hz = 5.0;
+            let mut synth = MlP8::new(params, SR);
+            let mut published = Vec::new();
+            for block in 0..8 {
+                let mut events = EventList::empty();
+                if block % 3 == 0 {
+                    events.push(note_on(0, block as u64 + 1, 48 + block as u8 * 2));
+                }
+                published.push(outlets_after(&mut synth, events, 1024));
+            }
+            published
+        };
+        assert_eq!(run(), run());
     }
 
     /// A skipped oscillator has to be skipped for the right reason. Muting

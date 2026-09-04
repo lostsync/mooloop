@@ -76,6 +76,11 @@ pub enum SignalShape {
     Gate,
     /// Quantized levels; destinations state their own quantization rules.
     Stepped,
+    /// One control tick high per event, then low. Distinct from [`Self::Gate`]
+    /// because the two answer different questions: a gate says "a note is
+    /// held", a trigger says "a note started". A drum channel's `Trigger` is
+    /// the useful one and its `Gate` is almost always low.
+    Trigger,
 }
 
 /// How often a source recomputes. `Subdivision32` is the engine's existing

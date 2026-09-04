@@ -1,6 +1,60 @@
 # ML-P8 plan status
 
-**Steps 02, 03, 04 and 05 are in.** 06 and 07 are next, in order.
+**Steps 02, 03, 04 and 05 are in. 06 has started.** 07 is after it.
+
+## Step 06, so far
+
+What a device publishes now has a vocabulary, and ML-P8 has filled it in. What
+does *not* exist yet is the route mechanism that would let anything consume it,
+and the split is deliberate rather than a stopping point chosen at random —
+see "What 06 still needs" below.
+
+**Landed:** `mooloop_core::outlet` is the generic declaration — `OutletDomain`,
+`OutletTap`, `OutletDescriptor`, and the rule that a control outlet declares
+[`ControlLatency::OUTLET`] whether or not its author remembers to. ML-P8's
+fourteen outlets are declared with frozen ids: seven control (`LFO`, both
+envelopes, `Velocity`, `Note`, `Gate`, `Trigger`) and seven audio (`Osc 1-3`,
+`Sub`, `Noise`, `Pre-Filter Mix`, `Filter`) with their tap points. The device
+computes and publishes the seven control values, reduced through the focus
+group.
+
+Three things that half turned up:
+
+- **`Gate` and `Trigger` had to be built from different state, not the same
+  state read twice.** `Gate` is "any note is held", which is the channel-level
+  fact and does not fall when the newest note of a chord is released while an
+  older one is down; `Trigger` is "a note started since you last looked". The
+  second one has no width in samples — its width *is* the publication cadence
+  — so publishing is what clears it, and a device cannot define it alone.
+- **`Velocity` publishes the event, not the ramp.** The voice's smoothed
+  velocity gain is what the VCA uses, and on a stolen slot it is still sliding
+  from the previous note. The outlet is a fact about the note, so the voice
+  now carries the velocity it was played at beside the smoother that plays it.
+  Eight bytes a voice, and the test is that the two are measurably different
+  on a stolen slot.
+- **The published rate is `PerBlock`, and saying so is the point.** A local
+  modulator runs on the 32-frame tick; a device reduces per-voice state into
+  one number at the end of its block. Publishing per tick would mean rendering
+  the device in 32-frame pieces so the reduction had somewhere to happen, and
+  storing a tick's worth of every outlet against the chance somebody reads it.
+  Declaring the coarser rate honestly is what leaves that upgrade open — a
+  consumer told `PerBlock` cannot come to depend on more.
+
+**What 06 still needs**, and why it is a separate piece rather than the rest of
+an afternoon: a route cannot yet name an outlet. `ModRoute` stores
+`source: ModSourceId`, which is a *rack module's* identity, and resolves it
+against the rack's slot table; an outlet is neither. Making one routable means
+`ModRoute` referring to a source through `ModSourceRef` — which
+`mod_metadata.rs` has been shipping unconsumed for exactly this — widening the
+per-channel control table by an outlet band, publishing into it one block
+behind, and teaching the source picker and the persisted route form about it.
+That is the mechanism DS-01's step 07 also waits on, so it is worth doing once
+and deliberately rather than as the tail of this one.
+
+The audio outlets stay declared and unconnectable, which is the split the step
+itself offers. Materialising seven stereo taps with nothing able to read them
+would cost 56 KB a channel and put buffers in the callback for no consumer,
+which the same step forbids in its last line.
 
 Step 05 finished the pool. A note is a *group* of physical slots: Unison at
 1x/2x/4x/8x spends the eight rather than growing them, groups are allocated and

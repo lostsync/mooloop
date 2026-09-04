@@ -553,6 +553,15 @@ land on its own when it starts to matter:
   the curves rather than dialled. Its published outlets are not built and are
   blocked on the same device-outlet mechanism ML-P8's step 06 needs; its
   factory bank and listening pass are step 09 and have not happened.
+- **What a device publishes** has a declaration but no consumer.
+  `mooloop_core::outlet` states the vocabulary — control versus audio domain,
+  the tap point an audio outlet is taken at, and the one-block latency every
+  control outlet carries — and the ML-P8 declares fourteen outlets and computes
+  its seven control values, reduced through the group of its most recent note.
+  Nothing reads them: a route names its source by a rack module's identity, and
+  an outlet is not a rack module, so no picker lists them and no project can
+  save one. That mechanism is what both ML-P8's step 06 and DS-01's step 07
+  are waiting on.
 - The ML-P8 allocates its eight physical voices as *groups*. Unison at 1x, 2x,
   4x and 8x spends the pool rather than growing it, leaving 8, 4, 2 and 1 notes
   of polyphony; a note allocates a complete group and steals complete older

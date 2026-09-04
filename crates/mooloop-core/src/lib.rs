@@ -20,6 +20,7 @@ pub mod mod_metadata;
 pub mod mlm1;
 pub mod mlm1_factory;
 pub mod mlp8;
+pub mod outlet;
 pub mod pattern;
 pub mod playlist;
 pub mod project;
@@ -74,6 +75,9 @@ pub use mod_metadata::{
     local_slot_sources, ControlLatency, ControlRate, ModDestinationDescriptor, ModInterpretation,
     ModSourceDescriptor, ModSourceId, ModSourceKind, ModSourceRef, SignalShape, Smoothing,
     TriggerPolicy,
+};
+pub use outlet::{
+    OutletDescriptor, OutletDomain, OutletTap, PublishesOutlets,
 };
 pub use generator::{
     GeneratorParams, OSC_OFFSET_CENTS, OSC_OFFSET_LEVEL, OSC_OFFSET_PULSE_WIDTH,

@@ -26,7 +26,9 @@
 //! breaks every saved project.
 
 use crate::generator::{seconds, stepped, unit};
+use crate::mod_metadata::SignalShape;
 use crate::modulation::ModTimeDivision;
+use crate::outlet::{OutletDescriptor, OutletTap};
 use crate::{OscParams, OscWave, ParamCurve, ParamDescriptor};
 
 /// Physical voice slots. Not a knob: "eight voices" is the instrument's name
@@ -383,6 +385,76 @@ impl MlP8Chorus {
         }
     }
 }
+
+// --- Step 06: what the instrument publishes -------------------------------
+//
+// Outlet ids are a second durable namespace beside the parameter ids above,
+// and they are frozen the same way: a project saves a route to `Gate` as
+// outlet 5, so 5 is `Gate` forever. Control outlets are declared first
+// because a surface that can only make control edges takes the leading run
+// and stops.
+
+pub const OUTLET_LFO: u16 = 0;
+pub const OUTLET_AMP_ENV: u16 = 1;
+pub const OUTLET_FILTER_ENV: u16 = 2;
+pub const OUTLET_VELOCITY: u16 = 3;
+pub const OUTLET_NOTE: u16 = 4;
+pub const OUTLET_GATE: u16 = 5;
+pub const OUTLET_TRIGGER: u16 = 6;
+pub const OUTLET_OSC1: u16 = 7;
+pub const OUTLET_OSC2: u16 = 8;
+pub const OUTLET_OSC3: u16 = 9;
+pub const OUTLET_SUB: u16 = 10;
+pub const OUTLET_NOISE: u16 = 11;
+pub const OUTLET_PRE_FILTER: u16 = 12;
+pub const OUTLET_FILTER: u16 = 13;
+
+/// How many of the outlets below are control signals.
+pub const MLP8_CONTROL_OUTLETS: usize = 7;
+
+/// What ML-P8 publishes.
+///
+/// Not every internal value: the plan's rule is that an outlet is designed
+/// rather than discovered, so this is the list of signals another device has
+/// a use for. The per-voice ones reduce through the **focus group** — the
+/// group created by the most recent Note On, which stays the focus through
+/// its release so an envelope outlet has a coherent tail.
+///
+/// `Gate` deliberately does not follow the focus. "Any note is held" is the
+/// useful channel-level fact, and it does not fall low when the newest note
+/// of a chord is released while an older one is still down. `Trigger` and
+/// `Gate` therefore say different things, which is the point of having both.
+///
+/// The audio outlets are declared here and are not connectable yet: they need
+/// the typed auxiliary audio edges `AUDIO_ARCHITECTURE.md` describes. They
+/// are written down now because their ids and tap points are the part that
+/// has to be decided once, and because the pre-level taps are the reason the
+/// list is worth having — a source muted in ML-P8's own mix still publishes,
+/// so a silent internal modulator is available to somebody else.
+pub static OUTLETS: [OutletDescriptor; 14] = [
+    OutletDescriptor::control(OUTLET_LFO, "LFO", SignalShape::Bipolar),
+    OutletDescriptor::control(OUTLET_AMP_ENV, "Amp Envelope", SignalShape::Unipolar),
+    OutletDescriptor::control(OUTLET_FILTER_ENV, "Filter Envelope", SignalShape::Unipolar),
+    OutletDescriptor::control(OUTLET_VELOCITY, "Velocity", SignalShape::Unipolar),
+    OutletDescriptor::control(OUTLET_NOTE, "Note", SignalShape::Unipolar),
+    OutletDescriptor::control(OUTLET_GATE, "Gate", SignalShape::Gate),
+    OutletDescriptor::control(OUTLET_TRIGGER, "Trigger", SignalShape::Trigger),
+    OutletDescriptor::audio(OUTLET_OSC1, "Osc 1", OutletTap::PreLevel),
+    OutletDescriptor::audio(OUTLET_OSC2, "Osc 2", OutletTap::PreLevel),
+    OutletDescriptor::audio(OUTLET_OSC3, "Osc 3", OutletTap::PreLevel),
+    OutletDescriptor::audio(OUTLET_SUB, "Sub", OutletTap::PreLevel),
+    OutletDescriptor::audio(OUTLET_NOISE, "Noise", OutletTap::PreLevel),
+    OutletDescriptor::audio(OUTLET_PRE_FILTER, "Pre-Filter Mix", OutletTap::PreFilter),
+    OutletDescriptor::audio(OUTLET_FILTER, "Filter", OutletTap::PreVca),
+];
+
+/// The instrument's published control signals, in outlet-id order, as the
+/// realtime path carries them.
+///
+/// One array rather than seven fields because it is written once a control
+/// tick and read by index: the outlet id *is* the index for the control run,
+/// which is what keeps publication free of a lookup on the audio thread.
+pub type MlP8ControlOutlets = [f32; MLP8_CONTROL_OUTLETS];
 
 /// Which response the multimode filter runs.
 ///
@@ -1911,6 +1983,61 @@ mod tests {
                 descriptor.name
             );
             assert_eq!((descriptor.min, descriptor.max), (0.0, 1.0));
+        }
+    }
+
+    /// The published table obeys the shared rules, and the ids the plan
+    /// froze are the ids that are there.
+    #[test]
+    fn the_outlet_table_is_well_formed_and_frozen() {
+        crate::outlet::tests::check_table(&OUTLETS);
+        assert_eq!(crate::outlet::control_count(&OUTLETS), MLP8_CONTROL_OUTLETS);
+
+        // The plan names seven control outlets and seven audio ones, and
+        // renumbering any of them breaks a saved route. Spelled out rather
+        // than derived, because a derivation would move with the table.
+        for (id, name) in [
+            (OUTLET_LFO, "LFO"),
+            (OUTLET_AMP_ENV, "Amp Envelope"),
+            (OUTLET_FILTER_ENV, "Filter Envelope"),
+            (OUTLET_VELOCITY, "Velocity"),
+            (OUTLET_NOTE, "Note"),
+            (OUTLET_GATE, "Gate"),
+            (OUTLET_TRIGGER, "Trigger"),
+            (OUTLET_OSC1, "Osc 1"),
+            (OUTLET_OSC2, "Osc 2"),
+            (OUTLET_OSC3, "Osc 3"),
+            (OUTLET_SUB, "Sub"),
+            (OUTLET_NOISE, "Noise"),
+            (OUTLET_PRE_FILTER, "Pre-Filter Mix"),
+            (OUTLET_FILTER, "Filter"),
+        ] {
+            let outlet = crate::outlet::find(&OUTLETS, id)
+                .unwrap_or_else(|| panic!("outlet {id} is missing"));
+            assert_eq!(outlet.name, name, "outlet {id} was renamed");
+        }
+        // The control run is indexable by outlet id, which is what lets the
+        // realtime path publish without a lookup.
+        for (index, outlet) in OUTLETS[..MLP8_CONTROL_OUTLETS].iter().enumerate() {
+            assert_eq!(usize::from(outlet.id), index);
+        }
+    }
+
+    /// The five pre-level audio taps are the reason the audio list exists: a
+    /// source muted in ML-P8's own mix still publishes, so it can modulate
+    /// somebody else while contributing nothing here.
+    #[test]
+    fn every_source_tap_is_declared_pre_level() {
+        for id in [
+            OUTLET_OSC1,
+            OUTLET_OSC2,
+            OUTLET_OSC3,
+            OUTLET_SUB,
+            OUTLET_NOISE,
+        ] {
+            let outlet = crate::outlet::find(&OUTLETS, id).unwrap();
+            assert_eq!(outlet.tap, crate::outlet::OutletTap::PreLevel);
+            assert_eq!(outlet.tap.status(), "pre-level");
         }
     }
 

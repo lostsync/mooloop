@@ -5559,7 +5559,7 @@ mod footprint {
         assert_eq!(size_of::<EffectChain>(), 20_544);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
-        // The ML-P8 is 5,696 bytes of it. Its eight voices are the bulk -- a
+        // The ML-P8 is 5,768 bytes of it. Its eight voices are the bulk -- a
         // voice carries three oscillators, their modulation taps and sync
         // carries, a sub, coloured noise, two envelopes, two filter stages, a
         // drive follower and the feedback loop's delay.
@@ -5601,7 +5601,15 @@ mod footprint {
         // materialized channel instead of 128 KB; the device renders in chunks
         // to afford that, and its bit-identity tests are what say the chunk
         // boundary is not audible.
-        assert_eq!(size_of::<MlP8>(), 5_696);
+        //
+        // Step 06's published control outlets added 72 on top, and they are
+        // the cheapest thing in this test because publication is a reduction
+        // rather than a buffer: eight bytes on the node for the focus group's
+        // age and its trigger latch, and eight on each voice for the velocity
+        // its note was played at. The seven outlet *values* are computed on
+        // demand from state the voices already carry, so nothing here stores
+        // them.
+        assert_eq!(size_of::<MlP8>(), 5_768);
         // DS-01 is 6,816, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -5628,7 +5636,7 @@ mod footprint {
         // wide as its widest variant and the ML-P8 is that variant. Step 05's
         // sixteen bytes of new parameters are therefore paid twice, which is
         // why the strip moved by 1,000 where the node moved by 984.
-        assert_eq!(size_of::<ChannelStrip>(), 41_568);
+        assert_eq!(size_of::<ChannelStrip>(), 41_640);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -5642,7 +5650,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_008);
+        assert_eq!(per_live, 60_080);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -5657,8 +5665,11 @@ mod footprint {
         // nine of that is the eight slots' fixed drift tables, and the rest is
         // the finishing chorus and its two scratch headers. The chorus's
         // *buffers* are 8 KiB of heap a live channel on top of this, which is
-        // the figure the 512-frame chunk exists to keep small.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_392);
+        // the figure the 512-frame chunk exists to keep small. Step 06's
+        // published outlets moved it by one more KiB across sixteen channels,
+        // which is what a device's whole published interface costs when
+        // publication is a reduction of state that already exists.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_393);
     }
 }
 
