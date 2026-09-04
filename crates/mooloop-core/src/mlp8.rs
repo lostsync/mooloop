@@ -261,6 +261,129 @@ pub const PARAM_LFO_RETRIGGER: u32 = 62;
 // 63 closes the band the plan reserved for the LFO and is deliberately
 // unused, like 24. A reservation spent early is a renumbering later.
 
+// --- Step 05: allocation, character, and the finishing chorus -------------
+//
+// The plan reserves 64-68 for exactly these five. Unison and Chorus are
+// structural selectors and are therefore stepped, which is the same rule that
+// keeps a waveform or a sync source out of the route destination list; Drift,
+// Detune, and Spread are continuous and are ordinary automation targets.
+
+pub const PARAM_DRIFT: u32 = 64;
+pub const PARAM_UNISON: u32 = 65;
+pub const PARAM_DETUNE: u32 = 66;
+pub const PARAM_SPREAD: u32 = 67;
+pub const PARAM_CHORUS: u32 = 68;
+
+/// How many of the eight physical slots one note takes.
+///
+/// Unison spends the pool rather than adding to it, so the effective note
+/// polyphony is [`MLP8_VOICES`] divided by this. That division is the whole
+/// contract: there is no parameter anywhere that can make the device build a
+/// ninth voice.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MlP8Unison {
+    #[default]
+    X1,
+    X2,
+    X4,
+    X8,
+}
+
+impl MlP8Unison {
+    pub const ALL: [Self; 4] = [Self::X1, Self::X2, Self::X4, Self::X8];
+
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::X2,
+            2 => Self::X4,
+            3 => Self::X8,
+            _ => Self::X1,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::X1 => 0,
+            Self::X2 => 1,
+            Self::X4 => 2,
+            Self::X8 => 3,
+        }
+    }
+
+    /// Physical slots one note group occupies.
+    pub fn voices(self) -> usize {
+        match self {
+            Self::X1 => 1,
+            Self::X2 => 2,
+            Self::X4 => 4,
+            Self::X8 => 8,
+        }
+    }
+
+    /// How many notes can sound at once at this setting.
+    pub fn note_polyphony(self) -> usize {
+        MLP8_VOICES / self.voices()
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::X1 => "1x",
+            Self::X2 => "2x",
+            Self::X4 => "4x",
+            Self::X8 => "8x",
+        }
+    }
+}
+
+/// The finishing chorus. Four fixed policies, not a chorus with its own
+/// parameter page: this is the last thing in the signal path and the least
+/// important control on the face.
+///
+/// `Off` is the default and a true bypass. `One` and `Two` are two useful
+/// chorus settings; `Ensemble` is the wider three-tap algorithm. All three
+/// run the shared `ModulationEffect` rather than a second copy of a chorus.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MlP8Chorus {
+    #[default]
+    Off,
+    One,
+    Two,
+    Ensemble,
+}
+
+impl MlP8Chorus {
+    pub const ALL: [Self; 4] = [Self::Off, Self::One, Self::Two, Self::Ensemble];
+
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::One,
+            2 => Self::Two,
+            3 => Self::Ensemble,
+            _ => Self::Off,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Off => 0,
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Ensemble => 3,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::One => "I",
+            Self::Two => "II",
+            Self::Ensemble => "ENS",
+        }
+    }
+}
+
 /// Which response the multimode filter runs.
 ///
 /// All four come off the same shared state-variable stage; this is a response
@@ -1125,18 +1248,33 @@ const VOICE_DESCRIPTORS: [ParamDescriptor; 13] = [
     bipolar(PARAM_VOICE_FEEDBACK, "Feedback"),
 ];
 
+/// Allocation, character, and the finisher: the five controls step 05 adds.
+///
+/// Drift, Detune, and Spread are unit knobs read as percentages; the curve
+/// from Detune's percentage to cents lives in the DSP, because it is a
+/// musical shape rather than a range. Unison and Chorus are stepped, which is
+/// what keeps them out of the route destination list without a second rule.
+const CHARACTER_DESCRIPTORS: [ParamDescriptor; 5] = [
+    unit(PARAM_DRIFT, "Drift", 0.0),
+    stepped(PARAM_UNISON, "Unison", 4, 0.0),
+    unit(PARAM_DETUNE, "Detune", 0.0),
+    unit(PARAM_SPREAD, "Spread", 0.0),
+    stepped(PARAM_CHORUS, "Chorus", 4, 0.0),
+];
+
 /// The complete ML-P8 table: three oscillator blocks then everything else.
 ///
 /// Written as one `static` so the engine can enumerate it without allocating,
 /// and assembled by a `const fn` rather than by hand so the ids stay derived
 /// from the constants above.
-pub static DESCRIPTORS: [ParamDescriptor; 62] = concat(
+pub static DESCRIPTORS: [ParamDescriptor; 67] = concat(
     osc_descriptors(0, "Osc 1 wave"),
     osc_descriptors(1, "Osc 2 wave"),
     osc_descriptors(2, "Osc 3 wave"),
     NETWORK_DESCRIPTORS,
     VOICE_DESCRIPTORS,
     LFO_DESCRIPTORS,
+    CHARACTER_DESCRIPTORS,
 );
 
 const fn concat(
@@ -1146,8 +1284,9 @@ const fn concat(
     network: [ParamDescriptor; 26],
     voice: [ParamDescriptor; 13],
     lfo: [ParamDescriptor; 8],
-) -> [ParamDescriptor; 62] {
-    let mut out = [a[0]; 62];
+    character: [ParamDescriptor; 5],
+) -> [ParamDescriptor; 67] {
+    let mut out = [a[0]; 67];
     let mut i = 0;
     while i < 5 {
         out[i] = a[i];
@@ -1169,6 +1308,11 @@ const fn concat(
     while l < 8 {
         out[54 + l] = lfo[l];
         l += 1;
+    }
+    let mut m = 0;
+    while m < 5 {
+        out[62 + m] = character[m];
+        m += 1;
     }
     out
 }
@@ -1231,6 +1375,22 @@ pub struct MlP8Params {
     pub filter_velocity: f32,
     /// Bipolar output-to-input feedback around the voice's filter.
     pub voice_feedback: f32,
+
+    // --- Allocation, character, and the finisher ------------------------
+    /// How far the eight slots drift from what the patch authored, in
+    /// `[0, 1]`. `0` is exactly authored; there is no runtime entropy at any
+    /// setting, only stable per-slot offsets scaled by this.
+    pub drift: f32,
+    /// How many physical slots one note takes. Never grows the pool.
+    pub unison: MlP8Unison,
+    /// Symmetric intentional detune across a unison group, in `[0, 1]`. `0`
+    /// is exactly zero cents, not a small number.
+    pub detune: f32,
+    /// How far voices spread across the stereo field, in `[0, 1]`. Across a
+    /// unison group above 1x, and across the stable slot positions at 1x.
+    pub spread: f32,
+    /// The finishing chorus over the instrument's own summed output.
+    pub chorus: MlP8Chorus,
 
     // --- The instrument's own modulation --------------------------------
     pub lfo: MlP8LfoParams,
@@ -1298,6 +1458,14 @@ impl Default for MlP8Params {
             amp_velocity: 1.0,
             filter_velocity: 0.0,
             voice_feedback: 0.0,
+            // Every one of the five is off. The plan's acceptance case is a
+            // patch at 1x, Drift 0 and Chorus OFF, which has to be what a
+            // fresh device already is.
+            drift: 0.0,
+            unison: MlP8Unison::X1,
+            detune: 0.0,
+            spread: 0.0,
+            chorus: MlP8Chorus::Off,
             lfo: MlP8LfoParams::default(),
             routes: MlP8Routes::default(),
         }
@@ -1388,6 +1556,11 @@ pub fn get(p: &MlP8Params, id: u32) -> Option<f32> {
         PARAM_SUB_SOURCE => p.sub_source.to_index() as f32,
         PARAM_NOISE_LEVEL => p.noise_level,
         PARAM_NOISE_COLOR => p.noise_color,
+        PARAM_DRIFT => p.drift,
+        PARAM_UNISON => p.unison.to_index() as f32,
+        PARAM_DETUNE => p.detune,
+        PARAM_SPREAD => p.spread,
+        PARAM_CHORUS => p.chorus.to_index() as f32,
         _ => return None,
     })
 }
@@ -1460,6 +1633,11 @@ pub fn set(p: &mut MlP8Params, id: u32, value: f32) -> bool {
         PARAM_SUB_SOURCE => p.sub_source = SubSource::from_index(value.round() as i32),
         PARAM_NOISE_LEVEL => p.noise_level = value,
         PARAM_NOISE_COLOR => p.noise_color = value,
+        PARAM_DRIFT => p.drift = value,
+        PARAM_UNISON => p.unison = MlP8Unison::from_index(value.round() as i32),
+        PARAM_DETUNE => p.detune = value,
+        PARAM_SPREAD => p.spread = value,
+        PARAM_CHORUS => p.chorus = MlP8Chorus::from_index(value.round() as i32),
         _ => return false,
     }
     true
@@ -1478,16 +1656,16 @@ mod tests {
         }
     }
 
-    /// The plan reserves 0-41 with 24 held back. A descriptor outside that
-    /// band would be reaching into a later step's reservation.
+    /// Every step's reservation, with the two holes inside it held back. A
+    /// descriptor outside the band would be reaching into a later step's.
     #[test]
     fn descriptor_ids_stay_inside_the_reserved_band() {
         for d in &DESCRIPTORS {
-            assert!(d.id <= 63, "{} ({}) is outside 0-63", d.id, d.name);
+            assert!(d.id <= 68, "{} ({}) is outside 0-68", d.id, d.name);
             assert_ne!(d.id, 24, "24 is reserved for a fifth sub control");
             assert_ne!(d.id, 63, "63 closes the LFO band and stays reserved");
         }
-        assert_eq!(DESCRIPTORS.len(), 62);
+        assert_eq!(DESCRIPTORS.len(), 67);
     }
 
     #[test]
@@ -1687,12 +1865,69 @@ mod tests {
     #[test]
     fn an_unknown_id_is_neither_readable_nor_writable() {
         let mut params = MlP8Params::default();
-        // 24 and 63 are holes inside the band, 64 is past its end.
+        // 24 and 63 are holes inside the band, 69 is past its end.
         assert_eq!(get(&params, 24), None);
         assert!(!set(&mut params, 24, 1.0));
         assert_eq!(get(&params, 63), None);
         assert!(!set(&mut params, 63, 1.0));
-        assert_eq!(get(&params, 64), None);
-        assert!(!set(&mut params, 64, 1.0));
+        assert_eq!(get(&params, 69), None);
+        assert!(!set(&mut params, 69, 1.0));
+    }
+
+    /// Unison spends the pool; it never grows it. Stated here rather than
+    /// only in the DSP because it is the promise the whole allocation rule
+    /// rests on, and it is arithmetic on this enum.
+    #[test]
+    fn unison_divides_the_fixed_pool_and_never_exceeds_it() {
+        for unison in MlP8Unison::ALL {
+            let group = unison.voices();
+            assert!(group <= MLP8_VOICES, "{unison:?} wants {group} of eight");
+            assert_eq!(
+                group * unison.note_polyphony(),
+                MLP8_VOICES,
+                "{unison:?} does not divide the pool exactly"
+            );
+        }
+        assert_eq!(MlP8Unison::X1.note_polyphony(), 8);
+        assert_eq!(MlP8Unison::X2.note_polyphony(), 4);
+        assert_eq!(MlP8Unison::X4.note_polyphony(), 2);
+        assert_eq!(MlP8Unison::X8.note_polyphony(), 1);
+    }
+
+    /// Unison and Chorus choose a topology, so a route or a lane aimed at
+    /// them would be asking for a structural edit at the audio rate. The rule
+    /// is the descriptor's curve, exactly as it is for the waveform
+    /// selectors; Drift, Detune, and Spread stay continuous and reachable.
+    #[test]
+    fn the_two_structural_selectors_refuse_to_be_routed() {
+        for id in [PARAM_UNISON, PARAM_CHORUS] {
+            assert!(!MlP8ModDest::Param { id }.is_legal(), "id {id} was accepted");
+        }
+        for id in [PARAM_DRIFT, PARAM_DETUNE, PARAM_SPREAD] {
+            let descriptor = descriptor(id).unwrap();
+            assert!(
+                !matches!(descriptor.curve, ParamCurve::Stepped { .. }),
+                "{} is stepped, so no lane can sweep it",
+                descriptor.name
+            );
+            assert_eq!((descriptor.min, descriptor.max), (0.0, 1.0));
+        }
+    }
+
+    /// Both selectors round-trip through the index the face and the wire use.
+    #[test]
+    fn the_step_05_selectors_round_trip_through_their_indices() {
+        for unison in MlP8Unison::ALL {
+            assert_eq!(MlP8Unison::from_index(unison.to_index()), unison);
+        }
+        for chorus in MlP8Chorus::ALL {
+            assert_eq!(MlP8Chorus::from_index(chorus.to_index()), chorus);
+        }
+        // Out of range settles on the safe end rather than panicking: a
+        // project file is not a trusted source of enum indices.
+        assert_eq!(MlP8Unison::from_index(-3), MlP8Unison::X1);
+        assert_eq!(MlP8Unison::from_index(9), MlP8Unison::X1);
+        assert_eq!(MlP8Chorus::from_index(-3), MlP8Chorus::Off);
+        assert_eq!(MlP8Chorus::from_index(9), MlP8Chorus::Off);
     }
 }

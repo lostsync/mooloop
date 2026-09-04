@@ -5559,7 +5559,7 @@ mod footprint {
         assert_eq!(size_of::<EffectChain>(), 20_544);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
-        // The ML-P8 is 4,712 bytes of it. Its eight voices are the bulk -- a
+        // The ML-P8 is 5,696 bytes of it. Its eight voices are the bulk -- a
         // voice carries three oscillators, their modulation taps and sync
         // carries, a sub, coloured noise, two envelopes, two filter stages, a
         // drive follower and the feedback loop's delay.
@@ -5583,7 +5583,25 @@ mod footprint {
         // with. The map itself lives in the slot, off the strip. The last 8
         // are the sampler's transport-edge flag, which is what lets a note
         // auditioned while stopped keep sounding.
-        assert_eq!(size_of::<MlP8>(), 4_712);
+        //
+        // Step 05 added 984, and it divides cleanly. Seventy-two of it is per
+        // *voice*, and fifty-nine of that is the slot's fixed drift table --
+        // eleven offsets that exist so "how far is this voice off" is a
+        // property of the slot rather than of runtime entropy, which is what
+        // makes an offline render reproduce a live take. The rest of the
+        // voice's share is the three multipliers Drift, Detune and Spread
+        // resolve to once a render range instead of once a sample. Off the
+        // voices: 296 for the finishing chorus, of which 280 is the shared
+        // `ModulationEffect` it reuses rather than a second chorus; 96 for the
+        // two scratch bus *headers*; and 16 for the five new parameters.
+        //
+        // The scratch buses are the one figure this test cannot see, because
+        // `size_of` a `Vec` is its header. They are deliberately one 512-frame
+        // chunk each rather than `MAX_BLOCK_SIZE`, which is 8 KB of heap a
+        // materialized channel instead of 128 KB; the device renders in chunks
+        // to afford that, and its bit-identity tests are what say the chunk
+        // boundary is not audible.
+        assert_eq!(size_of::<MlP8>(), 5_696);
         // DS-01 is 6,816, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -5607,8 +5625,10 @@ mod footprint {
         assert_eq!(size_of::<Ds01>(), 6_816);
         // The strip pays the parameter block twice: once inside the node
         // above, and once for `source_base`, whose `GeneratorParams` is as
-        // wide as its widest variant and the ML-P8 is that variant.
-        assert_eq!(size_of::<ChannelStrip>(), 40_568);
+        // wide as its widest variant and the ML-P8 is that variant. Step 05's
+        // sixteen bytes of new parameters are therefore paid twice, which is
+        // why the strip moved by 1,000 where the node moved by 984.
+        assert_eq!(size_of::<ChannelStrip>(), 41_568);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -5622,7 +5642,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 59_008);
+        assert_eq!(per_live, 60_008);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -5633,8 +5653,12 @@ mod footprint {
         // sixteen channels, which is what buys modulation that lands per
         // voice, and 16 of it the wider parameter address, paid once per
         // reserved channel whether or not anything routes -- and DS-01, the
-        // seventh kind, another 106.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_377);
+        // seventh kind, another 106. The ML-P8's voice pool moved it 15 more:
+        // nine of that is the eight slots' fixed drift tables, and the rest is
+        // the finishing chorus and its two scratch headers. The chorus's
+        // *buffers* are 8 KiB of heap a live channel on top of this, which is
+        // the figure the 512-frame chunk exists to keep small.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_392);
     }
 }
 

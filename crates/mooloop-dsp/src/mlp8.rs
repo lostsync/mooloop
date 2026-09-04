@@ -38,8 +38,20 @@
 //! - routes compiled flat, evaluated per sample, and resolved as authored base
 //!   plus offset then clamped through the destination's own descriptor range,
 //!   so the knob keeps meaning what it says.
+//!
+//! Step 05 finishes the pool around all of it. A note is a *group* of physical
+//! slots from that point on: Unison spends the eight rather than adding to
+//! them, groups are allocated and stolen whole, and Detune and Spread place a
+//! group's members symmetrically about the note that was played. Drift is
+//! stable per-slot character with no runtime entropy anywhere in it, so Drift
+//! 0 is not "almost authored" but bit-for-bit authored. The chorus is the last
+//! thing in the path and the least important control on the face: four fixed
+//! policies over the shared [`ModulationEffect`], running on ML-P8's own
+//! scratch buses so it can never read what another generator already put on
+//! the channel.
 
 use crate::bus::{pan_gains, StereoBus};
+use crate::effects::ModulationEffect;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
 use crate::filter::{soft_ceiling, PreDrive, Svf};
@@ -50,8 +62,9 @@ use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::mlp8::{MlP8Routes, MLP8_MAX_ROUTES, MLP8_MOD_DESTS};
 use mooloop_core::{
-    mlp8::xmod_index, MlP8FilterMode, MlP8LfoParams, MlP8LfoRetrigger, MlP8LfoWave, MlP8ModDest,
-    MlP8ModSource, MlP8Params, OscWave, SubWave, MLP8_VOICES,
+    mlp8::xmod_index, MlP8Chorus, MlP8FilterMode, MlP8LfoParams, MlP8LfoRetrigger, MlP8LfoWave,
+    MlP8ModDest, MlP8ModSource, MlP8Params, ModulationMode, ModulationParams, OscWave, SubWave,
+    MLP8_VOICES,
 };
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
@@ -107,6 +120,56 @@ const VOICE_FEEDBACK_RANGE: f32 = 1.15;
 /// Cutoff below which the filter is treated as open and skipped entirely.
 /// The normalized scale is perceptual, so this is the very top of the knob.
 const FILTER_OPEN: f32 = 0.999;
+
+/// Cents of pitch drift one slot reaches at Drift 100%.
+///
+/// A ceiling to tune in step 07, not an identity claim. Five cents is the
+/// point where eight voices stop being eight copies and start being an
+/// ensemble; past it the instrument sounds out of tune with itself rather
+/// than alive.
+const DRIFT_PITCH_CENTS: f32 = 5.0;
+
+/// How much of that an individual oscillator adds on top of its voice's
+/// shared offset.
+///
+/// Shared plus smaller independent, per the plan: the shared part is what
+/// makes a *voice* sit a little off, and the independent part is what stops
+/// its three oscillators being one detuned copy of each other.
+const DRIFT_OSC_SHARE: f32 = 0.4;
+
+/// Octaves of cutoff drift at Drift 100%.
+const DRIFT_CUTOFF_OCTAVES: f32 = 0.15;
+
+/// Fraction an envelope time is stretched or shortened at Drift 100%.
+/// Attack, decay and release only: a drifting sustain is a drifting level,
+/// which is a mix error rather than character.
+const DRIFT_TIME_FRACTION: f32 = 0.07;
+
+/// Cents the outermost member of a unison group reaches at Detune 100%.
+///
+/// The curve to it is squared, like every other signed depth on this device,
+/// so the low half of the knob buys the fine beating a chorus of voices is
+/// actually for.
+const DETUNE_MAX_CENTS: f32 = 40.0;
+
+/// Frames of ML-P8's own output the finisher works on at a time.
+///
+/// The chorus needs buses of its own — it may not read or rewrite the
+/// channel's — and reserving [`crate::bus::MAX_BLOCK_SIZE`] for them would
+/// put 128 KB on every materialized channel to serve a control that is off by
+/// default, on a device that on most channels is not even the active
+/// generator. Rendering in chunks
+/// costs one `Prepared` and one character refresh per chunk, which is
+/// nanoseconds against ten milliseconds of audio, and 512 frames is a whole
+/// cycle at every buffer size this program is played at.
+const CHORUS_CHUNK: usize = 512;
+
+/// How long the chorus's wet gain takes to cross a mode change.
+const CHORUS_FADE_S: f32 = 0.02;
+
+/// Wet gain below which the chorus is treated as silent, which is what makes
+/// `Off` an exact bypass rather than an inaudible one.
+const CHORUS_SILENT: f32 = 1.0e-4;
 
 /// One-pole corner the dark end of Noise Color rolls down to.
 const NOISE_DARK_HZ: f32 = 700.0;
@@ -731,6 +794,163 @@ mod slot {
     pub const PAN: usize = find(MlP8ModDest::Pan);
 }
 
+/// The stable per-slot offsets Drift scales, all bipolar in `[-1, 1]` except
+/// the start phases, which are cycles in `[0, 1)`.
+///
+/// Derived from the slot index at construction and never touched again. That
+/// is the whole point: the plan forbids runtime entropy, so "how far is this
+/// voice off" has to be a property of the slot rather than of when the note
+/// arrived, and an offline render has to reproduce a live take exactly.
+#[derive(Clone, Copy)]
+struct Drift {
+    /// The whole voice's pitch offset, shared by its three oscillators.
+    voice_pitch: f32,
+    /// Each oscillator's smaller offset on top of that.
+    osc_pitch: [f32; 3],
+    cutoff: f32,
+    attack: f32,
+    decay: f32,
+    release: f32,
+    /// Where each oscillator starts its cycle, in `[0, 1)`.
+    phase: [f32; 3],
+}
+
+impl Drift {
+    fn for_slot(slot: u32) -> Self {
+        // One deterministic sequence per slot rather than eight hand-written
+        // tables: the numbers themselves carry no meaning, only their being
+        // fixed and different does.
+        let mut rng = Noise::new(drift_seed(slot));
+        let mut bipolar = || rng.next_sample();
+        Self {
+            voice_pitch: bipolar(),
+            osc_pitch: std::array::from_fn(|_| bipolar()),
+            cutoff: bipolar(),
+            attack: bipolar(),
+            decay: bipolar(),
+            release: bipolar(),
+            phase: std::array::from_fn(|_| bipolar() * 0.5 + 0.5),
+        }
+    }
+}
+
+/// A slot's drift seed. A different odd multiplier from [`noise_seed`], so a
+/// voice's character is not a restatement of its noise sequence.
+fn drift_seed(slot: u32) -> u32 {
+    0x85EB_CA6B_u32.wrapping_mul(slot.wrapping_add(1)) | 1
+}
+
+/// ML-P8's finishing chorus: one shared [`ModulationEffect`], four fixed
+/// policies, and the wet gain that crosses between them.
+///
+/// It is not a modulation source and its delay LFO is not published. The
+/// authored LFO on the MOD page is the instrument's clock; this one is part
+/// of a finishing processor and belongs to nobody.
+struct Chorus {
+    effect: ModulationEffect,
+    /// The mode the effect is currently configured for, which lags the
+    /// patch's by however long the wet gain takes to reach zero.
+    active: MlP8Chorus,
+    /// The wet gain. A mode change is a topology change inside the finisher,
+    /// so it happens with this already at zero rather than under the audio.
+    gain: Smoothed,
+}
+
+impl Chorus {
+    fn new(mode: MlP8Chorus, sample_rate: u32) -> Self {
+        Self {
+            effect: ModulationEffect::new(mode_params(mode), sample_rate),
+            active: mode,
+            // A project that saved with a chorus opens with it, rather than
+            // fading it in over the first twenty milliseconds of the song.
+            gain: Smoothed::new(
+                f32::from(u8::from(mode != MlP8Chorus::Off)),
+                CHORUS_FADE_S,
+                sample_rate,
+            ),
+        }
+    }
+
+    fn reset(&mut self, mode: MlP8Chorus, sample_rate: u32) {
+        *self = Self::new(mode, sample_rate);
+    }
+
+    /// Bring the stage in line with the patch, and say whether it can be
+    /// skipped entirely.
+    ///
+    /// Called at range boundaries, not per sample: the swap has to wait for
+    /// the gain to run down anyway, so deciding it once a range costs at most
+    /// one block of extra fade and saves a branch in the sample loop.
+    fn settle(&mut self, wanted: MlP8Chorus) -> bool {
+        if self.active != wanted && self.gain.value() <= CHORUS_SILENT {
+            self.active = wanted;
+            self.gain.reset_to(0.0);
+            // The line holds audio from before the change, and at `Off` from
+            // before an arbitrarily long silence. Nothing should read it, and
+            // clearing it is what lets `Off` skip the processor outright
+            // instead of having to keep writing silence through it.
+            self.effect.reset();
+            if wanted != MlP8Chorus::Off {
+                self.effect.set_params(mode_params(wanted));
+            }
+        }
+        let reached = self.active == wanted && wanted != MlP8Chorus::Off;
+        self.gain.set_target(f32::from(u8::from(reached)));
+        self.active == MlP8Chorus::Off && self.gain.value() <= CHORUS_SILENT
+    }
+}
+
+/// The four fixed policies, as settings of the shared modulation effect.
+///
+/// Provisional until step 07's listening pass, which is also where the plan
+/// says a Mix control would have to be argued for. There is none here: the
+/// dry passes at unity and the wet is added beside it, which is how a chorus
+/// on a synth's output behaves and what keeps the modes distinguishable
+/// without a second knob.
+fn mode_params(mode: MlP8Chorus) -> ModulationParams {
+    match mode {
+        // Never read: `Off` clears the effect and skips it. Kept a legal
+        // value so constructing the stage does not need a special case.
+        MlP8Chorus::Off => ModulationParams::default(),
+        // I: slow and narrow. The one that makes a pad sit in a mix without
+        // announcing itself.
+        MlP8Chorus::One => ModulationParams {
+            mode: ModulationMode::Chorus,
+            rate_hz: 0.42,
+            depth: 0.30,
+            color: 0.30,
+            feedback: 0.0,
+            spread: 0.55,
+            tone: 0.80,
+            stages: 8,
+        },
+        // II: faster, deeper, and with a little feedback, so it is a
+        // different decision rather than more of the first one.
+        MlP8Chorus::Two => ModulationParams {
+            mode: ModulationMode::Chorus,
+            rate_hz: 1.15,
+            depth: 0.62,
+            color: 0.60,
+            feedback: 0.18,
+            spread: 0.90,
+            tone: 0.70,
+            stages: 8,
+        },
+        // Ensemble: the wider three-tap algorithm, which is the one that
+        // stops sounding like a delay and starts sounding like more players.
+        MlP8Chorus::Ensemble => ModulationParams {
+            mode: ModulationMode::Ensemble,
+            rate_hz: 0.70,
+            depth: 0.55,
+            color: 0.45,
+            feedback: 0.0,
+            spread: 1.0,
+            tone: 0.75,
+            stages: 8,
+        },
+    }
+}
+
 /// One physical voice. Eight of these exist for the life of the device.
 struct Voice {
     active: bool,
@@ -749,9 +969,19 @@ struct Voice {
     key: f32,
     age: u64,
     /// Stable across the device's life, so a voice's noise sequence and its
-    /// later per-slot drift are properties of the slot rather than of the
-    /// order notes arrived in.
+    /// per-slot drift are properties of the slot rather than of the order
+    /// notes arrived in.
     slot: u32,
+    /// Where this voice sits in its note group, and how large that group is.
+    ///
+    /// A group is allocated, stolen and released whole. These two are what
+    /// make Detune and Spread symmetric *about the note that was played*
+    /// rather than about the pool, so a group's centre pitch is the note and
+    /// its centre of image is the middle.
+    member: u8,
+    members: u8,
+    /// This slot's stable drift offsets. Fixed for the device's life.
+    drift: Drift,
     env: Adsr,
     filter_env: Adsr,
     filter: VoiceFilter,
@@ -790,6 +1020,22 @@ struct Voice {
     /// read wherever the destination is used; only the slots a route actually
     /// touches are ever written or read.
     mod_offsets: [f32; MLP8_MOD_DESTS],
+    /// Drift and Detune resolved into one frequency multiplier per
+    /// oscillator, refreshed once per render range.
+    ///
+    /// Exactly `1.0` when both controls are at zero, and `x * 1.0` is `x`
+    /// bit for bit — which is what makes "Drift 0 is exactly authored" an
+    /// identity rather than a tolerance.
+    pitch_scale: [f32; 3],
+    /// Drift's cutoff offset as a frequency multiplier. Exactly `1.0` at
+    /// Drift 0, for the same reason.
+    cutoff_scale: f32,
+    /// Where Spread puts this voice, in `[-1, 1]`, and the pan gains it
+    /// resolves to. Both are constant across a render range, so the gains are
+    /// computed once rather than per sample; at Spread 0 they are the centre
+    /// pair the channel strip would have applied anyway.
+    spread_pan: f32,
+    spread_gain: (f32, f32),
 }
 
 impl Voice {
@@ -815,6 +1061,9 @@ impl Voice {
             sync_carry: [0.0; 3],
             sub: Osc::new(),
             sub_carry: 0.0,
+            member: 0,
+            members: 1,
+            drift: Drift::for_slot(slot),
             noise: ColoredNoise::new(noise_seed(slot)),
             noise_tap: 0.0,
             current_freq: 0.0,
@@ -827,15 +1076,22 @@ impl Voice {
             drive_amount: smoothed(0.0),
             feedback: smoothed(0.0),
             mod_offsets: [0.0; MLP8_MOD_DESTS],
+            pitch_scale: [1.0; 3],
+            cutoff_scale: 1.0,
+            spread_pan: 0.0,
+            spread_gain: pan_gains(0.0),
         }
     }
 
     /// Return every piece of network state to its start. Called when a slot
     /// that was genuinely idle takes a note, so a repeated note renders
     /// identically rather than inheriting a phase from whatever came before.
-    fn restart(&mut self) {
-        for osc in &mut self.oscs {
-            osc.reset();
+    ///
+    /// "Its start" is where Drift puts it. At Drift 0 that is phase zero for
+    /// all three, which is exactly what [`Osc::reset`] does.
+    fn restart(&mut self, drift: f32) {
+        for (osc, phase) in self.oscs.iter_mut().zip(self.drift.phase) {
+            osc.reset_to(drift * phase);
         }
         self.taps = [0.0; 3];
         self.sync_carry = [0.0; 3];
@@ -861,6 +1117,23 @@ impl Voice {
         self.feedback_tap = 0.0;
         self.dc_x = 0.0;
         self.dc_y = 0.0;
+    }
+
+    /// Leave through the short de-click transition without adopting a note.
+    ///
+    /// A slot stolen by a *smaller* group has nothing to take on, and simply
+    /// dropping it would be the one sample of silence in the middle of a
+    /// sound that stealing exists to avoid. Its age goes to zero so it is
+    /// first in line to be reused rather than outliving notes still held; two
+    /// retiring slots sharing that age look like one group to
+    /// [`MlP8::select_group`], which is harmless because both are leaving.
+    fn retire(&mut self) {
+        self.gate = false;
+        self.age = 0;
+        if self.active && !self.env.is_releasing() {
+            self.env.release_with(STOP_RELEASE_S);
+            self.filter_env.release_with(STOP_RELEASE_S);
+        }
     }
 
     /// Sum this sample's internal routes into the offset table.
@@ -916,6 +1189,56 @@ impl Voice {
         }
         let (min, max) = routes.bounds[slot];
         (base + self.mod_offsets[slot]).clamp(min, max)
+    }
+
+    /// Resolve Drift, Detune, and Spread into the three per-voice multipliers
+    /// the sample loop reads.
+    ///
+    /// Once per render range rather than per sample. All three are patch
+    /// controls that an automation lane can sweep, and none of them is a
+    /// modulation destination — so a range boundary is the finest they can
+    /// change, and paying for them per sample would buy nothing.
+    fn refresh_character(&mut self, drift: f32, detune: f32, spread: f32) {
+        // Squared magnitude, like every other depth on this device, so the
+        // low half of the knob is the fine beating rather than a rounding
+        // error. Zero is exactly zero cents, not a small number.
+        let detune_cents = detune * detune * DETUNE_MAX_CENTS * self.group_offset();
+        let voice_cents = drift * self.drift.voice_pitch * DRIFT_PITCH_CENTS;
+        self.pitch_scale = std::array::from_fn(|n| {
+            let osc_cents = drift * self.drift.osc_pitch[n] * DRIFT_PITCH_CENTS * DRIFT_OSC_SHARE;
+            ((detune_cents + voice_cents + osc_cents) / 1200.0).exp2()
+        });
+        self.cutoff_scale = (drift * self.drift.cutoff * DRIFT_CUTOFF_OCTAVES).exp2();
+        self.spread_pan = spread * self.pan_offset();
+        self.spread_gain = pan_gains(self.spread_pan);
+    }
+
+    /// This voice's symmetric position in its note group, in `[-1, 1]`.
+    ///
+    /// Zero-mean, which is what makes a detuned group still play the note it
+    /// was sent. A group of one is at the centre by construction, so Detune
+    /// at 1x moves nothing rather than moving everything the same way.
+    fn group_offset(&self) -> f32 {
+        let members = f32::from(self.members.max(1));
+        if members <= 1.0 {
+            0.0
+        } else {
+            f32::from(self.member) / (members - 1.0) * 2.0 - 1.0
+        }
+    }
+
+    /// Where Spread puts this voice before the amount is applied.
+    ///
+    /// Across the group above 1x, and across the eight stable slot positions
+    /// at 1x — so a chord occupies the field by where its notes landed, and
+    /// occupies it the same way on every render rather than moving with the
+    /// order the notes happened to arrive in.
+    fn pan_offset(&self) -> f32 {
+        if self.members > 1 {
+            self.group_offset()
+        } else {
+            self.slot as f32 / (MLP8_VOICES - 1) as f32 * 2.0 - 1.0
+        }
     }
 
     fn snap_to(&mut self, params: &MlP8Params, velocity_amp: f32) {
@@ -1126,6 +1449,15 @@ pub struct MlP8 {
     lfo: MlP8Lfo,
     /// The authored routes, flattened. Rebuilt only when the topology moves.
     routes: CompiledRoutes,
+    /// ML-P8's own summed output, before the finisher, and the chorus's wet
+    /// copy of it.
+    ///
+    /// Allocated once at construction and never resized. The chorus processes
+    /// *these*, never the channel bus, so it cannot read and rewrite audio
+    /// another generator on the same channel already put there.
+    scratch: StereoBus,
+    wet: StereoBus,
+    chorus: Chorus,
 }
 
 impl MlP8 {
@@ -1137,6 +1469,9 @@ impl MlP8 {
             next_age: 1,
             lfo: MlP8Lfo::new(),
             routes: CompiledRoutes::new(),
+            scratch: StereoBus::with_capacity(CHORUS_CHUNK),
+            wet: StereoBus::with_capacity(CHORUS_CHUNK),
+            chorus: Chorus::new(params.chorus, sample_rate),
         };
         synth.routes.compile(&synth.params.routes);
         synth.apply_params_to_voices();
@@ -1157,7 +1492,16 @@ impl MlP8 {
         } else {
             self.routes.compile(&params.routes);
         }
+        // Unison is the one control that changes what a *group* is, and a
+        // group's size is fixed when it is allocated. Growing or shrinking a
+        // sounding one in place would leave half a group behind, so the old
+        // topology leaves through the same short transition a transport stop
+        // uses and the new one applies to the next Note On.
+        let regrouped = self.params.unison != params.unison;
         self.params = params;
+        if regrouped {
+            self.release_all();
+        }
         self.apply_params_to_voices();
     }
 
@@ -1197,18 +1541,27 @@ impl MlP8 {
     }
 
     fn apply_params_to_voices(&mut self) {
+        // Drift's envelope share is applied here rather than in the sample
+        // loop because an envelope time is only read when the stage it
+        // belongs to is entered. At Drift 0 every factor is exactly 1.0 and
+        // the times are the ones the patch authored.
+        let drift = self.params.drift.clamp(0.0, 1.0);
         for voice in &mut self.voices {
+            let stretch = |offset: f32| 1.0 + drift * offset * DRIFT_TIME_FRACTION;
+            // Sustain is a level, not a time. A drifting sustain would be a
+            // mix error wearing character's clothes, so the plan excludes it
+            // and so does this.
             voice.env.configure(
-                self.params.attack,
-                self.params.decay,
+                self.params.attack * stretch(voice.drift.attack),
+                self.params.decay * stretch(voice.drift.decay),
                 self.params.sustain,
-                self.params.release,
+                self.params.release * stretch(voice.drift.release),
             );
             voice.filter_env.configure(
-                self.params.filter_attack,
-                self.params.filter_decay,
+                self.params.filter_attack * stretch(voice.drift.attack),
+                self.params.filter_decay * stretch(voice.drift.decay),
                 self.params.filter_sustain,
-                self.params.filter_release,
+                self.params.filter_release * stretch(voice.drift.release),
             );
         }
     }
@@ -1221,6 +1574,7 @@ impl MlP8 {
         }
         self.next_age = 1;
         self.lfo.reset();
+        self.chorus.reset(self.params.chorus, self.sample_rate);
         self.routes.compile(&self.params.routes);
         self.apply_params_to_voices();
     }
@@ -1229,20 +1583,57 @@ impl MlP8 {
         self.release_all();
     }
 
-    /// An idle slot if there is one, otherwise the oldest sounding note.
+    /// Choose `size` slots for one note group: idle ones first, then whole
+    /// older groups, oldest first.
     ///
-    /// Eight is the whole pool; there is no polyphony parameter to consult,
-    /// which is what makes the stealing rule and the CPU ceiling honest.
-    fn select_voice(&self) -> usize {
-        if let Some(index) = self.voices.iter().position(|voice| !voice.active) {
-            return index;
+    /// Returns the slots the new group will use and a mask of every slot the
+    /// choice *reserved*, which is a larger set whenever the group being
+    /// stolen is bigger than the one replacing it. Never a partial group in
+    /// either direction: a group is the unit of allocation, of stealing, and
+    /// of release, so half of one is a state this device does not have.
+    ///
+    /// Eight is the whole pool. There is no polyphony parameter to consult
+    /// and Unison divides rather than multiplies, which is what makes the
+    /// stealing rule and the CPU ceiling honest.
+    fn select_group(&self, size: usize) -> ([usize; MLP8_VOICES], u8) {
+        let mut chosen = [0usize; MLP8_VOICES];
+        let mut count = 0;
+        let mut reserved: u8 = 0;
+        for (index, voice) in self.voices.iter().enumerate() {
+            if count == size {
+                break;
+            }
+            if !voice.active {
+                chosen[count] = index;
+                count += 1;
+                reserved |= 1 << index;
+            }
         }
-        self.voices
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, voice)| voice.age)
-            .map(|(index, _)| index)
-            .unwrap_or(0)
+        while count < size {
+            // Age is a group property: every member of a group is stamped
+            // with the same one when it is allocated, so "the oldest age
+            // still on the board" names a whole group rather than a slot.
+            let Some(oldest) = self
+                .voices
+                .iter()
+                .enumerate()
+                .filter(|(index, voice)| voice.active && reserved & (1 << index) == 0)
+                .map(|(_, voice)| voice.age)
+                .min()
+            else {
+                break;
+            };
+            for (index, voice) in self.voices.iter().enumerate() {
+                if voice.active && reserved & (1 << index) == 0 && voice.age == oldest {
+                    reserved |= 1 << index;
+                    if count < size {
+                        chosen[count] = index;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        (chosen, reserved)
     }
 
     /// Whether any note is currently held. Held, not sounding: a chord whose
@@ -1259,36 +1650,52 @@ impl MlP8 {
             MlP8LfoRetrigger::Chord => !self.any_gate_held(),
             MlP8LfoRetrigger::Note => true,
         };
-        let index = self.select_voice();
+        let size = self.params.unison.voices().min(MLP8_VOICES);
+        let (chosen, reserved) = self.select_group(size);
         let velocity_amp = f32::from(velocity) / 127.0;
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1).max(1);
+        let drift = self.params.drift.clamp(0.0, 1.0);
 
-        let voice = &mut self.voices[index];
-        let stolen = voice.active;
-        voice.event_id = event_id;
-        voice.note = note;
-        voice.key = key_offset(note);
-        voice.age = age;
-        voice.target_freq = note_to_freq(note);
-        voice.active = true;
-        voice.gate = true;
-
-        if !stolen {
-            // Fresh slot: no glide from silence, and every piece of network
-            // state starts where it started last time.
-            voice.current_freq = voice.target_freq;
-            voice.restart();
-            voice.snap_to(&self.params, velocity_amp);
-        } else {
-            voice.clear_loop();
-            if self.params.glide <= MIN_GLIDE_S {
-                voice.current_freq = voice.target_freq;
+        // A stolen group can be larger than the one taking its place — a
+        // patch that was at 8x when the note started and is at 2x now. The
+        // six slots nobody reuses do not simply stop: they leave through the
+        // same short de-click transition, because a group is released whole.
+        for index in 0..MLP8_VOICES {
+            if reserved & (1 << index) != 0 && !chosen[..size].contains(&index) {
+                self.voices[index].retire();
             }
         }
-        voice.velocity_amp.set_target(velocity_amp);
-        voice.env.note_on();
-        voice.filter_env.note_on();
+
+        for (member, &index) in chosen[..size].iter().enumerate() {
+            let voice = &mut self.voices[index];
+            let stolen = voice.active;
+            voice.event_id = event_id;
+            voice.note = note;
+            voice.key = key_offset(note);
+            voice.age = age;
+            voice.member = member as u8;
+            voice.members = size as u8;
+            voice.target_freq = note_to_freq(note);
+            voice.active = true;
+            voice.gate = true;
+
+            if !stolen {
+                // Fresh slot: no glide from silence, and every piece of
+                // network state starts where it started last time.
+                voice.current_freq = voice.target_freq;
+                voice.restart(drift);
+                voice.snap_to(&self.params, velocity_amp);
+            } else {
+                voice.clear_loop();
+                if self.params.glide <= MIN_GLIDE_S {
+                    voice.current_freq = voice.target_freq;
+                }
+            }
+            voice.velocity_amp.set_target(velocity_amp);
+            voice.env.note_on();
+            voice.filter_env.note_on();
+        }
         if retrigger_lfo {
             self.lfo.retrigger();
         }
@@ -1316,10 +1723,31 @@ impl MlP8 {
         }
     }
 
+    /// Render `start..end` of the channel bus, in pieces no longer than the
+    /// finisher's scratch.
+    ///
+    /// The chunk is not a block: everything inside is either per sample or a
+    /// function of the patch, so splitting a range changes nothing about what
+    /// comes out — the bit-identity tests below cover exactly that. What it
+    /// buys is a finisher that costs kilobytes a channel rather than
+    /// [`crate::bus::MAX_BLOCK_SIZE`] ones.
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize, bpm: f64) {
+        let limit = self.scratch.capacity().max(1);
+        let mut pos = start;
+        while pos < end {
+            let chunk = (pos + limit).min(end);
+            self.render_chunk(bus, pos, chunk, bpm);
+            pos = chunk;
+        }
+    }
+
+    fn render_chunk(&mut self, bus: &mut StereoBus, start: usize, end: usize, bpm: f64) {
         if start >= end {
             return;
         }
+        // Decided once a range, before anything is rendered: a mode change
+        // has to wait for the wet gain to run down anyway.
+        let bypass_chorus = self.chorus.settle(self.params.chorus);
         // Split the borrows by field: the prepared state holds the compiled
         // routes for the whole range while the voices are being written.
         let Self {
@@ -1328,13 +1756,33 @@ impl MlP8 {
             voices,
             lfo,
             routes,
+            scratch,
+            wet,
+            chorus,
             ..
         } = self;
         let params = *params;
         let sr = *sample_rate;
         let prepared = Prepared::new(&params, sr, routes);
         let glide_coeff = (-1.0 / (params.glide.max(MIN_GLIDE_S) * sr as f32)).exp();
-        let (centre_l, centre_r) = pan_gains(0.0);
+        // With the chorus off the voices go straight onto the channel bus and
+        // the finisher costs nothing at all — not a copy, not a delay line
+        // write, not a branch in the sample loop. That is what "OFF is a true
+        // bypass" has to mean.
+        //
+        // The channel bus is written at absolute frame indices; the scratch is
+        // written from zero, because it is sized for one chunk rather than for
+        // whatever range the caller asked for. `offset` is the difference.
+        let offset = if bypass_chorus { 0 } else { start };
+        let target: &mut StereoBus = if bypass_chorus {
+            &mut *bus
+        } else {
+            for index in 0..end - start {
+                scratch.l[index] = 0.0;
+                scratch.r[index] = 0.0;
+            }
+            &mut *scratch
+        };
 
         for voice in voices.iter_mut() {
             for (smoothed, osc) in voice.osc_level.iter_mut().zip(params.osc.iter()) {
@@ -1349,6 +1797,11 @@ impl MlP8 {
             voice
                 .feedback
                 .set_target(params.voice_feedback.clamp(-1.0, 1.0));
+            voice.refresh_character(
+                params.drift.clamp(0.0, 1.0),
+                params.detune.clamp(0.0, 1.0),
+                params.spread.clamp(0.0, 1.0),
+            );
         }
 
         for frame in start..end {
@@ -1396,15 +1849,36 @@ impl MlP8 {
                 // so with nothing routed they cost one untaken branch and
                 // change not a sample.
                 let voice_level = voice.dest(routes, slot::VCA_LEVEL, 1.0);
+                // Spread is the base a Pan route moves from, so the two are
+                // one position rather than two that fight. With neither in
+                // play the pair is the centre one the channel strip would
+                // have applied anyway, resolved once a range.
                 let (gain_l, gain_r) = if routes.touched[slot::PAN] {
-                    pan_gains(voice.dest(routes, slot::PAN, 0.0))
+                    pan_gains(voice.dest(routes, slot::PAN, voice.spread_pan))
                 } else {
-                    (centre_l, centre_r)
+                    voice.spread_gain
                 };
                 let sample =
                     shaped * voice.env.level() * amp * voice_level * VOICE_OUTPUT_REFERENCE;
-                bus.l[frame] += sample * gain_l;
-                bus.r[frame] += sample * gain_r;
+                target.l[frame - offset] += sample * gain_l;
+                target.r[frame - offset] += sample * gain_r;
+            }
+        }
+
+        if !bypass_chorus {
+            // The wet is a copy the effect turns into its own output, because
+            // `ModulationEffect` returns wet in place and the dry has to
+            // survive it. Dry at unity, wet beside it: physical voices and
+            // the finisher both sum honestly, and there is no hidden divider
+            // anywhere in this device.
+            let frames = end - start;
+            wet.l[..frames].copy_from_slice(&scratch.l[..frames]);
+            wet.r[..frames].copy_from_slice(&scratch.r[..frames]);
+            chorus.effect.process_wet(wet, 0, frames);
+            for index in 0..frames {
+                let gain = chorus.gain.advance();
+                bus.l[start + index] += scratch.l[index] + wet.l[index] * gain;
+                bus.r[start + index] += scratch.r[index] + wet.r[index] * gain;
             }
         }
     }
@@ -1462,13 +1936,19 @@ impl Voice {
 
         // Resolved once for all three, because the sub divides one of them
         // and has to follow the same answer.
+        //
+        // Drift and Detune are folded in here rather than applied to the
+        // frequency, so the sub — which reads `ratio[sub_source]` — inherits
+        // both without a second copy of the rule. Both are exactly `1.0` when
+        // their controls are at zero, so this multiply is the identity.
         let ratio: [f32; 3] = std::array::from_fn(|n| {
-            if routes.touched[slot::OSC_SEMIS[n]] {
+            let authored = if routes.touched[slot::OSC_SEMIS[n]] {
                 (self.dest(routes, slot::OSC_SEMIS[n], prep.semitones[n]) / 12.0).exp2()
                     * prep.cents_ratio[n]
             } else {
                 prep.ratio[n]
-            }
+            };
+            authored * self.pitch_scale[n]
         });
 
         let mut value = [0.0_f32; 3];
@@ -1611,7 +2091,10 @@ impl Voice {
         let returned = soft_ceiling(self.feedback_tap * feedback * VOICE_FEEDBACK_RANGE);
         let driven = self.drive.next_sample(mix + returned, drive, sample_rate);
 
-        let base_hz = hz_from_normalized(cutoff, prep.max_hz);
+        // Drift's cutoff share rides on the authored corner rather than on
+        // the tracked one, so it is a property of the voice and not something
+        // that grows as a patch climbs the keyboard.
+        let base_hz = hz_from_normalized(cutoff, prep.max_hz) * self.cutoff_scale;
         // Keytracking reads the *gliding* frequency, so a slide sweeps the
         // filter with the pitch instead of stepping at the note boundary.
         let tracked = if prep.keytrack <= 0.0 {
@@ -1690,7 +2173,7 @@ mod tests {
     use super::*;
     use crate::event::TimedEvent;
     use mooloop_core::mlp8::{xmod_index, PARAM_FILTER_CUTOFF, PARAM_VOICE_FEEDBACK};
-    use mooloop_core::{MlP8FilterMode, SubOctave, SubSource, SyncSource};
+    use mooloop_core::{MlP8FilterMode, MlP8Unison, SubOctave, SubSource, SyncSource};
 
     const SR: u32 = 48_000;
 
@@ -3097,6 +3580,546 @@ mod tests {
         assert_eq!(synth.voices[0].event_id, 9);
     }
 
+    // --- Step 05: allocation, character, and the finisher -----------------
+
+    /// A quiet sine with a flat middle. Pitch drift moves a sine's frequency
+    /// and not its amplitude, which is what lets the sustain tests below
+    /// separate "the times drifted" from "the level drifted".
+    fn sine_bed() -> MlP8Params {
+        let mut params = init_saw();
+        params.osc[0].wave = OscWave::Sine;
+        params.attack = 0.001;
+        params.decay = 0.001;
+        params.sustain = 0.6;
+        params.release = 0.1;
+        params
+    }
+
+    /// Both channels, which spread and chorus are the whole point of.
+    fn render_stereo(params: MlP8Params, notes: &[u8], frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        for (index, note) in notes.iter().enumerate() {
+            events.push(note_on(0, index as u64 + 1, *note));
+        }
+        synth.process(&ctx(frames), &mut bus, &events, None);
+        (bus.l[..frames].to_vec(), bus.r[..frames].to_vec())
+    }
+
+    /// Play `notes` all at once and report the synth, so a test can look at
+    /// what the pool actually did with them.
+    fn played(params: MlP8Params, notes: &[u8], frames: usize) -> MlP8 {
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        for (index, note) in notes.iter().enumerate() {
+            events.push(note_on(0, index as u64 + 1, *note));
+        }
+        synth.process(&ctx(frames), &mut bus, &events, None);
+        synth
+    }
+
+    /// How many distinct notes are still held, and how many slots they cost.
+    fn held(synth: &MlP8) -> (usize, usize) {
+        let mut ids: Vec<u64> = synth
+            .voices
+            .iter()
+            .filter(|voice| voice.gate)
+            .map(|voice| voice.event_id)
+            .collect();
+        let slots = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        (ids.len(), slots)
+    }
+
+    /// The headline of the step: Unison spends the eight slots, it never adds
+    /// to them, and the note polyphony it leaves is exactly the division.
+    #[test]
+    fn unison_divides_the_pool_it_never_grows_it() {
+        let notes = [48, 52, 55, 59, 62, 65, 69, 72];
+        for (unison, expected) in [
+            (MlP8Unison::X1, 8),
+            (MlP8Unison::X2, 4),
+            (MlP8Unison::X4, 2),
+            (MlP8Unison::X8, 1),
+        ] {
+            let mut params = init_saw();
+            params.unison = unison;
+            let synth = played(params, &notes, 2048);
+            let (voices, slots) = held(&synth);
+            assert_eq!(
+                voices, expected,
+                "{unison:?} left {voices} notes sounding, not {expected}"
+            );
+            // And it spent the whole pool doing it, rather than reaching past
+            // it or leaving half of it idle.
+            assert_eq!(slots, MLP8_VOICES, "{unison:?} occupied {slots} slots");
+            assert!(
+                synth.voices.iter().filter(|v| v.active).count() <= MLP8_VOICES,
+                "{unison:?} built more than eight physical voices"
+            );
+        }
+    }
+
+    /// A group is the unit of allocation. Playing more notes than the pool
+    /// can hold at 4x steals a whole group at a time, so every note that is
+    /// still held is held by all four of its voices — never by three.
+    #[test]
+    fn a_group_is_allocated_and_stolen_whole() {
+        let mut params = init_saw();
+        params.unison = MlP8Unison::X4;
+        // Three notes into a pool that holds two groups of four.
+        let synth = played(params, &[48, 55, 62], 2048);
+        for voice in synth.voices.iter().filter(|v| v.gate) {
+            let siblings = synth
+                .voices
+                .iter()
+                .filter(|other| other.gate && other.event_id == voice.event_id)
+                .count();
+            assert_eq!(
+                siblings,
+                usize::from(voice.members),
+                "event {} is held by {siblings} of {} voices",
+                voice.event_id,
+                voice.members
+            );
+        }
+        let (voices, _) = held(&synth);
+        assert_eq!(voices, 2, "a third group was allocated into a full pool");
+    }
+
+    /// Note Off is a group operation too: one event id releases every member,
+    /// and none of them is left gated behind.
+    #[test]
+    fn note_off_releases_every_member_of_its_group() {
+        let mut params = init_saw();
+        params.unison = MlP8Unison::X4;
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(1024);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 48));
+        events.push(note_on(0, 2, 60));
+        synth.process(&ctx(1024), &mut bus, &events, None);
+        assert_eq!(held(&synth), (2, 8));
+
+        let mut off = EventList::empty();
+        off.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOff { id: 1, note: 48 },
+        });
+        synth.process(&ctx(1024), &mut bus, &off, None);
+        let (voices, slots) = held(&synth);
+        assert_eq!((voices, slots), (1, 4), "half a group survived its Note Off");
+        // The released four are still sounding out their tail, not cut.
+        assert!(
+            synth.voices.iter().filter(|v| v.active).count() > 4,
+            "the released group was dropped rather than released"
+        );
+    }
+
+    /// Shrinking Unison under a sounding chord leaves no partial group. The
+    /// old topology leaves through the short transition; it is not resized.
+    #[test]
+    fn changing_unison_releases_the_old_groups_rather_than_resizing_them() {
+        let mut params = init_saw();
+        params.unison = MlP8Unison::X8;
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(1024);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 48));
+        synth.process(&ctx(1024), &mut bus, &events, None);
+        assert_eq!(held(&synth), (1, 8));
+
+        params.unison = MlP8Unison::X2;
+        synth.set_params(params);
+        assert_eq!(held(&synth).1, 0, "a group stayed gated across the change");
+        assert!(
+            synth.voices.iter().all(|v| !v.active || v.env.is_releasing()),
+            "a voice kept sounding at its old group size"
+        );
+
+        // And the next note gets the new topology, whole.
+        let mut next = EventList::empty();
+        next.push(note_on(0, 2, 60));
+        synth.process(&ctx(1024), &mut bus, &next, None);
+        assert_eq!(held(&synth), (1, 2));
+    }
+
+    /// A slot stolen by a smaller group has nothing to adopt. It has to leave
+    /// through the release rather than simply stopping, which is the one
+    /// sample of silence in the middle of a sound the plan forbids.
+    #[test]
+    fn a_slot_stolen_by_a_smaller_group_is_released_not_cut() {
+        let mut params = sine_bed();
+        params.unison = MlP8Unison::X8;
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(4096);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 48));
+        synth.process(&ctx(4096), &mut bus, &events, None);
+
+        // The whole pool is one group, and it is still sounding out the
+        // release the Unison change started. A 2x note arriving into that
+        // steals all eight and has a use for two of them.
+        params.unison = MlP8Unison::X2;
+        synth.set_params(params);
+        let mut next = EventList::empty();
+        next.push(note_on(0, 2, 60));
+        bus.clear(4096);
+        // A short block, because the five-millisecond transition is the thing
+        // being looked at: run a long one and every surplus slot has already
+        // finished leaving by the time the assertion reads it.
+        synth.process(&ctx(128), &mut bus, &next, None);
+
+        assert_eq!(held(&synth), (1, 2));
+        let retired = synth.voices.iter().filter(|v| v.active && !v.gate).count();
+        assert_eq!(retired, 6, "{retired} of the six surplus slots were released");
+        // The step where they should have been cut off is not in the audio.
+        let step = bus.l[..128]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(step < 0.1, "the handoff stepped by {step}");
+    }
+
+    /// Choke and transport stop reach whole groups by construction, and a
+    /// group that has left is left with no member still gated.
+    #[test]
+    fn choke_and_transport_stop_take_whole_groups() {
+        for stop_the_transport in [false, true] {
+            let mut params = init_saw();
+            params.unison = MlP8Unison::X4;
+            let mut synth = MlP8::new(params, SR);
+            let mut bus = StereoBus::with_capacity(1024);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 1, 48));
+            events.push(note_on(0, 2, 60));
+            synth.process(&ctx(1024), &mut bus, &events, None);
+            assert_eq!(held(&synth), (2, 8));
+
+            let mut stop = EventList::empty();
+            let mut context = ctx(1024);
+            if stop_the_transport {
+                context.playing = false;
+            } else {
+                stop.push(TimedEvent {
+                    offset: 0,
+                    event: Event::Choke,
+                });
+            }
+            synth.process(&context, &mut bus, &stop, None);
+            assert_eq!(held(&synth), (0, 0), "a member survived the stop");
+            // Released, not cut: they are still sounding their short tail.
+            assert!(
+                synth.voices.iter().all(|v| !v.active || v.env.is_releasing()),
+                "a voice was left running without a gate"
+            );
+        }
+    }
+
+    /// Detune and Spread are symmetric about the note, so a group plays the
+    /// pitch it was sent and sits in the middle of the field.
+    #[test]
+    fn detune_and_spread_are_symmetric_about_the_note() {
+        let mut params = init_saw();
+        params.unison = MlP8Unison::X4;
+        params.detune = 0.8;
+        params.spread = 1.0;
+        let synth = played(params, &[60], 1024);
+        let group: Vec<&Voice> = synth.voices.iter().filter(|v| v.gate).collect();
+        assert_eq!(group.len(), 4);
+
+        let offsets: f32 = group.iter().map(|v| v.group_offset()).sum();
+        assert!(offsets.abs() < 1.0e-6, "the group is not zero-mean: {offsets}");
+        let pans: f32 = group.iter().map(|v| v.spread_pan).sum();
+        assert!(pans.abs() < 1.0e-6, "the image is not centred: {pans}");
+        // The outermost members reach the ends, so the amount means what it
+        // says rather than a fraction of it.
+        let extremes = group
+            .iter()
+            .map(|v| v.spread_pan)
+            .fold((0.0_f32, 0.0_f32), |(lo, hi), p| (lo.min(p), hi.max(p)));
+        assert!((extremes.0 + 1.0).abs() < 1.0e-6 && (extremes.1 - 1.0).abs() < 1.0e-6);
+    }
+
+    /// Zero means exactly zero, not a small number: both controls leave the
+    /// pitch and the pan bit-for-bit where the patch put them.
+    #[test]
+    fn detune_and_spread_at_zero_change_nothing() {
+        let mut params = init_saw();
+        params.unison = MlP8Unison::X4;
+        let synth = played(params, &[60], 1024);
+        for voice in synth.voices.iter().filter(|v| v.gate) {
+            assert_eq!(voice.pitch_scale, [1.0; 3], "detune moved a pitch at zero");
+            assert_eq!(voice.spread_pan, 0.0, "spread moved a voice at zero");
+            assert_eq!(voice.spread_gain, pan_gains(0.0));
+        }
+        // Four voices of the same note at the same pitch and pan is four
+        // times one voice, exactly.
+        let (left, right) = render_stereo(params, &[60], 4096);
+        assert_eq!(left, right, "a centred group is not centred");
+    }
+
+    /// At 1x, Spread places notes by their stable slot positions, so a chord
+    /// occupies the field the same way on every render rather than following
+    /// the order the notes arrived in.
+    #[test]
+    fn spread_at_1x_places_a_chord_by_slot_and_repeats_it() {
+        let mut params = init_saw();
+        params.spread = 1.0;
+        let (left, right) = render_stereo(params, &[48, 55, 62, 69], 4096);
+        assert_ne!(left, right, "a spread chord is still centred");
+        // Deterministic: the same chord twice is the same image twice.
+        let (again_l, again_r) = render_stereo(params, &[48, 55, 62, 69], 4096);
+        assert_eq!((left, right), (again_l, again_r));
+
+        // And it is the slot that decides, not the arrival order: slot 0 sits
+        // hard left and slot 7 hard right whatever is playing.
+        let synth = played(params, &[60], 1024);
+        assert!((synth.voices[0].pan_offset() + 1.0).abs() < 1.0e-6);
+        assert!((synth.voices[MLP8_VOICES - 1].pan_offset() - 1.0).abs() < 1.0e-6);
+    }
+
+    /// Drift 0 is not "nearly authored". Every multiplier it introduces is
+    /// exactly one, so the render is bit-identical to the same patch with the
+    /// control never touched.
+    #[test]
+    fn drift_zero_is_bit_for_bit_the_authored_patch() {
+        let mut params = sine_bed();
+        params.filter_cutoff = 0.5;
+        params.filter_keytrack = 1.0;
+        let authored = render_chord(params, &[48, 60, 67], 8192);
+        params.drift = 0.0;
+        assert_eq!(render_chord(params, &[48, 60, 67], 8192), authored);
+
+        let synth = played(params, &[60], 512);
+        for voice in &synth.voices {
+            assert_eq!(voice.pitch_scale, [1.0; 3]);
+            assert_eq!(voice.cutoff_scale, 1.0);
+        }
+    }
+
+    /// Drift 100 differs measurably, uses no entropy, and does not move the
+    /// sustain *level* — only the times either side of it.
+    #[test]
+    fn drift_full_differs_deterministically_without_touching_sustain() {
+        let mut params = sine_bed();
+        params.filter_cutoff = 0.5;
+        let flat = render_chord(params, &[48, 60, 67], 16384);
+        params.drift = 1.0;
+        let drifted = render_chord(params, &[48, 60, 67], 16384);
+        assert_ne!(flat, drifted, "Drift 100 changed nothing");
+
+        // No runtime entropy: two fresh devices agree sample for sample.
+        assert_eq!(render_chord(params, &[48, 60, 67], 16384), drifted);
+
+        // The sustained level is the patch's, not the slot's.
+        //
+        // One note, one sine, and the filter left open, because that is the
+        // only arrangement in which the sustained peak measures the envelope
+        // and nothing else: a chord's peak follows the phases its members
+        // happen to be at, and a filter's output follows its cutoff, and
+        // Drift moves both of those on purpose.
+        let mut open = sine_bed();
+        let peak = |signal: &[f32]| {
+            signal[8192..].iter().fold(0.0, |a: f32, s| a.max(s.abs()))
+        };
+        let flat_sustain = peak(&render(open, 60, 16384));
+        open.drift = 1.0;
+        let drifted_sustain = peak(&render(open, 60, 16384));
+        assert!(
+            (flat_sustain - drifted_sustain).abs() < flat_sustain * 0.01,
+            "sustain moved from {flat_sustain} to {drifted_sustain}"
+        );
+        // And it is the sustain that was measured, not silence.
+        assert!(flat_sustain > 0.2, "the bed did not reach sustain");
+    }
+
+    /// Drift's start phases are a property of the slot, so a note played
+    /// twice into the same idle slot renders identically both times.
+    #[test]
+    fn drift_start_phase_is_a_slot_property_not_a_new_number_each_note() {
+        let mut params = sine_bed();
+        params.drift = 1.0;
+        let first = render(params, 60, 4096);
+        let second = render(params, 60, 4096);
+        assert_eq!(first, second);
+        // And the slots differ from each other, which is the point of it.
+        let synth = played(params, &[60], 512);
+        assert_ne!(synth.voices[0].drift.phase, synth.voices[1].drift.phase);
+    }
+
+    /// OFF contributes no chorus processing at all: the stage reports itself
+    /// bypassed and its wet gain is exactly zero, so the voices reach the
+    /// channel bus without a copy or a delay line in the way.
+    #[test]
+    fn chorus_off_is_a_true_bypass() {
+        let mut synth = MlP8::new(init_saw(), SR);
+        assert!(synth.chorus.settle(MlP8Chorus::Off));
+        assert_eq!(synth.chorus.gain.value(), 0.0);
+        assert_eq!(synth.chorus.active, MlP8Chorus::Off);
+    }
+
+    /// The three live modes are distinct from OFF and from each other, and
+    /// each of them processes only ML-P8's own output.
+    #[test]
+    fn the_three_chorus_modes_are_distinct() {
+        let mut params = sine_bed();
+        params.osc[0].wave = OscWave::Saw;
+        let dry = render_chord(params, &[48, 60], 16384);
+        let mut rendered = vec![dry.clone()];
+        for mode in [MlP8Chorus::One, MlP8Chorus::Two, MlP8Chorus::Ensemble] {
+            params.chorus = mode;
+            let wet = render_chord(params, &[48, 60], 16384);
+            assert!(wet.iter().all(|s| s.is_finite()), "{mode:?} went non-finite");
+            for (index, other) in rendered.iter().enumerate() {
+                assert_ne!(&wet, other, "{mode:?} is the same as mode {index}");
+            }
+            rendered.push(wet);
+        }
+    }
+
+    /// The chorus reads ML-P8's scratch bus, never the channel's. A bus that
+    /// already carries another generator's audio comes back with that audio
+    /// untouched and ML-P8 added to it.
+    #[test]
+    fn the_chorus_never_rewrites_what_was_already_on_the_bus() {
+        const FRAMES: usize = 4096;
+        let mut params = sine_bed();
+        params.chorus = MlP8Chorus::Ensemble;
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(FRAMES);
+        // Somebody else's signal, already summed onto the channel.
+        let existing: Vec<f32> = (0..FRAMES)
+            .map(|i| (i as f32 * 0.01).sin() * 0.25)
+            .collect();
+        bus.l[..FRAMES].copy_from_slice(&existing);
+        bus.r[..FRAMES].copy_from_slice(&existing);
+
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        synth.process(&ctx(FRAMES), &mut bus, &events, None);
+
+        // ML-P8's own contribution, rendered alone.
+        let mine = render(params, 60, FRAMES);
+        for index in 0..FRAMES {
+            let expected = existing[index] + mine[index];
+            assert!(
+                (bus.l[index] - expected).abs() < 1.0e-6,
+                "frame {index}: {} is not {expected}",
+                bus.l[index]
+            );
+        }
+    }
+
+    /// A mode change on sounding material crosses rather than steps, and OFF
+    /// is reached the same way, so neither direction clicks.
+    #[test]
+    fn a_chorus_mode_change_crosses_instead_of_stepping() {
+        const FRAMES: usize = 24_000;
+        let mut params = sine_bed();
+        let steady = |signal: &[f32]| {
+            signal
+                .windows(2)
+                .map(|w| (w[1] - w[0]).abs())
+                .fold(0.0_f32, f32::max)
+        };
+
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        let held_still = render_with(params, events, FRAMES);
+        let baseline = steady(&held_still);
+
+        for (from, to) in [
+            (MlP8Chorus::Off, MlP8Chorus::Ensemble),
+            (MlP8Chorus::Ensemble, MlP8Chorus::Off),
+            (MlP8Chorus::One, MlP8Chorus::Two),
+        ] {
+            params.chorus = from;
+            let mut events = EventList::empty();
+            events.push(note_on(0, 1, 60));
+            // Well past the attack, so the change is the only thing moving.
+            events.push(TimedEvent {
+                offset: 12_000,
+                event: Event::ParamValue {
+                    id: mooloop_core::mlp8::PARAM_CHORUS,
+                    value: to.to_index() as f32,
+                },
+            });
+            let crossed = render_with(params, events, FRAMES);
+            let step = steady(&crossed);
+            assert!(
+                step < baseline * 4.0 + 0.01,
+                "{from:?} to {to:?} stepped by {step} against a baseline of {baseline}"
+            );
+            assert!(crossed.iter().all(|s| s.is_finite()));
+        }
+    }
+
+    /// Everything at once, at the top of every control the step adds: eight
+    /// physical voices, one note, full drift, full detune, full spread, and
+    /// the widest chorus. It has to stay finite and stay inside what honest
+    /// summing predicts.
+    #[test]
+    fn the_worst_case_of_this_step_stays_finite_and_bounded() {
+        let mut params = init_saw();
+        for osc in params.osc.iter_mut() {
+            osc.level = 1.0;
+        }
+        params.sub_level = 1.0;
+        params.noise_level = 1.0;
+        params.unison = MlP8Unison::X8;
+        params.drift = 1.0;
+        params.detune = 1.0;
+        params.spread = 1.0;
+        params.chorus = MlP8Chorus::Ensemble;
+        params.voice_feedback = 1.0;
+        params.drive = 1.0;
+
+        let out = render_chord(params, &[36, 48, 60, 72], 16384);
+        assert!(out.iter().all(|s| s.is_finite()), "worst case went non-finite");
+        let peak = out.iter().fold(0.0_f32, |a, s| a.max(s.abs()));
+        // Five unit sources a voice, eight voices, at the voice reference and
+        // hard left -- plus the wet the finisher adds beside the dry, which
+        // is bounded by the dry because it is a filtered sum of delayed taps.
+        let ceiling = 2.0 * 5.0 * VOICE_OUTPUT_REFERENCE * MLP8_VOICES as f32;
+        println!("step 05 worst-case peak: {peak:.3}, honest ceiling {ceiling:.3}");
+        assert!(peak < ceiling, "worst case peaked at {peak}, over {ceiling}");
+        // And unison did not quietly buy a ninth voice to do it with.
+        let synth = played(params, &[36, 48, 60, 72], 4096);
+        assert!(synth.voices.iter().filter(|v| v.active).count() <= MLP8_VOICES);
+    }
+
+    /// The whole step, rendered twice: unison, drift, detune, spread, and the
+    /// chorus are all deterministic, so an offline render is the take.
+    #[test]
+    fn the_finished_voice_renders_identically_across_instances() {
+        let mut params = init_saw();
+        params.unison = MlP8Unison::X4;
+        params.drift = 0.75;
+        params.detune = 0.5;
+        params.spread = 0.8;
+        params.chorus = MlP8Chorus::Two;
+        let first = render_stereo(params, &[48, 60], 12_288);
+        let second = render_stereo(params, &[48, 60], 12_288);
+        assert_eq!(first, second);
+    }
+
+    /// The factory identity case the plan names: 1x, Drift 0, Chorus OFF is
+    /// what a fresh device already is, so step 07's listening pass starts
+    /// from the instrument rather than from its finishers.
+    #[test]
+    fn the_default_patch_is_the_acceptance_case() {
+        let params = MlP8Params::default();
+        assert_eq!(params.unison, MlP8Unison::X1);
+        assert_eq!(params.chorus, MlP8Chorus::Off);
+        assert_eq!(params.drift, 0.0);
+        assert_eq!(params.detune, 0.0);
+        assert_eq!(params.spread, 0.0);
+    }
+
     /// A skipped oscillator has to be skipped for the right reason. Muting
     /// one that nothing reads must not change the two that are heard.
     #[test]
@@ -3116,3 +4139,5 @@ mod tests {
         assert_eq!(render(noisy, 60, 4096), with_third_silent);
     }
 }
+
+

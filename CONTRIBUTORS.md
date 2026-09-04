@@ -68,13 +68,13 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-04
-- Sessions: 44
+- Sessions: 45
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
   ML-P8, DS-01 and modulator-module plans, and the build of DS-01 and of
-  ML-P8's own modulation; the `mooloop-session` extraction; the Slint MCP
-  server behind `scripts/mooloop-mcp`; `scripts/antibox`,
+  ML-P8's own modulation and voice pool; the `mooloop-session` extraction;
+  the Slint MCP server behind `scripts/mooloop-mcp`; `scripts/antibox`,
   `scripts/slint-sketch` and `scripts/loop-profile`;
   `docs/WIDGET_INVENTORY.md`; `docs/ARCHITECTURE_REVIEW.md`; and the
   September 2026 documentation audit. Longer accounts of most of this are in

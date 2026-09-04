@@ -116,6 +116,36 @@ impl ModulationEffect {
         }
     }
 
+    /// Replace `start..end` of `bus` with this node's wet output, without the
+    /// event handling [`AudioNode::process`] wraps it in.
+    ///
+    /// The rack host always has a whole block and an event list; a device that
+    /// embeds this processor as a finisher has neither — it has whatever range
+    /// its own event splitting left, and its mode comes from its own patch. So
+    /// the range is the reusable unit, and `process` is one caller of it.
+    pub fn process_wet(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        self.process_range(bus, start, end);
+    }
+
+    /// Forget the delay line, the filters, and the LFO phase.
+    ///
+    /// Non-allocating, so a device may call it when its own mode changes and
+    /// the line's contents are older than anything it should be reading.
+    pub fn reset(&mut self) {
+        self.line.clear();
+        self.lfo = Lfo::new();
+        self.feedback_l = 0.0;
+        self.feedback_r = 0.0;
+        self.tone_l.reset();
+        self.tone_r.reset();
+        for stage in &mut self.phaser_l {
+            stage.reset();
+        }
+        for stage in &mut self.phaser_r {
+            stage.reset();
+        }
+    }
+
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         for i in start..end {
             let depth = self.depth.advance();
