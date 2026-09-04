@@ -9,10 +9,20 @@
 mod actions;
 mod gestures;
 mod meter;
+#[cfg(feature = "mockup")]
 mod mockup;
 mod settings;
 
 slint::include_modules!();
+
+/// The mockup tool's Slint module, compiled from its own entry point so that
+/// it stays out of the window's. Nested in a module of its own because two
+/// generated modules define the same shared globals and structs, and only one
+/// of them can be at the crate root.
+#[cfg(feature = "mockup")]
+mod mockup_ui {
+    include!(concat!(env!("OUT_DIR"), "/mockup-tool.rs"));
+}
 
 use meter::MeterBallistics;
 use mooloop_core::gain::{linear_to_db, MIN_DB as METER_FLOOR_DB};
@@ -89,7 +99,10 @@ use mooloop_session::values::{
     stretch_bars_to_norm, stretch_grain_from_norm, stretch_grain_to_norm, stretch_ratio_from_norm,
     stretch_ratio_to_norm,
 };
+#[cfg(feature = "mockup")]
 pub use mockup::{load_mockup_layout, wire_mockup};
+#[cfg(feature = "mockup")]
+pub use mockup_ui::MockupCanvas;
 use settings::{AppearanceSettings, ThemePalette, ThemeScheme, UiSettings};
 use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode,
@@ -3659,7 +3672,12 @@ impl AppUi {
         // Kept alive here for as long as the app runs so the window survives
         // after this constructor returns; re-opening while it is already up
         // just refocuses it instead of spawning a second one.
-        let mockup_window: Rc<RefCell<Option<MockupCanvas>>> = Rc::new(RefCell::new(None));
+        #[cfg(feature = "mockup")]
+        let mockup_window: Rc<RefCell<Option<mockup_ui::MockupCanvas>>> =
+            Rc::new(RefCell::new(None));
+        // The Developer page hides its tools row entirely rather than offering
+        // a button that would open nothing.
+        window.set_preferences_mockup_tool_available(cfg!(feature = "mockup"));
         {
             let settings = ui_settings.borrow();
             apply_appearance(&window, &settings.appearance);
@@ -3932,6 +3950,7 @@ impl AppUi {
                 });
             });
         }
+        #[cfg(feature = "mockup")]
         {
             let mockup_window = mockup_window.clone();
             window.on_preferences_open_mockup_tool(move || {
@@ -9281,8 +9300,9 @@ impl AppUi {
 /// alongside the main app rather than blocking it. Same component and same
 /// wiring as `cargo run -p mooloop-ui --example mockup`; the developer
 /// preferences page just saves leaving the running app to reach it.
-fn open_mockup_window() -> Result<MockupCanvas, slint::PlatformError> {
-    let canvas = MockupCanvas::new()?;
+#[cfg(feature = "mockup")]
+fn open_mockup_window() -> Result<mockup_ui::MockupCanvas, slint::PlatformError> {
+    let canvas = mockup_ui::MockupCanvas::new()?;
     mockup::wire_mockup(&canvas);
     canvas.show()?;
     Ok(canvas)

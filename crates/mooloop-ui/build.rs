@@ -16,6 +16,13 @@ fn main() {
 /// free -- toggling it recompiles the whole generated module -- which is why
 /// it stays off unless the MCP server is being compiled in too.
 fn compile_ui() {
+    // Compiled before the window, because every `slint_build` call overwrites
+    // the `SLINT_INCLUDE_GENERATED` that `slint::include_modules!()` expands
+    // to, and the window is the one that has to win it. The tool's module is
+    // included by path instead; see `mockup_ui` in `lib.rs`.
+    if std::env::var_os("CARGO_FEATURE_MOCKUP").is_some() {
+        slint_build::compile("ui/mockup-tool.slint").expect("Slint compilation failed");
+    }
     if std::env::var_os("CARGO_FEATURE_MCP").is_some() {
         let config = slint_build::CompilerConfiguration::new().with_debug_info(true);
         slint_build::compile_with_config("ui/main.slint", config)

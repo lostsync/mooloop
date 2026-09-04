@@ -10,7 +10,7 @@
 //! and this module reads sizes, behaviour and grouping back off that global.
 
 use crate::settings::config_dir;
-use crate::{MockupCanvas, MockupCatalog, MockupItem, MockupPaletteRow};
+use crate::mockup_ui::{MockupCanvas, MockupCatalog, MockupItem, MockupPaletteRow};
 use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;

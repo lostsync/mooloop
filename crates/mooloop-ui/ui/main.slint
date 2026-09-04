@@ -47,10 +47,8 @@ import { PolyDeviceFace } from "poly-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
 import { SampleTrace } from "device-displays.slint";
 export { Theme }
-export { MockupCanvas, MockupItem, MockupPaletteRow } from "mockup.slint";
-// The palette, the default sizes, and the drag behaviour all come off
-// this global, which Rust reads to build the palette model.
-export { MockupCatalog, MockupKind } from "mockup-catalog.slint";
+// The mockup tool is deliberately absent: it has its own entry point in
+// `mockup-tool.slint`, so it is not compiled into this module. See there.
 export { DeviceRackConcepts } from "device-concepts.slint";
 // Exported standalone (rather than only reachable through the rack) so the
 // drag regression tests can drive them directly with real pointer events
@@ -299,6 +297,10 @@ export component MainWindow inherits Window {
     in-out property <float> preferences-appearance-roundness: 1.0;
     in-out property <string> preferences-appearance-scheme-name;
     in-out property <bool> preferences-developer-mode;
+    // False unless the build carries the `mockup` Cargo feature, in which
+    // case the Developer page hides the row rather than offering a button
+    // that opens nothing.
+    in-out property <bool> preferences-mockup-tool-available;
     in-out property <bool> preferences-log-to-file;
     in-out property <string> preferences-log-path;
     callback preferences-log-to-file-toggled(bool);
@@ -4523,6 +4525,7 @@ export component MainWindow inherits Window {
         appearance-roundness <=> root.preferences-appearance-roundness;
         appearance-scheme-name <=> root.preferences-appearance-scheme-name;
         developer-mode <=> root.preferences-developer-mode;
+        mockup-tool-available: root.preferences-mockup-tool-available;
         smooth-curves <=> root.preferences-smooth-curves;
         log-to-file: root.preferences-log-to-file;
         log-path: root.preferences-log-path;

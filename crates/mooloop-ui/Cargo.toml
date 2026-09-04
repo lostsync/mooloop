@@ -12,6 +12,14 @@ authors.workspace = true
 # `docs/AGENT_OPERATIONS.md`.
 mcp = ["slint/mcp"]
 
+# Compiles the drag-and-drop UI mockup tool: its Slint module, its Rust wiring,
+# and the Developer preferences entry that opens it. Off by default, because
+# everything one `.slint` entry point reaches expands into a single generated
+# Rust module -- exporting the tool from `main.slint` put 1.78 MB of generated
+# Rust, 4.3% of the module, into every build including release. See
+# `docs/plans/edit-loop/01-the-verification-ladder.md`.
+mockup = []
+
 [dependencies]
 mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
@@ -26,6 +34,11 @@ symphonia = {
 }
 serde = { workspace = true }
 toml = { workspace = true }
+
+# The standalone tool cannot build without the module it is a front end for.
+[[example]]
+name = "mockup"
+required-features = ["mockup"]
 
 [build-dependencies]
 slint-build = { workspace = true }

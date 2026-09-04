@@ -196,7 +196,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   place it in the mockup tool below.
 - The active interface contract is `docs/UI_DESIGN.md`. A visual composition
   tool using the real controls is available with `cargo run -p mooloop-ui
-  --example mockup`, or from Preferences > Developer. Its palette comes from one
+  --features mockup --example mockup`, or from Preferences > Developer in a
+  build carrying that feature. It is off by default because everything one
+  `.slint` entry point reaches compiles into a single generated Rust module,
+  so exporting the tool from the window put 1.78 MB of generated Rust into
+  every build; the Developer page hides the row when it is absent. Its palette comes from one
   catalog (`ui/mockup-catalog.slint`), grouped by role or module and filterable;
   items have z-order, a layers list, rack-unit sizing for device kinds, and a
   snap grid. Named layouts save to `layouts/` under the config directory, keyed

@@ -1,0 +1,12 @@
+// The developer mockup tool's entry point, compiled as its own Slint module.
+//
+// It exists so that `mockup.slint` and its catalog are not re-exported from
+// `main.slint`: everything a single `.slint` entry reaches expands into one
+// generated Rust module, so exporting the tool from the window compiled the
+// tool into the window -- 1.78 MB of generated Rust, 4.3% of the module, in
+// every build including release. `build.rs` compiles this file only when the
+// `mockup` feature asks for it; see `docs/plans/edit-loop/`.
+export { MockupCanvas, MockupItem, MockupPaletteRow } from "mockup.slint";
+// The palette, the default sizes, and the drag behaviour all come off this
+// global, which Rust reads to build the palette model.
+export { MockupCatalog, MockupKind } from "mockup-catalog.slint";

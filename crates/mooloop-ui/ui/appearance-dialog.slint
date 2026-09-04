@@ -664,6 +664,8 @@ export component PreferencesDialog inherits Rectangle {
     callback shortcut-reset(string);
     callback shortcut-reset-all();
     callback gesture-rebound(string, int);
+    // Off unless the build compiled the mockup tool in; see main.slint.
+    in property <bool> mockup-tool-available;
     callback open-mockup-tool();
     callback log-to-file-toggled(bool);
 
@@ -888,8 +890,8 @@ export component PreferencesDialog inherits Rectangle {
                         if root.page == 5 && root.developer-mode : VerticalBox {
                             spacing: 8px;
                             Text { text: "Developer"; color: Theme.text; font-size: 14px; height: 20px; }
-                            SectionLabel { text: "DEVELOPER TOOLS"; }
-                            HorizontalBox {
+                            if root.mockup-tool-available : SectionLabel { text: "DEVELOPER TOOLS"; }
+                            if root.mockup-tool-available : HorizontalBox {
                                 height: 36px;
                                 spacing: 8px;
                                 VerticalBox {
