@@ -122,7 +122,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   ML-P8 face is two pages: the instrument -- SOURCE, the network grid, and
   VOICE on one screen -- and ML-P8 MOD, which holds the device's own LFO and
   the list of its internal modulation routes. The name distinguishes it from
-  the frame's MOD button, which opens the channel shelf. The
+  the frame's MOD button, which opens the channel shelf. Its VOICE region's
+  last two columns are allocation and character: Detune, Drift and Spread as
+  knobs, and Unison and Chorus as selectors under a fixed `VOICES 8` and the
+  note count that Unison leaves. Those two columns are why the ML-P8 face is
+  four rack units rather than three; DS-01 is five, for the same reason. The
   drum face keeps family, character, shared shaping, and voice-specific controls
   visible together. Replacing a source does not change the channel's notes or
   mixer state. Closed and open hats share a choke group in the generated
@@ -549,6 +553,23 @@ land on its own when it starts to matter:
   the curves rather than dialled. Its published outlets are not built and are
   blocked on the same device-outlet mechanism ML-P8's step 06 needs; its
   factory bank and listening pass are step 09 and have not happened.
+- The ML-P8 allocates its eight physical voices as *groups*. Unison at 1x, 2x,
+  4x and 8x spends the pool rather than growing it, leaving 8, 4, 2 and 1 notes
+  of polyphony; a note allocates a complete group and steals complete older
+  groups, and a slot stolen by a smaller group leaves through the same short
+  de-click transition rather than stopping. Changing Unison releases the
+  sounding groups and applies the new topology to the next note; it never
+  resizes a group in place. Detune and Spread place a group's members
+  symmetrically about the note that was played, and at 1x Spread places notes
+  by their stable slot positions so a chord occupies the field the same way on
+  every render. Drift is one control over stable per-slot offsets to
+  oscillator pitch, cutoff, the envelopes' attack, decay and release times, and
+  oscillator start phase — never sustain, and never from runtime entropy, so
+  Drift 0 renders bit-for-bit what the patch authored. A finishing chorus with
+  four fixed policies (OFF, I, II, Ensemble) reuses the rack's modulation
+  effect over ML-P8's own scratch buses, never the channel's; OFF is a true
+  bypass and a mode change crosses through a silent wet rather than stepping.
+  There is no gain normalization by voice count anywhere in the device.
 - The ML-P8 and DS-01 are the two generators with modulation of their own. It owns an
   audio-rate LFO and a list of internal routes reading six per-voice sources
   — the LFO, both envelopes, velocity, key, and gate — into thirty-one

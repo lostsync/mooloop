@@ -18,7 +18,7 @@ is worth reading before either.
 
 | Plan | State |
 | --- | --- |
-| `poly-synth-v2/` | **In progress.** ML-P8 steps 02-04 in; 05-07 next. `origin/feat/mlp8-mod` is stale: it carried step 04's WIP, which has landed. |
+| `poly-synth-v2/` | **In progress.** ML-P8 steps 02-05 in; 06-07 next. `origin/feat/mlp8-mod` is stale: it carried step 04's WIP, which has landed. |
 | `drum-synth-v2/` | **Approved, no code.** DS-01, nine steps, three rendered face concepts in `mockups/`. |
 | `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |

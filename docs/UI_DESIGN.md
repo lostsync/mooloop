@@ -338,7 +338,14 @@ plot responds to waveform, tuning, level, and pulse width.
   levels, because a level is a route to the output. The grid's cells are
   `ParameterKnob` with `show-dial: false`, not a second draggable control,
   so arming a modulation source changes what a cell means exactly as it
-  changes what any other knob means.
+  changes what any other knob means. VOICE ends in allocation and character:
+  Detune, Drift and Spread as knobs, and Unison and Chorus as selectors under
+  a fixed `VOICES 8`. Eight is instrument information rather than a control —
+  nothing on the face can change the pool — so the number that moves beside
+  the Unison selector is the derived one: how many notes are left to play.
+  Those two columns are what took the face from three rack units to four:
+  three fitted the VOICE region exactly, with no slack, and the alternative
+  was taking width from the network grid.
 
 No synth face owns a general LFO page. The common frame exposes the channel
 modulation shelf and the routes that terminate in that device's parameters.

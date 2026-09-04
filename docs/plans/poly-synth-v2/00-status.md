@@ -1,8 +1,65 @@
 # ML-P8 plan status
 
-**Steps 02, 03 and 04 are in.** The device exists and plays: a new `MlP8`
-generator kind beside the v1 poly synth, the three-oscillator network with all
-six directed XMOD routes, self-feedback, noise into every phase input, hard
+**Steps 02, 03, 04 and 05 are in.** 06 and 07 are next, in order.
+
+Step 05 finished the pool. A note is a *group* of physical slots: Unison at
+1x/2x/4x/8x spends the eight rather than growing them, groups are allocated and
+stolen whole, and a slot a smaller group steals leaves through the same short
+de-click transition rather than stopping. Detune and Spread place a group's
+members symmetrically about the note; at 1x Spread places notes by their stable
+slot positions. Drift is stable per-slot character over pitch, cutoff, the
+envelope times and the oscillator start phases, with no runtime entropy at any
+setting. The finisher is four fixed policies over the rack's own
+`ModulationEffect`, running on ML-P8's scratch buses.
+
+Six things that step turned up:
+
+- **A group needs an identity, and `age` already was one.** Every member of a
+  group is stamped with the same age when it is allocated, so "the oldest age
+  still on the board" names a whole group and stealing needs no second table.
+  The event id could not do it: it identifies the *note*, and a slot being
+  retired has stopped being part of one.
+- **Stealing can be asymmetric.** A patch that was at 8x when a note started
+  and is at 2x now steals eight slots to fill two, and the six left over have
+  nothing to adopt. Dropping them is the one sample of silence in the middle of
+  a sound that stealing exists to avoid, so they retire through the release
+  instead, with their age set to zero so they are first in line to be reused.
+- **"Drift 0 is exactly authored" is an identity, not a tolerance, and the
+  code has to earn it.** Every multiplier Drift introduces is written so it is
+  exactly `1.0` at zero — `exp2(0.0)` is one, and `x * 1.0` is `x` bit for bit
+  — rather than being skipped by a branch. That is why the drifted pitch is
+  folded into the oscillator ratio the sub already reads, instead of being a
+  second multiply the sub would have needed its own copy of.
+- **The finisher is nearly free, and the worst case has headroom.** Measured
+  on the build box on a release build, 4.3 seconds of audio at 48 kHz in
+  512-frame blocks: the step's worst case — eight physical voices as one 8x
+  group, three pulse oscillators with every XMOD, self-feedback and noise
+  amount at 100%, all three sync pairs live, a resonant LP24 with drive and
+  voice feedback, Drift, Detune and Spread at their tops, and sixteen internal
+  routes — costs **12.2% of one core**. Adding the Ensemble chorus takes it to
+  13.2%, so the finisher is one point for a whole instrument's worth of it. The
+  figure is a measurement rather than a test: a wall-clock assertion in the
+  suite would be flaky on a laptop and would fail for reasons that are not
+  this device's.
+- **The face had no room, and three rack units was the boundary.** The VOICE
+  region fitted its 664px exactly, with no slack at all — a sketch at 664
+  shows every control and nothing to spare. Allocation and character had to go
+  somewhere, and the only alternatives to widening the face were taking width
+  from the network grid or height the region did not have. Four units, on the
+  same argument DS-01's five already stand on. The controls sit rightmost,
+  which is also where the plan wants the chorus to feel.
+- **The finisher's buffers were the expensive part, and the fix was to render
+  in chunks.** The chorus may not read the channel bus, so it needs two of its
+  own; at `MAX_BLOCK_SIZE` that is 128 KB on every materialized channel for a
+  control that is off by default. Rendering `render_range` in 512-frame chunks
+  makes it 8 KB, and costs one `Prepared` per chunk. The engine's footprint
+  test is what asked the question — `size_of::<MlP8>()` grew by 984 bytes and
+  the test's job is to make that a decision rather than a drift.
+
+In more detail, from the earlier steps: the device exists and plays — a new
+`MlP8` generator kind beside the v1 poly synth, the three-oscillator network
+with all six directed XMOD routes, self-feedback, noise into every phase
+input, hard
 sync with a band-limited reset, a derived sub, deterministic coloured noise,
 eight fixed voices, and — from 03 — two envelopes, four filter modes,
 keytracking, both velocity depths, and a feedback loop around the filter with
@@ -10,7 +67,8 @@ the drive inside it. From 04 it has its own modulation: an audio-rate LFO with
 six waves, Warp, Slew and three retrigger policies; six per-voice sources
 reaching thirty-one continuous destinations through authored routes; and an
 ML-P8 MOD page to author them on. A complete moving patch needs nothing from
-the channel modulation shelf. 05 through 07 are next, in order.
+the channel modulation shelf. From 05 it allocates in groups, drifts by slot,
+detunes and spreads them, and finishes with a chorus that is off by default.
 
 The face is one screen, not pages: SOURCE, NETWORK, VOICE, divided by rules
 along the signal path. Its centre is a grid of every route in the voice —

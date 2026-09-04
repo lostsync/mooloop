@@ -45,27 +45,31 @@ reopened, and rendered through the ordinary UI.
 
 ### 1. Finish ML-P8
 
-Execute `docs/plans/poly-synth-v2/` steps 05 through 07. Steps 02, 03 and 04
-are in: the device plays, with the three-oscillator network, all six directed
+Execute `docs/plans/poly-synth-v2/` steps 06 and 07. Steps 02 through 05 are
+in: the device plays, with the three-oscillator network, all six directed
 XMOD routes, sync, the derived sub, coloured noise, both envelopes, four filter
 modes, the feedback loop with drive inside it, and its own modulation — an
 audio-rate LFO, six per-voice sources, authored routes onto thirty-one
 continuous destinations, and an ML-P8 MOD page to build them on. A complete
-moving patch needs nothing from the channel shelf.
+moving patch needs nothing from the channel shelf. Step 05 finished the pool
+around it: group allocation, Unison that spends the eight slots rather than
+growing them, symmetric Detune and Spread, entropy-free per-slot Drift, and a
+finishing chorus that is off by default.
 
-What remains is voice allocation's finishers (unison, drift, spread, the
-internal chorus) and — the one that matters beyond this device — **step 06's
-published outlets**. Its second half is genuinely blocked: the audio outlets
-need the typed auxiliary audio edges `AUDIO_ARCHITECTURE.md` describes, which
-do not exist, so 06 lands in the two slices the step already names.
+What remains is the one that matters beyond this device — **step 06's
+published outlets** — and then the listening pass. 06's second half is
+genuinely blocked: the audio outlets need the typed auxiliary audio edges
+`AUDIO_ARCHITECTURE.md` describes, which do not exist, so 06 lands in the two
+slices the step already names.
 
-This step is first because it is half built, its cost is known, and DS-01's own
-step 07 publishes outlets the same way. Doing it here means designing that
-contract once.
+This step is first because it is most of the way built, its cost is known, and
+DS-01's own step 07 publishes outlets the same way. Doing it here means
+designing that contract once.
 
 Do not import ML-M1's acid semantics, held-note rules, or character filters. Do
 not let Drift, Unison, Spread, or Chorus carry ML-P8's identity; they are
-finishers around a network that already stands on its own.
+finishers around a network that already stands on its own, which is why every
+one of them is off in the default patch.
 
 Done when: eight ordinary notes play, the network stays deterministic and
 bounded under automation, voice groups never strand or click, typed outlets
