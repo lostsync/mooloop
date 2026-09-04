@@ -547,6 +547,7 @@ fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
     EffectSlotRow {
         kind,
         units,
+        preset_options: Vec::<slint::SharedString>::new().as_slice().into(),
         bypassed: false,
         p0: 0.5,
         p1: 0.5,

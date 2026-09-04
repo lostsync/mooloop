@@ -505,8 +505,10 @@ mod tests {
     /// chain the dialog was opened on, not from the selected channel.
     #[test]
     fn an_effect_save_on_a_bus_reads_the_bus_row() {
-        let mut session = Session::default();
-        session.effect_target = EffectTarget::Bus(1);
+        let mut session = Session {
+            effect_target: EffectTarget::Bus(1),
+            ..Session::default()
+        };
         session.insert_effect_at(EffectKind::Compressor, 0).expect("room");
         session.pending_preset_save = Some(PresetSaveTarget::Effect {
             target: EffectTarget::Bus(1),

@@ -137,6 +137,7 @@ fn render_mixer_pane_with_a_bus_chain() {
         EffectSlotRow {
             kind: 5,
             units: 2,
+            preset_options: Vec::<SharedString>::new().as_slice().into(),
             bypassed: false,
             p0: 0.5,
             p1: 0.4,
@@ -167,6 +168,7 @@ fn render_mixer_pane_with_a_bus_chain() {
         EffectSlotRow {
             kind: 6,
             units: 1,
+            preset_options: Vec::<SharedString>::new().as_slice().into(),
             bypassed: false,
             p0: 0.95,
             p1: 0.5,
