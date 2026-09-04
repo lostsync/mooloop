@@ -193,10 +193,14 @@ impl Session {
     ///
     /// No command: the caller queues the whole project as one undoable edit,
     /// which is what rebuilds the engine's node with the new parameters.
+    ///
+    /// `name` is what the row then wears in its header. Pass an empty string
+    /// for a load that should not claim one.
     pub fn load_effect_preset(
         &mut self,
         slot: usize,
         preset: &EffectSlotState,
+        name: &str,
     ) -> Option<EffectTarget> {
         let target = self.effect_target;
         let effect = self.effect_chain_mut()?.get_mut(slot)?;
@@ -204,9 +208,13 @@ impl Session {
             return None;
         }
         *effect = *preset;
+        if let Ok(slot) = u8::try_from(slot) {
+            self.set_effect_preset_name(target, slot, name);
+        }
         self.mark_dirty();
         Some(target)
     }
+
 
     /// The delay parameters in `slot`, when that slot holds a delay at all.
     fn delay_params_mut(&mut self, slot: i32) -> Option<&mut mooloop_core::DelayParams> {
@@ -395,7 +403,7 @@ mod tests {
         };
 
         assert_eq!(
-            session.load_effect_preset(0, &loaded),
+            session.load_effect_preset(0, &loaded, "Dialled"),
             Some(EffectTarget::Channel(0))
         );
         assert_eq!(session.channels[0].effects[0], dialled_in_delay());
@@ -411,11 +419,11 @@ mod tests {
         let before = session.channels[0].effects.clone();
         let dirty = session.dirty;
 
-        assert_eq!(session.load_effect_preset(0, &dialled_in_delay()), None);
+        assert_eq!(session.load_effect_preset(0, &dialled_in_delay(), "Dialled"), None);
         assert_eq!(session.channels[0].effects, before);
         assert_eq!(session.dirty, dirty, "a refused load is not an edit");
         // As is a slot that does not exist.
-        assert_eq!(session.load_effect_preset(3, &dialled_in_delay()), None);
+        assert_eq!(session.load_effect_preset(3, &dialled_in_delay(), "Dialled"), None);
     }
 
     /// Undo is the project snapshot machinery every rack edit uses: one
@@ -438,7 +446,7 @@ mod tests {
         let mut history = History::default();
         let before = session.project_snapshot(120, 50);
         session
-            .load_effect_preset(0, &dialled_in_delay())
+            .load_effect_preset(0, &dialled_in_delay(), "Dialled")
             .expect("same kind");
         let after = session.project_snapshot(120, 50);
         history.record(Entry {
@@ -527,5 +535,60 @@ mod tests {
         assert!(list_presets(&temp.path().join("effects").join("delay")).is_empty());
         std::fs::create_dir_all(temp.path().join("effects").join("delay")).unwrap();
         assert!(list_presets(&temp.path().join("effects").join("delay")).is_empty());
+    }
+
+    /// The header label is how the row got to these settings, so it names the
+    /// device rather than the position: it rides the reorder, is dropped with
+    /// the device, and a refused load never claims it.
+    #[test]
+    fn a_rows_preset_label_follows_the_device_and_dies_with_it() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Delay, 0).expect("room");
+        session.insert_effect_at(EffectKind::Filter, 1).expect("room");
+        let target = EffectTarget::Channel(0);
+
+        session
+            .load_effect_preset(0, &dialled_in_delay(), "Dub Runaway")
+            .expect("same kind");
+        assert_eq!(session.effect_preset_name(target, 0), Some("Dub Runaway"));
+        assert_eq!(session.effect_preset_name(target, 1), None);
+
+        // A refused load leaves the label alone rather than claiming a row it
+        // did not change.
+        assert_eq!(session.load_effect_preset(1, &dialled_in_delay(), "Dub Runaway"), None);
+        assert_eq!(session.effect_preset_name(target, 1), None);
+
+        // The label travels with its device.
+        session.move_effect_to(0, 1).expect("in range");
+        assert_eq!(session.effect_preset_name(target, 1), Some("Dub Runaway"));
+        assert_eq!(session.effect_preset_name(target, 0), None);
+
+        // A knob move keeps it: the settings still came from that preset.
+        session.set_effect_wet_dry(1, 0.2).expect("a delay is there");
+        assert_eq!(session.effect_preset_name(target, 1), Some("Dub Runaway"));
+
+        // Removing the device takes it.
+        session.remove_effect_at(1).expect("in range");
+        assert_eq!(session.effect_preset_name(target, 1), None);
+        assert!(session.effect_preset_names.is_empty());
+    }
+
+    /// Two chains do not share labels, and a reorder on one leaves the
+    /// other's alone.
+    #[test]
+    fn a_label_belongs_to_one_chain() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Gate, 0).expect("room");
+        session.set_effect_preset_name(EffectTarget::Channel(0), 0, "Tight Drum Gate");
+
+        session.effect_target = EffectTarget::Bus(1);
+        session.insert_effect_at(EffectKind::Limiter, 0).expect("room");
+        session.insert_effect_at(EffectKind::Gate, 0).expect("room");
+
+        assert_eq!(
+            session.effect_preset_name(EffectTarget::Channel(0), 0),
+            Some("Tight Drum Gate")
+        );
+        assert_eq!(session.effect_preset_name(EffectTarget::Bus(1), 0), None);
     }
 }

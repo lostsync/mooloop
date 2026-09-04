@@ -139,9 +139,8 @@ pub enum LoadTarget {
     Kit,
     Channel,
     Generator,
-    /// One rack row of the chain the device rack is pointed at.
-    Effect { slot: u8 },
 }
+
 
 pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem> {
     let mut report = mooloop_project::load_bundle(path)?;

@@ -817,7 +817,11 @@ fn effect_presets_of_kind(
         .filter(move |preset| preset.kind == PresetKind::Effect(kind))
 }
 
-fn effect_slot_row(slot: &EffectSlotState, presets: &[PresetSummary]) -> EffectSlotRow {
+fn effect_slot_row(
+    slot: &EffectSlotState,
+    presets: &[PresetSummary],
+    preset_name: Option<&str>,
+) -> EffectSlotRow {
     let kind = slot.kind();
     let preset_options: Vec<slint::SharedString> = effect_presets_of_kind(presets, kind)
         .map(preset_menu_label)
@@ -868,6 +872,7 @@ fn effect_slot_row(slot: &EffectSlotState, presets: &[PresetSummary]) -> EffectS
         kind: effect_kind_index(kind),
         units: effect_kind_units(kind),
         preset_options: ModelRc::from(Rc::new(VecModel::from(preset_options))),
+        preset_name: preset_name.unwrap_or_default().into(),
         bypassed: slot.bypassed,
         p0: p[0],
         p1: p[1],
@@ -2038,7 +2043,12 @@ impl UiState {
         if let Some(effect) = self.session.effect_chain().and_then(|chain| chain.get(slot)) {
             self.effect_slot_model.set_row_data(
                 slot,
-                effect_slot_row(effect, &self.session.effect_presets),
+                effect_slot_row(
+                    effect,
+                    &self.session.effect_presets,
+                    self.session
+                        .effect_preset_name(self.session.effect_target, slot as u8),
+                ),
             );
         }
     }
@@ -2087,7 +2097,14 @@ impl UiState {
                         .iter()
                         .enumerate()
                         .map(|(slot, effect)| {
-                            let mut row = effect_slot_row(effect, &self.session.effect_presets);
+                            let mut row = effect_slot_row(
+                                effect,
+                                &self.session.effect_presets,
+                                self.session.effect_preset_name(
+                                    EffectTarget::Channel(channel),
+                                    slot as u8,
+                                ),
+                            );
                             let descriptors = effect.kind().descriptors();
                             row.modulation_depths =
                                 self.destination_depths(armed, descriptors, |param| {
@@ -2117,15 +2134,25 @@ impl UiState {
                         .collect()
                 })
                 .unwrap_or_default(),
-            _ => self
-                .session.effect_chain()
-                .map(|effects| {
-                    effects
-                        .iter()
-                        .map(|effect| effect_slot_row(effect, &self.session.effect_presets))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            _ => {
+                let target = self.session.effect_target;
+                self.session
+                    .effect_chain()
+                    .map(|effects| {
+                        effects
+                            .iter()
+                            .enumerate()
+                            .map(|(slot, effect)| {
+                                effect_slot_row(
+                                    effect,
+                                    &self.session.effect_presets,
+                                    self.session.effect_preset_name(target, slot as u8),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
         };
         self.effect_slot_model.set_vec(rows);
     }
@@ -3521,78 +3548,6 @@ impl AppUi {
             }
         }
 
-        // --- Effect presets: one rack row, loaded into the row it was
-        // picked from. The index names an entry of that row's kind, in the
-        // order `effect_presets_of_kind` lists them. ---
-        {
-            let st = state.clone();
-            let tx = document_tx.clone();
-            let weak = window.as_weak();
-            window.on_effect_preset_selected(move |slot, index| {
-                let (Ok(slot), Ok(index)) = (u8::try_from(slot), usize::try_from(index)) else {
-                    return;
-                };
-                let Some(path) = ({
-                    let st = st.borrow();
-                    st.session
-                        .effect_chain()
-                        .and_then(|chain| chain.get(slot as usize))
-                        .map(EffectSlotState::kind)
-                        .and_then(|kind| {
-                            effect_presets_of_kind(&st.session.effect_presets, kind)
-                                .nth(index)
-                                .map(|preset| preset.path.clone())
-                        })
-                }) else {
-                    return;
-                };
-                if let Some(window) = weak.upgrade() {
-                    window.set_document_busy(true);
-                    window.set_status_message("Loading effect preset...".into());
-                }
-                let tx = tx.clone();
-                std::thread::spawn(move || {
-                    let result = resolve_document(&path)
-                        .map(|document| DocumentResult::Loaded {
-                            path,
-                            target: LoadTarget::Effect { slot },
-                            document,
-                        })
-                        .unwrap_or_else(|problem| DocumentResult::Failed {
-                            action: "open this preset",
-                            problem,
-                        });
-                    let _ = tx.send(result);
-                });
-            });
-        }
-
-        {
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_save_effect_preset_requested(move |slot| {
-                let Ok(slot) = u8::try_from(slot) else {
-                    return;
-                };
-                let mut st = st.borrow_mut();
-                let target = st.session.effect_target;
-                if st
-                    .session
-                    .effect_chain()
-                    .is_none_or(|chain| chain.get(slot as usize).is_none())
-                {
-                    return;
-                }
-                st.session.pending_preset_save = Some(PresetSaveTarget::Effect { target, slot });
-                if let Some(window) = weak.upgrade() {
-                    window.set_save_preset_title("Save Effect Preset".into());
-                    window.set_save_preset_name("".into());
-                    window.set_save_preset_category("".into());
-                    window.set_save_preset_open(true);
-                }
-            });
-        }
-
         // --- Presets: open the save dialog, scoped to generator or channel ---
         for (generator, title) in [
             (true, "Save Generator Preset"),
@@ -3649,7 +3604,15 @@ impl AppUi {
                     category: category.trim().to_string(),
                     tags: Vec::new(),
                 };
+                // The row now wears the name it was saved under, the same way
+                // it wears the name of a preset loaded into it.
+                if let PresetSaveTarget::Effect { target, slot } = source.target {
+                    let mut state = st.borrow_mut();
+                    state.session.set_effect_preset_name(target, slot, &name);
+                    state.sync_effects();
+                }
                 let file_stem = mooloop_project::sanitize_preset_name(&name);
+
                 let (dir, extension, label) = match source.target {
                     PresetSaveTarget::Generator => (
                         settings::generator_presets_dir(source.setup.kind()),
@@ -6325,6 +6288,112 @@ impl AppUi {
             });
         }
 
+        // --- Effect presets: one rack row, replaced in place ---
+        //
+        // Loaded on this thread and queued as an ordinary project edit,
+        // exactly like every other rack mutation. An effect bundle is a few
+        // hundred bytes of TOML that references no audio, so the document
+        // pipeline's worker thread bought nothing and cost the guarantee
+        // that matters here: that the row the click named is still the row
+        // the edit lands on.
+        {
+            let tx = project_edit_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_effect_preset_selected(move |slot, index| {
+                let Some(window) = weak.upgrade() else { return };
+                let (Ok(slot), Ok(index)) = (usize::try_from(slot), usize::try_from(index)) else {
+                    return;
+                };
+                // The index names an entry of this row's kind, in the order
+                // `effect_presets_of_kind` built the row's menu from.
+                let Some(chosen) = ({
+                    let st = st.borrow();
+                    st.session
+                        .effect_chain()
+                        .and_then(|chain| chain.get(slot))
+                        .map(EffectSlotState::kind)
+                        .and_then(|kind| {
+                            effect_presets_of_kind(&st.session.effect_presets, kind)
+                                .nth(index)
+                                .map(|preset| (preset.path.clone(), preset.name.clone()))
+                        })
+                }) else {
+                    return;
+                };
+                let (path, name) = chosen;
+                let effect = match mooloop_project::load_bundle(&path) {
+                    Ok(report) => match report.document {
+                        LoadedDocument::Effect(effect) => *effect,
+                        _ => {
+                            log_warn!("project", "{} is not an effect preset", path.display());
+                            window.set_status_message(
+                                "That bundle is not an effect preset".into(),
+                            );
+                            return;
+                        }
+                    },
+                    Err(error) => {
+                        log_warn!("project", "could not open {}: {error}", path.display());
+                        window.set_status_message(
+                            format!("Could not open this preset: {error}").into(),
+                        );
+                        return;
+                    }
+                };
+
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut state = st.borrow_mut();
+                    if state.session.load_effect_preset(slot, &effect, &name).is_none() {
+                        log_warn!(
+                            "project",
+                            "{name} is a {:?} preset; slot {slot} holds something else",
+                            effect.kind()
+                        );
+                        drop(state);
+                        window.set_status_message(
+                            "That preset is for a different kind of device".into(),
+                        );
+                        return;
+                    }
+                    state.sync_effects();
+                }
+                let after = project_snapshot(&st.borrow(), &window);
+                if queue_project_edit(&tx, before, after, "Effect preset loaded") {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
+
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_save_effect_preset_requested(move |slot| {
+                let Ok(slot) = u8::try_from(slot) else {
+                    return;
+                };
+                let mut st = st.borrow_mut();
+                let target = st.session.effect_target;
+                if st
+                    .session
+                    .effect_chain()
+                    .is_none_or(|chain| chain.get(slot as usize).is_none())
+                {
+                    return;
+                }
+                st.session.pending_preset_save = Some(PresetSaveTarget::Effect { target, slot });
+                if let Some(window) = weak.upgrade() {
+                    window.set_save_preset_title("Save Effect Preset".into());
+                    window.set_save_preset_name("".into());
+                    window.set_save_preset_category("".into());
+                    window.set_save_preset_open(true);
+                }
+            });
+        }
+
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
@@ -8708,10 +8777,6 @@ impl AppUi {
                                 .borrow()
                                 .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
                             let current_samples = st.borrow().session.sample_snapshots();
-                            // Set by the one load that is an edit of the
-                            // open song rather than a replacement of it, and
-                            // recorded once the engine has taken it.
-                            let mut history_entry: Option<HistoryEntry<ProjectSnapshot>> = None;
                             let merged = match (target, document) {
                                 (LoadTarget::Song, LoadedDocument::Song(project)) => {
                                     Some((project, loaded_samples, true))
@@ -8805,35 +8870,6 @@ impl AppUi {
                                     samples[selected] = loaded_samples.into_iter().next().flatten();
                                     Some((project, samples, false))
                                 }
-                                (LoadTarget::Effect { slot }, LoadedDocument::Effect(effect)) => {
-                                    // One rack row replaced, as one undoable
-                                    // edit like every other rack mutation. The
-                                    // session refuses a preset of another
-                                    // kind and leaves the rack alone.
-                                    let before = project_snapshot(&st.borrow(), &window);
-                                    let loaded = st
-                                        .borrow_mut()
-                                        .session
-                                        .load_effect_preset(slot as usize, &effect);
-                                    if loaded.is_none() {
-                                        window.set_status_message(
-                                            "That preset is for a different kind of device"
-                                                .into(),
-                                        );
-                                        None
-                                    } else {
-                                        st.borrow().sync_effects();
-                                        let after = project_snapshot(&st.borrow(), &window);
-                                        let project = after.project.clone();
-                                        history_entry = Some(HistoryEntry {
-                                            before,
-                                            after,
-                                            label: "Effect preset loaded",
-                                            gesture: None,
-                                        });
-                                        Some((project, current_samples, false))
-                                    }
-                                }
                                 _ => {
                                     window.set_status_message(
                                         "Selected bundle has the wrong document type".into(),
@@ -8861,11 +8897,6 @@ impl AppUi {
                                         "Audio engine is busy; project was not installed".into(),
                                     );
                                     continue;
-                                }
-                                if let Some(entry) = history_entry {
-                                    let mut commands = commands.borrow_mut();
-                                    commands.history.record(entry);
-                                    sync_command_availability(&window, &commands);
                                 }
                                 let mut state = st.borrow_mut();
                                 if is_song {

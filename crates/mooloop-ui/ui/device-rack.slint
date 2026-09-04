@@ -160,32 +160,6 @@ export component DeviceFrame inherits Rectangle {
                     ? "Load a preset for this device"
                     : "No presets saved for this device yet";
                 clicked => { preset-menu.show(); }
-
-                preset-menu := PopupWindow {
-                    x: 0px;
-                    y: parent.height + 2px;
-                    width: preset-content.preferred-width;
-                    height: preset-content.preferred-height;
-                    close-policy: close-on-click;
-                    Rectangle {
-                        background: Theme.surface;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        border-radius: Theme.radius-md;
-                        preset-content := VerticalLayout {
-                            padding: 4px;
-                            spacing: 1px;
-                            for option[i] in root.preset-options : EffectTypeRow {
-                                text: option;
-                                tooltip: "Load " + option;
-                                selected => {
-                                    preset-menu.close();
-                                    root.preset-selected(i);
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             Rectangle { vertical-stretch: 1; }
@@ -268,11 +242,75 @@ export component DeviceFrame inherits Rectangle {
         value-text: root.wet-dry-text;
         changed(v) => { root.wet-dry-changed(v); }
     }
+
+    // The preset list, scrolled rather than grown, because this one fills
+    // from disk: a user with forty saved filters must not get a menu taller
+    // than the window. That is why it mirrors `MenuField` in the toolbar
+    // instead of the insert menu above, whose entries are a fixed twelve.
+    //
+    // Placed beside the rail rather than over it, at the button's own y:
+    // three 24px buttons from a 2px inset with 2px between them.
+    preset-menu := PopupWindow {
+        x: DeviceRackMetrics.rail-width;
+        y: 80px;
+        width: 220px;
+        height: min(root.preset-options.length, 12) * 22px + 8px;
+        close-policy: close-on-click;
+
+        Rectangle {
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+
+            Flickable {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                viewport-height: root.preset-options.length * 22px;
+                VerticalLayout {
+                    for option[i] in root.preset-options : Rectangle {
+                        height: 22px;
+                        border-radius: Theme.radius-sm;
+                        background: row-touch.has-hover ? Theme.surface-active : transparent;
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            Text {
+                                text: option;
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        row-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            // Deliberately no `preset-menu.close()` before the
+                            // callback: `close-policy` already dismisses the
+                            // popup on this click, and closing it here first
+                            // tears down the repeater item whose handler is
+                            // still running, so the callback never lands.
+                            // `MenuField` in the toolbar leaves it to the
+                            // policy for the same reason.
+                            clicked => { root.preset-selected(i); }
+                        }
+
+                    }
+                }
+            }
+        }
+    }
 }
+
 
 export component DeviceHeader inherits Rectangle {
     in property <string> name;
     in property <string> kind;
+    // The preset these settings came from, shown beside the device name as
+    // "Filter | Telephone". Empty when the row has not been loaded from one.
+    in property <string> preset;
     in property <color> device-color: Theme.accent;
     in property <bool> enabled: true;
     // Right-edge role tag: "SOURCE" for generators, "FX" for effects.
@@ -308,6 +346,16 @@ export component DeviceHeader inherits Rectangle {
             font-size: 11px;
             vertical-alignment: center;
         }
+        if root.preset != "" : Text {
+            text: "| " + root.preset;
+            color: Theme.text-muted;
+            font-size: 10px;
+            vertical-alignment: center;
+            // A long preset name must not push the kind tag and the role off
+            // the end of a 220px rack unit.
+            max-width: 104px;
+            overflow: elide;
+        }
         Text {
             text: root.kind;
             color: Theme.text-faint;
@@ -336,6 +384,9 @@ export component EffectDeviceShell inherits Rectangle {
     in property <int> slot-index;
     in property <int> slot-count;
     in property <bool> bypassed;
+    // Forwarded to the header. Every face inherits this shell, so a face
+    // gets the preset label without knowing anything about presets.
+    in property <string> preset-name;
     callback reorder-requested(int);  // target slot index
 
     // Modulation state for every effect face, indexed by descriptor id so a
@@ -360,9 +411,11 @@ export component EffectDeviceShell inherits Rectangle {
         width: parent.width;
         name: root.name;
         kind: root.kind;
+        preset: root.preset-name;
         role: "FX";
         device-color: Theme.warning;
         enabled: !root.bypassed;
+
     }
 
     // Drag-to-reorder handle: covers the header left of the host frame's

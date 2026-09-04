@@ -27,7 +27,7 @@ use mooloop_core::{
 use mooloop_dsp::SampleData;
 use mooloop_project::PresetSummary;
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -127,6 +127,15 @@ pub struct Session {
     /// entries whose [`mooloop_project::PresetKind`] matches its own device;
     /// one flat list here means one scan per refresh rather than one per row.
     pub effect_presets: Vec<PresetSummary>,
+    /// The preset each rack row was last loaded from or saved as, so the
+    /// device header can say which one it is.
+    ///
+    /// Kept here rather than inside [`EffectSlotState`], which is `Copy` and
+    /// is exactly what a preset bundle stores: the label is how the row got
+    /// to these settings, not part of what the settings are. It follows the
+    /// row through a reorder and is dropped with a removal, like every other
+    /// thing on this side that names a slot.
+    pub effect_preset_names: HashMap<(EffectTarget, u8), String>,
     pub pending_preset_save: Option<PresetSaveTarget>,
 }
 
@@ -171,6 +180,7 @@ impl Default for Session {
             generator_presets: Vec::new(),
             channel_presets: Vec::new(),
             effect_presets: Vec::new(),
+            effect_preset_names: HashMap::new(),
             pending_preset_save: None,
         }
     }
@@ -706,7 +716,40 @@ impl Session {
                     .map(|slot| PresetSaveTarget::Effect { target, slot });
             }
         }
+        // And so does the label a row is wearing.
+        self.effect_preset_names = std::mem::take(&mut self.effect_preset_names)
+            .into_iter()
+            .filter_map(|((owner, slot), name)| {
+                if owner != target {
+                    return Some(((owner, slot), name));
+                }
+                remap.slot(slot).map(|slot| ((target, slot), name))
+            })
+            .collect();
     }
+
+    /// The preset `slot` of `target` was last loaded from or saved as.
+    ///
+    /// Deliberately kept through a knob move: the label says where these
+    /// settings came from, which stays true after they are adjusted. It does
+    /// not survive undo, which restores the project but not this map.
+    pub fn effect_preset_name(&self, target: EffectTarget, slot: u8) -> Option<&str> {
+        self.effect_preset_names
+            .get(&(target, slot))
+            .map(String::as_str)
+    }
+
+    /// Names `slot` of `target` after a preset, or clears it when `name` is
+    /// empty.
+    pub fn set_effect_preset_name(&mut self, target: EffectTarget, slot: u8, name: &str) {
+        if name.is_empty() {
+            self.effect_preset_names.remove(&(target, slot));
+        } else {
+            self.effect_preset_names
+                .insert((target, slot), name.to_string());
+        }
+    }
+
 
 
     pub fn modulation_depth_for(&self, source_slot: u8, destination: ParamAddr) -> f32 {

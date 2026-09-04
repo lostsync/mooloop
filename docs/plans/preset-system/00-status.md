@@ -106,13 +106,12 @@ Two things the run left that the plan did not anticipate:
   `MonoSynth`, `PolySynth`) are not worth a bank, and a sampler preset is
   nothing without a sample to ship with it. Every generator can already save
   and load presets; what they lack is content, and the content has owners.
-- **The rail's next/previous preset buttons stay disabled.** Stepping needs a
-
-  notion of "the preset this row currently holds", and the format has no
-  place for one — a row is its parameters, and the moment a knob moves it is
-  no preset at all. Matching the row's state against the list would give a
-  stateless answer, but that is a browser question and it waits with the
-  browser.
+- **The rail's next/previous preset buttons were removed rather than left
+  disabled.** Stepping needs a notion of "the preset this row currently
+  holds", and two controls that can never do anything are worse than none.
+  The header label added in the second pass below is that notion in its
+  weakest form — it says where the settings came from, not that they still
+  match — so stepping remains a browser question and waits with the browser.
 
 
 ## Why this was queued at all
@@ -214,3 +213,50 @@ rather than restated.
 - Sharing or importing preset packs.
 - Migrating the existing seeded ML-M1 bank. Those are ordinary user presets
   now; leaving them alone is a valid answer.
+
+## The first cut did not work — 2026-09-04, second pass
+
+Adam ran the branch and reported two things: **presets did not load when
+chosen from the menu**, and the loaded preset's name should show in the
+device header.
+
+The first was a design fault, not a typo, and it is worth recording because
+the shape of it is general. The load was routed through the *document*
+pipeline — resolve on a worker thread, hand back through the document
+channel, apply in the pump — copied from how a channel or generator preset
+loads. That pipeline exists because those documents carry samples that must
+be decoded off the UI thread. An effect preset is a few hundred bytes of TOML
+that references no audio at all, so the thread bought nothing, and the round
+trip cost the one guarantee a rack edit needs: that the row named by the
+click is still the row the edit lands on when it finally arrives.
+
+The load is now synchronous in the callback and queued as an ordinary
+`ProjectEdit`, which is what every other rack mutation already does — the
+same path as add, remove and reorder. `LoadTarget::Effect` is gone.
+
+**The lesson to carry:** an effect preset is a *rack edit*, not a document
+load. It was filed under the wrong verb, and everything that followed from
+that was wrong in the same direction.
+
+That was the reported symptom's most likely cause, and it was not the cause.
+The load path was genuinely wrong and is genuinely better now, but the menu
+was broken for a second, independent reason, and only a test found it.
+
+**The menu row closed the popup before invoking its callback.** Closing a
+`PopupWindow` destroys the repeater item whose handler is still running, so
+the call never landed: the menu opened, drew correctly, highlighted on hover,
+and did nothing. The insert menu two buttons up does the same close-then-call
+and works, because its rows are written out rather than repeated — a static
+child survives what a repeated one does not. `close-policy` already dismisses
+the popup on that click, so the explicit close bought nothing and cost
+everything.
+
+`crates/mooloop-ui/tests/effect_preset_menu.rs` drives the rail with real
+pointer events and keeps the insert menu beside it as a control. It was worth
+the build it cost: three rounds of reading the Rust — which was correct —
+found nothing, and the first pointer test failed immediately. **A control that
+opens a window is not verified until something has clicked it.**
+
+The list is also scrolled now, mirroring `MenuField`, because unlike the
+insert menu's fixed twelve entries this one fills from disk and would
+otherwise grow past the window.

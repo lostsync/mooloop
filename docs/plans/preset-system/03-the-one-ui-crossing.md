@@ -94,5 +94,29 @@ To try it:
    row 3 with the dialog open — the save lands on the device you opened it
    from, not on whatever is now in row 1.
 
-`→` and `←` stay disabled; `00-status.md` says why.
+The `→` and `←` placeholders were removed rather than left inert;
+`00-status.md` says why.
+
+## Second pass — 2026-09-04
+
+Adam found that presets did not load when chosen. The cause and the fix are
+in `00-status.md`; the short form is that the load was routed through the
+document pipeline, which exists to decode samples off the UI thread, and an
+effect preset has none. It is now a synchronous rack edit like add, remove
+and reorder.
+
+Two more properties crossed in the same pass, which is why they are here
+rather than in a step of their own: `preset-name` on `EffectSlotRow`, and
+`preset` on `DeviceHeader` by way of `preset-name` on `EffectDeviceShell`.
+A row that was loaded from — or saved as — a preset now reads
+`Filter | Telephone` in its header. The label follows the device through a
+reorder and dies with it, and it deliberately survives a knob move: it says
+where the settings came from, which stays true after they are adjusted.
+
+It does **not** survive undo. Undo restores the project, and the label lives
+beside the session rather than inside `EffectSlotState`, which is `Copy` and
+is exactly what the preset bundle stores. Putting it in the snapshot means
+threading it through `ProjectEdit`, which is more machinery than a label is
+worth; if it starts to grate, that is the fix.
+
 
