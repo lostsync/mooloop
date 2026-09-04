@@ -5,7 +5,7 @@
 
 use crate::audio_file;
 use crate::session::{PresetSaveTarget, Session};
-use mooloop_core::{log_error, log_warn, ChannelSetup, Project, SampleReference};
+use mooloop_core::{log_error, log_warn, ChannelSetup, EffectSlotState, Project, SampleReference};
 use mooloop_dsp::SampleData;
 use mooloop_engine::{ExportFormat, Mp3Bitrate, RenderScope, WavEncoding};
 use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, SaveReport};
@@ -139,6 +139,8 @@ pub enum LoadTarget {
     Kit,
     Channel,
     Generator,
+    /// One rack row of the chain the device rack is pointed at.
+    Effect { slot: u8 },
 }
 
 pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem> {
@@ -172,6 +174,8 @@ pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem
         LoadedDocument::Generator(source) => {
             vec![source.sampler_state().map(|sampler| sampler.sample.clone())]
         }
+        // An effect references no audio; there is nothing to decode.
+        LoadedDocument::Effect(_) => Vec::new(),
     };
     let mut samples = Vec::with_capacity(sample_references.len());
     for (channel, reference) in sample_references.into_iter().enumerate() {
@@ -260,6 +264,11 @@ impl ExportRequest {
 pub struct PresetSource {
     pub target: PresetSaveTarget,
     pub setup: ChannelSetup,
+    /// The rack row an effect save was started from, when `target` is one.
+    /// A bus row has no channel setup worth saving, so this is what an effect
+    /// save writes and `setup` is only what the selected channel happens to
+    /// be.
+    pub effect: Option<EffectSlotState>,
 }
 
 impl Session {
@@ -310,6 +319,18 @@ impl Session {
             .get(snapshot.selected_channel as usize)?
             .setup
             .clone();
-        Some(PresetSource { target, setup })
+        let effect = match target {
+            PresetSaveTarget::Effect {
+                target: chain,
+                slot,
+            } => Some(*self.effect_chain_of(chain)?.get(slot as usize)?),
+            _ => None,
+        };
+        Some(PresetSource {
+            target,
+            setup,
+            effect,
+        })
     }
+
 }

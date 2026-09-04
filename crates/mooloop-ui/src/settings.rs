@@ -1,4 +1,4 @@
-use mooloop_core::DeviceKind;
+use mooloop_core::{DeviceKind, EffectKind};
 use serde::{Deserialize, Serialize};
 use slint::Color;
 use std::fmt;
@@ -536,6 +536,18 @@ pub(crate) fn channel_presets_dir() -> PathBuf {
     config_dir().join("presets/channels")
 }
 
+/// Directory holding one subdirectory of effect presets per [`EffectKind`],
+/// e.g. `presets/effects/delay/`.
+///
+/// One directory a kind rather than one flat `presets/effects/`: a filter
+/// preset loaded into a reverb row is nonsense, and the directory layout is
+/// the cheapest place to make that impossible to offer.
+pub(crate) fn effect_presets_dir(kind: EffectKind) -> PathBuf {
+    config_dir()
+        .join("presets/effects")
+        .join(effect_kind_slug(kind))
+}
+
 /// The diagnostic log, when the preference to write one is on.
 ///
 /// Under the config directory rather than a state or cache directory: mooloop
@@ -567,6 +579,28 @@ fn kind_slug(kind: DeviceKind) -> &'static str {
         DeviceKind::Ds01 => "ds01",
     }
 }
+
+/// On-disk directory names for effect presets. These are frozen the moment
+/// anything ships against them, for the same reason `ml1` is above: renaming
+/// one would orphan every preset already saved under it. Plain snake_case of
+/// the kind, chosen to still be right in a year.
+fn effect_kind_slug(kind: EffectKind) -> &'static str {
+    match kind {
+        EffectKind::Eq => "eq",
+        EffectKind::Modulation => "modulation",
+        EffectKind::Filter => "filter",
+        EffectKind::Drive => "drive",
+        EffectKind::Bitcrush => "bitcrush",
+        EffectKind::Delay => "delay",
+        EffectKind::Reverb => "reverb",
+        EffectKind::Plate => "plate",
+        EffectKind::Gate => "gate",
+        EffectKind::Compressor => "compressor",
+        EffectKind::Limiter => "limiter",
+        EffectKind::Buffer => "buffer",
+    }
+}
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Rgb {

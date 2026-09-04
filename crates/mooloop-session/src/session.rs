@@ -32,10 +32,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Which preset kind a save dialog in flight is for.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresetSaveTarget {
     Generator,
     Channel,
+    /// One rack row of `target`'s chain. The slot is carried rather than
+    /// re-derived, and it follows the row through a reorder made while the
+    /// dialog is open (see `retarget_effect_slots`): a save that landed on
+    /// whichever device now sits in position 3 would be a bug that is very
+    /// hard to find later.
+    Effect { target: EffectTarget, slot: u8 },
 }
 
 pub struct Session {
@@ -117,6 +123,10 @@ pub struct Session {
     pub source_revision: u64,
     pub generator_presets: Vec<PresetSummary>,
     pub channel_presets: Vec<PresetSummary>,
+    /// Every effect preset on disk, across every kind. A rack row offers the
+    /// entries whose [`mooloop_project::PresetKind`] matches its own device;
+    /// one flat list here means one scan per refresh rather than one per row.
+    pub effect_presets: Vec<PresetSummary>,
     pub pending_preset_save: Option<PresetSaveTarget>,
 }
 
@@ -160,6 +170,7 @@ impl Default for Session {
             source_revision: 0,
             generator_presets: Vec::new(),
             channel_presets: Vec::new(),
+            effect_presets: Vec::new(),
             pending_preset_save: None,
         }
     }
@@ -634,11 +645,17 @@ impl Session {
 
     /// The chain the device rack is currently editing, channel or bus.
     pub fn effect_chain(&self) -> Option<&Vec<EffectSlotState>> {
-        match self.effect_target {
+        self.effect_chain_of(self.effect_target)
+    }
+
+    /// The chain of `target`, whether or not the rack is pointed at it.
+    pub fn effect_chain_of(&self, target: EffectTarget) -> Option<&Vec<EffectSlotState>> {
+        match target {
             EffectTarget::Channel(index) => self.channels.get(index as usize).map(|c| &c.effects),
             EffectTarget::Bus(index) => self.buses.get(index as usize).map(|b| &b.effects),
         }
     }
+
 
     pub fn effect_chain_mut(&mut self) -> Option<&mut Vec<EffectSlotState>> {
         match self.effect_target {
@@ -675,7 +692,22 @@ impl Session {
                 .get()
                 .and_then(|shown| remap.address(target, shown)),
         );
+        // A save dialog opened from a row names that row's device, not its
+        // position; it follows the device through the edit and is dropped
+        // with it.
+        if let Some(PresetSaveTarget::Effect {
+            target: pending_target,
+            slot,
+        }) = self.pending_preset_save
+        {
+            if pending_target == target {
+                self.pending_preset_save = remap
+                    .slot(slot)
+                    .map(|slot| PresetSaveTarget::Effect { target, slot });
+            }
+        }
     }
+
 
     pub fn modulation_depth_for(&self, source_slot: u8, destination: ParamAddr) -> f32 {
         self.channels
