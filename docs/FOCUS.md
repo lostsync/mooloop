@@ -166,11 +166,17 @@ loop ranges, autosave, crash recovery, and richer missing-sample relinking
 remain important. They do not interrupt this sequence unless one becomes
 necessary to preserve its work.
 
-**The preset system revisit.** `docs/plans/preset-system/` is written and
-queued, and its trigger is real: device-level presets were asked for and never
-delivered, and the ML-M1 bank already paid for it once by shipping as channel
-presets. It waits because DS-01's step 09 ships another factory bank, and doing
-the preset work first would be designing against one bank instead of two.
+**The preset system revisit.** `docs/plans/preset-system/` is written, and its
+opening decision was made on 2026-09-04: a preset's unit is a **device, with
+relative addressing**. Its steps 01 to 03 — the effect-level preset that was
+asked for and never delivered — are cleared to run, because an
+`EffectSlotState` carries no absolute addressing and so cannot be designed
+wrongly against one bank.
+
+What still waits for DS-01 is the rest: the browser, the taxonomy surface, and
+the factory-content mechanism. Those want two factory banks to design against,
+and DS-01's step 09 ships the second. Do not let the rack row's preset entry
+grow into a browser to avoid the wait.
 
 **Metronome, plugin hosting, MIDI configuration, and the graph editor.** None is
 required to prove the active instrument workflows.

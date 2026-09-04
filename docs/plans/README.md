@@ -33,7 +33,7 @@ These have steps but no `00-status.md`, because nothing has landed to record.
 | Plan | Why it is queued |
 | --- | --- |
 | `poly-v1-mono-mode/` | One step. The only thing blocking deletion of `DeviceKind::MonoSynth`, which is what lets `MlM1` take the plain name. The held-note stack it needs already exists. |
-| `preset-system/` | Device-level presets were asked for and never delivered. Waiting on DS-01's factory bank so the design answers to two banks rather than one. |
+| `preset-system/` | **Decision made 2026-09-04; steps 01-04 written and ready to run.** A preset's unit is a device, with relative addressing. Steps 01-03 build the effect-level preset that was asked for and never delivered: one rack row, no routes, no absolute addressing, with the manifest recording what the bundle contains so a later fragment format can supersede it cleanly. `PresetSummary` widens to a three-class `PresetKind`, which fixes the taxonomy-free flat list structurally without building a browser. The browser, the taxonomy surface, and the factory-content mechanism stay queued behind DS-01's second bank. |
 | `adopt-shared-biquad-in-eq/` | `effects/eq.rs:30` still declares its own `Biquad` after the shared one was promoted out of it. |
 | `auto-offline-idle-devices/` | `AudioNode` has no rest/tail contract, so every occupied slot and every channel strip runs every block regardless of whether it is doing anything. |
 | `extract-mid-level-dsp-blocks/` | The primitives-to-devices ladder has no middle rung on the DSP side, and `device-displays.slint` holds eight visualizers with no shared canvas. |

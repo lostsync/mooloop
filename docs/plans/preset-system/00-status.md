@@ -1,6 +1,35 @@
 # Preset system revisit — plan status
 
-Not started. Queued on its own merits, independent of `docs/NODE_MODEL.md`.
+**The opening decision is made. Steps 01 to 04 are written and ready to run
+unattended.** Queued on its own merits, independent of `docs/NODE_MODEL.md`.
+
+## The decision — Adam, 2026-09-04
+
+**The unit of a preset is a device, with relative addressing.** The specific
+form, not the general one, on this plan's own argument that it is not wasted
+work if a fragment format later supersedes it.
+
+What that means in practice, and why it can run ahead of `FOCUS.md`'s
+sequencing:
+
+- The gap being filled is the **effect-level preset**, one rack row. Generator
+  presets already cover the source slot; there is no effect preset at all,
+  and that is what was asked for.
+- An `EffectSlotState` contains no route and no `EffectTarget`, so it carries
+  **no absolute addressing to get wrong**. The rescoping problem cannot arise,
+  which is what makes this form safe to build before the fragment question is
+  settled.
+- The manifest records **what the bundle contains**, not just what it is, so a
+  later fragment reader can tell a one-row preset from a run of rows. That
+  record is the condition this plan set on going specific first, and step 01
+  treats it as non-optional.
+- `PresetSummary.kind` widens from `DeviceKind` to a three-class
+  `PresetKind`, which is the **structural half of problem 3** — the flat,
+  taxonomy-free list — fixed without building any browser.
+
+Still queued behind DS-01, and unchanged by this: the browser, the taxonomy
+surface, and the factory-content mechanism. Those want two factory banks to
+design against, and DS-01's step 09 ships the second.
 
 Unlike the node direction, this has a concrete trigger: Adam asked for
 device-level presets and an earlier agent delivered something else. The gap is
