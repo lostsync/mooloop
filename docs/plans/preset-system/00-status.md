@@ -1,7 +1,12 @@
 # Preset system revisit — plan status
 
-**The opening decision is made. Steps 01 to 04 are written and ready to run
-unattended.** Queued on its own merits, independent of `docs/NODE_MODEL.md`.
+**Steps 01 to 04 ran on 2026-09-04, on branch `feat/device-presets`.** The
+effect-level preset exists end to end: format, directory, session path, and
+the rack row's save and load controls. Every effect kind ships a factory bank
+of five to seven patches. What building it taught is under "What the run
+found" below; the listening pass is Adam's, and step 03 says what to click.
+
+Queued on its own merits, independent of `docs/NODE_MODEL.md`.
 
 ## The decision — Adam, 2026-09-04
 
@@ -30,6 +35,85 @@ sequencing:
 Still queued behind DS-01, and unchanged by this: the browser, the taxonomy
 surface, and the factory-content mechanism. Those want two factory banks to
 design against, and DS-01's step 09 ships the second.
+
+## What the run found — 2026-09-04
+
+Step 04 asked three questions of the specific form. The answers, from the
+code that now exists rather than from the plan:
+
+**The `contains` list bought exactly what was claimed, and no more.** An
+effect preset's manifest reads `contains = ["effect_params"]`, the loader
+refuses any entry it does not know before it parses the document, and
+`list_presets` leaves such a bundle out rather than offering it and then
+refusing the click. That is enough for a fragment reader to tell a one-row
+preset from a run of rows: a fragment will carry entries this reader has
+never seen (`effect_chain`, `mod_routes`, whatever the boundary contract
+names), and today's reader steps aside cleanly. It is *not* enough to
+describe a fragment — ordering and boundaries have no place in a flat list of
+content classes, and should not: they belong in the fragment's own document,
+with `contains` naming that a document of that shape is present. So the
+first real cost of going specific first is nil, provided the fragment format
+adds an entry rather than redefining `effect_params`. The generator and
+channel envelopes were left without a `contains` list, since nothing has
+ever written one for them and an empty list is accepted; a fragment format
+that wants to inspect those too will have to add it then.
+
+**Nothing in step 02 reached for a route.** The one place that wanted more
+than a row was the *pending save*, not the format: a dialog opened from row 1
+must still save row 1's device after the rack is reordered underneath it, so
+`PresetSaveTarget::Effect` rides the same `SlotRemap` routes and lanes ride.
+That is a position-versus-identity problem in the session, and the format
+never sees it. Loading, meanwhile, replaces the slot's state in place and
+leaves its identity alone, which has a consequence worth stating: **a preset
+loaded into a modulated row keeps its modulation.** The LFO aimed at the
+filter's cutoff is still aimed there after "Acid Squelch" lands, because the
+route names the slot and the slot did not move. The ML-M1 bank's complaint —
+a patch that is nothing without its modulation — does not recur for effects
+in the same shape, because an effect preset never claimed to carry the
+modulation in the first place; the row it lands on brings its own.
+
+**The directory-per-kind layout holds, and a fragment simply lives
+elsewhere.** `presets/effects/<kind>/` makes a mismatch impossible to offer,
+which is right for one row and right for nothing wider. A fragment spans
+kinds by definition, so it gets a directory of its own when it exists;
+nothing here has to move.
+
+**Plainly: a stepping stone, not a detour.** Every part of it — the
+`EffectSlotState` payload, the `contains` record, the `PresetKind` taxonomy,
+the per-kind directories, the session's slot-following save target — is
+something a fragment format would keep or extend, and none of it would be
+torn out.
+
+Two things the run left that the plan did not anticipate:
+
+- **The factory-content mechanism was extended after all.** Adam asked for a
+  factory bank for every device in the same instruction that ran these
+  steps, and that outranks step 02's "do not". So `seed_effect_bank` seeds
+  each kind's directory once behind a `.factory-v1` marker, the same shape as
+  the ML-M1 seeder and with the same limit: it cannot update a shipped patch.
+  The marker is per directory rather than global, so a kind added later gets
+  its bank on the next launch without touching the ones already written. The
+  banks are authored blind, as data in `mooloop_core::effect_factory`, and
+  the tests only prove they are in range, distinct from the defaults, and
+  survive the disk; whether they *sound* like their names is the listening
+  pass.
+- **Instrument banks were not authored here, on purpose.** "A factory bank
+  for them all" was read as every *effect* kind, because every instrument
+  that wants a bank already has a plan step for one that ends in a listening
+  pass: the ML-M1's shipped, ML-P8's is `poly-synth-v2/07`, DS-01's is
+  `drum-synth-v2/09`. Writing those blind here would pre-empt that work with
+  patches nobody had heard. The three superseded generators (`DrumSynth`,
+  `MonoSynth`, `PolySynth`) are not worth a bank, and a sampler preset is
+  nothing without a sample to ship with it. Every generator can already save
+  and load presets; what they lack is content, and the content has owners.
+- **The rail's next/previous preset buttons stay disabled.** Stepping needs a
+
+  notion of "the preset this row currently holds", and the format has no
+  place for one — a row is its parameters, and the moment a knob moves it is
+  no preset at all. Matching the row's state against the list would give a
+  stateless answer, but that is a browser question and it waits with the
+  browser.
+
 
 ## Why this was queued at all
 

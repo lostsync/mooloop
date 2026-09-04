@@ -9,6 +9,7 @@ pub mod buffer;
 pub mod channel;
 pub mod ds01;
 pub mod effect;
+pub mod effect_factory;
 pub mod gain;
 pub mod generator;
 pub mod log;
@@ -47,6 +48,7 @@ pub use mlp8::{
     SubSource, SubWave, SyncSource, MLP8_MAX_ROUTES, MLP8_MOD_DESTS, MLP8_ROUTE_PARAM_AMOUNT,
     MLP8_VOICES,
 };
+pub use effect_factory::EffectFactoryPatch;
 pub use mlm1_factory::FactoryPatch;
 pub use modulation::{
     step_value_index, strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform,

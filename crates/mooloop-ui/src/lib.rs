@@ -61,7 +61,10 @@ use mooloop_dsp::{
 use mooloop_engine::{
     EffectSlot, EngineHandle, ExportSpec, OfflineRenderer, PreviewCommand, StructuralCommand,
 };
-use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetSummary};
+use mooloop_project::{
+    AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetKind,
+    PresetSummary,
+};
 use mooloop_session::browser::{browser_display_name, has_playable_descendant, scan_browser_dir};
 use mooloop_session::channel::{
     apply_sample_references, copied_channel_name, ChannelClipboard, ChannelState,
@@ -803,8 +806,22 @@ fn effect_kind_from_index(index: i32) -> Option<EffectKind> {
 /// Project a slot into the flat, positional row the rack renders. Values are
 /// normalized through the kind's descriptor table in descriptor order, so a
 /// new effect kind needs a device face and no change here.
-fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
+/// The effect presets saved for `kind`, in the order a row's menu lists them
+/// and the order a menu index resolves back through.
+fn effect_presets_of_kind(
+    presets: &[PresetSummary],
+    kind: EffectKind,
+) -> impl Iterator<Item = &PresetSummary> {
+    presets
+        .iter()
+        .filter(move |preset| preset.kind == PresetKind::Effect(kind))
+}
+
+fn effect_slot_row(slot: &EffectSlotState, presets: &[PresetSummary]) -> EffectSlotRow {
     let kind = slot.kind();
+    let preset_options: Vec<slint::SharedString> = effect_presets_of_kind(presets, kind)
+        .map(preset_menu_label)
+        .collect();
     let mut p = [0.0f32; EFFECT_ROW_PARAMS];
     for (index, descriptor) in kind
         .descriptors()
@@ -850,6 +867,7 @@ fn effect_slot_row(slot: &EffectSlotState) -> EffectSlotRow {
     EffectSlotRow {
         kind: effect_kind_index(kind),
         units: effect_kind_units(kind),
+        preset_options: ModelRc::from(Rc::new(VecModel::from(preset_options))),
         bypassed: slot.bypassed,
         p0: p[0],
         p1: p[1],
@@ -2018,8 +2036,10 @@ impl UiState {
     /// Re-draws one device-rack row from the slot behind it.
     fn refresh_effect_row(&self, slot: usize) {
         if let Some(effect) = self.session.effect_chain().and_then(|chain| chain.get(slot)) {
-            self.effect_slot_model
-                .set_row_data(slot, effect_slot_row(effect));
+            self.effect_slot_model.set_row_data(
+                slot,
+                effect_slot_row(effect, &self.session.effect_presets),
+            );
         }
     }
 
@@ -2067,7 +2087,7 @@ impl UiState {
                         .iter()
                         .enumerate()
                         .map(|(slot, effect)| {
-                            let mut row = effect_slot_row(effect);
+                            let mut row = effect_slot_row(effect, &self.session.effect_presets);
                             let descriptors = effect.kind().descriptors();
                             row.modulation_depths =
                                 self.destination_depths(armed, descriptors, |param| {
@@ -2099,7 +2119,12 @@ impl UiState {
                 .unwrap_or_default(),
             _ => self
                 .session.effect_chain()
-                .map(|effects| effects.iter().map(effect_slot_row).collect())
+                .map(|effects| {
+                    effects
+                        .iter()
+                        .map(|effect| effect_slot_row(effect, &self.session.effect_presets))
+                        .collect()
+                })
                 .unwrap_or_default(),
         };
         self.effect_slot_model.set_vec(rows);
@@ -3001,6 +3026,18 @@ impl AppUi {
         if let Err(error) = mooloop_project::seed_mlm1_bank(&settings::channel_presets_dir()) {
             log_warn!("app", "could not write the ML-M1 factory bank: {error}");
         }
+        // The effect banks, one directory a kind, on the same terms.
+        for kind in EffectKind::ALL {
+            if let Err(error) =
+                mooloop_project::seed_effect_bank(&settings::effect_presets_dir(kind), kind)
+            {
+                log_warn!(
+                    "app",
+                    "could not write the {} factory bank: {error}",
+                    kind.label()
+                );
+            }
+        }
 
         // --- Transport initial state ---
         window.set_bpm(INITIAL_BPM);
@@ -3484,6 +3521,78 @@ impl AppUi {
             }
         }
 
+        // --- Effect presets: one rack row, loaded into the row it was
+        // picked from. The index names an entry of that row's kind, in the
+        // order `effect_presets_of_kind` lists them. ---
+        {
+            let st = state.clone();
+            let tx = document_tx.clone();
+            let weak = window.as_weak();
+            window.on_effect_preset_selected(move |slot, index| {
+                let (Ok(slot), Ok(index)) = (u8::try_from(slot), usize::try_from(index)) else {
+                    return;
+                };
+                let Some(path) = ({
+                    let st = st.borrow();
+                    st.session
+                        .effect_chain()
+                        .and_then(|chain| chain.get(slot as usize))
+                        .map(EffectSlotState::kind)
+                        .and_then(|kind| {
+                            effect_presets_of_kind(&st.session.effect_presets, kind)
+                                .nth(index)
+                                .map(|preset| preset.path.clone())
+                        })
+                }) else {
+                    return;
+                };
+                if let Some(window) = weak.upgrade() {
+                    window.set_document_busy(true);
+                    window.set_status_message("Loading effect preset...".into());
+                }
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let result = resolve_document(&path)
+                        .map(|document| DocumentResult::Loaded {
+                            path,
+                            target: LoadTarget::Effect { slot },
+                            document,
+                        })
+                        .unwrap_or_else(|problem| DocumentResult::Failed {
+                            action: "open this preset",
+                            problem,
+                        });
+                    let _ = tx.send(result);
+                });
+            });
+        }
+
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_save_effect_preset_requested(move |slot| {
+                let Ok(slot) = u8::try_from(slot) else {
+                    return;
+                };
+                let mut st = st.borrow_mut();
+                let target = st.session.effect_target;
+                if st
+                    .session
+                    .effect_chain()
+                    .is_none_or(|chain| chain.get(slot as usize).is_none())
+                {
+                    return;
+                }
+                st.session.pending_preset_save = Some(PresetSaveTarget::Effect { target, slot });
+                if let Some(window) = weak.upgrade() {
+                    window.set_save_preset_title("Save Effect Preset".into());
+                    window.set_save_preset_name("".into());
+                    window.set_save_preset_category("".into());
+                    window.set_save_preset_open(true);
+                }
+            });
+        }
+
         // --- Presets: open the save dialog, scoped to generator or channel ---
         for (generator, title) in [
             (true, "Save Generator Preset"),
@@ -3552,6 +3661,16 @@ impl AppUi {
                         "mooloop-channel",
                         "Channel preset saved",
                     ),
+                    // The row's own kind picks the directory, so a delay
+                    // preset can only ever be offered to a delay row.
+                    PresetSaveTarget::Effect { .. } => match source.effect {
+                        Some(effect) => (
+                            settings::effect_presets_dir(effect.kind()),
+                            "mooloop-effect",
+                            "Effect preset saved",
+                        ),
+                        None => return,
+                    },
                 };
                 let path = dir.join(format!("{file_stem}.{extension}"));
                 window.set_document_busy(true);
@@ -3571,6 +3690,15 @@ impl AppUi {
                             info,
                             AssetMode::Embedded,
                         ),
+                        PresetSaveTarget::Effect { .. } => match source.effect {
+                            Some(effect) => mooloop_project::save_effect_preset(
+                                &path,
+                                &effect,
+                                info,
+                                AssetMode::Embedded,
+                            ),
+                            None => return,
+                        },
                     };
                     let result = result
                         .map(|report| DocumentResult::SavedPreset { label, report })
@@ -8580,6 +8708,10 @@ impl AppUi {
                                 .borrow()
                                 .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
                             let current_samples = st.borrow().session.sample_snapshots();
+                            // Set by the one load that is an edit of the
+                            // open song rather than a replacement of it, and
+                            // recorded once the engine has taken it.
+                            let mut history_entry: Option<HistoryEntry<ProjectSnapshot>> = None;
                             let merged = match (target, document) {
                                 (LoadTarget::Song, LoadedDocument::Song(project)) => {
                                     Some((project, loaded_samples, true))
@@ -8673,6 +8805,35 @@ impl AppUi {
                                     samples[selected] = loaded_samples.into_iter().next().flatten();
                                     Some((project, samples, false))
                                 }
+                                (LoadTarget::Effect { slot }, LoadedDocument::Effect(effect)) => {
+                                    // One rack row replaced, as one undoable
+                                    // edit like every other rack mutation. The
+                                    // session refuses a preset of another
+                                    // kind and leaves the rack alone.
+                                    let before = project_snapshot(&st.borrow(), &window);
+                                    let loaded = st
+                                        .borrow_mut()
+                                        .session
+                                        .load_effect_preset(slot as usize, &effect);
+                                    if loaded.is_none() {
+                                        window.set_status_message(
+                                            "That preset is for a different kind of device"
+                                                .into(),
+                                        );
+                                        None
+                                    } else {
+                                        st.borrow().sync_effects();
+                                        let after = project_snapshot(&st.borrow(), &window);
+                                        let project = after.project.clone();
+                                        history_entry = Some(HistoryEntry {
+                                            before,
+                                            after,
+                                            label: "Effect preset loaded",
+                                            gesture: None,
+                                        });
+                                        Some((project, current_samples, false))
+                                    }
+                                }
                                 _ => {
                                     window.set_status_message(
                                         "Selected bundle has the wrong document type".into(),
@@ -8700,6 +8861,11 @@ impl AppUi {
                                         "Audio engine is busy; project was not installed".into(),
                                     );
                                     continue;
+                                }
+                                if let Some(entry) = history_entry {
+                                    let mut commands = commands.borrow_mut();
+                                    commands.history.record(entry);
+                                    sync_command_availability(&window, &commands);
                                 }
                                 let mut state = st.borrow_mut();
                                 if is_song {
@@ -9433,15 +9599,24 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
     };
     let generator_presets = mooloop_project::list_presets(&settings::generator_presets_dir(kind));
     let channel_presets = mooloop_project::list_presets(&settings::channel_presets_dir());
+    // Every kind's directory in one scan, kept flat: each rack row filters
+    // the list down to its own kind when its row is built.
+    let effect_presets: Vec<PresetSummary> = EffectKind::ALL
+        .iter()
+        .flat_map(|kind| mooloop_project::list_presets(&settings::effect_presets_dir(*kind)))
+        .collect();
     {
         let mut st = state.borrow_mut();
         st.session.generator_presets = generator_presets;
         st.session.channel_presets = channel_presets;
+        st.session.effect_presets = effect_presets;
     }
     let st = state.borrow();
     st.sync_generator_preset_menu(window);
     st.sync_channel_preset_menu(window);
+    st.sync_effects();
 }
+
 
 /// Hand one channel's audio and slice map to the engine.
 ///

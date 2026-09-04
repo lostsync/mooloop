@@ -61,7 +61,9 @@ Alphabetical by model name, then by harness.
   the UI and engine sides, so modulation and automation follow a moved
   effect and die with a removed one; channel delete/paste renumber every
   channel-scoped address; effect add/move/remove became undoable; the
-  integrity pass repairs stranded and dangling addresses.
+  integrity pass repairs stranded and dangling addresses. Then the preset
+  system's steps 01-04: the effect-level preset end to end, with a factory
+  bank for every effect kind.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21

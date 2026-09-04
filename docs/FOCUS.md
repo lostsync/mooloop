@@ -173,17 +173,20 @@ loop ranges, autosave, crash recovery, and richer missing-sample relinking
 remain important. They do not interrupt this sequence unless one becomes
 necessary to preserve its work.
 
-**The preset system revisit.** `docs/plans/preset-system/` is written, and its
-opening decision was made on 2026-09-04: a preset's unit is a **device, with
-relative addressing**. Its steps 01 to 03 — the effect-level preset that was
-asked for and never delivered — are cleared to run, because an
-`EffectSlotState` carries no absolute addressing and so cannot be designed
-wrongly against one bank.
+**The preset system revisit.** `docs/plans/preset-system/` decided on
+2026-09-04 that a preset's unit is a **device, with relative addressing**,
+and its steps 01 to 04 ran the same day: the effect-level preset exists end
+to end — format, `presets/effects/<kind>/`, the session path, and the rack
+row's save and load controls — and every effect kind ships a factory bank.
+`PresetSummary` now names three preset classes, which is the structural half
+of the taxonomy done. `00-status.md` records what building it taught; the
+short form is that the specific form was a stepping stone, not a detour.
 
-What still waits for DS-01 is the rest: the browser, the taxonomy surface, and
-the factory-content mechanism. Those want two factory banks to design against,
-and DS-01's step 09 ships the second. Do not let the rack row's preset entry
-grow into a browser to avoid the wait.
+What still waits for DS-01 is the rest: the browser, the taxonomy *surface*,
+and a factory-content mechanism that can update what it shipped. Those want
+two instrument banks to design against, and DS-01's step 09 ships the second.
+Do not let the rack row's preset menu grow into a browser to avoid the wait.
+
 
 **Metronome, plugin hosting, MIDI configuration, and the graph editor.** None is
 required to prove the active instrument workflows.

@@ -17,9 +17,11 @@ use std::fs;
 use std::path::Path;
 
 use mooloop_core::mlm1_factory::{self, FactoryPatch};
-use mooloop_core::ChannelSetup;
+use mooloop_core::{effect_factory, ChannelSetup, EffectKind};
 
-use crate::{sanitize_preset_name, save_channel_preset, AssetMode, Error, PresetInfo};
+use crate::{
+    sanitize_preset_name, save_channel_preset, save_effect_preset, AssetMode, Error, PresetInfo,
+};
 
 /// Written once the bank has been seeded. Its presence — not the presence of
 /// the patches themselves — is what suppresses seeding, so deleting a patch
@@ -79,7 +81,54 @@ pub fn seed_mlm1_bank(dir: &Path) -> Result<usize, Error> {
     Ok(written)
 }
 
+/// Bundle extension for an effect preset, matching what the save dialog
+/// writes.
+const EFFECT_BUNDLE_EXTENSION: &str = "mooloop-effect";
+
+/// Written once a kind's effect bank has been seeded into its directory. One
+/// marker per directory, so a kind added later gets its bank on the next
+/// launch without touching the ones already written.
+const EFFECT_MARKER_FILE: &str = ".factory-v1";
+
+/// Seeds the factory bank for `kind` into `dir`, which is that kind's own
+/// preset directory (`presets/effects/<kind>/`). The same contract as
+/// [`seed_mlm1_bank`]: once, marker-guarded, never over a preset of the same
+/// name, and the marker last so a partial run finishes next time.
+///
+/// Returns how many bundles were written.
+pub fn seed_effect_bank(dir: &Path, kind: EffectKind) -> Result<usize, Error> {
+    let marker = dir.join(EFFECT_MARKER_FILE);
+    if marker.exists() {
+        return Ok(0);
+    }
+    fs::create_dir_all(dir)?;
+
+    let mut written = 0;
+    for patch in effect_factory::patches(kind) {
+        let stem = sanitize_preset_name(patch.name);
+        let path = dir.join(format!("{stem}.{EFFECT_BUNDLE_EXTENSION}"));
+        if path.exists() {
+            continue;
+        }
+        save_effect_preset(
+            &path,
+            &patch.effect,
+            PresetInfo {
+                name: patch.name.to_string(),
+                category: patch.category.to_string(),
+                tags: patch.tags.iter().map(|tag| (*tag).to_string()).collect(),
+            },
+            AssetMode::Embedded,
+        )?;
+        written += 1;
+    }
+
+    fs::write(&marker, b"")?;
+    Ok(written)
+}
+
 fn channel_setup(patch: &FactoryPatch) -> ChannelSetup {
+
     let mut setup = ChannelSetup::mlm1_with_params(patch.name, patch.params);
     setup.modulation = patch.modulation;
     setup
@@ -274,5 +323,67 @@ mod tests {
         for route in setup.modulation.routes.iter().flatten() {
             assert_eq!(route.destination.scope, EffectTarget::Channel(5));
         }
+    }
+
+    // --- Effect banks --------------------------------------------------------
+
+    /// Every kind's bank makes the same trip the ML-M1 bank does: written,
+    /// listed under its own kind, and read back as the same row.
+    #[test]
+    fn every_effect_bank_seeds_lists_and_loads_back_unchanged() {
+        let temp = tempdir().unwrap();
+        for kind in EffectKind::ALL {
+            let dir = temp.path().join(format!("{kind:?}"));
+            let bank = mooloop_core::effect_factory::patches(kind);
+            assert_eq!(seed_effect_bank(&dir, kind).unwrap(), bank.len());
+
+            let listed = list_presets(&dir);
+            assert_eq!(listed.len(), bank.len(), "{kind:?} lists short");
+            for summary in &listed {
+                assert_eq!(summary.category, "Factory");
+                assert_eq!(summary.kind, PresetKind::Effect(kind));
+            }
+            for patch in bank {
+                let summary = listed
+                    .iter()
+                    .find(|found| found.name == patch.name)
+                    .unwrap_or_else(|| panic!("{} is missing from {kind:?}", patch.name));
+                let LoadedDocument::Effect(effect) = load_bundle(&summary.path).unwrap().document
+                else {
+                    panic!("{} did not load as an effect", patch.name);
+                };
+                assert_eq!(*effect, patch.effect, "{} changed on disk", patch.name);
+            }
+
+            assert_eq!(seed_effect_bank(&dir, kind).unwrap(), 0, "{kind:?} re-seeded");
+        }
+    }
+
+    #[test]
+    fn a_user_effect_preset_of_the_same_name_is_left_alone() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("delay");
+        fs::create_dir_all(&dir).unwrap();
+        let mut mine = mooloop_core::EffectSlotState::of_kind(EffectKind::Delay);
+        mine.wet_dry = 0.123;
+        let path = dir.join("Slapback.mooloop-effect");
+        save_effect_preset(
+            &path,
+            &mine,
+            PresetInfo {
+                name: "Slapback".into(),
+                category: "Mine".into(),
+                tags: Vec::new(),
+            },
+            AssetMode::Embedded,
+        )
+        .unwrap();
+
+        let bank = mooloop_core::effect_factory::patches(EffectKind::Delay).len();
+        assert_eq!(seed_effect_bank(&dir, EffectKind::Delay).unwrap(), bank - 1);
+        let LoadedDocument::Effect(reloaded) = load_bundle(&path).unwrap().document else {
+            panic!("the user's preset stopped being an effect");
+        };
+        assert_eq!(reloaded.wet_dry, 0.123);
     }
 }

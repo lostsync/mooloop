@@ -148,6 +148,9 @@ struct EffectSlotRow {
     // Rack units this device's face occupies. Devices with more working
     // controls get more width rather than compressing their controls.
     units: int,
+    // The presets saved for this row's kind, as menu labels, in the order
+    // the Rust side resolves an index back to a bundle.
+    preset-options: [string],
     bypassed: bool,
     p0: float,
     p1: float,
@@ -566,6 +569,9 @@ export component MainWindow inherits Window {
     callback add-effect-clicked(int, int);
     callback remove-effect-clicked(int);            // slot
     callback effect-bypass-toggled(int);            // slot
+    // Slot, then an index into that row's preset-options.
+    callback effect-preset-selected(int, int);
+    callback save-effect-preset-requested(int);     // slot
     callback effect-wet-dry-changed(int, float);
     callback effect-input-trim-changed(int, float);
     callback effect-output-trim-changed(int, float);
@@ -3069,6 +3075,11 @@ export component MainWindow inherits Window {
                                                     removal-enabled: true;
                                                     effect-kind-selected(kind) => { root.add-effect-clicked(kind, index); }
                                                     remove-requested => { root.remove-effect-clicked(index); }
+                                                    preset-enabled: true;
+                                                    preset-options: slot.preset-options;
+                                                    preset-selected(i) => { root.effect-preset-selected(index, i); }
+                                                    save-preset-requested => { root.save-effect-preset-requested(index); }
+
                                                     if slot.kind == 0 : FilterDeviceFace {
                                                         modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
                                                         modulation-depths: slot.modulation-depths;

@@ -66,3 +66,33 @@ real window, and the workspace is green.
 
 **The listening pass is Adam's and is not part of this step.** Leave the
 branch unmerged with a note saying what to click.
+
+## What was crossed, and what to click — 2026-09-04
+
+The single pass added, in `main.slint`: `preset-options: [string]` on
+`EffectSlotRow`, and two callbacks, `effect-preset-selected(slot, index)` and
+`save-effect-preset-requested(slot)`. `DeviceFrame` in `device-rack.slint`
+grew `preset-enabled`, `preset-options`, `preset-selected` and
+`save-preset-requested`; the source face leaves them off and keeps its own
+preset field in the editor header. No new panel: the two rail buttons that
+had been sitting disabled since the shell was drawn (`⌑` save, `▱` load) are
+what got wired.
+
+To try it:
+
+1. Insert any effect. On its **left rail**, `▱` opens the presets for that
+   kind — every kind ships a Factory bank, so the menu is never empty on a
+   fresh install.
+2. Pick one. The row's knobs move; **Undo** puts the previous settings back,
+   bypass and trims included.
+3. Turn a knob, press `⌑`, name it. It appears in that kind's menu and in
+   `presets/effects/<kind>/` under the config directory, ahead of the
+   Factory entries because an empty category sorts first.
+4. Open the rack on a **bus** and do the same: a bus row saves and loads the
+   same way.
+5. Open the save dialog from row 1, cancel it, and instead drag row 1 to
+   row 3 with the dialog open — the save lands on the device you opened it
+   from, not on whatever is now in row 1.
+
+`→` and `←` stay disabled; `00-status.md` says why.
+

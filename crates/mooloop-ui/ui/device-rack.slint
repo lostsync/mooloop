@@ -69,6 +69,14 @@ export component DeviceFrame inherits Rectangle {
     in property <bool> removal-enabled: false;
     callback effect-kind-selected(int);
     callback remove-requested();
+    // Per-device presets: the entries saved for this device's kind, offered
+    // from the left rail. Off for a shell whose device has no preset store
+    // of its own; the source face keeps its preset field in the editor
+    // header.
+    in property <bool> preset-enabled: false;
+    in property <[string]> preset-options;
+    callback preset-selected(int);   // index into preset-options
+    callback save-preset-requested();
     in property <bool> bypassed: false;
     in property <bool> bypass-enabled: false;
     callback bypass-toggled();
@@ -140,10 +148,46 @@ export component DeviceFrame inherits Rectangle {
                     }
                 }
             }
-            IconButton { text: "→"; size: 24px; enabled: false; tooltip: "Next preset"; }
-            IconButton { text: "←"; size: 24px; enabled: false; tooltip: "Previous preset"; }
-            IconButton { text: "⌑"; size: 24px; enabled: false; tooltip: "Save preset"; }
-            IconButton { text: "▱"; size: 24px; enabled: false; tooltip: "Load preset"; }
+            IconButton {
+                text: "⌑"; size: 24px; enabled: root.preset-enabled;
+                tooltip: "Save this device's settings as a preset";
+                clicked => { root.save-preset-requested(); }
+            }
+            IconButton {
+                text: "▱"; size: 24px;
+                enabled: root.preset-enabled && root.preset-options.length > 0;
+                tooltip: root.preset-options.length > 0
+                    ? "Load a preset for this device"
+                    : "No presets saved for this device yet";
+                clicked => { preset-menu.show(); }
+
+                preset-menu := PopupWindow {
+                    x: 0px;
+                    y: parent.height + 2px;
+                    width: preset-content.preferred-width;
+                    height: preset-content.preferred-height;
+                    close-policy: close-on-click;
+                    Rectangle {
+                        background: Theme.surface;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        border-radius: Theme.radius-md;
+                        preset-content := VerticalLayout {
+                            padding: 4px;
+                            spacing: 1px;
+                            for option[i] in root.preset-options : EffectTypeRow {
+                                text: option;
+                                tooltip: "Load " + option;
+                                selected => {
+                                    preset-menu.close();
+                                    root.preset-selected(i);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Rectangle { vertical-stretch: 1; }
             Text { text: "IN"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
             ChannelMeter {
