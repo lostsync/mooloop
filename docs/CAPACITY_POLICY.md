@@ -17,7 +17,7 @@ both the `u8` index space, and the render graph once reserved their product —
 65,536 effect slots, each with a 320-byte pending queue — so an empty project
 paid 42.8 MiB before it held anything. Boxing the slot state and materializing
 channels from the project took a sixteen-channel project to 1.1 MiB with both
-ceilings untouched (`docs/plans/modulator-capacity/00-status.md`).
+ceilings untouched (`docs/plans/archive/modulator-capacity/00-status.md`).
 
 The lesson is the one this policy already implies, stated the other way round:
 a large address space is fine, and preallocating the whole of it in advance is

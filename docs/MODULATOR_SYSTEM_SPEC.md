@@ -400,7 +400,7 @@ of growing a parallel system.
    inspector, and undo as the normal workflow.
 3. **Done** for durable references and the step/random/math modules; macro and
    note-derived sources are not built. See
-   `docs/plans/modulator-modules/00-status.md`.
+   `docs/plans/archive/modulator-modules/00-status.md`.
 4. Add declared generator/effect/Buffer outlets through the one-block control
    table. **Next.**
 5. After typed auxiliary graph edges and compensation exist, evaluate true
