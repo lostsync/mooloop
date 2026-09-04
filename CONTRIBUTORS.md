@@ -589,7 +589,10 @@ work session you can recall being part of, and don't stress over precision.
   31.1 active hours with 19.1 of them waiting on cargo. Sixty-one percent.
   And not where either of us guessed -- compile errors cost two minutes of
   a hundred and seventy-two, while 48 workspace-wide runs cost 166, most of
-  them passing. The plan follows the measurement.
+  them passing. The plan follows the measurement. The release-build numbers
+  landed last and re-ranked it: on the box a runnable binary is 12s away
+  after a Rust edit and 522s away after a `main.slint` one, so the build
+  machinery was never the problem and the shell's markup always was.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31

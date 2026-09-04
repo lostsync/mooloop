@@ -58,6 +58,27 @@ The per-run mean is what separates a good session from a bad one. Across all
 nineteen it ranges from 2 s to 117 s, and the sessions at the bottom of that
 range cost almost nothing.
 
+## The other half: getting to something you can hear
+
+Measured on the box, `cargo build --release -p mooloop-app`, which is what
+turns an edit into an application with sound coming out of it:
+
+| Edit | Rebuild |
+| --- | --- |
+| a Rust file | **12 s** |
+| a device face **split into its own crate** | **13 s** |
+| `main.slint` | **522 s — 8.7 minutes** |
+| cold, first of the day | 697 s |
+
+**Rust work is fine.** Twelve seconds from edit to runnable binary is not
+what anybody is complaining about, and it means step 02 is narrower than it
+looked: the build machinery is not the problem, the shell's markup is.
+
+**A `main.slint` edit costs nearly nine minutes to hear**, on the fast
+machine, and nothing in this plan changes that. Splitting device faces takes
+a face edit from that to thirteen seconds; it leaves `main.slint` exactly
+where it is. That is the sentence step 04 has to weigh.
+
 ## What this plan is, therefore
 
 Not a toolkit migration. Not a test-writing exercise. **A discipline about
@@ -68,10 +89,12 @@ cheaper.**
 | --- | --- | --- |
 | `01` | The verification ladder: rules for when to climb it, and a cheaper top rung | a day |
 | `02` | Get the build, and the run, off the laptop | a day |
-| `03` | Split the device faces actually being edited | two to four days, optional, probably last |
+| `03` | Split the device faces actually being edited | two to four days; the only thing that touches UI iteration |
 | `04` | Decide whether `egui-view-layer/` still has a case | an hour |
 
-Step 01 is expected to be most of the win and it changes no code.
+Step 01 is expected to be most of the win for Rust work, and it changes no
+code. Step 03 is the only one that touches UI work. They fix different
+sessions and neither fixes both.
 
 ## What this plan cannot fix
 
@@ -81,12 +104,18 @@ on the box, about four minutes to build on the laptop, and a laptop that
 during the session that wrote this could not complete the check at all
 because it had zero free memory and a full swap.
 
-Splitting device faces into their own crates is measured at **2 s** against
-31 s and is real, but it does nothing for `main.slint` or `controls.slint`,
-which stay at 30–56 s. If UI work turns out to be where the remaining time
-goes, this plan will not be enough -- and that is the finding that decides
-`docs/plans/egui-view-layer/`, and much better evidence for it than any
-benchmark.
+Splitting device faces into their own crates is measured at **2 s to check
+and 13 s to a runnable release binary**, against 31 s and 8.7 minutes. That
+is real and it is large. But it does nothing for `main.slint` or
+`controls.slint`, which stay at 30 s to check and 8.7 minutes to build.
+
+**So the ceiling is `main.slint` itself**, and no arrangement of Slint
+crates reaches it -- `slint-split-experiment.md` established that the
+generated module's cost is not an artefact of how mooloop invokes Slint. If
+the remaining time turns out to be going there, this plan cannot fix it, and
+that is the finding that decides `docs/plans/egui-view-layer/`. It is much
+better evidence than any benchmark, because it is measured against the work
+rather than against a probe.
 
 ## Evidence already on disk
 

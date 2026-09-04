@@ -14,10 +14,10 @@ free and 8 GB of zram swap fully consumed with an ordinary desktop running.
 was killed by `scripts/cargo-capped`'s cgroup three times in a row. The box
 has 62 GB and eight cores and does the same check in 69 s.
 
-`cargo build -p mooloop-ui` is about four minutes on the laptop. On the box
-a full `mooloop-app` rebuild after a `main.slint` edit is 56 s. If a cycle
-involves three of those, that is nine minutes of the forty-five, and it goes
-to under three.
+`cargo build -p mooloop-ui` is about four minutes on the laptop, and the
+laptop could not complete the *check* at all during the session that wrote
+this. Whatever the numbers, compiling this workspace on a 15 GB machine with
+a full swap is not a thing to keep doing.
 
 ## What exists already
 
@@ -29,12 +29,13 @@ than a thing to remember.
 
 ## What is missing
 
-- **The number.** `spikes/slint-units/release-loop.sh` on
-  `spike/slint-split-build` measures cold and warm release builds of
-  `mooloop-app` on the box, plus what a Rust-only edit costs against a
-  `.slint` edit. It was still running when this was written, after long
-  enough that the answer is itself interesting. Run it first; everything
-  below is shaped by it.
+**The number landed, and it narrows this step.** On the box, a release
+rebuild of `mooloop-app` costs **12 s after a Rust edit** and **522 s after
+a `main.slint` edit**. The build machinery is not what is slow. Do not spend
+a day tuning it.
+
+What is left here is small and worth doing anyway:
+
 - **A dev-profile equivalent.** `--release-bin` only builds release. The
   workspace's dev profile is deliberately tuned to be playable --
   `opt-level = 1` workspace-wide, with a comment in `Cargo.toml` saying the
