@@ -1,6 +1,6 @@
 # 05 — Decide whether `egui-view-layer/` still has a case
 
-Read `00-status.md` and whatever steps 01 to 04 actually recorded.
+Read `00-status.md` and whatever steps 01 to 03 actually recorded.
 
 This step is an hour of writing, and it is the point of the plan.
 
@@ -18,15 +18,17 @@ step forward still costs 45 minutes.
 
 ## How to answer it
 
-Re-run step 01's cycle -- the same change, or one the same size -- and put
-the two tables side by side. Then say plainly which of these happened:
+Re-run the transcript analysis from `00-status.md` against a session that
+happened after these changes, and put the two side by side. The number is
+**the share of active time spent waiting on cargo**, which was 61% across
+the nineteen sessions this plan was written from. Then say plainly which of
+these happened:
 
-- **The loop is fine now.** Write that in
+- **The loop is fine now** -- call it under 25%. Write that in
   `docs/plans/egui-view-layer/00-status.md`, move that directory to
   `archive/`, and record that the case was good and the problem it solved
   went away by other means. The spike branches stay as evidence.
-- **The loop is better but still bad, and the remaining cost is
-  `main.slint` and `controls.slint`.** That is the outcome the split cannot
+- **The loop is better but still bad, and what is left is `mooloop-ui`.** That is the outcome the split cannot
   reach, and it is the strongest possible argument for the port -- much
   stronger than any compile-time table, because it is measured against real
   work rather than against a benchmark. `egui-view-layer/`'s step 02 starts

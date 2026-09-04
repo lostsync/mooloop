@@ -1,9 +1,12 @@
 # 02 — Get the build off the laptop
 
-Read `01-measure-the-loop.md` first. Do not start this until its question 2
-is answered; if the builds are already happening on the box, skip to `03`.
+Read `00-status.md` and `01-the-verification-ladder.md` first.
 
-## Why this is first
+The transcript analysis shows the heavy verification already runs on the box
+through `scripts/antibox`, so this step is narrower than it first looked. It
+is about the other half: turning an edit into an application Adam can hear.
+
+## Why it still matters
 
 The laptop has 15 GB and, during the session that wrote this plan, had zero
 free and 8 GB of zram swap fully consumed with an ordinary desktop running.
@@ -24,8 +27,14 @@ box, strips it, and copies it to `./bin/mooloop-test`.
 which case this step is confirming that and making it the default rather
 than a thing to remember.
 
-## What is probably missing
+## What is missing
 
+- **The number.** `spikes/slint-units/release-loop.sh` on
+  `spike/slint-split-build` measures cold and warm release builds of
+  `mooloop-app` on the box, plus what a Rust-only edit costs against a
+  `.slint` edit. It was still running when this was written, after long
+  enough that the answer is itself interesting. Run it first; everything
+  below is shaped by it.
 - **A dev-profile equivalent.** `--release-bin` only builds release. The
   workspace's dev profile is deliberately tuned to be playable --
   `opt-level = 1` workspace-wide, with a comment in `Cargo.toml` saying the

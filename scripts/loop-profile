@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""How much of a working session is spent waiting for the compiler.
+
+    scripts/loop-profile                 # every session, summarised
+    scripts/loop-profile <session-id>    # one session, broken down by command
+
+Reads Claude Code's own transcripts under
+`~/.claude/projects/-home-lost-projects-mooloop/`. Written for
+`docs/plans/edit-loop/`, which exists because the first run of this said 61%.
+
+Active time counts only the gaps between events shorter than five minutes,
+so Adam being away from the keyboard is not counted as the loop being slow.
+That makes it an underestimate of the working day and a fair estimate of the
+share of it spent waiting, which is the number the plan is about.
+"""
+
+import json
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+TRANSCRIPTS = Path.home() / ".claude/projects/-home-lost-projects-mooloop"
+IDLE_SECONDS = 300
+
+
+def stamp(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def read(path):
+    """Every tool call in one transcript, paired with when its result came back."""
+    stamps, uses, results = [], {}, {}
+    for raw in path.open(encoding="utf-8"):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        when = record.get("timestamp")
+        if when:
+            stamps.append(stamp(when))
+        content = (record.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                uses[block["id"]] = (stamp(when), block.get("name"), block.get("input", {}))
+            elif block.get("type") == "tool_result":
+                results[block["tool_use_id"]] = (stamp(when), str(block.get("content")))
+    stamps.sort()
+    active = sum(
+        (b - a).total_seconds()
+        for a, b in zip(stamps, stamps[1:])
+        if (b - a).total_seconds() < IDLE_SECONDS
+    )
+    runs = []
+    for tool_id, (started, name, args) in uses.items():
+        if name != "Bash" or tool_id not in results:
+            continue
+        command = args.get("command", "")
+        if not re.search(r"\bcargo\b", command):
+            continue
+        finished, output = results[tool_id]
+        runs.append(((finished - started).total_seconds(), command, output))
+    return active, runs
+
+
+def classify(command, output):
+    verb = next(
+        (v for v in ("test", "clippy", "check", "build") if re.search(rf"\b{v}\b", command)),
+        "other",
+    )
+    packages = re.findall(r"-p\s+([\w-]+)", command)
+    target = ",".join(sorted(set(packages))) or (
+        "--workspace" if "--workspace" in command else "(all)"
+    )
+    where = "box" if "antibox" in command else "laptop"
+    if re.search(r"error\[E\d+\]|could not compile|cannot find|unresolved", output):
+        found = "did not compile"
+    elif re.search(r"test result: FAILED|panicked at", output):
+        found = "test failed"
+    else:
+        found = "passed"
+    return verb, target, where, found
+
+
+def one(session):
+    path = next(TRANSCRIPTS.glob(f"{session}*.jsonl"), None)
+    if path is None:
+        sys.exit(f"no transcript matching {session!r} in {TRANSCRIPTS}")
+    active, runs = read(path)
+    total = sum(seconds for seconds, _, _ in runs)
+    print(f"{path.stem}\n  active {active / 3600:.2f} h, cargo {total / 3600:.2f} h "
+          f"({total / active * 100:.0f}%), {len(runs)} runs\n")
+    buckets = {}
+    for seconds, command, output in runs:
+        key = classify(command, output)
+        count, elapsed = buckets.get(key, (0, 0.0))
+        buckets[key] = (count + 1, elapsed + seconds)
+    print(f"  {'verb':<7}{'target':<34}{'where':<8}{'found':<16}{'runs':>5}{'mean':>7}{'total':>9}")
+    for (verb, target, where, found), (count, elapsed) in sorted(
+        buckets.items(), key=lambda item: -item[1][1]
+    ):
+        print(f"  {verb:<7}{target:<34}{where:<8}{found:<16}"
+              f"{count:>5}{elapsed / count:>6.0f}s{elapsed / 60:>8.1f}m")
+
+
+def everything():
+    print(f"  {'session':<10}{'active':>9}{'cargo':>9}{'share':>7}{'runs':>7}{'mean':>7}")
+    active_total = cargo_total = runs_total = 0
+    for path in sorted(TRANSCRIPTS.glob("*.jsonl")):
+        active, runs = read(path)
+        if active < 1800:
+            continue
+        elapsed = sum(seconds for seconds, _, _ in runs)
+        active_total += active
+        cargo_total += elapsed
+        runs_total += len(runs)
+        print(f"  {path.stem[:8]:<10}{active / 3600:>8.2f}h{elapsed / 3600:>8.2f}h"
+              f"{elapsed / active * 100:>6.0f}%{len(runs):>7}"
+              f"{elapsed / max(len(runs), 1):>6.0f}s")
+    print(f"\n  {'TOTAL':<10}{active_total / 3600:>8.2f}h{cargo_total / 3600:>8.2f}h"
+          f"{cargo_total / active_total * 100:>6.0f}%{runs_total:>7}")
+    print("\n  The share is the plan's number. It was 61% when "
+          "`docs/plans/edit-loop/` was written.")
+
+
+if __name__ == "__main__":
+    one(sys.argv[1]) if len(sys.argv) > 1 else everything()

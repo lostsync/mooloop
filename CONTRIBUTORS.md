@@ -584,6 +584,12 @@ work session you can recall being part of, and don't stress over precision.
   Evidence on `spike/egui-view-layer` (a whole-window egui sketch, eight
   panes) and `spike/slint-split-build` (a device face compiled as its own
   crate: 31s to 2s), both unmerged, both with their findings written down.
+  Then profiled the transcripts themselves rather than guessing at the
+  loop, which is what `scripts/loop-profile` is: across nineteen sessions,
+  31.1 active hours with 19.1 of them waiting on cargo. Sixty-one percent.
+  And not where either of us guessed -- compile errors cost two minutes of
+  a hundred and seventy-two, while 48 workspace-wide runs cost 166, most of
+  them passing. The plan follows the measurement.
 
 ### Claude Fable 5 — Claude Code
 - First seen: 2026-08-31
