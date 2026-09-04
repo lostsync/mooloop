@@ -28,9 +28,32 @@ def stamp(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+# A backgrounded Bash call returns "running in background with ID: <id>"
+# immediately and reports its real exit much later, in a task notification. The
+# gap between tool_use and tool_result is therefore about zero, and a profiler
+# that measures only that gap scores a seven-minute build as free.
+LAUNCHED = re.compile(r"running in background with ID: (\w+)")
+FINISHED = re.compile(r"<task-id>(\w+)</task-id>")
+
+# An actual invocation, not the word in passing: `grep cargo out.log` is not a
+# build. `scripts/antibox --dev-bin` is one, and says "cargo" nowhere.
+INVOCATION = re.compile(
+    r"\bcargo\s+(?:\+\S+\s+)?(?:test|check|clippy|build|run|bench|nextest)\b"
+    r"|--(?:dev|release)-bin\b"
+)
+
+
 def read(path):
-    """Every tool call in one transcript, paired with when its result came back."""
+    """Every cargo run in one transcript, with how long it actually took.
+
+    Returns (active seconds, runs), where each run is
+    (seconds, command, output, blocking). `blocking` is False for a run that
+    was backgrounded, because that time overlapped other work instead of
+    stopping it -- which is a different thing to spend a working day on, and
+    worth counting separately rather than not at all.
+    """
     stamps, uses, results = [], {}, {}
+    launched, finished_at = {}, {}
     for raw in path.open(encoding="utf-8"):
         try:
             record = json.loads(raw)
@@ -39,6 +62,11 @@ def read(path):
         when = record.get("timestamp")
         if when:
             stamps.append(stamp(when))
+        # Completion notifications arrive outside the message content, as their
+        # own queued records, so match them on the raw line.
+        if when and "<task-id>" in raw:
+            for task in FINISHED.findall(raw):
+                finished_at.setdefault(task, stamp(when))
         content = (record.get("message") or {}).get("content")
         if not isinstance(content, list):
             continue
@@ -48,7 +76,11 @@ def read(path):
             if block.get("type") == "tool_use":
                 uses[block["id"]] = (stamp(when), block.get("name"), block.get("input", {}))
             elif block.get("type") == "tool_result":
-                results[block["tool_use_id"]] = (stamp(when), str(block.get("content")))
+                text = str(block.get("content"))
+                results[block["tool_use_id"]] = (stamp(when), text)
+                task = LAUNCHED.search(text)
+                if task:
+                    launched[block["tool_use_id"]] = task.group(1)
     stamps.sort()
     active = sum(
         (b - a).total_seconds()
@@ -60,18 +92,29 @@ def read(path):
         if name != "Bash" or tool_id not in results:
             continue
         command = args.get("command", "")
-        if not re.search(r"\bcargo\b", command):
+        if not INVOCATION.search(command):
             continue
-        finished, output = results[tool_id]
-        runs.append(((finished - started).total_seconds(), command, output))
+        returned, output = results[tool_id]
+        task = launched.get(tool_id)
+        if task is None:
+            runs.append(((returned - started).total_seconds(), command, output, True))
+        elif task in finished_at:
+            runs.append(((finished_at[task] - started).total_seconds(), command, output, False))
+        # A backgrounded run with no notification never finished inside the
+        # transcript; counting it as zero would be the bug this fixes, and
+        # guessing a duration would be worse.
     return active, runs
 
 
 def classify(command, output):
-    verb = next(
-        (v for v in ("test", "clippy", "check", "build") if re.search(rf"\b{v}\b", command)),
-        "other",
-    )
+    if re.search(r"--(?:dev|release)-bin\b", command):
+        verb = "build"
+    else:
+        verb = next(
+            (v for v in ("test", "clippy", "check", "build")
+             if re.search(rf"\b{v}\b", command)),
+            "other",
+        )
     packages = re.findall(r"-p\s+([\w-]+)", command)
     target = ",".join(sorted(set(packages))) or (
         "--workspace" if "--workspace" in command else "(all)"
@@ -91,40 +134,52 @@ def one(session):
     if path is None:
         sys.exit(f"no transcript matching {session!r} in {TRANSCRIPTS}")
     active, runs = read(path)
-    total = sum(seconds for seconds, _, _ in runs)
+    total = sum(seconds for seconds, _, _, _ in runs)
+    blocking = sum(seconds for seconds, _, _, waited in runs if waited)
+    overlapped = total - blocking
     print(f"{path.stem}\n  active {active / 3600:.2f} h, cargo {total / 3600:.2f} h "
-          f"({total / active * 100:.0f}%), {len(runs)} runs\n")
+          f"({total / active * 100:.0f}%), {len(runs)} runs")
+    print(f"  of that: {blocking / 3600:.2f} h blocking "
+          f"({blocking / active * 100:.0f}%), {overlapped / 3600:.2f} h backgrounded\n")
     buckets = {}
-    for seconds, command, output in runs:
-        key = classify(command, output)
+    for seconds, command, output, waited in runs:
+        key = classify(command, output) + ("blocking" if waited else "background",)
         count, elapsed = buckets.get(key, (0, 0.0))
         buckets[key] = (count + 1, elapsed + seconds)
-    print(f"  {'verb':<7}{'target':<34}{'where':<8}{'found':<16}{'runs':>5}{'mean':>7}{'total':>9}")
-    for (verb, target, where, found), (count, elapsed) in sorted(
+    print(f"  {'verb':<7}{'target':<30}{'where':<8}{'found':<15}{'wait':<11}"
+          f"{'runs':>5}{'mean':>7}{'total':>9}")
+    for (verb, target, where, found, waited), (count, elapsed) in sorted(
         buckets.items(), key=lambda item: -item[1][1]
     ):
-        print(f"  {verb:<7}{target:<34}{where:<8}{found:<16}"
+        print(f"  {verb:<7}{target:<30}{where:<8}{found:<15}{waited:<11}"
               f"{count:>5}{elapsed / count:>6.0f}s{elapsed / 60:>8.1f}m")
 
 
 def everything():
-    print(f"  {'session':<10}{'active':>9}{'cargo':>9}{'share':>7}{'runs':>7}{'mean':>7}")
-    active_total = cargo_total = runs_total = 0
+    print(f"  {'session':<10}{'active':>9}{'cargo':>9}{'block':>7}{'bg':>7}"
+          f"{'runs':>7}{'mean':>7}")
+    active_total = cargo_total = block_total = runs_total = 0
     for path in sorted(TRANSCRIPTS.glob("*.jsonl")):
         active, runs = read(path)
         if active < 1800:
             continue
-        elapsed = sum(seconds for seconds, _, _ in runs)
+        elapsed = sum(seconds for seconds, _, _, _ in runs)
+        blocking = sum(seconds for seconds, _, _, waited in runs if waited)
         active_total += active
         cargo_total += elapsed
+        block_total += blocking
         runs_total += len(runs)
         print(f"  {path.stem[:8]:<10}{active / 3600:>8.2f}h{elapsed / 3600:>8.2f}h"
-              f"{elapsed / active * 100:>6.0f}%{len(runs):>7}"
-              f"{elapsed / max(len(runs), 1):>6.0f}s")
+              f"{blocking / active * 100:>6.0f}%{(elapsed - blocking) / 3600:>6.2f}h"
+              f"{len(runs):>7}{elapsed / max(len(runs), 1):>6.0f}s")
     print(f"\n  {'TOTAL':<10}{active_total / 3600:>8.2f}h{cargo_total / 3600:>8.2f}h"
-          f"{cargo_total / active_total * 100:>6.0f}%{runs_total:>7}")
-    print("\n  The share is the plan's number. It was 61% when "
-          "`docs/plans/edit-loop/` was written.")
+          f"{block_total / active_total * 100:>6.0f}%"
+          f"{(cargo_total - block_total) / 3600:>6.2f}h{runs_total:>7}")
+    print("\n  `block` is the plan's number: the share of active time spent")
+    print("  *waiting*. It was 61% when `docs/plans/edit-loop/` was written, when")
+    print("  every run was a blocking one. `bg` is cargo time that overlapped")
+    print("  other work instead of stopping it, which is the same compiler and a")
+    print("  different working day.")
 
 
 if __name__ == "__main__":
