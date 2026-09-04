@@ -31,10 +31,16 @@ Still queued behind DS-01, and unchanged by this: the browser, the taxonomy
 surface, and the factory-content mechanism. Those want two factory banks to
 design against, and DS-01's step 09 ships the second.
 
+## Why this was queued at all
+
 Unlike the node direction, this has a concrete trigger: Adam asked for
 device-level presets and an earlier agent delivered something else. The gap is
 real, it has already cost one piece of work, and it will cost the next factory
 bank the same way.
+
+Everything below this line is the problem statement the decision was made
+from. It is unchanged, and it is still the reason the steps look the way they
+do.
 
 ## What exists today
 
@@ -107,15 +113,17 @@ a bare source", and both are wrong for the common case. The candidates:
 
 The third subsumes the others and is the only one that survives the node
 direction, but it is also the only one that needs a boundary contract to
-exist. A device preset can ship without one. **Whether to build the general
-form now or the specific form first is the decision this plan opens with, and
-it is Adam's.**
+exist. A device preset can ship without one.
 
-Worth noting: nothing forces that choice today. A device-level preset built
-with relative addressing and an explicit record of what it contains is not
-wasted work if a fragment format later supersedes it.
+Nothing forces that choice today, because a device-level preset built with
+relative addressing and an explicit record of what it contains is not wasted
+work if a fragment format later supersedes it.
 
-## Deliberately out of scope until the above is settled
+**Answered at the top of this file: the first, on exactly that reasoning.**
+Steps 01 to 04 build it, and step 04 is where the reasoning gets tested
+rather than restated.
+
+## Deliberately out of scope, decision or no
 
 - Preset browsing UI beyond fixing the flat list.
 - Tags, ratings, search.
