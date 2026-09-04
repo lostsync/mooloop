@@ -1,6 +1,6 @@
 # Audio Core Architecture
 
-Status: target architecture and migration contract, August 2026.
+Status: target architecture and migration contract, September 2026.
 
 This document defines the audio subsystem Mooloop is growing toward. It is
 not a proposal to become a general DAW, plugin host, or audio server. The goal
@@ -81,9 +81,11 @@ Each route joins a stable source or outlet reference to a stable `ParamAddr`
 destination through a bounded transform (depth, polarity, and later shaping).
 Source metadata declares value semantics, control rate, and latency; parameter
 metadata declares range, curve, and modulation eligibility. The current
-runtime may use fixed arrays and a small source taxonomy to retain predictable
-work, but those implementation capacities are not the persistent or product
-meaning of "four modulation slots."
+runtime uses fixed arrays and a bounded source taxonomy to retain predictable
+work -- eight module slots and sixteen routes a channel -- but those
+implementation capacities are not the persistent or product meaning of the
+number. Both are compile-time constants with a measured, linear price;
+`CAPACITY_POLICY.md` says why a ceiling is not the same as a reservation.
 
 At each declared control tick, the executor evaluates a source, applies each
 route transform, adds offsets to the destination's base value, and puts the
@@ -241,6 +243,8 @@ ownership queue.
 
 ## Migration Sequence
 
+Steps 1 through 4 have landed. Step 5 has not, and steps 6 and 7 depend on it.
+
 1. Move project construction out of the JACK callback. Prepare a complete
    render state on the control thread, swap it at a block boundary, and return
    the old state for deferred destruction.
@@ -251,7 +255,8 @@ ownership queue.
 4. Add node latency reporting and align effects' internal parallel paths,
    beginning with the oversampled drive.
 5. Introduce preallocated compensation delays and compile cumulative latency
-   for the existing mixer tree.
+   for the existing mixer tree. **Next, and blocking:** parallel sends,
+   sidechains, and limiter lookahead all wait on it.
 6. Generalize the render plan from one audio output edge per bus to typed audio
    and dependency edges. Add parallel sends, then auxiliary sidechain inputs.
 7. Route retained-audio buffers and explicit feedback through the same port,

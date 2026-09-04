@@ -1,6 +1,6 @@
 # Product Definition
 
-Status: working definition, August 2026.
+Status: working definition, September 2026.
 
 This document defines what mooloop is trying to become. It should be updated
 when product decisions change. It is not a claim that every described feature
@@ -215,19 +215,31 @@ These are firm enough to build against:
 ## Open Product Questions
 
 These should be answered by prototypes or current UI design, not guessed from
-old screenshots or personality notes:
+old screenshots or personality notes.
 
-- Is the channel buffer continuously rolling, explicitly recorded, or both?
-- Which tap points are essential: source, pre-insert, post-insert, group, or
-  master?
-- Does the initial buffer voice replace the source, layer with it, or expose
-  both as explicit monitor modes?
-- How many simultaneous buffer playback heads are musically necessary?
+Three were answered by building the Buffer device, and the answers are
+recorded here rather than left as questions:
+
+- **Continuously rolling.** The device writes whatever reaches its input, with
+  no record gesture and no transport dependency.
+- **The tap point is wherever the device is inserted.** That was the whole
+  reason to make it an insert rather than a fixed channel stage, and it means
+  "which tap points are essential" is not a question the engine has to answer.
+- **It replaces the source in its own chain position**, because at rest it is
+  a wire. Layering is what a second chain would be for, not a monitor mode.
+
+Still open:
+
+- How many simultaneous buffer playback heads are musically necessary? One
+  detached head plus the live one has been enough so far, but nothing has
+  pushed on it.
 - Which operations must be nondestructive, and which should deliberately
   modify working audio?
 - How much live performance behavior matters relative to composition and
   export?
-- When should MIDI input and output enter the roadmap?
+- When should MIDI input and output enter the roadmap? A decoded JACK port
+  exists and reaches nothing, which is the current answer by default rather
+  than by decision.
 
 ## Decision Precedence
 

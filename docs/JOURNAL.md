@@ -1,6 +1,6 @@
 # Mooloop — dev journal
 
-*Reconstructed from the commit log. Dates are derived from relative timestamps, so treat them as approximate; a few commits are out of chronological order in the log itself (rebase/cherry-pick noise), and I've placed them by content rather than by position.*
+*The early entries were reconstructed from the commit log; dates there are derived from relative timestamps, so treat them as approximate. A few commits are out of chronological order in the log itself (rebase/cherry-pick noise) and are placed by content rather than by position. From the modulation-grid entry onward it is kept live — a dated section per arc of work, not per commit.*
 
 ---
 
@@ -118,7 +118,7 @@ Last: the channel-settings save validator still checked volume against the old `
 
 Appearance prefs had been a single-purpose dialog; folding Audio settings into it as a second tab would have meant a second bespoke dialog shape. Rebuilt it as a general two-pane `PreferencesDialog` — a page nav list down the left, page content on the right — with Appearance as its first page (`76634ce`). JACK device controls landed as the second: driver select (JACK only, ALSA later), an output-device picker read from the live JACK port graph, buffer size, a read-only sample-rate readout, and auto-reconnect for when the port graph changes underneath the app. The JACK surface is its own Slint component rather than a driver-agnostic one, because JACK's client API has no sample-rate setter and buffer size is server-wide, not per-client — a future ALSA page is a sibling, not a rewrite, since the two drivers expose genuinely different controls (`35b4084`). Settled a few days of build/doc loose ends alongside it: portable Cargo target output, linker requirements documented, dev setup instructions trimmed (`4d36c04`, `9d94853`, `ee8a1fd`), and a later pass tightened the dialog's own layout now that it had two real pages to balance (`73aca0f`).
 
-Two of today's doc commits are process, not content: an `AGENTS.md` exception letting an untracked Markdown file under `docs/` be committed alongside doc work without asking each time (`fdfff4e`), and preserving a couple of Adam's own working notes — dockable-pane and step-shading ideas for `ENHANCEMENTS.md`, a `SHORTCUTS.md` stub — that had been sitting uncommitted (`37f46d3`). Also today: the journal's own do-not-edit guard came off, since keeping it updated live turned out to be fine (see the note at the top of this file — no commit hash, just Adam's call).
+Two of today's doc commits are process, not content: an `AGENTS.md` exception letting an untracked Markdown file under `docs/` be committed alongside doc work without asking each time (`fdfff4e`), and preserving a couple of Adam's own working notes — dockable-pane and step-shading ideas for `ENHANCEMENTS.md`, a `SHORTCUTS.md` stub (since consumed, now `docs/archive/SHORTCUTS.md`) — that had been sitting uncommitted (`37f46d3`). Also today: the journal's own do-not-edit guard came off, since keeping it updated live turned out to be fine (see the note at the top of this file — no commit hash, just Adam's call).
 
 The effect suite grew three devices in one day. Seven-band parametric EQ: peak/shelf/pass biquads per band plus dedicated high/low-pass filters, sample-timed coefficient updates, no allocation in `process` (`4a7cf6f`). Then a compact allocation-free `SpectrumAnalyzer` — a fixed Goertzel bank over a mono sum, 48 log-spaced bands, computed once per 2048-sample hop and only when a device display subscribes — so a device host can show a spectrum without ever handing PCM to the UI thread (`f6ffc1a`). Convolution reverb followed: an IR player first, a room generator second, meeting at one `StereoIr` boundary so a future WAV/AIFF loader is just another producer of the same type. Rooms combine a small image-source early-reflection model (shape controls reflection density) with a material-filtered deterministic diffuse tail; the direct sound is deliberately absent since the host already owns dry/wet blending (`385a765`). Preparing a room's FFT partitions runs off the audio thread on a worker that coalesces control edits for 80ms, and the resulting prepared resource carries a fingerprint so a slot refuses a stale swap — a generic mechanism meant to serve future resource-backed devices, not just reverb (`16c7b48`). And a unified modulation effect: chorus, flange, ensemble, and ADT as policies over one short fractional stereo delay line, plus a phaser sharing the same LFO and parameter contract even though its all-pass cascade is a different signal path underneath — one device rather than four, because a user thinks of them as one knob-turn apart (`76c8730`).
 
@@ -258,6 +258,12 @@ One thing the plan asked for and did not get: a per-route polarity control. Pola
 
 **Constraints get relaxed as soon as they're cheap.** The lower-numbered bus rule lasted about a day, and removing it took a topological sort over fixed-size arrays. Worth asking of the remaining rules which ones are still load-bearing.
 
+**A ceiling costs nothing; dimensioning by it costs everything.** Nothing about `MAX_CHANNELS` or `MAX_EFFECTS_PER_CHANNEL` being 256 was wrong. Reserving their *product* before a project existed was, and it cost 42.8 MiB that no individual definition made visible — the number only appeared when they were multiplied. The fix left both ceilings exactly where they were.
+
+**Names are the thing that has to be reachable, not values.** `Osc.phase` was private with no reset and no wrap event, which is why `COMPOSABLE_DEVICE_UNITS.md` used it as its live counter-example. Hard sync for the ML-P8 needed all three, and adding them was mechanical *because the value already existed as a field*. The habit is cheap precisely when it looks unnecessary.
+
+**A position is not an identity.** Routes and lanes named a device by its slot and a channel by its index, and every structural edit silently repointed them. Stating each edit once as a permutation and running it over everything that stores a position is the fix; so is minting durable ids for modules so a grid reorder means nothing at all.
+
 **Deferrals are recorded with reasons.** Limiter lookahead waits on plugin-delay compensation. `ParamAddr`, inter-channel data and audio sidechain are named as deliberate absences. The README states what the mixer deliberately is *not* yet.
 
 **A comment that states a fact can outlive the reason for it.** The sampler's inline SVF and ADSR carried comments justifying why they weren't the shared primitives; asked to actually attempt the merge and measure rather than trust the comments, both conclusions held but for different, sharper reasons than what was written (`5d82121`). Worth periodically re-deriving *why*, not just re-reading it.
@@ -276,7 +282,7 @@ One thing the plan asked for and did not get: a per-route polarity control. Pola
 
 ## Open threads
 
-Refreshed 2026-09-02. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.
+Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.
 
 - The drum synth is the only generator that cannot be modulated, and the fix is a new instrument rather than a table. `docs/plans/drum-synth-v2/` is approved and unbuilt.
 - ML-P8 stops after step 04. Unison, chorus, and the published outlets are open. Step 06's audio outlets are blocked on typed auxiliary audio edges rather than merely unbuilt, and step 07 is a listening pass that needs Adam's ear.
@@ -287,3 +293,7 @@ Refreshed 2026-09-02. Four of the six threads listed here in August are closed: 
 - No plugin-delay compensation, so no lookahead anywhere.
 - There is no effect-level or device-level preset, only generator and whole-channel. The ML-M1 bank already paid for this once by shipping as channel presets.
 - `PolylinePlot` does not exist, and the workaround for it is hand-rolled 17 times across 8 files.
+- MIDI input is wired to nothing: there is a JACK port, a decoder, and a `BufferMidiMap` the render state will apply, with no caller installing one and no controls on the MIDI preferences page.
+- The Buffer's product question is untested. The device is built and is an ordinary insert; whether routing a source into it and sequencing the result beats bouncing to a sample is what `docs/FOCUS.md` step 3 decides.
+- The tooltip audit is unfinished: the status bar exists and about forty sites feed it, but deciding per control which half of the rule it falls under has not happened, and the sampler face is not plumbed in at all.
+- The v1 mono synth cannot be deleted until its channels have somewhere to land, which is the poly mono/legato toggle in `docs/plans/poly-v1-mono-mode/`. Until then the picker lists both mono synths.

@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Need BP. Other filter modes would be
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Need BP. Other filter modes would be
 cool, e.g. Moog, etc. Needs poles or db/oct, a way to set slope. Note is
 shown in freq knob value but that should only be visible in the tooltip.
 Filter should have a sat/drive control."

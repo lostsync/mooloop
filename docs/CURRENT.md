@@ -19,11 +19,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   2-4 even hits), and Stretch (drag a step sideways to set note length). The
   whole run of steps shares one hit area, because a per-cell one cannot follow
   a drag past the cell the press landed in.
-- The complete 256-channel addressable bank. A new song starts with a lightly randomized four-channel
-  drum kit (kick, snare, closed hat, and open hat); creating another new song
-  generates a new variation. Channels can use the sampler, drum synth, v1 mono
-  synth, ML-M1, or poly synth and every rack row exposes mute, output volume, and
-  constant-power stereo pan.
+- The complete 256-channel addressable bank. A new song starts with a lightly
+  randomized four-channel drum kit (kick, snare, closed hat, and open hat);
+  creating another new song generates a new variation. Channels can use any of
+  six sources — the sampler, the drum synth, the v1 mono synth, the ML-M1, the
+  v1 poly synth, or the ML-P8 — and every rack row exposes mute, output
+  volume, and constant-power stereo pan.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.
@@ -90,15 +91,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   a full cell.
 - A sampler editor with waveform, WAV/AIFF/MP3/FLAC/Ogg Vorbis loading and
   mixed-format sibling navigation, trim, reverse, root note, coarse/fine tune,
-  loop region and mode, ADSR, low-pass
-  filter with envelope depth and resonance, drive, bit reduction, and rate
-  reduction. The filter runs its own ADSR, reached through a CURVE/ENV switch
+  loop region and mode, ADSR, low-pass filter with envelope depth and
+  resonance, drive, bit reduction, and rate reduction. The filter runs its own ADSR, reached through a CURVE/ENV switch
   on the Tone page's filter panel; a patch that never sets one follows the
-  amplitude envelope, which is what every project saved before it did. An Output trim in the page bar sets the patch's level ahead of
-  the channel's inserts; a sampler created today starts at -9 dB so a
-  normalized file peaks where the synths' default patches do, while projects
-  saved before the trim existed load at unity. Voice controls cover one-shot/gated playback, 1-16 voices,
-  restart/layer retriggering, and 16 cross-channel choke groups.
+  amplitude envelope, which is what every project saved before it did. An
+  Output trim in the page bar sets the patch's level ahead of the channel's
+  inserts; a sampler created today starts at -9 dB so a normalized file peaks
+  where the synths' default patches do, while projects saved before the trim
+  existed load at unity. Voice controls cover one-shot/gated playback, 1-16
+  voices, restart/layer retriggering, and 16 cross-channel choke groups.
 - A mixer sharing the work surface with the step grid, behind a Steps/Mixer
   toggle. It is a strip per bus - master first, then sixteen inserts - with a
   name plate, live stereo meter, fader, pan, mute, destination, and a count of
@@ -107,10 +108,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   gesture as a chain on one channel. Channels name their bus from a picker in
   their rack row, beside their other output controls.
 - A horizontal lower device rack with one fixed-height 3U source face followed
-  by a chainable effect chain (filter, drive, bitcrush, delay, gate,
-  compressor, and limiter; slots are added by kind from the rack's add slot,
-  bypassed or removed from their shared host header, and reordered by dragging
-  a header). Sampler, drum synth, v1 mono synth, ML-M1, and
+  by a chainable effect chain (slots are added by kind from the rack's add
+  slot, bypassed or removed from their shared host header, and reordered by
+  dragging a header). Sampler, drum synth, v1 mono synth, ML-M1, and
   poly synth faces share the same rack chrome and preserve their dimensions at
   narrow widths through horizontal scrolling. Sampler controls are divided
   into Sample, Voice, and Tone pages; the v1 mono controls into Osc,
@@ -149,7 +149,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   filter response geometry is reusable for LPF, BPF, and HPF modes.
 - A two-pane Preferences dialog with General, Audio, MIDI, Appearance, and
   Shortcuts pages; General persists developer mode and reveals the presently
-  empty Developer page. Appearance is seeded by three colors -- base (every
+  empty Developer page, and the MIDI page is a placeholder with no controls
+  on it yet. Appearance is seeded by three colors -- base (every
   neutral), accent (state), and alert (attention) -- with six built-in
   schemes, user schemes that can be saved and removed, and roundness and
   contrast scalars that retune the whole UI. All of it previews live and
@@ -167,13 +168,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - A traditional menu bar above the toolbar (`menubar.slint`): File, Edit,
   Pattern, Channel, View, and Help. Menus are declared where their window
   callbacks are in scope, so an item is one `MenuRow` line and a new action is
-  one callback plus one line. Rows for features that do not exist yet
-  (Clear Pattern, Select All) are present but disabled, marking where they
-  will land. Every enabled shortcut shown on a menu row is one entry in the
-  action registry (`ACTIONS.md`, `mooloop-ui/src/actions.rs`), which a
-  single keyboard dispatcher in `main.slint` resolves and reassigns from the
-  Shortcuts preferences page — covering transport, pane switching and
-  piano-roll zoom, file, edit, channel, and pattern operations. The File
+  one callback plus one line. Rows disable themselves when they cannot act
+  rather than being absent — Select All Notes is live only in the piano roll
+  with notes on screen, Clear Pattern only when no project edit is pending.
+  Every enabled shortcut shown on a menu row is one entry in the action
+  registry (`ACTIONS.md`, `mooloop-ui/src/actions.rs`), which a single
+  keyboard dispatcher in `main.slint` resolves and reassigns from the
+  Shortcuts preferences page — 39 actions across transport, file, edit, note
+  editing and pointer tools, pane switching and piano-roll zoom, channel, and
+  pattern operations. The File
   menu covers song, kit, and selected-channel save/load, the sample-embed
   toggle, export, and quit; Ctrl+O / Ctrl+S / Ctrl+Shift+S / Ctrl+E / Ctrl+Q
   mirror it by default. Help has an About dialog with the crate version.
@@ -213,6 +216,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   correlation have no audio behind them yet, and solo is a button style only.
 - There is no metronome. The toolbar deliberately does not offer a click-track
   toggle, since nothing in the DSP graph produces one yet.
+- MIDI input is wired but reaches nothing. The engine registers a JACK
+  `midi_in` port and decodes a bounded number of messages per block into
+  `mooloop_core::midi` types, and `RenderState` will apply a
+  `BufferMidiMap` — note and CC mappings onto one Buffer insert's gestures —
+  if one is installed. Nothing installs one: `EngineHandle::set_buffer_midi_map`
+  has no caller outside its own tests, so decoded messages are dropped. There
+  is no note input, no learn, no mapping editor, and no controls on the MIDI
+  preferences page.
 
 ## Current Audio Path
 
@@ -281,8 +292,12 @@ boundary.
   keep foldback down, and the kernel folds across loop and ping-pong
   boundaries rather than filtering against silence.
 - DSP tests cover sampler pitch, trim, loops, envelopes, filter behavior,
-  reverse playback, and lo-fi stages, plus drum synth, v1 mono, ML-M1, and poly
-  voice, envelope, glide, filter, and modulation behavior. V1 mono tests also
+  reverse playback, and lo-fi stages, plus drum synth, v1 mono, ML-M1, v1
+  poly, and ML-P8 voice, envelope, glide, filter, sync, and modulation
+  behavior. ML-P8's sync aliasing is compared against an eight-times
+  oversampled render rather than by looking for energy in a high band, since
+  a hard-synced oscillator folds its alias products onto its master's own
+  harmonic grid. V1 mono tests also
   bound the largest sample-to-sample step across note retriggers and parameter
   changes, which is what the declicking work is defended by.
 - The v1 mono synth's LFO is one shape (sine, triangle, saw, square, or sample and
@@ -424,7 +439,7 @@ land on its own when it starts to matter:
   index back at its own channel and drops one that names a device or control
   that is not there, leaving addresses on a generator that has no descriptor
   table yet untouched.
-- Ten effect kinds ship: a low-pass/high-pass filter, a drive/saturation
+- Twelve effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
   oversampled, a stereo delay with damped cross-feedable feedback and
   digital/tape/reverse responses to a moving delay time. Its Time control
@@ -445,9 +460,14 @@ land on its own when it starts to matter:
   so every one of them is a working modulation destination. It replaced a
   generated-room convolution player whose per-block cost spiked over a
   64-frame budget at a two-second tail and which could not accept a parameter
-  change at all without an off-thread IR rebuild. Device faces are
-  width-quantized in rack units; gate and compressor take 2U, while delay,
-  EQ, reverb, and Mod take 3U.
+  change at all without an off-thread IR rebuild. Beside it is a cheaper
+  plate: eight parallel Freeverb-tuned combs into four series allpasses per
+  channel, with Size, Decay, Damp, and Width, for material that does not need
+  the hall. The twelfth kind is the retained-audio Buffer described below,
+  which is an ordinary insert in the same picker. Device faces are
+  width-quantized in rack units: filter, drive, bitcrush, limiter, plate, and
+  Buffer take 1U; gate, compressor, EQ, and Mod take 2U; delay and reverb
+  take 3U.
 - Gate, compressor, and limiter share one transfer-curve display with a
   draggable threshold handle. Its live dot is fed by the device's own gain
   computer rather than by the surrounding peak meters: the audio thread
@@ -479,11 +499,23 @@ land on its own when it starts to matter:
   supplies the base a knob would otherwise supply, and the matrix adds its
   offsets on top, so an LFO wobbles around a drawn curve. Both resolve at the
   32-frame control rate into the destination's existing event path, and no
-  effect needed a change to receive them. A channel carries eight modulator
-  slots, shown as a grid beside the selected module's own surface, and five
-  module kinds fill them: LFO, gate-driven envelope, step, random, and math.
-  Every kind is a descriptor table plus a tick, so the grid speaks one
-  `param-changed` verb rather than one callback per control.
+  effect needed a change to receive them.
+- The channel modulation rack is a shelf under the device rack, collapsed by
+  default. Open, it is a module grid beside the selected module's full
+  surface. Five module kinds ship — LFO, Envelope, Step, Random, and Math —
+  each a descriptor table plus a tick, so a module's parameters automate,
+  undo, and persist like an effect's. Capacity is eight modules and sixteen
+  routes per channel; the eight is a constant with a measured price rather
+  than a layout assumption, and the grid scrolls to whatever it is set to.
+  Routes carry durable `ModSourceId`s, so reordering the grid moves a module
+  without changing what any route means, and `MoveModulator` remaps the Math
+  module's `input_slot` across the same permutation. Arming a module's Assign
+  switch makes legal controls assignable; dragging one sets route depth while
+  the control keeps its base value. Removing a route restores the
+  destination's base, on generator parameters as well as effect ones. The
+  envelope's gate input is an explicit channel-note picker — the first
+  adapter for a typed generator `Gate` outlet, which does not exist yet.
+  Device outlets, cross-channel sources, and macros remain planned.
 - The retained-audio buffer is descriptor-addressed: `Offset` places the read
   head behind the writer in beats and `Crossfade` sets the declick length.
   Offset is position mode, the same as a hand scrub — the head chases the
@@ -543,8 +575,11 @@ land on its own when it starts to matter:
 
 ### Buffers And Rendering
 
-- Samples are immutable loaded assets. Channels do not yet record their own
-  output into working audio memory.
+- A loaded sample is immutable in the audio path. The only audio the
+  application generates for itself is a sampler stretch commit, which
+  re-renders the decoded source off-thread under a stored spec, and the
+  Buffer insert's rolling ring. Neither writes a channel's own output back
+  into a project asset: there is still no capture-to-sample gesture.
 - The render graph is independent of JACK and supports finite offline passes.
   WAV uses the active JACK sample rate; MP3 renders at 48 kHz through an
   in-process LAME encoder. Stem/bus export and realtime-vs-offline null testing
@@ -556,7 +591,10 @@ land on its own when it starts to matter:
 
 - The application is usable but still has interaction and responsive-layout
   edge cases.
-- The lower parameter selector only implements Velocity.
+- One automation lane is visible at a time. Its picker reaches every
+  parameter of every effect on the selected channel and on every bus, but
+  several lanes cannot be shown at once, and the velocity lane is a separate
+  fixed lane rather than one entry in that list.
 - A canonical action registry drives the menu bar and rebindable shortcuts.
   Note multi-selection supports Select All and bulk deletion; channel,
   pattern, note, and modulation edits feed a project-snapshot undo/redo stack.

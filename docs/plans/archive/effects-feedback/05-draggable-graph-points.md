@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "in general points on splines should be
+From `docs/archive/EFFECTS_FEEDBACK.md`: "in general points on splines should be
 draggable if it makes sense. for instance, a filter curve - the freq
 point should be draggable x,y for freq,gain and maybe scrollwheel would
 adjust Q." The Comp/Gate/Limiter feedback separately asks for a draggable

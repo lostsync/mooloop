@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "we should have a kind of knob that has
+From `docs/archive/EFFECTS_FEEDBACK.md`: "we should have a kind of knob that has
 a toggle for ms and beat divisions. we'd use that e.g. in a delay but
 maybe not for compressor attack - just raw ms there (although that could
 be cool)."

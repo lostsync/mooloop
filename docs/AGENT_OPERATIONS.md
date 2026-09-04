@@ -1,7 +1,10 @@
 # Agent Operations Runbook
 
 Read this only when running Cargo, software-rendered UI checks, or the live
-application. The root agent contract has the workflow and verification rules.
+application. `AGENTS.md` has the workflow and verification rules;
+`docs/OPERATIONS.md` has the ordinary build, test, release, and git
+mechanics. This file is what is specific to running them from an agent on
+Adam's machine.
 
 ## Cargo limits
 
@@ -187,12 +190,33 @@ so no display, compositor or `agent` workspace is involved and it works while
 the screen is locked. Sketches and their PNGs land in `$TMPDIR`, outside the
 repo -- keep them there, they are working notes rather than artefacts.
 
-Capture the real `MainWindow` through its playlist snapshot test:
+### Capturing the real widgets
+
+Sketching stops where a Rust model starts. For anything model-driven, the
+`mooloop-ui` test suite already builds the real window and can be asked to
+write its snapshot to disk. Every one of these follows the same shape — the
+test always runs and asserts; setting an environment variable additionally
+writes the PPM it rendered:
 
 ```sh
 MOOLOOP_PLAYLIST_SNAPSHOT=/tmp/window.ppm \
   cargo test -p mooloop-ui --test playlist_snapshot
 ```
+
+There are around fifty of these across twenty test files, one per state
+somebody wanted to look at — every source face and its pages, the mixer, the
+modulation shelf and each module kind, the preferences pages, the effect rack
+scrolled and unscrolled, before/after shots either side of a drag. Find the
+one you want rather than adding another:
+
+```sh
+rg -o 'MOOLOOP_[A-Z_]+_SNAPSHOT' crates/mooloop-ui/tests | sort -u
+```
+
+The variable name says which test file to run; `rg -l <VARIABLE>
+crates/mooloop-ui/tests` gets you there. Add a new one only when no existing
+state shows what you changed, and follow the surrounding convention: assert
+something, and write the image as a side effect.
 
 Convert an image for inspection:
 
@@ -297,15 +321,6 @@ in either direction -- 13m05s on the box for a cold release build with it on
 
 ## Hook activation
 
-The tracked pre-commit hook protects `main` from ordinary commits. Enable it
-once per clone; the setting is shared by that repository's linked worktrees:
-
-```sh
-git config core.hooksPath .githooks
-```
-
-Verify it with:
-
-```sh
-git config --get core.hooksPath
-```
+`AGENTS.md` requires `git config core.hooksPath .githooks` once per clone; the
+setting is shared by that repository's linked worktrees. Verify it with
+`git config --get core.hooksPath`.

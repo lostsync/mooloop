@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Delay: Tempo sync option."
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Delay: Tempo sync option."
 
 `DelayEffect`'s params already carry a `bpm: 120.0` field
 (`crates/mooloop-dsp/src/effects/delay.rs:254`); confirm first whether

@@ -33,12 +33,17 @@ It is Linux-first. There is no web layer, account, cloud service, or plugin stor
 ## What It Does
 
 - 256-channel pattern rack with independently sized patterns.
-- Sample playback plus DrumSynth, MonoSynth, and PolySynth generators.
+- Sample playback plus six sources: the sampler, a drum synth, and four
+  synths — the original mono and poly pair, the filter-led ML-M1, and the
+  eight-voice ML-P8 built around a three-oscillator network.
 - Piano roll with 64th-note snap, velocity, note duration, multi-selection, and pattern operations.
 - Playlist arrangement with layered pattern clips and Pattern/Song transport modes.
-- Reorderable insert effects including EQ, modulation, filters, drive, bitcrush, delay, reverb, gate, compression, and limiting.
+- Twelve reorderable insert effects: EQ, modulation, filter, drive, bitcrush,
+  delay, hall and plate reverbs, gate, compressor, limiter, and a
+  retained-audio buffer.
 - Master bus and sixteen insert buses with faders, pan, mute, metering, and ordered routing.
-- Per-parameter automation for channel and mixer effects.
+- Per-parameter automation for channel and mixer effects, plus a per-channel
+  modulation rack of LFO, envelope, step, random, and math modules.
 - Versioned project, kit, channel, and generator preset formats.
 - Optional sample embedding so projects can carry their assets with them.
 - WAV and MP3 export.
@@ -51,14 +56,17 @@ Mooloop is not a general-purpose recording DAW or a plugin host.
 It currently does not:
 
 - record audio into a project;
-- provide the planned retained-audio/resampling workflow;
+- have the composition workflow the retained-audio buffer is for — the
+  device is an ordinary insert and works, but routing a source into it and
+  sequencing the result is still the open product question;
 - have parallel sends and returns;
 - support sidechains or external inputs;
 - export stems;
 - provide full plugin-delay compensation;
-- have the planned LFO rack, modulation matrix, parameter locks, or tracker-command editor.
+- accept MIDI input, beyond a decoded port that currently reaches nothing;
+- have parameter locks or a tracker-command editor.
 
-Some basic application workflows are also still unfinished. Undo/redo, keyboard navigation, menus, clipboard handling, recovery, and responsive layout all have rough edges.
+Some basic application workflows are also still unfinished. Undo/redo, menus, shortcuts, and clipboard handling exist but do not reach everywhere; keyboard navigation, crash recovery, autosave, and responsive layout all have rough edges.
 
 Linux with JACK or PipeWire/JACK is the supported platform.
 
@@ -119,7 +127,7 @@ Cargo jobs are capped intentionally. Builds should run one at a time.
 
 ## Development
 
-The documentation is split between what exists now and what the project is intended to become.
+The documentation is split between what exists now and what the project is intended to become. [docs/README.md](docs/README.md) indexes all of it; the ones worth knowing about first:
 
 - [Operations](docs/OPERATIONS.md) — worktrees, Cargo, checks, releases, and development mechanics.
 - [Current system](docs/CURRENT.md) — implemented behavior and known gaps. The source of truth for the current application.
@@ -128,12 +136,13 @@ The documentation is split between what exists now and what the project is inten
 - [Application architecture](docs/ARCHITECTURE.md) — crates, components, and data flow.
 - [Audio architecture](docs/AUDIO_ARCHITECTURE.md) — realtime engine, control plane, timing, and latency.
 - [Project format](docs/PROJECT_FORMAT.md) — project files and asset bundles.
-- [Automation/modulation](docs/MODULATION_PLAN.md) — planned modulation system.
-- [Retained-audio buffer](docs/BUFFER_ENGINE.md) — planned resampling, mutation, and retained-audio system.
+- [Modulation spec](docs/MODULATOR_SYSTEM_SPEC.md) — the modulation rack's sources, routes, and destination policy.
+- [Retained-audio buffer](docs/BUFFER_ENGINE.md) — the buffer device's thesis, and what shipped against it.
+- [Focus](docs/FOCUS.md) — the active work sequence; [Roadmap](docs/ROADMAP.md) orders the rest by dependency.
 
 ## Where It's Going
 
-The immediate work is mostly automation, modulation, resampling, mutation, generation, and finishing the parts of the existing application that still feel unfinished.
+The immediate work is the synths — finishing the ML-M1 and building out the ML-P8 — and then turning the retained-audio buffer from a working device into a composition workflow. `docs/FOCUS.md` is the current sequence.
 
 The original question was whether someone who understood the instrument but not the implementation could direct AI well enough to build one.
 

@@ -2,7 +2,7 @@
 
 ## Problem
 
-Three related complaints from `docs/EFFECTS_FEEDBACK.md`:
+Three related complaints from `docs/archive/EFFECTS_FEEDBACK.md`:
 
 1. "In every device, it has its own name up at the top. The device's name
    is already shown in its frame. Maybe we drop the in-device name and

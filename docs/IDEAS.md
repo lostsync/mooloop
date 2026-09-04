@@ -1,3 +1,11 @@
+# Ideas
+
+Loose notes and a design conversation about them, kept because they may
+become plans later. Nothing here is scheduled or decided. Last audited
+September 2026.
+
+---
+
 Arduino/ESP32 adapter - kinda like what SimHub does for controlling LEDs, but for MIDI events
 
 ---
@@ -20,7 +28,7 @@ BAR.BEAT   +TICKS   VALUE     SHAPE
 
 `+TICKS` is the useful second X value. It makes the row readable and editable on a musical grid while allowing any position the engine can represent. Crucially, it should be derived from and round-trip to absolute ticks; it should not become a second timing system. Changing the visible row resolution then cannot move events.
 
-For values, use the target parameter’s natural units, as already intended by [MODULATION_PLAN.md](/home/adam/projects/mooloop/docs/MODULATION_PLAN.md:45): Hz, dB, buffer offset, window length, rate, etc., rather than a generic 0–1 column. The table becomes a very good manual-writing interface:
+For values, use the target parameter’s natural units, as already intended by [MODULATION_PLAN.md](MODULATION_PLAN.md): Hz, dB, buffer offset, window length, rate, etc., rather than a generic 0–1 column. The table becomes a very good manual-writing interface:
 
 ```text
 01.01  +00  follow       hold

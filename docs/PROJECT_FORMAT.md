@@ -1,6 +1,6 @@
 # Project Bundle Format
 
-Status: format version 1, August 2026.
+Status: format version 1, September 2026.
 
 Mooloop songs are inspectable UTF-8 TOML files. When a song embeds samples,
 ordinary copied audio files live in a sibling asset directory; samples are
@@ -57,8 +57,18 @@ asset_mode = "embedded" # "embedded" or "referenced"
 
 Readers reject unknown format versions and document types before installing
 any state. Version 1 is fixed at PPQ 96 and 4/4. Its tagged source envelope
-supports sampler, drum synth, and mono synth states without changing the
-sampler representation.
+carries all six generator kinds without changing the sampler representation.
+Two of the six tags were chosen rather than inherited from serde's
+`rename_all`, and both are frozen:
+
+| Generator | `source.type` |
+| --- | --- |
+| Sampler | `sampler` |
+| Drum synth | `drum_synth` |
+| v1 mono synth | `mono_synth` |
+| v1 poly synth | `poly_synth` |
+| ML-M1 | `ml1` — the device shipped under the wrong name and the tag is an on-disk identifier, so it was frozen rather than corrected |
+| ML-P8 | `mlp8` — picked deliberately the first time, for the reason above |
 
 `asset_mode` records the requested save policy. Each file sample also carries
 its own `embedded` flag because a referenced save may retain a bundle-owned
@@ -168,6 +178,42 @@ controls were added.
 envelope, filter, glide, and drive fields. Its `params.lfo` table holds the
 LFO wave, rate, retrigger flag, and one depth per destination; readers default
 the whole table for version 1 manifests written before the LFO was added.
+`poly_synth` shares that shape with a voice count and stereo spread.
+
+`ml1` and `mlp8` each store their own complete parameter set under the same
+`state.params` envelope: the ML-M1's two ADSRs, filter model, drive,
+keytracking, note-priority and glide fields; the ML-P8's oscillator network
+matrix, sub, noise, sync sources, two envelopes, and filter. Neither shares
+the v1 synths' parameter ids — see `CURRENT.md` on ML-P8's separate id
+namespace — but both are ordinary `#[serde(default)]` structures, so a field
+added later reads as its default rather than failing the load.
+
+## Effects, modulation, and automation
+
+Three later additions all hang off `#[serde(default)]`, so a manifest written
+before any of them existed still loads:
+
+- `channels[].setup.effects` is the ordered insert chain: one
+  `EffectSlotState` per slot, each a tagged `EffectParams` enum. The
+  pre-tag untagged filter shape still decodes.
+- `channels[].setup.modulation` is that channel's `ModRack`. Only occupied
+  slots are written, each with its slot index, its durable `id`, and its
+  module parameters. Routes persist their durable `source` id alone; the
+  runtime slot is derived on load, so a saved project cannot disagree with
+  itself about where a module lives. A project written before durable
+  identities existed carries `source_slot` instead, and its slot number
+  becomes its id, which keeps its routes resolving to exactly what they
+  meant. A route whose source or destination no longer resolves is dropped
+  at load rather than parked.
+- Automation lanes live inside the pattern lane that drew them — per
+  (pattern, channel), at most one lane per destination — and address a
+  `ParamAddr`, which may name a bus.
+
+Because all three name positions (`slot`, channel index) rather than
+identities, loading runs an integrity pass: a route or lane stranded on
+another channel's index is pointed back at its own channel, and one naming a
+device or control that is not present is dropped. Addresses on a generator
+that has no descriptor table yet are left untouched.
 
 ## Kit And Channel Documents
 
@@ -179,8 +225,15 @@ indices that remain present; removing populated channels requires confirmation.
 A channel document is one reusable instrument preset directly under
 `[document]`. Loading it replaces the selected channel's mixer and source state
 while retaining that channel's notes. Sampler presets include parameters and a
-sample reference; drum and mono synth presets include their generator
-parameters and require no audio asset.
+sample reference; every generated source's preset is its generator parameters
+and requires no audio asset.
+
+A channel document's modulation routes are rescoped as they load. A route
+names its destination channel absolutely, so a preset saved from channel 3
+would otherwise modulate channel 3 wherever it landed; `rescope_modulation`
+rewrites those addresses onto the receiving channel. This is the concrete
+case behind `COMPOSABLE_DEVICE_UNITS.md`'s rule that a saveable fragment must
+not name its neighbours by index.
 
 ## Sample References
 
@@ -229,5 +282,15 @@ audio file.
   velocities `1..=127`.
 - Finite, bounded mixer and sampler values; polyphony and choke groups from
   their current engine limits.
+- Up to 256 effect slots per channel — the same complete `u8` space, for the
+  same reason.
+- Up to `MAX_MODULATORS_PER_CHANNEL` (8) modules and
+  `MAX_MOD_ROUTES_PER_CHANNEL` (16) routes per channel. Both are engine
+  constants rather than format fields: a manifest carrying more is truncated
+  at load, not refused.
+- Seventeen buses (master plus sixteen inserts). A short stored bank is
+  padded, an out-of-range destination is repaired to the master, and a bank
+  whose routing contains a cycle is flattened to everything-to-master so the
+  file still opens.
 
 The loader validates these limits before changing the running document.

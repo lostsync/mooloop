@@ -1,7 +1,44 @@
 # Channel Buffer Engine
 
-Status: product and architecture hypothesis. Not yet approved as a permanent
-engine contract.
+Status: September 2026. **The device is built; the thesis is not yet
+settled.** Stage 1 shipped — see "What shipped" below — so the engineering
+questions this document poses are answered and the product question it poses
+is not. Do not read the future tense in the rest of this file as a statement
+that nothing exists. `docs/plans/buffer-implementation/` is the build order;
+`docs/FOCUS.md` step 3 is the remaining product test.
+
+## What shipped
+
+`EffectKind::Buffer` is an ordinary 1U insert, added from the same picker as
+every other effect, capturing whatever reaches its position in the chain.
+
+- `mooloop_dsp::buffer_device` owns a stereo ring sized by `bars` (default
+  8). Construction allocates; `process` does not. Resizing the ring is an
+  off-thread structural edit, which is why `bars` is deliberately not a
+  descriptor-addressed parameter.
+- Two parameters are addressable and therefore automatable and modulatable:
+  `Offset` (beats behind the writer) and `Crossfade` (declick length in ms).
+  Offset is a position control, not a rate control — the head chases the
+  position and the closing speed *is* the playback rate, so sweeping it
+  scrubs and holding it is delayed playback at unity.
+- `BufferEvent` is the gesture contract in `mooloop-core`: offset, rate,
+  optional window, optional repeat count, a `BufferDuration` of steps /
+  until-next-event / gate, and a crossfade. The face exposes JUMP, REV, and
+  STUT as debug triggers. A running gesture outranks the offset; the offset
+  re-asserts on the next control tick after one ends.
+- Read/write collisions are counted and published as device telemetry, so a
+  head overtaken by its writer is visible rather than merely audible.
+- The device is built on the shared `mooloop_dsp::delayline` primitive rather
+  than a private ring, as this document required.
+
+Stage 1's acceptance list is complete except realtime-hygiene test 8: no
+allocations or locks in the callback is reasoned rather than measured, and
+still wants an allocation-tracking harness.
+
+What has *not* happened is the part this document exists to decide. There is
+no source-to-buffer workflow, no note-mapping layer, no parameter-lock UI, no
+freeze/snapshot persistence, and no MIDI mapping actually installed (see
+`CURRENT.md`). The success test below is unrun.
 
 ## Thesis
 
@@ -149,7 +186,9 @@ only. Do not expand the first Buffer spike to implement this list.
 
 ## Bounded Spike
 
-Build one insert instance before expanding the device count:
+Steps 1 through 4 are done; step 5 is not. Kept as written because the
+acceptance bar is what the workflow test in `FOCUS.md` still measures
+against.
 
 1. Continuously write the device input into a short stereo ring.
 2. Pass live audio through a following read head with no surprising coloration

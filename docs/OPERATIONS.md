@@ -1,9 +1,13 @@
 # Building Mooloop: Cargo And Git
 
-This is the short version of how we operate the repository. The machine is
-usually short on memory while linking, not CPU: run Cargo commands one at a
-time, and use `-j 2` for whole-workspace work. The committed default is `-j 3`
-for smaller commands; do not turn it up.
+This is the short version of how we operate the repository. `AGENTS.md` is the
+workflow contract these commands serve; `docs/AGENT_OPERATIONS.md` covers what
+is specific to running them from an agent — the remote build box, headless
+rendering, and the live application.
+
+The machine is usually short on memory while linking, not CPU: run Cargo
+commands one at a time, and use `-j 2` for whole-workspace work. The committed
+default is `-j 3` for smaller commands; do not turn it up.
 
 ## Start A Piece Of Work
 
@@ -83,6 +87,12 @@ MOOLOOP_PLAYLIST_SNAPSHOT=/tmp/window.ppm \
   cargo test -p mooloop-ui --test playlist_snapshot
 magick /tmp/window.ppm /tmp/window.png
 ```
+
+That is one of about fifty such snapshots — every source face and its pages,
+the mixer, the modulation shelf, the preferences pages, before/after pairs
+either side of a drag. Each is a test that always asserts and writes its image
+only when its environment variable is set. List them with
+`rg -o 'MOOLOOP_[A-Z_]+_SNAPSHOT' crates/mooloop-ui/tests | sort -u`.
 
 ## Diagnostic Log
 

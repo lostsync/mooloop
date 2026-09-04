@@ -12,7 +12,7 @@
 //! - [`mlp8`]: the ML-P8, eight voices around a three-oscillator network
 //!   rather than three oscillators layered.
 //! - [`effects`]: chainable effects that run after a channel's generator
-//!   (see `docs/EFFECTS_PLAN.md` and `docs/MODULATION_PLAN.md`).
+//!   (see `docs/archive/EFFECTS_PLAN.md` and `docs/MODULATION_PLAN.md`).
 //! - [`align`]: the dry-path latency delay the engine's effect container
 //!   blends against.
 //! - [`env`], [`osc`], [`lfo`], [`filter`], [`biquad`], [`scale`],

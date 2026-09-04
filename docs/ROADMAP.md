@@ -23,8 +23,10 @@ Scope:
   scroll sync, single-click selection without accidental note creation,
   double-click note insertion, double-click-drag length entry, independent
   piano-roll snap with an on/off toggle, pointer tools, marquee selection,
-  and a selection that moves, resizes, and time-scales as one object.
-  Remaining: cut/copy/paste of notes, and keyboard-driven selection.
+  and a selection that moves, resizes, and time-scales as one object;
+  cut/copy/paste of notes; Select All; arrow-key nudge and transpose.
+  Remaining: keyboard-driven selection and navigation — the arrow keys move
+  a selection, they do not build one.
 - Establish consistent right-click removal and keyboard navigation.
 - Make labeled knobs draggable from their labels as well as from the knob body.
 - Finish sampler voice controls that do not require the new event model.
@@ -105,10 +107,15 @@ Implemented foundation:
 - Persistent global sixteenth-note swing shared by realtime and offline
   scheduling.
 
-Remaining work in this phase includes autosave/recovery, undo, richer missing-
-sample relinking, pattern management, playlist manipulation, cut/copy/paste,
-shortcut keys, context menus, explicit loop ranges, per-pattern swing/groove
-templates, and realtime/offline comparison tolerances.
+Since landed: a project-snapshot undo/redo stack behind channel, pattern,
+note, effect, and modulation edits; cut/copy/paste for notes and channels; a
+reassignable action registry driving both the menu bar and shortcuts
+(`ACTIONS.md`); and right-click context menus.
+
+Remaining work in this phase is autosave/recovery, richer missing-sample
+relinking, pattern management, playlist clip manipulation, explicit loop
+ranges, per-pattern swing and groove templates, and realtime/offline
+comparison tolerances.
 
 Different pattern lengths:
 
@@ -202,11 +209,12 @@ Scope:
 
 Implemented foundation:
 
-- Six selectable channel sources with complete editors, project/preset
+- Seven selectable channel sources with complete editors, project/preset
   persistence, realtime playback, and offline rendering: the sampler, the v1
-  `DrumSynth`, the v1 `MonoSynth`, the filter-led `MlM1`, the eight-voice
-  `MlP8`, and `PolySynth`. All but `DrumSynth` are descriptor-addressed, so
-  their parameters automate and modulate like an effect's.
+  `DrumSynth`, the descriptor-addressed `Ds01` beside it, the v1 `MonoSynth`,
+  the filter-led `MlM1`, the eight-voice `MlP8`, and `PolySynth`. All but
+  `DrumSynth` are descriptor-addressed, so their parameters automate and
+  modulate like an effect's.
 - New songs start from a randomized kick/snare/closed-hat/open-hat kit.
 - The mixer model exists: channels assign explicitly to buses, the graph is
   topologically sorted rather than constrained to lower-numbered targets, and
@@ -216,7 +224,9 @@ Implemented foundation:
 Remaining work in this phase is the percussive synth's replacement (`DS-01`,
 which is the only source that cannot be modulated), the source-to-buffer
 workflow, external/internal routing, groups, sends, and resampling-source
-selection.
+selection. `MIXER_PLAN.md` is the design for the
+routing half of that, and replaces the fixed master-plus-16-bus bank rather
+than extending it.
 
 ## Later, Not Scheduled
 

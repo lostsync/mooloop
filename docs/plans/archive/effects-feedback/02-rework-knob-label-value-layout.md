@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Move knob labels above the actual knob
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Move knob labels above the actual knob
 and put the knob's value display where those labels currently are, right
 beneath the knobs. Put the values in a bright color, inside a small dark
 box appropriately sized for the value to emulate a small readout display.

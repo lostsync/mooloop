@@ -1,8 +1,8 @@
 # Outcome: done
 
 Closed September 2026. All fourteen plans that came out of
-`docs/EFFECTS_FEEDBACK.md` landed; the status audit for each is preserved in
-the files here. Two notes that outlive the individual plans:
+`docs/archive/EFFECTS_FEEDBACK.md` landed; the status audit for each is
+preserved in the files here. Two notes that outlive the individual plans:
 
 - The display dim/darken option deferred from `12-reverb-scope-rework.md` is
   an appearance-prefs item, not a reverb item. The prefs mechanism it should
@@ -21,4 +21,5 @@ went from a 330x108 banner to a 174x148 left column, the seven full-size
 `ParameterKnob`s became eight compact ones at 60px/36px, and the device
 dropped from 3U to 2U -- pinned by `effect_kind_units(EffectKind::Modulation)
 == 2` rather than left to drift. The face was recomposed as an instrument
-panel in the same pass (`87d18f8`, `5013ad9`).
+panel in the same pass (`87d18f8`, `5013ad9`). The active
+`docs/plans/effects-feedback/` directory is gone with it.

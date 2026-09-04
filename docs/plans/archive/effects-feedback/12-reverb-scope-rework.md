@@ -35,7 +35,7 @@ The one remaining item is the only reason this file is not archived.
 
 ## Original problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "I dont actually know what that green
+From `docs/archive/EFFECTS_FEEDBACK.md`: "I dont actually know what that green
 square in the scope is for. I can't move it. Don't know what it
 means/does. The scope is not as wide as the 4 buttons below it. ... it
 might be more trouble than it's worth, but i do think we could find

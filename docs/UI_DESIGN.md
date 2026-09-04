@@ -1,6 +1,6 @@
 # Mooloop Interface Design Language
 
-Status: active design contract, August 2026.
+Status: active design contract, September 2026.
 
 This document defines how mooloop's interface is composed. It exists because
 locally reasonable controls do not automatically make a coherent instrument.
@@ -170,8 +170,12 @@ alignment, and height contract as effects.
 - Device faces have one fixed 268 px height.
 - Width is quantized in 220 px units with 4 px inter-device gaps. Half-unit
   widths are valid for compact effects.
-- Current source devices use 3U. An effect uses only the units its working
-  controls require.
+- Every source device uses 3U. An effect uses only the units its working
+  controls require, declared once in `effect_kind_units`
+  (`mooloop-ui/src/lib.rs`) rather than in each face: 1U for filter, drive,
+  bitcrush, limiter, plate, and Buffer; 2U for gate, compressor, EQ, and Mod;
+  3U for delay and reverb. A face that outgrows its width takes another unit;
+  it does not compress.
 - The rack scrolls horizontally. Device internals never compress when the
   application narrows.
 - Every device has a 28 px identity header with enabled state, name, kind, and
@@ -251,8 +255,9 @@ The channel's modulation shelf lives immediately below the device rack and is
 collapsed by default. Its header is a small `MOD` affordance; opening it shows
 existing source chips and an add-source action. It is one shelf for the whole
 channel, so a source can target a source parameter, any insert, and the strip
-at the same time. Do not place four permanent empty slots in the rack or a
-separate modulation page inside every device.
+at the same time. Do not place a fixed row of permanent empty slots in the
+rack or a separate modulation page inside every device: the grid's rows follow
+the capacity constant and scroll, so the number is not a layout decision.
 
 Selecting a source tile opens its larger control surface without changing what
 ordinary parameter gestures mean. A separate **Assign** switch arms the
@@ -313,16 +318,35 @@ not a separate engine or a replacement for the rack.
 - The voice-shape display is a deterministic preview rendered through the
   production drum voice and reduced to waveform min/max bins.
 
-### Mono synth
+### Synth faces
 
-- `Osc` uses three repeated oscillator strips with identical geometry.
-- `Amp/Filter` pairs the graphical amplitude envelope with filter and drive.
-- A Mono face does not own a general LFO page. Its common frame exposes the
-  channel modulation shelf and the routes that terminate in Mono parameters.
-  Any existing device-local LFO controls are transitional and must migrate to
-  the channel rack rather than grow into a second modulation system.
-- Waveforms remain visible selector banks rather than dropdowns.
-- Oscillator plots respond to waveform, tuning, level, and pulse width.
+The four synths do not share a layout, because they are not the same
+instrument. What they share is the rule below them: waveforms and filter
+models are visible selector banks rather than dropdowns, and every oscillator
+plot responds to waveform, tuning, level, and pulse width.
+
+- **v1 mono and v1 poly** page as `Osc` / `Amp/Filter` / `Mod`, with poly
+  adding `Voice`. `Osc` uses three repeated oscillator strips with identical
+  geometry; `Amp/Filter` pairs the graphical amplitude envelope with filter
+  and drive.
+- **ML-M1** pages as `Osc` / `Amp/Filter` / `Perf`. `Perf` is the page that
+  makes it a distinct device: note priority, legato and glide, and accent.
+- **ML-P8** is one screen rather than a stack of pages, divided into SOURCE,
+  NETWORK, and VOICE by rules along the signal path. Its centre is a
+  source-by-destination grid — rows are sources, columns the oscillators they
+  reach, the diagonal is an oscillator on itself, and a MIX column carries the
+  levels, because a level is a route to the output. The grid's cells are
+  `ParameterKnob` with `show-dial: false`, not a second draggable control,
+  so arming a modulation source changes what a cell means exactly as it
+  changes what any other knob means.
+
+No synth face owns a general LFO page. The common frame exposes the channel
+modulation shelf and the routes that terminate in that device's parameters.
+The v1 mono and poly faces still carry device-local LFO controls; those are
+transitional and must migrate to the channel rack rather than grow into a
+second modulation system. A synth's *authored* modulation — per-voice
+envelopes, the ML-P8's oscillator network — is part of its synthesis contract
+and stays where it is.
 
 ### Response displays
 

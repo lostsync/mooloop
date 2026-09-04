@@ -126,6 +126,13 @@ show what the read head is doing, survive save and reload, and render the same
 result offline. If that workflow is not materially better than bouncing a
 sample and loading it again, record why before expanding the device.
 
+### Queued, not yet placed in this sequence
+
+`docs/plans/drum-synth-v2/` is an approved design for **DS-01**, a second drum
+instrument, written in full before any code. Nothing is built. It is not
+numbered above because Adam has not said where it goes against the three
+steps; treat it as ready to start rather than as next.
+
 ## Fixes that may interrupt the sequence
 
 Take a fix immediately when it blocks hearing, playing, saving, loading, or
@@ -146,7 +153,7 @@ both are small and both will be in the way:
 ## Deliberately not now
 
 **More effect kinds or a broad effect-polish pass.** The 2026 effects-feedback
-pass is complete and archived. The rack has ten effects and a common host. A
+pass is complete and archived. The rack has twelve effects and a common host. A
 synth step may fix a concrete defect it exposes; the suite does not need more
 breadth.
 

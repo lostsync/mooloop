@@ -1,13 +1,12 @@
 //! Lightweight comb/allpass ("plate") reverb.
 //!
 //! A classic Schroeder/Freeverb-style feedback network: 8 parallel comb
-//! filters feeding 4 series allpass filters, per channel. Unlike
-//! [`super::reverb::ReverbEffect`]'s partitioned FFT convolution, there is no
-//! impulse response and no per-block transform — CPU cost is a small fixed
-//! number of buffer taps per sample, completely independent of `decay_s`.
-//! That's the whole point of this effect: a much cheaper alternative for
-//! material that doesn't need the convolution reverb's generated-room
-//! precision.
+//! filters feeding 4 series allpass filters, per channel. CPU cost is a small
+//! fixed number of buffer taps per sample, completely independent of
+//! `decay_s`. That's the whole point of this effect: a much cheaper
+//! alternative to [`super::reverb::ReverbEffect`]'s eight-line FDN for
+//! material that doesn't need it. (It was written against the convolution
+//! player the FDN replaced; the comparison changed, the reason did not.)
 //!
 //! Mono-summed input feeds two independent networks (one per output
 //! channel) whose tap lengths differ by a fixed offset, so the two channels

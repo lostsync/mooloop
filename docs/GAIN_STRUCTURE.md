@@ -24,9 +24,11 @@ Each generator calibrates itself against the reference:
   decision, a character control and a safety bound at once, and DS-01 splits
   those into `PARAM_LEVEL`, the Drive/Character/Bias/Bits stage, and
   `ds01::device_bound`.
-- `MonoSynth` / `PolySynth`: `VOICE_OUTPUT_REFERENCE` in each file; the
-  default patch runs one oscillator at its 0 dB top, and one oscillator at
-  that top *is* the reference.
+- `MonoSynth` / `PolySynth` / `MlM1` / `MlP8`: `VOICE_OUTPUT_REFERENCE` in
+  each file; the default patch runs one oscillator at its 0 dB top, and one
+  oscillator at that top *is* the reference. The two mono voices are anchored
+  at 0.36 and the two polyphonic ones at 0.51, because a polyphonic device's
+  reference is set per voice against a chord rather than against one note.
 - `Sampler`: the builtin `default_kick` is generated to match. Arbitrary
   user samples cannot be calibrated, so the sampler spends headroom instead
   of measuring: a fresh sampler's own output trim starts at

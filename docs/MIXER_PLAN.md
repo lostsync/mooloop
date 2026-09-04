@@ -1,6 +1,8 @@
 # Mixer and Signal-Slot Design
 
-Status: proposed v0.1 design, August 2026.
+Status: proposed v0.1 design, August 2026. Not started; nothing in it has
+been built, and `CURRENT.md` describes the fixed master-plus-16-bus bank that
+exists instead.
 
 This document defines the mixer, groups, auxiliary sends, and routing model
 Mooloop is growing toward. It is the product and architecture target for this

@@ -2,7 +2,7 @@
 
 ## Problem
 
-From `docs/EFFECTS_FEEDBACK.md`: "Bitcrush: Few diff ways to do the math -
+From `docs/archive/EFFECTS_FEEDBACK.md`: "Bitcrush: Few diff ways to do the math -
 maybe set as a row of toggles to swap between bitcrusher styles."
 
 `BitcrushEffect` (`crates/mooloop-dsp/src/effects/bitcrush.rs`)

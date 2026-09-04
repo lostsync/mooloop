@@ -1,8 +1,10 @@
 # Modulation, parameters, and the effect suite
 
-Status: approved design, August 2026. Supersedes the "Explicitly out of scope"
-section of `docs/EFFECTS_PLAN.md` where the two disagree; everything else in
-that document still stands.
+Status: approved design, August 2026, still current. The implementation
+specification that expands it is `MODULATOR_SYSTEM_SPEC.md`, and that document
+records which of its delivery steps have landed. This one supersedes the
+"Explicitly out of scope" section of `docs/archive/EFFECTS_PLAN.md` where the
+two disagree.
 
 Read `docs/PRODUCT.md` for why this exists ("One Automation Language"),
 `docs/BUFFER_ENGINE.md` for the retained-audio device this has to stay
@@ -79,24 +81,25 @@ routes. Those cannot in general be reproduced after the channel has reduced a
 chord to one control value. Selected internal signals become channel sources
 only by being published through the typed outlet contract below.
 
-The realtime implementation may use a fixed, bounded array (currently four
-local source positions) because it makes the callback predictable. That is an
-engine protocol boundary, not the product abstraction: the UI presents a
-collection of existing sources plus an add action, never four permanent empty
-bays. Increasing capacity or admitting a new source type must not change the
-persisted route vocabulary or the ordinary interaction.
+The realtime implementation may use a fixed, bounded array (currently eight
+module slots and sixteen routes per channel) because it makes the callback
+predictable. That is an engine protocol boundary, not the product abstraction:
+the UI presents a collection of existing sources plus an add action, never a
+fixed row of permanent empty bays. Increasing capacity or admitting a new
+source type must not change the persisted route vocabulary or the ordinary
+interaction.
 
 Per-channel, not project-global. It matches the rack UI and keeps a channel a
 self-contained instrument. Project-global modulators can be added later as a
 distinct source kind; nothing here blocks them.
 
 A source is something that produces a normalized bounded control signal over
-time, conventionally `-1..1` before route transformation. The initial source
-is an LFO. The taxonomy is intentionally broader: step and random generators,
-macros, note-derived values, envelopes, named device outlets, and eventually
-external control or audio-derived signals can all participate if they declare
-their timing and value semantics. Do not make a type or UI that assumes a
-modulator is only a little waveform generator.
+time, conventionally `-1..1` before route transformation. The first source was
+an LFO; LFO, envelope, step, random, and math modules ship now. The taxonomy
+is intentionally broader still: macros, note-derived values, named device
+outlets, and eventually external control or audio-derived signals can all
+participate if they declare their timing and value semantics. Do not make a
+type or UI that assumes a modulator is only a little waveform generator.
 
 ### Mod matrix
 
@@ -286,7 +289,7 @@ view of the same routes, not a prerequisite for using them.
 4. ~~**Dynamics: gate, compressor, limiter** — one shared envelope
    detector.~~ Done, sharing `mooloop_dsp::dynamics`.
 5. ~~**EQ** — cheap; `Svf` already exists.~~ Done.
-6. ~~**One modulation processor**~~ Done as a mode-selectable 3U insert:
+6. ~~**One modulation processor**~~ Done as a mode-selectable 2U insert:
    chorus, flange, phaser, ensemble, and ADT share stable parameter IDs and
    the ordinary effect event path. This is deliberately separate from the
    forthcoming modulator rack: its internal LFO is a sound algorithm, not a
@@ -299,6 +302,11 @@ view of the same routes, not a prerequisite for using them.
    modulation" above: a convolution node cannot take a parameter event, so
    routes aimed at its knobs did nothing. That is the concrete reason it was
    replaced rather than tuned.
+8. ~~**A cheaper plate**~~ Done, beside the hall rather than instead of it:
+   eight combs into four allpasses per channel, for material that does not
+   need the network.
+9. ~~**The retained-audio Buffer as an ordinary insert**~~ Done. See
+   `BUFFER_ENGINE.md`.
 
 ### The delay line is shared with the buffer device
 
