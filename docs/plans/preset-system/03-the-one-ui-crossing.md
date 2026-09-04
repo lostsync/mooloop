@@ -67,6 +67,9 @@ real window, and the workspace is green.
 **The listening pass is Adam's and is not part of this step.** Leave the
 branch unmerged with a note saying what to click.
 
+*Done 2026-09-04:* he ran it, found the two faults the second pass below
+records, and confirmed the rebuilt binary works. Merged.
+
 ## What was crossed, and what to click — 2026-09-04
 
 The single pass added, in `main.slint`: `preset-options: [string]` on

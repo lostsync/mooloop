@@ -4,7 +4,8 @@
 effect-level preset exists end to end: format, directory, session path, and
 the rack row's save and load controls. Every effect kind ships a factory bank
 of five to seven patches. What building it taught is under "What the run
-found" below; the listening pass is Adam's, and step 03 says what to click.
+found" below. Adam ran it on 2026-09-04 and confirmed it works, after the
+second pass recorded at the foot of this file; the branch landed on `main`.
 
 Queued on its own merits, independent of `docs/NODE_MODEL.md`.
 
