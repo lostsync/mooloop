@@ -9,7 +9,8 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
-Last swept 2026-09-05, four times: once when DS-01's step 09 closed, again
+Last swept 2026-09-05, five times, the last when `typed-audio-edges/` was
+written. Earlier the same day, four times: once when DS-01's step 09 closed, again
 when `FOCUS.md` was rewritten around the debt those two instruments left,
 again when ML-P8's step 07 listening pass closed, and again when
 `latency-compensation/` finished and archived.
@@ -35,6 +36,7 @@ These have steps but no `00-status.md`, because nothing has landed to record.
 
 | Plan | Why it is queued |
 | --- | --- |
+| `typed-audio-edges/` | **`FOCUS.md`'s step 1, and next.** `AUDIO_ARCHITECTURE.md`'s migration step 6, and the last thing holding `poly-synth-v2/` and `drum-synth-v2/` out of `archive/`. Five steps: a compiled channel order with cycle refusal, taps that exist only when subscribed, an `Aux In` source device as the consumer, and acceptance. Adam chose the consumer on 2026-09-05; `01-what-this-is.md` records why same-block delivery is forced rather than chosen. |
 | `poly-v1-mono-mode/` | One step. The only thing blocking deletion of `DeviceKind::MonoSynth`, which is what lets `MlM1` take the plain name. The held-note stack it needs already exists. |
 | `preset-system/` | **Done: steps 01-04 ran 2026-09-04 and landed on `main` after Adam confirmed the interface.** A preset's unit is a device, with relative addressing. The effect-level preset exists end to end: one rack row, no routes, no absolute addressing, `contains = ["effect_params"]` in the manifest so a later fragment format can supersede it cleanly, `presets/effects/<kind>/` on disk, an undoable load through the session, and the rack row's rail buttons wired. `PresetSummary` names three preset classes. Every effect kind ships a factory bank, seeded like the ML-M1 one. A second pass fixed the load path — an effect preset is a rack edit, not a document load — and put the preset's name in the device header. `00-status.md` records what the run found. A second entry, 2026-09-05, moves the *generator* half onto the device rail beside the effect half and gives the source device a preset label in its header. The browser, the taxonomy surface, and an updatable factory mechanism are unblocked now that DS-01's bank ships. As of 2026-09-05 the browser has a home: Adam wants preset browsing in the sample browser panel, and `FOCUS.md` step 3 carries it. |
 | `adopt-shared-biquad-in-eq/` | `effects/eq.rs:30` still declares its own `Biquad` after the shared one was promoted out of it. |

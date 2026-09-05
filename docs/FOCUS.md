@@ -75,6 +75,12 @@ Two pieces, in order:
   nothing implements it. This is the one genuine architecture gap left behind
   by the instrument push, and it is also what parallel sends and sidechain
   will want later — build it as an edge type, not as an ML-P8 feature.
+  **Planned 2026-09-05 in `docs/plans/typed-audio-edges/`**, five steps: the
+  edge is same-block rather than one-block latent, because a block-sized delay
+  is a delay whose length is the host's buffer size, so what this really
+  builds is a compiled channel order with cycle refusal. Adam's call on the
+  consumer: an `Aux In` source device, whose sound is another channel's
+  published outlet.
 
 This is first because two finished instruments are sitting in `plans/` unable
 to be archived on account of it, because the contract gets designed once
