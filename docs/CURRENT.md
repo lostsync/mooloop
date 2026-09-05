@@ -392,7 +392,13 @@ land on its own when it starts to matter:
   referenced asset policies are available per save.
 - Channel presets are instrument presets for sampler and generated sources;
   sampler presets may carry a referenced or embedded audio file while synth
-  presets contain only inspectable parameter state.
+  presets contain only inspectable parameter state. They are saved and loaded
+  from the channel row above the rack, because they span the generator and the
+  channel's own state.
+- A *device* preset is saved and loaded from that device's own rail in the
+  rack -- the same two buttons on the generator and on every effect row. The
+  load button offers only the presets saved for that device's kind, and is
+  disabled when there are none.
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.

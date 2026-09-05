@@ -70,9 +70,10 @@ export component DeviceFrame inherits Rectangle {
     callback effect-kind-selected(int);
     callback remove-requested();
     // Per-device presets: the entries saved for this device's kind, offered
-    // from the left rail. Off for a shell whose device has no preset store
-    // of its own; the source face keeps its preset field in the editor
-    // header.
+    // from the left rail. Generator and effect alike -- a preset's unit is a
+    // device, so it is saved and loaded from the device rather than from a
+    // toolbar above the chain. Off for a frame whose device has no preset
+    // store of its own, which is the bus output stage.
     in property <bool> preset-enabled: false;
     in property <[string]> preset-options;
     callback preset-selected(int);   // index into preset-options
@@ -113,7 +114,7 @@ export component DeviceFrame inherits Rectangle {
 
     // These are deliberately a shell rather than a per-effect header: source,
     // inserts, and future buffer devices all get stable insertion/preset/mix
-    // territory. Preset navigation is reserved until per-device presets land.
+    // territory, in the same two rail positions whatever the device is.
     Rectangle {
         x: 0px;
         width: DeviceRackMetrics.rail-width;

@@ -2537,23 +2537,6 @@ export component MainWindow inherits Window {
                                                 root.channel-source-changed(i);
                                             }
                                         }
-                                        if !root.editing-bus : Rectangle { width: 6px; }
-                                        if !root.editing-bus : MenuField {
-                                            label: "PRESET";
-                                            options: root.generator-preset-options;
-                                            selected-index: -1;
-                                            display-text: "Browse...";
-                                            field-width: 90px;
-                                            menu-width: 220px;
-                                            tooltip: "Load a preset for this source device";
-                                            selected(i) => { root.generator-preset-selected(i); }
-                                        }
-                                        if !root.editing-bus : IconButton {
-                                            text: "💾";
-                                            tooltip: "Save the current source as a preset";
-                                            size: 24px;
-                                            clicked => { root.save-generator-preset-requested(); }
-                                        }
                                         // A bus has no generator and no generator
                                         // preset, so the row states what it is instead.
                                         if root.editing-bus : Text {
@@ -2631,6 +2614,14 @@ export component MainWindow inherits Window {
                                                     root.channel-volume-changed(root.selected-channel, GainMath.db-to-linear(v));
                                                 }
                                                 effect-kind-selected(kind) => { root.add-effect-clicked(kind, 0); }
+                                                // The generator's presets belong on the generator,
+                                                // in the same rail position an effect row keeps
+                                                // them: one device, one place to save and load it.
+                                                // A bus has no generator, so its rail has none.
+                                                preset-enabled: !root.editing-bus;
+                                                preset-options: root.generator-preset-options;
+                                                preset-selected(i) => { root.generator-preset-selected(i); }
+                                                save-preset-requested => { root.save-generator-preset-requested(); }
 
                                                 if root.editing-bus : BusDeviceFace {
                                                     x: DeviceRackMetrics.rail-width;

@@ -32,12 +32,15 @@ The interface has four levels. Their ownership must remain visible.
 1. App chrome: menu, transport, global timing, master state.
 2. Work surface: rack, notes, playlist, mixer.
 3. Channel header: selected channel identity and whole-channel preset/actions.
-4. Generator: source type, generator preset/actions, and generator modules.
+4. Generator: source type and generator modules.
+5. Device: the hosted device's own parameters, presets, and host actions.
 
-A control belongs at the lowest level that owns its state. Generator preset
-controls sit beside the source selector, not detached at the far edge of the
-editor. Channel presets remain in the channel header because they include the
-generator and channel-level state.
+A control belongs at the lowest level that owns its state. A preset's unit is
+a device, so a device's save and load sit on that device's own rail --
+generator and effect alike -- rather than in a toolbar above the chain, where
+a control that belongs to one device would look like it belongs to the row.
+Channel presets remain in the channel header because they include the
+generator and channel-level state, which no single device owns.
 
 The modulation rack and its routes are channel state. A common device frame
 may expose that system because it is where the user reads the channel's signal
@@ -194,7 +197,9 @@ alignment, and height contract as effects.
 - A face is a working surface, not a dump of every parameter. Each page must
   still expose a coherent musical operation rather than an arbitrary subset.
 - The shared host owns input and output metering, input and output trim, wet/dry,
-  bypass, presets, insertion, removal, and reorder actions. Its meter pair is
+  bypass, presets, insertion, removal, and reorder actions. Presets are the
+  same two rail buttons whatever the device is, so a generator's bank is
+  reached exactly where an effect's is. Its meter pair is
   signal-flow evidence: left is the signal entering the hosted device and
   right is the signal leaving after host wet/dry and trim. A generator is the
   only exception: it has no input meter, only a generated output.
@@ -206,9 +211,9 @@ The lower editor retains one channel row:
 
 `[Source | Notes | Playlist] [channel name] [channel preset browser/actions]`
 
-The device-chain row directly below it owns source type and generator presets:
+The device-chain row directly below it owns the source type, and nothing else:
 
-`[DEVICE CHAIN] [source type] [generator preset browser/actions]`
+`[DEVICE CHAIN] [source type]`
 
 ### Piano roll gestures
 
