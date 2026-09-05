@@ -70,7 +70,19 @@ const HALF_TAPS: usize = FIR_TAPS / 2;
 /// Effective base-rate latency of the complete interpolate/process/decimate
 /// path. Both 32-tap filters contribute; the retained polyphase output has its
 /// impulse peak at frame 15.
-pub const OVERSAMPLER_LATENCY_FRAMES: usize = HALF_TAPS - 1;
+///
+/// Re-exported from `mooloop_core::effect`, which owns it: the control thread
+/// sizes compensation delays from it before any node exists to ask, so it is
+/// part of the device's declared interface rather than a private property of
+/// this file. `identity_path_has_the_declared_latency` below is what keeps the declaration
+/// honest against the filter that produces it: it drives an impulse through
+/// the real path and asserts where the peak lands, which no derivation from
+/// `HALF_TAPS` could do once the kernel changed shape.
+pub use mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES as OVERSAMPLER_LATENCY_U32;
+
+/// The same figure as a `usize`, for the array lengths and index arithmetic
+/// in this crate.
+pub const OVERSAMPLER_LATENCY_FRAMES: usize = OVERSAMPLER_LATENCY_U32 as usize;
 
 /// A 2x oversampler for one audio channel.
 ///

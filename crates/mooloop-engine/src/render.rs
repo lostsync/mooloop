@@ -12,7 +12,7 @@ use mooloop_core::{
     SlotRemap,
     Project,
     SamplerParams, SliceMap,
-    DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
+    clamp_bus, DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
 use mooloop_core::modulation::{CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS};
@@ -1191,15 +1191,6 @@ fn mix_into(buses: &mut [BusStrip], from: usize, into: usize, frames: usize) {
     }
 }
 
-/// Keep a channel's bus assignment inside the bank. A stale index from the GUI
-/// lands on the master rather than silently muting the channel.
-fn clamp_bus(bus: u8) -> u8 {
-    if (bus as usize) < MAX_BUSES {
-        bus
-    } else {
-        MASTER_BUS
-    }
-}
 
 /// The most auditions one block may carry. A block is a couple of
 /// milliseconds; anything past this is a stuck key, not playing.

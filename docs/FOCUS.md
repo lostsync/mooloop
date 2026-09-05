@@ -81,16 +81,15 @@ to be archived on account of it, because the contract gets designed once
 instead of twice, and because it is the only item on this list that is
 architecture rather than surface.
 
-**Note on ordering, recorded 2026-09-05.** `AUDIO_ARCHITECTURE.md`'s migration
-sequence puts typed audio and dependency edges at its step 6 and says step 6
-depends on its step 5 — preallocated compensation delays and compiled
-cumulative latency — which has *not* landed: `CompiledBusGraph` carries
-destinations and a render order and no latency at all. So the second piece
-above is really two, and the first of them is the compensation work this
-document parks under "deliberately not now". Whoever picks it up should decide
-deliberately whether to do compensation first (the documented order) or to
-build the edge type against the current uncompensated tree; do not discover
-the dependency halfway through.
+**Ordering, settled 2026-09-05.** `AUDIO_ARCHITECTURE.md`'s migration sequence
+puts typed audio and dependency edges at its step 6 and says step 6 depends on
+its step 5 — preallocated compensation delays and compiled cumulative latency
+— which had not landed. Adam's call: if compensation is on the path either
+way, building the edge type against an uncompensated tree means building it
+twice. So the second piece above is really two, and compensation goes first,
+in `docs/plans/latency-compensation/`. That supersedes this document's
+"deliberately not now" entry on compensation, which was written on the
+opposite reading.
 
 `drum-synth-v2/` archives the moment its step 07 closes. `poly-synth-v2/` has
 one more thing after this: its step 07 is ML-P8's factory bank and listening
@@ -260,10 +259,12 @@ derives the whole palette from three seeds plus roundness and contrast — and
 that is exactly why it can wait for the panes to stop moving. `ENHANCEMENTS.md`
 holds both in Adam's words, including the pywal/wallust half.
 
-**Parallel sends, sidechains, and plugin delay compensation.** Compensation is
-required before parallel paths are trustworthy. Step 1's typed audio edges are
-the shared prerequisite; build the rest when sends or sidechain become the
-actual product task.
+**Parallel sends, sidechains, and plugin delay compensation for hosted
+plugins.** Still not now. But the *mixer's own* delay compensation is no
+longer parked: it turned out to be the prerequisite for step 1's typed audio
+edges rather than the other way round, and it is being built in
+`docs/plans/latency-compensation/`. Sends and sidechains themselves wait for a
+product task that wants them.
 
 **Broad arrangement and recovery work.** Playlist clip manipulation, explicit
 loop ranges, autosave, crash recovery, and richer missing-sample relinking

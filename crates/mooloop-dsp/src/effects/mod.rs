@@ -71,3 +71,36 @@ pub fn build_effect_at_tempo(
         EffectParams::Buffer(p) => Box::new(crate::BufferDevice::new(p, sample_rate, bpm)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mooloop_core::EffectKind;
+
+    /// A device's latency is written down twice: as a declaration in
+    /// `mooloop-core`, which the control thread reads to size a compensation
+    /// delay before any node exists, and on the running node itself. Two
+    /// numbers for one fact is how they come to disagree, and a disagreement
+    /// here is silent — the delay would be built to the wrong length and the
+    /// misalignment it was meant to remove would move instead.
+    ///
+    /// This is the one crate that can see both, so this is where they are held
+    /// together. Two sample rates, because a device whose latency depended on
+    /// the rate could not be declared statically at all and this is where that
+    /// would be found out.
+    #[test]
+    fn every_effect_kinds_declared_latency_matches_its_node() {
+        for kind in EffectKind::ALL {
+            for sample_rate in [44_100, 48_000] {
+                let node = build_effect_at_tempo(kind.default_params(), sample_rate, 120.0);
+                assert_eq!(
+                    node.latency_frames(),
+                    kind.latency_frames(),
+                    "{kind:?} at {sample_rate} Hz: node reports {}, core declares {}",
+                    node.latency_frames(),
+                    kind.latency_frames()
+                );
+            }
+        }
+    }
+}

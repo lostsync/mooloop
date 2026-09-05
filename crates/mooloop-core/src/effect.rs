@@ -26,7 +26,47 @@ pub enum EffectKind {
     Buffer,
 }
 
+/// Base-rate frames of latency the 2x oversampler's interpolate/process/
+/// decimate path adds.
+///
+/// Declared here rather than in `mooloop-dsp` beside the oversampler because
+/// it is an *interface* number now: the control thread sizes a compensation
+/// delay from it before any node exists to ask
+/// (`docs/plans/latency-compensation/02-declared-latency.md`). The DSP reads
+/// it from here, so there is one figure rather than two that must agree.
+pub const OVERSAMPLER_LATENCY_FRAMES: u32 = 15;
+
 impl EffectKind {
+    /// Base-rate frames this kind adds to the signal passing through it.
+    ///
+    /// A *declaration*, answerable without building a node, which is what lets
+    /// the graph plan be compiled on the control thread where its delays can
+    /// be allocated. `AudioNode::latency_frames` is the same number from the
+    /// running node, and `mooloop-dsp` asserts the two agree per kind — two
+    /// numbers for one fact is how they come to disagree, and a disagreement
+    /// here would size a compensation delay wrongly and move the misalignment
+    /// rather than remove it.
+    ///
+    /// Zero is the common and correct answer: an effect that processes sample
+    /// by sample adds no latency, and most of them do.
+    pub fn latency_frames(self) -> u32 {
+        match self {
+            // The only device with an internal oversampled path today.
+            Self::Drive => OVERSAMPLER_LATENCY_FRAMES,
+            Self::Eq
+            | Self::Modulation
+            | Self::Filter
+            | Self::Bitcrush
+            | Self::Delay
+            | Self::Reverb
+            | Self::Plate
+            | Self::Gate
+            | Self::Compressor
+            | Self::Limiter
+            | Self::Buffer => 0,
+        }
+    }
+
     /// Every kind, in the order the UI offers them when adding an effect.
     pub const ALL: [EffectKind; 12] = [
         EffectKind::Eq,

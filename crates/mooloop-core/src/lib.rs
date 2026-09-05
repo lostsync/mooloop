@@ -134,9 +134,10 @@ pub use effect::{
     REVERB_PARAM_PREDELAY_MS, REVERB_PARAM_SIZE, REVERB_PARAM_WIDTH,
 };
 pub use mixer::{
-    compile_bus_graph, compile_render_order, default_buses, default_render_order, is_legal_route,
-    sanitize_route, would_create_cycle, BusSetup, CompiledBusGraph, EffectTarget, MixerBus,
-    RenderOrder, INSERT_BUSES, MASTER_BUS, MAX_BUSES,
+    clamp_bus, compile_bus_graph, compile_latency, compile_render_order, default_buses,
+    default_render_order, is_legal_route, sanitize_route, would_create_cycle, BusSetup,
+    CompiledBusGraph, CompiledLatency, EffectTarget, MixerBus, RenderOrder, INSERT_BUSES,
+    MASTER_BUS, MAX_BUSES,
 };
 pub use pattern::{
     ChannelPattern, NoteEvent, NoteId, Pattern, Step, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,

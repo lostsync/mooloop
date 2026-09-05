@@ -23,6 +23,7 @@
 //! this engine does not have yet.
 
 use crate::EffectSlotState;
+use crate::MAX_CHANNELS;
 
 /// Insert buses available in addition to the master.
 pub const INSERT_BUSES: usize = 16;
@@ -247,6 +248,134 @@ pub fn compile_bus_graph(buses: &[BusSetup]) -> Option<CompiledBusGraph> {
     })
 }
 
+/// Keep a channel's bus assignment inside the bank. A stale index from the GUI
+/// lands on the master rather than silently muting the channel.
+///
+/// Here rather than in the engine, which held the only copy, because the
+/// latency plan below has to agree with the executor about which bus a channel
+/// actually feeds — two answers to that would compensate a channel against a
+/// summing point it does not sum into.
+pub fn clamp_bus(bus: u8) -> u8 {
+    if (bus as usize) < MAX_BUSES {
+        bus
+    } else {
+        MASTER_BUS
+    }
+}
+
+/// What each producer must be delayed by so that everything summing at a
+/// point arrives from the same moment.
+///
+/// One number per channel and per bus, in the same fixed-capacity shape and
+/// for the same reason as [`CompiledBusGraph`]: the whole plan crosses to the
+/// executor by value, so it can never observe one generation's delays against
+/// another's edges. What allocates is the delay *storage* the engine sizes
+/// from this, never this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledLatency {
+    channels: [u32; MAX_CHANNELS],
+    buses: [u32; MAX_BUSES],
+    total: u32,
+}
+
+impl CompiledLatency {
+    /// Frames to delay `channel`'s output before it sums into its bus.
+    pub fn channel(&self, channel: usize) -> u32 {
+        self.channels.get(channel).copied().unwrap_or(0)
+    }
+
+    /// Frames to delay `bus`'s output before it sums into the bus it feeds.
+    /// The master feeds nothing and is always zero.
+    pub fn bus(&self, bus: usize) -> u32 {
+        self.buses.get(bus).copied().unwrap_or(0)
+    }
+
+    /// The whole graph's latency: how far behind the input the master's output
+    /// now is. This is the figure a host would be told, and it is the price of
+    /// alignment — the longest path does not move, so everything else waits
+    /// for it.
+    pub fn total(&self) -> u32 {
+        self.total
+    }
+}
+
+impl Default for CompiledLatency {
+    fn default() -> Self {
+        Self {
+            channels: [0; MAX_CHANNELS],
+            buses: [0; MAX_BUSES],
+            total: 0,
+        }
+    }
+}
+
+/// Compile the tree's cumulative latency into a per-producer compensation.
+///
+/// `channel_latency[c]` is the sum of channel `c`'s own chain, and
+/// `channel_bus[c]` the bus it feeds; `bus_latency[b]` is bus `b`'s own chain.
+/// Shorter slices are read as zeros, which is what a project with four
+/// channels hands in.
+///
+/// The rule is the general one from `AUDIO_ARCHITECTURE.md` -- at every
+/// summing point, delay each input by the difference between it and the
+/// longest one -- collapsed to the tree the mixer actually is. Each producer
+/// has exactly one destination, so "per edge" and "per producer" are the same
+/// thing and the simpler one is honest until step 6 makes them differ.
+///
+/// One descending pass over `graph.render_order()`, which is already
+/// topological: every bus feeding `b` is visited before `b`, so `b`'s input
+/// arrival is complete by the time it is read. No recursion, no second sort,
+/// and no allocation.
+pub fn compile_latency(
+    graph: &CompiledBusGraph,
+    channel_latency: &[u32],
+    channel_bus: &[u8],
+    bus_latency: &[u32],
+) -> CompiledLatency {
+    let at = |table: &[u32], index: usize| table.get(index).copied().unwrap_or(0);
+
+    // The latest anything feeding each bus arrives, before that bus's own
+    // chain. Channels are known up front; buses fill in as they are visited.
+    let mut input_arrival = [0u32; MAX_BUSES];
+    let channels = channel_latency.len().min(channel_bus.len()).min(MAX_CHANNELS);
+    for channel in 0..channels {
+        let bus = clamp_bus(channel_bus[channel]) as usize;
+        input_arrival[bus] = input_arrival[bus].max(channel_latency[channel]);
+    }
+
+    let mut arrival = [0u32; MAX_BUSES];
+    for &bus in graph.render_order() {
+        let bus = bus as usize;
+        arrival[bus] = input_arrival[bus] + at(bus_latency, bus);
+        if bus == MASTER_BUS as usize {
+            continue;
+        }
+        let destination = graph.destination(bus) as usize;
+        input_arrival[destination] = input_arrival[destination].max(arrival[bus]);
+    }
+
+    let mut channels_out = [0u32; MAX_CHANNELS];
+    for channel in 0..channels {
+        let bus = clamp_bus(channel_bus[channel]) as usize;
+        channels_out[channel] = input_arrival[bus].saturating_sub(channel_latency[channel]);
+    }
+
+    let mut buses_out = [0u32; MAX_BUSES];
+    for bus in 0..MAX_BUSES {
+        if bus == MASTER_BUS as usize {
+            continue;
+        }
+        let destination = graph.destination(bus) as usize;
+        buses_out[bus] = input_arrival[destination].saturating_sub(arrival[bus]);
+    }
+
+    CompiledLatency {
+        channels: channels_out,
+        buses: buses_out,
+        total: arrival[MASTER_BUS as usize],
+    }
+}
+
 /// Topologically sort the bank so every bus is rendered before the bus it
 /// feeds. Returns `None` if the routing contains a cycle.
 ///
@@ -296,6 +425,142 @@ mod tests {
             buses[*bus].bus.output = *output;
         }
         buses
+    }
+
+    // --- Latency compensation ------------------------------------------
+
+    /// The plan for a flat bank: `channels` channels, all on the master,
+    /// carrying the given latencies and no bus latency anywhere.
+    fn flat(channel_latency: &[u32]) -> CompiledLatency {
+        let graph = compile_bus_graph(&default_buses()).expect("a default bank is acyclic");
+        let on_master = vec![MASTER_BUS; channel_latency.len()];
+        compile_latency(&graph, channel_latency, &on_master, &[])
+    }
+
+    /// The case that is silently wrong today: one channel carries a Drive and
+    /// its neighbour does not, so they sum at the master fifteen frames apart.
+    /// After compensation the shorter one waits and both arrive together.
+    #[test]
+    fn a_shorter_channel_waits_for_its_longer_sibling() {
+        let plan = flat(&[0, 15, 0]);
+        assert_eq!(plan.channel(0), 15);
+        assert_eq!(plan.channel(1), 0, "the longest path must not move");
+        assert_eq!(plan.channel(2), 15);
+        // Alignment is not free: everything now arrives fifteen frames late,
+        // which is the figure a host would be told.
+        assert_eq!(plan.total(), 15);
+    }
+
+    /// Nothing to align is nothing to do. A bank where every path is the same
+    /// length compensates nobody, which is what keeps the common project from
+    /// paying for a delay it does not need.
+    #[test]
+    fn an_aligned_bank_compensates_nothing() {
+        let plan = flat(&[0, 0, 0, 0]);
+        assert!((0..4).all(|channel| plan.channel(channel) == 0));
+        assert_eq!(plan.total(), 0);
+        // And an equal non-zero latency everywhere is still aligned: what
+        // matters is the difference, not the amount.
+        let plan = flat(&[15, 15, 15]);
+        assert!((0..3).all(|channel| plan.channel(channel) == 0));
+        assert_eq!(plan.total(), 15);
+    }
+
+    /// A bus's own chain pushes everything that feeds it further out, so the
+    /// channels on a *different* bus have to wait for it. This is the case a
+    /// per-channel-only scheme gets wrong, and it is why the pass walks the
+    /// compiled render order rather than looking at channels alone.
+    #[test]
+    fn a_buss_own_latency_delays_the_paths_beside_it() {
+        let graph = compile_bus_graph(&default_buses()).expect("acyclic");
+        // Channel 0 goes through bus 1, which carries fifteen frames of its
+        // own; channel 1 goes straight to the master with nothing.
+        let mut bus_latency = vec![0; MAX_BUSES];
+        bus_latency[1] = 15;
+        let plan = compile_latency(&graph, &[0, 0], &[1, MASTER_BUS], &bus_latency);
+
+        // Nothing else feeds bus 1, so its own input needs no delay.
+        assert_eq!(plan.channel(0), 0);
+        // But bus 1 arrives at the master fifteen frames late, so the direct
+        // channel waits for it.
+        assert_eq!(plan.channel(1), 15);
+        assert_eq!(plan.bus(1), 0, "the longest path into the master must not move");
+        assert_eq!(plan.total(), 15);
+    }
+
+    /// Two buses into the master with different depths: the shallower bus is
+    /// delayed, and so is everything that feeds it -- through the bus rather
+    /// than on top of it, which is what stops a channel being compensated
+    /// twice for the same deficit.
+    #[test]
+    fn a_shallower_bus_is_delayed_once_and_not_its_inputs_again() {
+        let graph = compile_bus_graph(&default_buses()).expect("acyclic");
+        let mut bus_latency = vec![0; MAX_BUSES];
+        bus_latency[1] = 20;
+        // Channel 0 into the deep bus 1; channel 1 into the shallow bus 2.
+        let plan = compile_latency(&graph, &[0, 0], &[1, 2], &bus_latency);
+
+        assert_eq!(plan.bus(1), 0, "the deepest bus must not move");
+        assert_eq!(plan.bus(2), 20, "the shallow bus waits for the deep one");
+        // Each channel is the only thing feeding its bus, so neither is
+        // compensated at its own summing point. The correction happens once,
+        // on bus 2's edge into the master.
+        assert_eq!(plan.channel(0), 0);
+        assert_eq!(plan.channel(1), 0);
+        assert_eq!(plan.total(), 20);
+    }
+
+    /// A chain of buses accumulates, and the pass has to see through it: the
+    /// render order guarantees bus 2 is finished before bus 1 reads it, which
+    /// is the property this reuses rather than rebuilding.
+    #[test]
+    fn latency_accumulates_along_a_chain_of_buses() {
+        // 2 -> 1 -> master, each adding ten frames.
+        let graph = compile_bus_graph(&routed(&[(2, 1)])).expect("acyclic");
+        let mut bus_latency = vec![0; MAX_BUSES];
+        bus_latency[1] = 10;
+        bus_latency[2] = 10;
+        // Channel 0 at the top of the chain, channel 1 straight to master.
+        let plan = compile_latency(&graph, &[0, 0], &[2, MASTER_BUS], &bus_latency);
+
+        // Channel 0 travels 10 (bus 2) + 10 (bus 1) = 20 frames.
+        assert_eq!(plan.total(), 20);
+        assert_eq!(plan.channel(1), 20, "the direct channel waits for the chain");
+        assert_eq!(plan.channel(0), 0);
+        assert_eq!(plan.bus(2), 0);
+        assert_eq!(plan.bus(1), 0);
+    }
+
+    /// A repaired bank still compiles a plan. `compile_bus_graph` sends an
+    /// out-of-range edge to the master, and the latency pass must agree with
+    /// it rather than reading the original -- a channel compensated against a
+    /// summing point it does not sum into would be worse than no compensation.
+    #[test]
+    fn a_repaired_bank_still_compiles_a_coherent_plan() {
+        let graph = compile_bus_graph(&routed(&[(3, MAX_BUSES as u8)])).expect("repairable");
+        assert_eq!(graph.destination(3), MASTER_BUS);
+        let mut bus_latency = vec![0; MAX_BUSES];
+        bus_latency[3] = 15;
+        // A channel naming a bus that does not exist lands on the master, the
+        // same way the executor clamps it.
+        let plan = compile_latency(&graph, &[0, 0], &[3, 250], &bus_latency);
+        assert_eq!(plan.channel(1), 15, "the clamped channel waits for bus 3");
+        assert_eq!(plan.total(), 15);
+    }
+
+    /// An empty project is a plan too, and asking for a channel or bus outside
+    /// what was handed in answers zero rather than panicking: the executor
+    /// reads this by index for all 256 channels whatever the project holds.
+    #[test]
+    fn an_empty_bank_compiles_to_no_compensation() {
+        let plan = CompiledLatency::default();
+        assert_eq!(plan.total(), 0);
+        assert_eq!(plan.channel(MAX_CHANNELS + 10), 0);
+        assert_eq!(plan.bus(MAX_BUSES + 10), 0);
+
+        let graph = compile_bus_graph(&default_buses()).expect("acyclic");
+        let empty = compile_latency(&graph, &[], &[], &[]);
+        assert_eq!(empty, CompiledLatency::default());
     }
 
     /// The whole point of the permutation: whatever the routing, a bus is
