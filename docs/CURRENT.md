@@ -696,10 +696,10 @@ land on its own when it starts to matter:
   rather than a comment claiming them. Init Saw is the device default
   unchanged, because the gain contract is calibrated against exactly that
   signal. Those are the same patches the DSP acceptance test plays, so what
-  ships is what is checked. It has not had a recorded listening pass yet;
-  the bar it is held to is the one Adam set closing DS-01's bank -- enough to
-  prove the architecture reaches its range from the controls, not a curated
-  bank.
+  ships is what is checked. Adam played it on 2026-09-05 and it raised no
+  range corrections; the bar it is held to is the one he set closing DS-01's
+  bank -- enough to prove the architecture reaches its range from the
+  controls, not a curated bank.
 - Clip automation is per (pattern, channel), lives in the clip that drew it,
   and may address a bus. Two clips automating one destination is not
   prevented; the lowest channel wins at render time.

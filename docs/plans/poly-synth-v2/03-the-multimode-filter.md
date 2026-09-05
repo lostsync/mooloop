@@ -159,7 +159,7 @@ sits **before** the filter and **inside** the loop. That is what bounds the
 loop's energy, and it is why feedback changes the tone rather than only the
 gain. There is no limiter after the voice sum; `soft_ceiling` is exactly
 transparent below its knee, so an ordinary patch never meets it and only a
-runaway does. `VOICE_FEEDBACK_RANGE = 1.15`, provisional until step 07.
+runaway does. `VOICE_FEEDBACK_RANGE = 1.15`, and step 07's pass left it there.
 
 A one-pole DC blocker sits on the feedback tap only, not on the audible path:
 a resonant filter under asymmetric drive walks off centre, and in a loop that

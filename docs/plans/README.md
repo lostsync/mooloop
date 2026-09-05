@@ -9,8 +9,9 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
-Last swept 2026-09-05, twice: once when DS-01's step 09 closed, and again
-when `FOCUS.md` was rewritten around the debt those two instruments left.
+Last swept 2026-09-05, three times: once when DS-01's step 09 closed, again
+when `FOCUS.md` was rewritten around the debt those two instruments left, and
+again when ML-P8's step 07 listening pass closed.
 
 `docs/ARCHITECTURE_REVIEW.md` is where the two newest plans came from, and it
 is worth reading before either.
@@ -20,7 +21,7 @@ is worth reading before either.
 | Plan | State |
 | --- | --- |
 | `latency-compensation/` | **Steps 02, 03 and 04 in; most of 05 came with 04.** The mixer is time aligned: two channels hitting on the same tick, one through a fifteen-frame device, land in the same frame. `AUDIO_ARCHITECTURE.md`'s migration step 5, which its own header says steps 6 and 7 depend on — and step 6 is the typed audio edges `FOCUS.md` step 1 waits on. Adam settled the ordering on 2026-09-05: if compensation is on the path either way, building the edge type against an uncompensated tree means building it twice. A device declares its latency without being built, the tree compiles to a per-producer delay, and the delays are installed structurally and reconciled from the pump by deriving rather than tracking. Bypass was found not to be time transparent and now is. |
-| `poly-synth-v2/` | **In progress, and now first in the sequence.** ML-P8 steps 02-05 in; 06 mostly in (outlets declared, published and routable; the picker does not offer them and the audio outlets wait on typed edges); 07 after it. Step 06 is the same work as `drum-synth-v2/`'s step 07 — do it once, here. `origin/feat/mlp8-mod` is stale: it carried step 04's WIP, which has landed. |
+| `poly-synth-v2/` | **Every step in but 06's audio outlets, and it is first in the sequence.** ML-P8 steps 02-05 and 07 in: the control outlets are declared, published, routable and offered by the shelf's OUTLETS pane, and Adam played the eight-patch bank on 2026-09-05 and closed 07 without moving a range. What is left is 06's audio half, waiting on typed audio edges — the same work as `drum-synth-v2/`'s step 07, which is why it is done once, here, and why both directories archive together. `origin/feat/mlp8-mod` is stale: it carried step 04's WIP, which has landed. |
 | `drum-synth-v2/` | **Every step in but 07's outlets, which are blocked.** DS-01 plays, is descriptor-addressed throughout, has a six-page face and a seventeen-patch factory bank, and was played and signed off on 2026-09-04. Step 07's published outlets are blocked on the shared device-outlet mechanism ML-P8's step 06 also waits for, which is the only thing keeping the directory out of `archive/` — and which `FOCUS.md` now makes step 1 of the active sequence, so both directories archive together. `mockups/` holds four rendered concepts: the shipped pages, and the three one-screen layouts they replaced. |
 | `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |

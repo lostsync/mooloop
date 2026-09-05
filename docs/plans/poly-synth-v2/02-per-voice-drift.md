@@ -171,8 +171,9 @@ reaches outside 0-41 or lands on the reserved 24.
 
 ### Ranges and curves, as built
 
-All provisional until step 07's listening pass; the numbers are here so that
-pass has something specific to move.
+These were provisional until step 07's listening pass. That pass ran on
+2026-09-05 and moved none of them, so they are the built ranges rather than
+a proposal for one.
 
 - **Modulation amounts are signed percent**, `-100..100`, linear in the
   descriptor. The musical curve is in the DSP: `route_depth` squares the

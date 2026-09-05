@@ -91,21 +91,22 @@ in `docs/plans/latency-compensation/`. That supersedes this document's
 "deliberately not now" entry on compensation, which was written on the
 opposite reading.
 
-`drum-synth-v2/` archives the moment its step 07 closes. `poly-synth-v2/` has
-one more thing after this: its step 07 is ML-P8's factory bank and listening
-pass. **The bank shipped on 2026-09-05** — eight patches in
+**Both directories archive together now, on this one gap.**
+`drum-synth-v2/` archives the moment its step 07 closes. `poly-synth-v2/` no
+longer has anything after this: its step 07 was ML-P8's factory bank and
+listening pass, the bank shipped on 2026-09-05 — eight patches in
 `presets/generators/mlp8/`, seven of them at Unison 1x with the chorus off —
-so what is left is the pass itself, which is Adam's. Nothing added since the
-ML-M1 bank on 2026-08-31 has been listened to except DS-01. Do that pass at
-the end of this step rather than deferring it again; it is the only thing
-between ML-P8 and being finished, and the range decisions step 07 lists (XMOD
-curve, self-feedback scaling, Sub balance, LP24 resonance, Voice Feedback
-bounds, LFO Warp/Slew, Detune maximum, whether Chorus needs a Mix) are ear
-decisions waiting on it.
+and Adam played it and closed the step the same day. The range decisions step
+07 listed (XMOD curve, self-feedback scaling, Sub balance, LP24 resonance,
+Voice Feedback bounds, LFO Warp/Slew, Detune maximum, whether Chorus needs a
+Mix) were ear decisions and the pass moved none of them, so they are the
+ranges rather than provisional values. ML-P8's audio outlets are the last
+thing in its plan.
 
 Done when: a route can name a device outlet from the picker; audio outlets obey
-their declared rate and latency contracts; ML-P8's bank has been played;
-`poly-synth-v2/` and `drum-synth-v2/` both move to `docs/plans/archive/`.
+their declared rate and latency contracts; `poly-synth-v2/` and
+`drum-synth-v2/` both move to `docs/plans/archive/`. ML-P8's bank has been
+played, which was the third of those and closed on 2026-09-05.
 
 ### 2. ~~Give the v1 drum synth automation support~~ — done, 2026-09-05
 
@@ -296,9 +297,9 @@ stable parameter IDs, conservative project defaults, deterministic rendering,
 and the realtime rules in `AUDIO_ARCHITECTURE.md`. `AGENTS.md` governs
 worktrees, commits, and verification.
 
-**Listening is a step, not a formality.** The last recorded listening pass was
-DS-01 and its bank on 2026-09-04; ML-P8 has never had one, and step 1 ends
-with it. Step 2 changes nothing about how the v1 drum synth sounds
+**Listening is a step, not a formality.** The last recorded listening passes
+were DS-01 and its bank on 2026-09-04 and ML-P8 and its bank on 2026-09-05,
+which closed that plan's step 07. Step 2 changes nothing about how the v1 drum synth sounds
 and does not need a pass of its own; step 3 changes what can be *done* to a
 sound rather than how it sounds, and a moving patch is the only proof it
 worked.

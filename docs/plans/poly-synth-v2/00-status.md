@@ -1,7 +1,8 @@
 # ML-P8 plan status
 
-**Steps 02, 03, 04 and 05 are in. 06's control half is in; its audio outlets
-wait on typed audio edges. 07's bank is in and has not been listened to.**
+**Steps 02, 03, 04, 05 and 07 are in. 06's control half is in; its audio
+outlets wait on typed audio edges, and they are the only thing left in this
+plan.**
 
 ## The face was rebuilt on 2026-09-04
 
@@ -137,7 +138,7 @@ and the arm button, which is the reason it is in the picker.
 
 **What 06 still needs:** the audio outlets.
 
-## Step 07's bank is shipped and unheard
+## Step 07 is closed: the bank shipped and was played
 
 Eight patches, in `mlp8_factory`, seeded once into `presets/generators/mlp8/`
 as generator presets -- generator rather than channel, because an ML-P8 patch's
@@ -172,13 +173,21 @@ Three things authoring it turned up:
   *brightness* -- high-frequency energy over total energy, which does not move
   with level -- so the bank has to differ in timbre and not in gain.
 
-**What 07 still needs, and it is Adam's:** the listening pass. Nothing in the
-device has been played since the ML-M1 bank on 2026-08-31 except DS-01, and
-the range decisions the step lists -- XMOD curve, self-feedback scaling, Sub
-balance, LP24 resonance distribution, Voice Feedback bounds, LFO Warp/Slew,
-Detune maximum, whether Chorus needs a Mix -- are ear decisions and are still
-provisional. The bank exists to make that pass possible in one sitting: open
-a channel, switch it to ML-P8, and the eight patches are in its preset rail.
+**Adam played the bank and closed the step on 2026-09-05.** The range
+decisions it lists -- XMOD curve, self-feedback scaling, Sub balance, LP24
+resonance distribution, Voice Feedback bounds, LFO Warp/Slew, Detune maximum,
+whether Chorus needs a Mix -- were the point of the pass, and **none of them
+moved**: the values in steps 02 and 03 are the answer rather than a placeholder
+for one, and the documents that called them provisional now say so. The bank
+made the pass possible in one sitting, which is what it was for: open a
+channel, switch it to ML-P8, and the eight patches are in its preset rail.
+
+The step's own "done when" list carries two items the pass did not settle,
+and both are on the audio half rather than the ear. Its third published-
+interface fixture -- muted Osc 3 feeding a consumer through its pre-Level
+outlet -- says outright that it waits for typed audio edges, and the automation
+abuse pass has been run over the control surface the device actually exposes.
+Neither holds the step open; both belong to 06.
 
 The audio outlets stay declared and unconnectable, which is the split the step
 itself offers. Materialising seven stereo taps with nothing able to read them
@@ -358,9 +367,9 @@ Read 01 first, then work 02 through 07 in order:
 The filenames are retained so existing references to this plan do not break;
 their headings describe their new scope.
 
-Step 02's own document records the ids, ranges, and curves as built, and what
-is still provisional until step 07's listening pass. The bank that pass will
-use is shipped; the pass itself has not happened.
+Step 02's own document records the ids, ranges, and curves as built. They were
+provisional until step 07's listening pass; that pass happened on 2026-09-05
+and moved none of them, so they are simply the ranges now.
 
 The separate filter ADSR and keytracking that used to be an unnamed
 prerequisite are now part of step 03. The device's own modulation is part of
