@@ -610,7 +610,10 @@ pub fn compile_audio_graph(
         } else {
             match published.get(source) {
                 None => refuse(EdgeRefusal::NoSuchChannel),
-                Some(outlets) if outlets.is_empty() => refuse(EdgeRefusal::NotAProducer),
+                // An empty published table: the channel exists and its
+                // generator designs no outlets at all, which is usually a
+                // device that was changed after the edge was authored.
+                Some([]) => refuse(EdgeRefusal::NotAProducer),
                 Some(outlets) => match crate::outlet::find(outlets, subscription.outlet) {
                     None => refuse(EdgeRefusal::NoSuchOutlet),
                     Some(outlet) if outlet.is_control() => refuse(EdgeRefusal::NotAudio),
@@ -715,8 +718,8 @@ pub fn compile_audio_graph(
     if edges.iter().any(|edge| edge.refusal() == Some(EdgeRefusal::Cycle)) {
         taps = [None; MAX_CHANNELS];
         tap_count = 0;
-        for channel in 0..live {
-            let AudioEdge::Resolved { subscription, .. } = edges[channel] else {
+        for edge in edges.iter_mut().take(live) {
+            let AudioEdge::Resolved { subscription, .. } = *edge else {
                 continue;
             };
             let existing = taps[..tap_count]
@@ -730,7 +733,7 @@ pub fn compile_audio_graph(
                     tap_count - 1
                 }
             };
-            edges[channel] = AudioEdge::Resolved {
+            *edge = AudioEdge::Resolved {
                 subscription,
                 tap: tap as u8,
             };
