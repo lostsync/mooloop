@@ -247,12 +247,13 @@ front of the current sequence:
   the last real architecture gap the instrument push left, and it is the same
   prerequisite parallel sends and sidechain will want, so it is an edge type
   rather than an ML-P8 feature.
-- **The v1 drum synth's descriptor table.** It is still the only source that
-  cannot be modulated. The recorded reason — that `DrumSynthParams` is a
-  mode-union — does not hold up: it is a flat struct whose fields keep one
-  meaning regardless of the Mode switch, which selects which of them are
-  audible. Sixteen continuous fields and one table. The device itself does not
-  change; it stays the simple three-mode instrument it is.
+- ~~**The v1 drum synth's descriptor table.**~~ **Done, 2026-09-05.** It was
+  the only source that could not be modulated, and the recorded reason — that
+  `DrumSynthParams` is a mode-union — did not hold up: it is a flat struct
+  whose fields keep one meaning regardless of the Mode switch, which selects
+  which of them are audible. Sixteen continuous controls and four selectors
+  under ids of their own. The device itself did not change; it is still the
+  simple three-mode instrument it was.
 
 ## Phase 7: The 1.0 Interface Shell
 

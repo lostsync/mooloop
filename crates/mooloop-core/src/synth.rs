@@ -60,6 +60,97 @@ impl DrumMode {
             DrumMode::Hat => "Hat",
         }
     }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Kick => 0,
+            Self::Snare => 1,
+            Self::Hat => 2,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Snare,
+            2 => Self::Hat,
+            _ => Self::Kick,
+        }
+    }
+}
+
+// The three character selectors' index mappings.
+//
+// These lived in `mooloop-ui` as free functions while they were only ever a
+// Slint `int`. They are wire format now: a stepped parameter's value *is* its
+// index, and an automation lane persists it -- so the mapping belongs beside
+// the enum it names, and is frozen from here. The orders below are the ones
+// the UI was already using, so no saved project or open window changes
+// meaning; what changes is that there is one of them rather than two.
+
+impl KickCharacter {
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Sub => 0,
+            Self::Punch => 1,
+            Self::Deep => 2,
+            Self::Kit => 3,
+            Self::Dnb => 4,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::Sub,
+            1 => Self::Punch,
+            2 => Self::Deep,
+            4 => Self::Dnb,
+            _ => Self::Kit,
+        }
+    }
+}
+
+impl SnareCharacter {
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Pop => 0,
+            Self::Snap => 1,
+            Self::Power => 2,
+            Self::Clap => 3,
+            Self::Rim => 4,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Snap,
+            2 => Self::Power,
+            3 => Self::Clap,
+            4 => Self::Rim,
+            _ => Self::Pop,
+        }
+    }
+}
+
+impl HatCharacter {
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Soft => 0,
+            Self::Tight => 1,
+            Self::Metal => 2,
+            Self::Sizzle => 3,
+            Self::Trash => 4,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::Soft,
+            2 => Self::Metal,
+            3 => Self::Sizzle,
+            4 => Self::Trash,
+            _ => Self::Tight,
+        }
+    }
 }
 
 /// All drum synth parameters, in the units the DSP and UI share. Knobs that

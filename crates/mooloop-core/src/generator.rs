@@ -13,7 +13,8 @@
 //! adding an oscillator parameter later does not disturb the others.
 
 use crate::{
-    DeviceKind, Ds01Params, EnvTrigger, FilterModel, GlideMode, LfoParams, LfoWave, LoopMode,
+    DeviceKind, DrumMode, DrumSynthParams, Ds01Params, EnvTrigger, FilterModel, GlideMode,
+    HatCharacter, KickCharacter, LfoParams, LfoWave, LoopMode, SnareCharacter,
     MlP8Params,
     MonoSynthParams, MlM1Params,
     NotePriority, OscParams, OscWave, ParamCurve, ParamDescriptor, PlayMode, PolySynthParams,
@@ -106,6 +107,117 @@ pub(crate) const fn stepped(id: u32, name: &'static str, steps: u8, default: f32
         default,
     }
 }
+
+// --- The v1 drum synth ----------------------------------------------------
+//
+// Its own id namespace, starting at zero, like the ML-P8's and DS-01's. The
+// four selectors come first and the sixteen continuous controls follow, which
+// is also the order the face reads in.
+//
+// Ranges here must agree with `ui/drum-device.slint`, because a knob and an
+// automation lane are two views of one value and a range written twice is how
+// they come to disagree. `the_drum_table_agrees_with_its_face` is what holds
+// them together.
+
+pub const DRUM_PARAM_MODE: u32 = 0;
+pub const DRUM_PARAM_KICK_CHARACTER: u32 = 1;
+pub const DRUM_PARAM_SNARE_CHARACTER: u32 = 2;
+pub const DRUM_PARAM_HAT_CHARACTER: u32 = 3;
+pub const DRUM_PARAM_DECAY: u32 = 4;
+pub const DRUM_PARAM_TUNE_SEMITONES: u32 = 5;
+pub const DRUM_PARAM_DRIVE: u32 = 6;
+pub const DRUM_PARAM_PUNCH: u32 = 7;
+pub const DRUM_PARAM_KICK_START_HZ: u32 = 8;
+pub const DRUM_PARAM_KICK_END_HZ: u32 = 9;
+pub const DRUM_PARAM_KICK_SWEEP: u32 = 10;
+pub const DRUM_PARAM_KICK_CLICK: u32 = 11;
+pub const DRUM_PARAM_SNARE_TONE_HZ: u32 = 12;
+pub const DRUM_PARAM_SNARE_TONE2_HZ: u32 = 13;
+pub const DRUM_PARAM_SNARE_TONE2_MIX: u32 = 14;
+pub const DRUM_PARAM_SNARE_NOISE_MIX: u32 = 15;
+pub const DRUM_PARAM_SNARE_NOISE_DECAY: u32 = 16;
+pub const DRUM_PARAM_SNARE_NOISE_COLOR: u32 = 17;
+pub const DRUM_PARAM_HAT_HP_HZ: u32 = 18;
+pub const DRUM_PARAM_HAT_METALLIC: u32 = 19;
+
+/// A frequency knob, in the range the face draws it over.
+///
+/// Not [`seconds`] or a shared helper: this device's ranges are its own and
+/// predate the shared ones, and widening one to reuse a helper would move a
+/// knob under a saved project.
+const fn hz(id: u32, name: &'static str, min: f32, max: f32, default: f32) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "Hz",
+        min,
+        max,
+        curve: ParamCurve::Exponential,
+        default,
+    }
+}
+
+/// A time knob on this device's own 5 ms..2 s range, which is narrower than
+/// the shared envelope range because a drum's whole life is inside it.
+const fn drum_seconds(id: u32, name: &'static str, max: f32, default: f32) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "s",
+        min: 0.005,
+        max,
+        curve: ParamCurve::Exponential,
+        default,
+    }
+}
+
+/// The v1 drum synth's table.
+///
+/// Sixteen continuous controls and four selectors. Every id means exactly one
+/// thing forever: `kick_start_hz` is the kick sweep start whatever the Mode
+/// switch says, which is why the other modes' knobs are *retained* across a
+/// mode change rather than reset.
+///
+/// **What Mode selects is audibility, not meaning.** A route or a lane on
+/// `Kick start` does nothing while the device is in Snare mode, and that is
+/// the same situation as a route onto a bypassed effect, which the
+/// application permits everywhere. It is documented rather than special-cased:
+/// suppressing the route would be a second rule about when a parameter exists,
+/// and the value it would suppress is still the one the patch authored.
+///
+/// `choke_group` is deliberately absent. It is not a control of the voice but
+/// a relationship between channels, and DS-01 keeps its equivalent out of its
+/// destination list for the same reason.
+static DRUM_DESCRIPTORS: [ParamDescriptor; 20] = [
+    stepped(DRUM_PARAM_MODE, "Mode", 3, 0.0),
+    stepped(DRUM_PARAM_KICK_CHARACTER, "Kick char", 5, 3.0),
+    stepped(DRUM_PARAM_SNARE_CHARACTER, "Snare char", 5, 0.0),
+    stepped(DRUM_PARAM_HAT_CHARACTER, "Hat char", 5, 1.0),
+    drum_seconds(DRUM_PARAM_DECAY, "Decay", 2.0, 0.24),
+    ParamDescriptor {
+        id: DRUM_PARAM_TUNE_SEMITONES,
+        name: "Tune",
+        unit: "st",
+        min: -48.0,
+        max: 48.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    unit(DRUM_PARAM_DRIVE, "Drive", 0.0),
+    unit(DRUM_PARAM_PUNCH, "Punch", 0.35),
+    hz(DRUM_PARAM_KICK_START_HZ, "Kick start", 20.0, 1_000.0, 160.0),
+    hz(DRUM_PARAM_KICK_END_HZ, "Kick end", 20.0, 400.0, 48.0),
+    drum_seconds(DRUM_PARAM_KICK_SWEEP, "Kick sweep", 1.0, 0.045),
+    unit(DRUM_PARAM_KICK_CLICK, "Kick click", 0.5),
+    hz(DRUM_PARAM_SNARE_TONE_HZ, "Snare tone", 40.0, 2_000.0, 180.0),
+    hz(DRUM_PARAM_SNARE_TONE2_HZ, "Snare tone 2", 80.0, 4_000.0, 330.0),
+    unit(DRUM_PARAM_SNARE_TONE2_MIX, "Snare T2 mix", 0.2),
+    unit(DRUM_PARAM_SNARE_NOISE_MIX, "Snare noise", 0.6),
+    drum_seconds(DRUM_PARAM_SNARE_NOISE_DECAY, "Snare N decay", 2.0, 0.11),
+    unit(DRUM_PARAM_SNARE_NOISE_COLOR, "Snare color", 0.65),
+    hz(DRUM_PARAM_HAT_HP_HZ, "Hat high-pass", 500.0, 16_000.0, 7_500.0),
+    unit(DRUM_PARAM_HAT_METALLIC, "Hat metallic", 0.5),
+];
 
 static SAMPLER_DESCRIPTORS: [ParamDescriptor; 36] = [
     unit(SAMPLER_PARAM_START, "Start", 0.0),
@@ -550,29 +662,23 @@ const fn concat_synth(
 }
 
 impl DeviceKind {
-    /// This generator's parameter table, or empty for a kind that is not
-    /// descriptor-addressed yet.
+    /// This generator's parameter table. Every kind has one.
     ///
-    /// The v1 drum synth is the one still empty, and it is scheduled to stop
-    /// being empty — `docs/FOCUS.md` step 2, at Adam's request on 2026-09-05.
+    /// The v1 drum synth was the last one without, and the note here spent
+    /// two revisions being wrong about why. It first called the table
+    /// mechanical work rather than a design question; the correction called
+    /// [`DrumSynthParams`](crate::synth::DrumSynthParams) a mode-union that
+    /// would hand out ids whose meaning changes with the Mode switch. It is
+    /// not a union. It is a flat struct of named fields, each of which means
+    /// one thing forever — `kick_start_hz` is the kick sweep start whatever
+    /// the Mode switch says, which is exactly why the other modes' knobs are
+    /// *retained* across a mode change rather than reset.
     ///
-    /// This note has now been wrong in both directions. It first called the
-    /// table mechanical work rather than a design question; the correction
-    /// called [`DrumSynthParams`](crate::synth::DrumSynthParams) a mode-union
-    /// that would hand out ids whose meaning changes with the Mode switch, and
-    /// pointed at `docs/plans/drum-synth-v2/`. It is not a union. It is a flat
-    /// struct of named fields, each of which means one thing forever —
-    /// `kick_start_hz` is the kick sweep start whatever the Mode switch says,
-    /// which is exactly why the other modes' knobs are retained across a mode
-    /// change. Mode selects which fields are *audible*, and a voice latches it
-    /// at note-on.
-    ///
-    /// What survives is smaller: a route onto `kick_start_hz` does nothing
-    /// while the device is in Snare mode. That is an audibility gate, the same
-    /// one a route onto a bypassed effect already lives with, not an
-    /// addressing bug. [`Self::Ds01`] remains the better instrument and the
-    /// reason the v1 device does not need to grow; it is not the reason the v1
-    /// device cannot have a table.
+    /// What survived the correction was smaller and is now documented on
+    /// [`DRUM_DESCRIPTORS`] rather than avoided: a route onto `kick_start_hz`
+    /// does nothing while the device is in Snare mode. That is an audibility
+    /// gate, the same one a route onto a bypassed effect already lives with,
+    /// not an addressing bug.
     pub fn descriptors(self) -> &'static [ParamDescriptor] {
         match self {
             Self::Sampler => &SAMPLER_DESCRIPTORS,
@@ -587,7 +693,7 @@ impl DeviceKind {
             // Same reasoning as ML-P8: DS-01's ids are its own namespace, so
             // its table lives beside the struct it describes.
             Self::Ds01 => &crate::ds01::DESCRIPTORS,
-            Self::DrumSynth => &[],
+            Self::DrumSynth => &DRUM_DESCRIPTORS,
         }
     }
 
@@ -713,9 +819,7 @@ pub enum GeneratorParams {
     MlM1(MlM1Params),
     MlP8(MlP8Params),
     Ds01(Ds01Params),
-    /// Not addressable, and deliberately so: see [`DeviceKind::descriptors`].
-    /// Every `get`/`set` misses.
-    DrumSynth,
+    DrumSynth(DrumSynthParams),
 }
 
 impl GeneratorParams {
@@ -747,7 +851,7 @@ impl GeneratorParams {
             Self::MlM1(_) => DeviceKind::MlM1,
             Self::MlP8(_) => DeviceKind::MlP8,
             Self::Ds01(_) => DeviceKind::Ds01,
-            Self::DrumSynth => DeviceKind::DrumSynth,
+            Self::DrumSynth(_) => DeviceKind::DrumSynth,
         }
     }
 
@@ -871,7 +975,29 @@ impl GeneratorParams {
             }
             Self::MlP8(p) => crate::mlp8::get(p, id),
             Self::Ds01(p) => crate::ds01::get(p, id),
-            Self::DrumSynth => None,
+            Self::DrumSynth(p) => Some(match id {
+                DRUM_PARAM_MODE => p.mode.to_index() as f32,
+                DRUM_PARAM_KICK_CHARACTER => p.kick_character.to_index() as f32,
+                DRUM_PARAM_SNARE_CHARACTER => p.snare_character.to_index() as f32,
+                DRUM_PARAM_HAT_CHARACTER => p.hat_character.to_index() as f32,
+                DRUM_PARAM_DECAY => p.decay,
+                DRUM_PARAM_TUNE_SEMITONES => p.tune_semitones,
+                DRUM_PARAM_DRIVE => p.drive,
+                DRUM_PARAM_PUNCH => p.punch,
+                DRUM_PARAM_KICK_START_HZ => p.kick_start_hz,
+                DRUM_PARAM_KICK_END_HZ => p.kick_end_hz,
+                DRUM_PARAM_KICK_SWEEP => p.kick_sweep,
+                DRUM_PARAM_KICK_CLICK => p.kick_click,
+                DRUM_PARAM_SNARE_TONE_HZ => p.snare_tone_hz,
+                DRUM_PARAM_SNARE_TONE2_HZ => p.snare_tone2_hz,
+                DRUM_PARAM_SNARE_TONE2_MIX => p.snare_tone2_mix,
+                DRUM_PARAM_SNARE_NOISE_MIX => p.snare_noise_mix,
+                DRUM_PARAM_SNARE_NOISE_DECAY => p.snare_noise_decay,
+                DRUM_PARAM_SNARE_NOISE_COLOR => p.snare_noise_color,
+                DRUM_PARAM_HAT_HP_HZ => p.hat_hp_hz,
+                DRUM_PARAM_HAT_METALLIC => p.hat_metallic,
+                _ => return None,
+            }),
         }
     }
 
@@ -1035,7 +1161,35 @@ impl GeneratorParams {
                     return None;
                 }
             }
-            Self::DrumSynth => return None,
+            Self::DrumSynth(p) => match id {
+                DRUM_PARAM_MODE => p.mode = DrumMode::from_index(value.round() as i32),
+                DRUM_PARAM_KICK_CHARACTER => {
+                    p.kick_character = KickCharacter::from_index(value.round() as i32)
+                }
+                DRUM_PARAM_SNARE_CHARACTER => {
+                    p.snare_character = SnareCharacter::from_index(value.round() as i32)
+                }
+                DRUM_PARAM_HAT_CHARACTER => {
+                    p.hat_character = HatCharacter::from_index(value.round() as i32)
+                }
+                DRUM_PARAM_DECAY => p.decay = value,
+                DRUM_PARAM_TUNE_SEMITONES => p.tune_semitones = value,
+                DRUM_PARAM_DRIVE => p.drive = value,
+                DRUM_PARAM_PUNCH => p.punch = value,
+                DRUM_PARAM_KICK_START_HZ => p.kick_start_hz = value,
+                DRUM_PARAM_KICK_END_HZ => p.kick_end_hz = value,
+                DRUM_PARAM_KICK_SWEEP => p.kick_sweep = value,
+                DRUM_PARAM_KICK_CLICK => p.kick_click = value,
+                DRUM_PARAM_SNARE_TONE_HZ => p.snare_tone_hz = value,
+                DRUM_PARAM_SNARE_TONE2_HZ => p.snare_tone2_hz = value,
+                DRUM_PARAM_SNARE_TONE2_MIX => p.snare_tone2_mix = value,
+                DRUM_PARAM_SNARE_NOISE_MIX => p.snare_noise_mix = value,
+                DRUM_PARAM_SNARE_NOISE_DECAY => p.snare_noise_decay = value,
+                DRUM_PARAM_SNARE_NOISE_COLOR => p.snare_noise_color = value,
+                DRUM_PARAM_HAT_HP_HZ => p.hat_hp_hz = value,
+                DRUM_PARAM_HAT_METALLIC => p.hat_metallic = value,
+                _ => return None,
+            },
         }
         Some(value)
     }
@@ -1046,9 +1200,10 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn all() -> [GeneratorParams; 6] {
+    fn all() -> [GeneratorParams; 7] {
         [
             GeneratorParams::Sampler(SamplerParams::default()),
+            GeneratorParams::DrumSynth(DrumSynthParams::default()),
             GeneratorParams::MonoSynth(MonoSynthParams::default()),
             GeneratorParams::PolySynth(PolySynthParams::default()),
             GeneratorParams::MlM1(MlM1Params::default()),
@@ -1104,6 +1259,7 @@ mod tests {
     #[test]
     fn synth_descriptor_defaults_match_parameter_defaults() {
         for params in [
+            GeneratorParams::DrumSynth(DrumSynthParams::default()),
             GeneratorParams::MonoSynth(MonoSynthParams::default()),
             GeneratorParams::PolySynth(PolySynthParams::default()),
             GeneratorParams::MlM1(MlM1Params::default()),
@@ -1175,12 +1331,51 @@ mod tests {
         assert_eq!(params.set(synth_osc_param(0, OSC_OFFSET_LEVEL), 1.0), None);
     }
 
+    /// The v1 drum synth's table is the one that had to argue for itself, so
+    /// its shape is asserted rather than left to the generic sweep above:
+    /// sixteen continuous controls and four selectors, and every id means one
+    /// thing whatever Mode says.
     #[test]
-    fn the_drum_synth_is_honestly_empty_rather_than_partially_addressable() {
-        let mut drum = GeneratorParams::DrumSynth;
-        assert!(DeviceKind::DrumSynth.descriptors().is_empty());
-        assert_eq!(drum.get(0), None);
-        assert_eq!(drum.set(0, 1.0), None);
+    fn the_drum_synth_is_sixteen_continuous_controls_and_four_selectors() {
+        let table = DeviceKind::DrumSynth.descriptors();
+        assert_eq!(table.len(), 20);
+        let stepped = table
+            .iter()
+            .filter(|d| matches!(d.curve, ParamCurve::Stepped(_)))
+            .count();
+        assert_eq!(stepped, 4, "the selector count moved");
+
+        // The claim the whole step rests on: a field means the same thing in
+        // every mode, so writing a kick control while the device is in Snare
+        // mode stores the kick control -- it is inert, not misaddressed.
+        let mut drum = GeneratorParams::DrumSynth(DrumSynthParams {
+            mode: DrumMode::Snare,
+            ..DrumSynthParams::default()
+        });
+        assert_eq!(drum.set(DRUM_PARAM_KICK_START_HZ, 90.0), Some(90.0));
+        assert_eq!(drum.get(DRUM_PARAM_KICK_START_HZ), Some(90.0));
+        let GeneratorParams::DrumSynth(params) = drum else {
+            unreachable!()
+        };
+        assert_eq!(params.kick_start_hz, 90.0);
+        assert_eq!(params.mode, DrumMode::Snare, "writing a kick knob moved Mode");
+
+        // And the selectors round-trip through their index, which is now wire
+        // format: an automation lane persists the number, not the variant.
+        for (id, index, expect) in [
+            (DRUM_PARAM_MODE, 2.0, DrumMode::Hat.to_index()),
+            (DRUM_PARAM_KICK_CHARACTER, 0.0, KickCharacter::Sub.to_index()),
+            (DRUM_PARAM_SNARE_CHARACTER, 4.0, SnareCharacter::Rim.to_index()),
+            (DRUM_PARAM_HAT_CHARACTER, 3.0, HatCharacter::Sizzle.to_index()),
+        ] {
+            assert_eq!(drum.set(id, index), Some(index));
+            assert_eq!(drum.get(id), Some(expect as f32));
+        }
+
+        // `choke_group` stays out: it is a relationship between channels
+        // rather than a control of the voice, which is the same reason DS-01
+        // keeps its own out of its destination list.
+        assert!(table.iter().all(|d| !d.name.to_lowercase().contains("choke")));
     }
 
     #[test]

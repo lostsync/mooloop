@@ -82,8 +82,8 @@ Alphabetical by model name, then by harness.
   September 2026 documentation audit, the 2026-09-05 refresh that
   rewrote `FOCUS.md` around Adam's new list, the `v0.1.2` release, and the
   modulation shelf's OUTLETS pane that made a published outlet routable by
-  hand, DS-01's own published outlets, and ML-P8's factory bank. Longer
-  accounts of most of this are in
+  hand, DS-01's own published outlets, ML-P8's factory bank, and the v1 drum
+  synth's descriptor table. Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

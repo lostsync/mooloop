@@ -108,7 +108,7 @@ Done when: a route can name a device outlet from the picker; audio outlets obey
 their declared rate and latency contracts; ML-P8's bank has been played;
 `poly-synth-v2/` and `drum-synth-v2/` both move to `docs/plans/archive/`.
 
-### 2. Give the v1 drum synth automation support
+### 2. ~~Give the v1 drum synth automation support~~ — done, 2026-09-05
 
 Adam's ask, 2026-09-05, in his words: *"og drumsynth was simple but honestly
 sounded pretty good. why has simply updating it for automation support never
@@ -144,7 +144,23 @@ standing reason to hurry it out of the tree.
 Done when: `DrumSynthParams`' continuous fields are descriptor-addressed with
 stable ids, a modulation route and an automation lane both reach them, old
 projects load unchanged, and the inert-while-out-of-mode case is documented
-rather than special-cased.
+rather than special-cased. **All four hold.** Sixteen continuous controls and
+four selectors under their own ids; `a_lane_and_a_route_both_reach_the_v1_drum_synth`
+is the acceptance case, and it runs the device in Snare mode so the inert-kick
+case is exercised rather than described. Two things it turned up:
+
+- **`GeneratorParams::DrumSynth` was a unit variant.** The device's parameters
+  never travelled through the shuttle every other generator uses, which is the
+  structural half nobody had named — the missing table was the visible half.
+- **The character selectors' index mapping was UI-local and is now wire
+  format.** An automation lane persists a stepped parameter's index, so the
+  mapping moved to core beside the enums and is frozen. `mooloop-ui` had the
+  only copy; there is one now rather than two.
+
+The face and the table are two places one range is written, which is how a
+knob comes to disagree with the lane drawn against it, so
+`drum_slint_agreement.rs` holds them together on bounds, resting value, and
+whether the control is drawn in ratio.
 
 ### 3. The 1.0 interface shell
 

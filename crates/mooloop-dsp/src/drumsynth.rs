@@ -19,8 +19,8 @@ use crate::filter::{apply_drive, OnePoleHp};
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{Noise, Osc};
 use mooloop_core::{
-    DrumMode, DrumSynthParams, HatCharacter, KickCharacter, OscWave, SnareCharacter,
-    MAX_CHOKE_GROUP, MAX_DRUM_VOICES,
+    DrumMode, DrumSynthParams, GeneratorParams, HatCharacter, KickCharacter, OscWave,
+    SnareCharacter, MAX_CHOKE_GROUP, MAX_DRUM_VOICES,
 };
 
 /// Fast fade used for chokes and transport stops (seconds). The coefficient
@@ -137,6 +137,39 @@ impl DrumSynth {
     pub fn set_params(&mut self, mut params: DrumSynthParams) {
         params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
         self.params = params;
+    }
+
+    /// Apply one descriptor-addressed parameter, leaving the rest alone.
+    ///
+    /// Routed through [`GeneratorParams::set`] rather than through a second
+    /// `match` on the id: that setter already clamps through the descriptor,
+    /// and a private copy of the id-to-field mapping is exactly the kind of
+    /// duplication that drifts. `DrumSynthParams` is `Copy`, so the round trip
+    /// through the enum costs a stack move and no allocation, which is what
+    /// makes it safe on the audio thread.
+    ///
+    /// A sounding voice hears continuous changes immediately, because the
+    /// render loop reads `self.params` per sample. It does *not* hear a Mode
+    /// change: mode is latched on the voice at its trigger, so a lane moving
+    /// Mode takes effect from the next hit — which is the behaviour a
+    /// one-shot drum wants, and is why Mode being automatable is useful
+    /// rather than dangerous.
+    fn apply_param(&mut self, id: u32, value: f32) {
+        let mut params = GeneratorParams::DrumSynth(self.params);
+        if params.set(id, value).is_none() {
+            return;
+        }
+        if let GeneratorParams::DrumSynth(next) = params {
+            self.params = next;
+        }
+    }
+
+    /// What the device is currently set to, as the tests and the engine's
+    /// automation checks read it. The sampler has had this since it became
+    /// addressable, for the same reason: a lane that reached the device is
+    /// only observable if the device can be asked.
+    pub fn params(&self) -> DrumSynthParams {
+        self.params
     }
 
     pub fn choke_group(&self) -> u8 {
@@ -390,8 +423,8 @@ impl AudioNode for DrumSynth {
                 // Drums are one-shot; note-offs end nothing.
                 Event::NoteOff { .. } => {}
                 Event::Choke => self.choke(),
-                Event::ParamValue { .. }
-                | Event::SourceRouteAmount { .. }
+                Event::ParamValue { id, value } => self.apply_param(id, value),
+                Event::SourceRouteAmount { .. }
                 | Event::Buffer(_)
                 | Event::BufferRelease
                 | Event::BufferScrub { .. } => {}
@@ -431,6 +464,93 @@ mod tests {
                 velocity: 127,
             },
         }
+    }
+
+    /// A descriptor-addressed parameter reaching a *sounding* voice is the
+    /// whole point of the table: modulation and automation both arrive as
+    /// sample-timed `ParamValue` events mid-note, and a device that only read
+    /// its parameters at the trigger would ignore every one of them.
+    #[test]
+    fn a_param_event_moves_a_sounding_voice() {
+        let sr = 48_000;
+        let frames = 4_096;
+        let quiet = {
+            let mut synth = make_synth(sr, DrumSynthParams::default());
+            let mut bus = StereoBus::with_capacity(frames);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 60));
+            synth.process(&ctx(frames, sr), &mut bus, &events, None);
+            bus.l[..frames].to_vec()
+        };
+
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60));
+        // Halfway through the note, drop the kick's landing frequency an
+        // octave. Nothing re-triggers, so anything that changes has to have
+        // reached the voice already playing.
+        events.push(TimedEvent {
+            offset: 1_024,
+            event: Event::ParamValue {
+                id: mooloop_core::DRUM_PARAM_KICK_END_HZ,
+                value: 24.0,
+            },
+        });
+        synth.process(&ctx(frames, sr), &mut bus, &events, None);
+        let moved = &bus.l[..frames];
+
+        assert_eq!(
+            moved[..1_024],
+            quiet[..1_024],
+            "the event changed the block before it arrived"
+        );
+        assert_ne!(
+            moved[1_024..],
+            quiet[1_024..],
+            "the event never reached the sounding voice"
+        );
+        assert!(moved.iter().all(|s| s.is_finite()));
+    }
+
+    /// Mode is latched on the voice at its trigger, so automating it moves
+    /// the *next* hit rather than reshaping the one that is playing. That is
+    /// what a one-shot drum wants, and it is the reason Mode is safe to
+    /// automate at all -- so it is asserted rather than left to be discovered.
+    #[test]
+    fn automating_mode_takes_effect_from_the_next_hit() {
+        let sr = 48_000;
+        let frames = 4_096;
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60));
+        events.push(TimedEvent {
+            offset: 512,
+            event: Event::ParamValue {
+                id: mooloop_core::DRUM_PARAM_MODE,
+                value: DrumMode::Hat.to_index() as f32,
+            },
+        });
+        synth.process(&ctx(frames, sr), &mut bus, &events, None);
+
+        assert!(
+            synth.voices.iter().any(|voice| voice.mode == DrumMode::Kick),
+            "the sounding voice changed mode under itself"
+        );
+        assert_eq!(synth.params.mode, DrumMode::Hat, "the device did not take it");
+
+        // The next hit is the one that hears it.
+        let mut next = EventList::empty();
+        next.push(note_on(0, 60));
+        synth.process(&ctx(frames, sr), &mut bus, &next, None);
+        assert!(
+            synth
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.mode == DrumMode::Hat),
+            "the next hit did not take the new mode"
+        );
     }
 
     #[test]

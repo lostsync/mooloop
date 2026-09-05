@@ -107,11 +107,13 @@ keyboard is still wonky. you often have to click into a background area to make 
   guessed at; it is now confirmed and reproducible.
 
 og drumsynth was simple but honestly sounded pretty good. why has simply updating it for automation support never been on the table? let's put it up there
-  IN THE SEQUENCE (`FOCUS.md` step 2). It was off the table because of a note
-  on `DeviceKind::descriptors` calling `DrumSynthParams` a mode-union. It is not one —
-  it is a flat struct whose fields keep one meaning forever, and the module
-  comment at `drumsynth.rs:7` says so. Sixteen continuous fields, one
-  descriptor table, the shape every other generator already has.
+  **DONE, 2026-09-05.** It was off the table because of a note on
+  `DeviceKind::descriptors` calling `DrumSynthParams` a mode-union. It is not
+  one — it is a flat struct whose fields keep one meaning forever, and the
+  module comment at `drumsynth.rs:7` says so. It now has sixteen continuous
+  controls and four selectors, the shape every other generator already had,
+  and both a modulation route and an automation lane reach them. The sound is
+  untouched and old projects load unchanged.
 
 i want to move and redesign the modulation rack. i have an image somewhere, a mockup from chatgpt. ah its here: reference/img/mooloop-1.0-mockup.png
   IN THE SEQUENCE (`FOCUS.md` step 3). The mockup puts modulation in a

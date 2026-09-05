@@ -84,7 +84,7 @@ impl ChannelState {
             DeviceKind::MlM1 => GeneratorParams::MlM1(self.mlm1_params),
             DeviceKind::MlP8 => GeneratorParams::MlP8(self.mlp8_params),
             DeviceKind::Ds01 => GeneratorParams::Ds01(self.ds01_params),
-            DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
+            DeviceKind::DrumSynth => GeneratorParams::DrumSynth(self.drum_params),
         }
     }
 

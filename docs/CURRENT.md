@@ -567,19 +567,36 @@ land on its own when it starts to matter:
   not a parameter: resizing the ring reallocates, which happens off-thread.
   The JUMP/REV/STUT gestures are unchanged and outrank the offset while they
   run; the offset re-asserts on the next control tick after one ends.
-- The sampler, v1 mono synth, ML-M1, ML-P8, DS-01, and poly synth are
-  descriptor-addressed through `GeneratorParams`, so their parameters automate
-  and modulate like an effect's. The three-oscillator synths reserve ten
-  parameter ids per oscillator, starting at 100; ML-P8's and DS-01's ids are
-  each their own namespace starting at zero, because neither is that voice
-  with a different count. The **v1** drum synth is the one generator that is
-  not addressable, and the reason is structural rather than unfinished work:
-  `DrumSynthParams` is a mode-union, so a flat descriptor table over it would
-  produce ids whose meaning changes with the Mode switch. DS-01 is the answer
-  and is built: a second drum instrument beside the v1 device, addressable
-  from its first commit, with the v1 device and its saved projects untouched.
-  `docs/MODULATION_PLAN.md` records the approved design; build order is in
+- **Every generator is descriptor-addressed** through `GeneratorParams`, so
+  their parameters automate and modulate like an effect's. The
+  three-oscillator synths reserve ten parameter ids per oscillator, starting
+  at 100; ML-P8's, DS-01's and the v1 drum synth's ids are each their own
+  namespace starting at zero, because none of them is that voice with a
+  different count. `docs/MODULATION_PLAN.md` records the approved design;
+  build order is in
   `docs/plans/buffer-implementation/02-control-and-modulation.md`.
+- The **v1** drum synth was the last one without a table, and the argument
+  against giving it one did not survive being checked. It was called a
+  mode-union whose ids would change meaning with the Mode switch;
+  `DrumSynthParams` is a flat struct of named fields, each of which means one
+  thing forever -- `kick_start_hz` is the kick sweep start whatever Mode says,
+  which is exactly why the other modes' knobs are *retained* across a mode
+  change rather than reset. It now has sixteen continuous controls and four
+  selectors under ids of its own, and a modulation route and an automation
+  lane both reach them.
+  **What Mode selects is audibility, not meaning.** A route onto a kick
+  control does nothing while the device is in Snare mode: the value is still
+  written and still the one the patch authored, it is simply not heard. That
+  is the same situation as a route onto a bypassed effect, which the
+  application permits everywhere, so it is documented rather than
+  special-cased -- suppressing it would be a second rule about when a
+  parameter exists. Mode itself is automatable and is latched on a voice at
+  its trigger, so a lane moving it changes the *next* hit rather than
+  reshaping the one that is playing.
+  The device is otherwise unchanged: three modes, the same sound, and old
+  projects load exactly as before. DS-01 remains the better instrument and the
+  reason the v1 device does not need to grow; it was never the reason the v1
+  device could not have a table.
 - DS-01 is a second drum instrument, not a rewrite of the first: one universal
   percussion voice with no drum-type mode, three layers — a morphing tone with
   a partial bank and FM, a four-colour noise generator through a morphing

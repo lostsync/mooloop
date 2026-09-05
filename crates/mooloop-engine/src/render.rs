@@ -91,7 +91,7 @@ fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
         DeviceKind::MlM1 => GeneratorParams::MlM1(MlM1Params::default()),
         DeviceKind::MlP8 => GeneratorParams::MlP8(MlP8Params::default()),
         DeviceKind::Ds01 => GeneratorParams::Ds01(Ds01Params::default()),
-        DeviceKind::DrumSynth => GeneratorParams::DrumSynth,
+        DeviceKind::DrumSynth => GeneratorParams::DrumSynth(DrumSynthParams::default()),
     }
 }
 
@@ -1061,7 +1061,7 @@ impl ChannelStrip {
             GeneratorParams::MlM1(params) => self.mlm1.set_params(params),
             GeneratorParams::MlP8(params) => self.mlp8.set_params(params),
             GeneratorParams::Ds01(params) => self.ds01.set_params(params),
-            GeneratorParams::DrumSynth => {}
+            GeneratorParams::DrumSynth(params) => self.drum_synth.set_params(params),
         }
     }
 
@@ -1094,7 +1094,7 @@ impl ChannelStrip {
             }
             ChannelSource::DrumSynth(state) => {
                 self.drum_synth.set_params(state.params);
-                GeneratorParams::DrumSynth
+                GeneratorParams::DrumSynth(state.params)
             }
             ChannelSource::MonoSynth(state) => {
                 self.mono_synth.set_params(state.params);
@@ -2224,7 +2224,7 @@ impl RenderState {
             EngineCommand::SetChannelDrumSynthParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.drum_synth.set_params(params);
-                    strip.source_base = GeneratorParams::DrumSynth;
+                    strip.source_base = GeneratorParams::DrumSynth(params);
                 }
             }
             EngineCommand::SetChannelMonoSynthParams { channel, params } => {
@@ -4623,6 +4623,122 @@ mod tests {
                 .source_base
                 .get(mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF),
             Some(1.0),
+        );
+    }
+
+    /// `docs/FOCUS.md` step 2's whole acceptance case: a modulation route and
+    /// an automation lane both reach the v1 drum synth, which until now was
+    /// the one source nothing could move.
+    ///
+    /// Both halves in one test because they share the resolve pass and the
+    /// interesting question is whether a *generator* that had no table until
+    /// today is now indistinguishable from one that always had one — nothing
+    /// here is drum-specific, which is the point.
+    #[test]
+    fn a_lane_and_a_route_both_reach_the_v1_drum_synth() {
+        let mut channel = ProjectChannel::drum_synth(0, 1);
+        // Snare mode on purpose. The kick controls are inert here, so this is
+        // also the "audibility gate" case: the route below still resolves,
+        // still writes the parameter, and simply is not heard until the
+        // device is switched back. That is documented behaviour rather than a
+        // special case, and it is what a route onto a bypassed effect does.
+        channel
+            .setup
+            .drum_synth_state_mut()
+            .expect("a drum channel has drum state")
+            .params
+            .mode = mooloop_core::DrumMode::Snare;
+        let source = channel
+            .setup
+            .modulation
+            .install(
+                0,
+                mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
+                    rate_hz: 375.0,
+                    ..mooloop_core::ModLfoParams::default()
+                }),
+            )
+            .expect("slot 0 accepts a module");
+        let punch = ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Source,
+            param: mooloop_core::DRUM_PARAM_PUNCH,
+        };
+        assert!(channel
+            .setup
+            .modulation
+            .add_route(mooloop_core::ModRoute::to_slot(
+                0,
+                punch,
+                0.4,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
+            .is_some());
+        let _ = source;
+
+        let project = synth_project(channel);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+
+        // The lane drives a different control, so the two are visible apart.
+        let start = ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Source,
+            param: mooloop_core::DRUM_PARAM_KICK_START_HZ,
+        };
+        render.apply_command(EngineCommand::UpsertAutomationPoint {
+            pattern: 0,
+            channel: 0,
+            target: start,
+            point: mooloop_core::AutomationPoint::new(1, 0, 1.0),
+        });
+        render.play();
+        render.process_block(128);
+
+        // The lane reached the device: full-scale on a 20..1000 Hz control.
+        assert!(
+            (render.strips[0].drum_synth.params().kick_start_hz - 1_000.0).abs() < 1.0,
+            "the lane did not reach the drum synth: {}",
+            render.strips[0].drum_synth.params().kick_start_hz
+        );
+
+        // The route resolved every control tick and actually moved Punch off
+        // the knob it was authored at. Four ticks a block, so an empty list
+        // would mean the route never ran rather than that it ran flat.
+        let punched: Vec<f32> = render.events[0]
+            .iter()
+            .filter_map(|event| match event.event {
+                Event::ParamValue {
+                    id: mooloop_core::DRUM_PARAM_PUNCH,
+                    value,
+                } => Some(value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(punched.len(), 4, "the route was not resolving: {punched:?}");
+        let authored = mooloop_core::DrumSynthParams::default().punch;
+        assert!(
+            punched.iter().any(|value| (value - authored).abs() > 0.05),
+            "the route never moved Punch off {authored}: {punched:?}"
+        );
+
+        // Mode is untouched by either, which is what makes the inert-kick
+        // case an audibility gate rather than an addressing accident.
+        assert_eq!(
+            render.strips[0].drum_synth.params().mode,
+            mooloop_core::DrumMode::Snare
+        );
+
+        // Clearing the lane hands the device back its knob rather than
+        // leaving it holding the last resolved value.
+        render.apply_command(EngineCommand::ClearAutomationLane {
+            pattern: 0,
+            channel: 0,
+            target: start,
+        });
+        render.process_block(128);
+        assert_eq!(
+            render.strips[0].drum_synth.params().kick_start_hz,
+            mooloop_core::DrumSynthParams::default().kick_start_hz
         );
     }
 

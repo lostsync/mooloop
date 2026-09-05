@@ -991,82 +991,6 @@ fn device_kind_to_int(kind: DeviceKind) -> i32 {
     }
 }
 
-fn drum_mode_from_int(value: i32) -> DrumMode {
-    match value {
-        1 => DrumMode::Snare,
-        2 => DrumMode::Hat,
-        _ => DrumMode::Kick,
-    }
-}
-
-fn drum_mode_to_int(mode: DrumMode) -> i32 {
-    match mode {
-        DrumMode::Kick => 0,
-        DrumMode::Snare => 1,
-        DrumMode::Hat => 2,
-    }
-}
-
-fn kick_character_from_int(value: i32) -> KickCharacter {
-    match value {
-        0 => KickCharacter::Sub,
-        1 => KickCharacter::Punch,
-        2 => KickCharacter::Deep,
-        4 => KickCharacter::Dnb,
-        _ => KickCharacter::Kit,
-    }
-}
-
-fn kick_character_to_int(character: KickCharacter) -> i32 {
-    match character {
-        KickCharacter::Sub => 0,
-        KickCharacter::Punch => 1,
-        KickCharacter::Deep => 2,
-        KickCharacter::Kit => 3,
-        KickCharacter::Dnb => 4,
-    }
-}
-
-fn snare_character_from_int(value: i32) -> SnareCharacter {
-    match value {
-        1 => SnareCharacter::Snap,
-        2 => SnareCharacter::Power,
-        3 => SnareCharacter::Clap,
-        4 => SnareCharacter::Rim,
-        _ => SnareCharacter::Pop,
-    }
-}
-
-fn snare_character_to_int(character: SnareCharacter) -> i32 {
-    match character {
-        SnareCharacter::Pop => 0,
-        SnareCharacter::Snap => 1,
-        SnareCharacter::Power => 2,
-        SnareCharacter::Clap => 3,
-        SnareCharacter::Rim => 4,
-    }
-}
-
-fn hat_character_from_int(value: i32) -> HatCharacter {
-    match value {
-        0 => HatCharacter::Soft,
-        2 => HatCharacter::Metal,
-        3 => HatCharacter::Sizzle,
-        4 => HatCharacter::Trash,
-        _ => HatCharacter::Tight,
-    }
-}
-
-fn hat_character_to_int(character: HatCharacter) -> i32 {
-    match character {
-        HatCharacter::Soft => 0,
-        HatCharacter::Tight => 1,
-        HatCharacter::Metal => 2,
-        HatCharacter::Sizzle => 3,
-        HatCharacter::Trash => 4,
-    }
-}
-
 fn osc_wave_from_int(value: i32) -> OscWave {
     match value {
         0 => OscWave::Sine,
@@ -2930,10 +2854,10 @@ impl UiState {
         // it has to be rebuilt wherever the chains or the selection can have
         // moved -- which is exactly this function's job.
         self.refresh_automation(window);
-        window.set_drum_mode(drum_mode_to_int(drum.mode));
-        window.set_drum_kick_character(kick_character_to_int(drum.kick_character));
-        window.set_drum_snare_character(snare_character_to_int(drum.snare_character));
-        window.set_drum_hat_character(hat_character_to_int(drum.hat_character));
+        window.set_drum_mode(drum.mode.to_index());
+        window.set_drum_kick_character(drum.kick_character.to_index());
+        window.set_drum_snare_character(drum.snare_character.to_index());
+        window.set_drum_hat_character(drum.hat_character.to_index());
         window.set_drum_decay(drum.decay);
         window.set_drum_tune_semitones(drum.tune_semitones);
         window.set_drum_drive(drum.drive);
@@ -7762,7 +7686,7 @@ impl AppUi {
         wire_drum_param!(on_drum_hat_metallic_changed, hat_metallic);
 
         macro_rules! wire_drum_int_param {
-            ($callback:ident, $field:ident, $map:ident) => {{
+            ($callback:ident, $field:ident, $map:path) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
                 let window_weak = window.as_weak();
@@ -7787,17 +7711,17 @@ impl AppUi {
         wire_drum_int_param!(
             on_drum_kick_character_changed,
             kick_character,
-            kick_character_from_int
+            KickCharacter::from_index
         );
         wire_drum_int_param!(
             on_drum_snare_character_changed,
             snare_character,
-            snare_character_from_int
+            SnareCharacter::from_index
         );
         wire_drum_int_param!(
             on_drum_hat_character_changed,
             hat_character,
-            hat_character_from_int
+            HatCharacter::from_index
         );
 
         {
@@ -7808,7 +7732,7 @@ impl AppUi {
                 let mut st = st.borrow_mut();
                 let channel_index = st.session.selected;
                 let channel = &mut st.session.channels[channel_index];
-                channel.drum_params.mode = drum_mode_from_int(value);
+                channel.drum_params.mode = DrumMode::from_index(value);
                 let params = channel.drum_params;
                 let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
                     channel: channel_index as u8,
