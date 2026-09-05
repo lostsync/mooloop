@@ -14,9 +14,10 @@ execution.
 
 `ARCHITECTURE_REVIEW.md` grades the implementation against an external
 reference and agrees with this document almost everywhere. Its one finding
-against the engine is that migration step 5 below — graph-wide latency
-compensation — is the next infrastructure step and is cheaper now than it will
-ever be again.
+against the engine was that migration step 5 below — graph-wide latency
+compensation — was the next infrastructure step and cheaper then than it would
+ever be again. It landed on 2026-09-05, which is what leaves step 6, the typed
+audio and dependency edges, as the next one.
 
 ## Design Character
 
@@ -261,7 +262,7 @@ Steps 1 through 5 have landed. Steps 6 and 7 are next; 6 depended on 5.
    beginning with the oversampled drive.
 5. Introduce preallocated compensation delays and compile cumulative latency
    for the existing mixer tree. **Landed 2026-09-05**, in
-   `docs/plans/latency-compensation/`: a device declares its latency without
+   `docs/plans/archive/latency-compensation/`: a device declares its latency without
    being built, `compile_latency` turns the tree into a per-producer delay, and
    the delays are installed structurally and reconciled by deriving the plan
    rather than tracking it. Parallel sends, sidechains and limiter lookahead no

@@ -1,6 +1,6 @@
 # Latency compensation plan status
 
-**Steps 02, 03 and 04 are in, and most of 05's measurements came with 04.**
+**Every step is in. The plan is finished and archives with this entry.**
 
 The mixer is time aligned. Two channels hitting on the same tick, one of them
 through a device that costs fifteen frames, now land in the same frame — and
@@ -95,13 +95,38 @@ Three things the doing turned up:
   level out, so it is one type. The old name would have been a lie at the new
   call site.
 
-## What 05 still owes
+## Step 05 landed: the measurements are complete
 
-Most of its measurements landed with 04: impulse alignment through a channel
-and through a bus, the block-size null, bypass not moving the channel, and the
-footprint. What remains is the explicit offline-versus-live comparison (the
-same `from_project` path is exercised, but not against a live render), and
-`AUDIO_ARCHITECTURE.md`'s migration sequence still lists step 5 as pending.
+Most of them came with 04 — impulse alignment through a channel and through a
+bus, the block-size null, bypass not moving the channel, and the footprint.
+What 05 owed on its own was the offline-versus-live comparison, and it is
+`an_offline_render_compiles_the_same_compensation_as_a_live_one`: the aligned
+pair is exported to a Float32 WAV through the real `OfflineRenderer` and
+compared against the live block path sample for sample.
+
+Three things about how it is written, because each is a way the test could
+have been worthless:
+
+- **Float32, not PCM24.** The export format has to be the one that does not
+  quantize, or the comparison would swallow exactly the sub-sample difference
+  it exists to find.
+- **It asserts the window is audible before it asserts agreement.** Two silent
+  buffers agree perfectly. The assertion that a hit is in the window is what
+  stops the test passing by rendering nothing.
+- **It checks the file's own alignment, not only that the two paths match.**
+  Both paths reach the plan through `from_project`, so a comparison alone
+  would pass if compensation vanished from both. The export is also asserted
+  silent for the first fifteen frames, which is the defect a listener would
+  only meet on disk. Neutering the plan makes that assertion fail, which is
+  how it was checked.
+
+`AUDIO_ARCHITECTURE.md`'s migration sequence marks step 5 landed, and
+`CURRENT.md` says the mixer is time aligned — including in the two places
+that still said the opposite, which is what a compensated mixer invalidated:
+the entry claiming there is no graph-level compensation, and the limiter's
+reason for having no lookahead. **That second one is now an open decision
+rather than a settled no**, and it is Adam's: lookahead is affordable in a
+compensated mixer, and nothing here decided to spend it.
 
 ## Reading order
 

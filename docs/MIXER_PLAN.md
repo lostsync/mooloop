@@ -234,9 +234,11 @@ and never validates a route.
 Parallel sends make latency compensation a prerequisite, not a polish item.
 At every summing point, the plan computes the longest upstream arrival and
 preallocates delays for shorter arrivals. A fully wet return and a dry main
-path must remain time-aligned if they later meet. `AudioNode`'s existing
-reported latency and internal dry-path alignment are the starting point;
-graph-level compensation must precede user-visible sends.
+path must remain time-aligned if they later meet. The one-destination tree is
+already compensated as of 2026-09-05 — declared latency, a compiled
+per-producer delay, and preallocated storage — so what a send still needs is
+the general DAG rule over that machinery rather than the machinery. It must
+precede user-visible sends either way.
 
 True sidechain inputs are not sends. A sidechain adds a dependency without
 mixing its signal into the consumer's main input, and needs a typed auxiliary

@@ -306,7 +306,8 @@ Exit criteria:
   instruments and user-assembled objects wired around them. Recorded in
   `docs/NODE_MODEL.md`, which is a direction rather than a plan: it is wanted
   for its own sake rather than pulled in by a workflow, and the audio domain
-  needs latency compensation first. What keeps it reachable is the three
+  needs latency compensation first — the mixer's own landed on 2026-09-05, so
+  what is still owed is the general DAG rule rather than the mechanism. What keeps it reachable is the three
   habits in `COMPOSABLE_DEVICE_UNITS.md`, not infrastructure built ahead of it.
 - MIDI output, and general controller mapping. Input exists behind a
   `MidiBackend` boundary with a buffer control mapping (#9 tracks the

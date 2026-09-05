@@ -523,9 +523,11 @@ land on its own when it starts to matter:
   on a silent channel does not sit lit up.
 - The dynamics effects detect on the louder of the two channels and apply one
   gain to both, so compression cannot walk the stereo image around. The
-  limiter has no lookahead on purpose: the engine has no plugin-delay
-  compensation, so lookahead latency would shift a channel against its
-  neighbours. Each kind publishes a static `ParamDescriptor` table
+  limiter has no lookahead. The reason it was built that way -- the engine
+  had no delay compensation, so lookahead latency would have shifted a
+  channel against its neighbours -- expired on 2026-09-05 when the mixer
+  became latency compensated, and whether the limiter should now take
+  lookahead is an open decision rather than a settled no. Each kind publishes a static `ParamDescriptor` table
   (range, curve, unit, default) in `mooloop-core`, which is the single source
   of truth for normalization and clamping; `Event::ParamValue` carries natural
   units so nodes never handle curves. `EffectSlotState.params` is a tagged
@@ -721,13 +723,15 @@ land on its own when it starts to matter:
   parallel send, return, or wet/dry split. There are no sidechains, external
   inputs, solo, or per-bus stem export, and buses cannot be renamed from the
   interface yet.
-- There is no graph-level plugin delay compensation. `AudioNode` can report
-  integer processing latency, and the drive declares the measured 15-frame
-  latency of its complete 2x interpolate/decimate path. Drive also delays its
-  internal dry path by the same amount, preventing its own wet/dry control from
-  mixing time-misaligned signals. Related channels with unequal effect latency
-  can still comb-filter when they meet at a bus; preallocated graph
-  compensation must land before parallel sends.
+- Latency compensation is the mixer's own, not a hosted plugin's. `AudioNode`
+  reports integer processing latency and `EffectKind` declares it without
+  being built; the drive is the only kind that costs anything, at the measured
+  15 frames of its complete 2x interpolate/decimate path, and it also delays
+  its internal dry path by the same amount so its own wet/dry control cannot
+  mix time-misaligned signals. Channels with unequal effect latency no longer
+  comb-filter when they meet at a bus -- see the mixer entry above. There is
+  no plugin hosting, so there is nothing else whose latency would have to be
+  discovered at runtime rather than declared.
 
 ### Buffers And Rendering
 

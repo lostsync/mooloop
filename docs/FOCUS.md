@@ -86,10 +86,16 @@ puts typed audio and dependency edges at its step 6 and says step 6 depends on
 its step 5 — preallocated compensation delays and compiled cumulative latency
 — which had not landed. Adam's call: if compensation is on the path either
 way, building the edge type against an uncompensated tree means building it
-twice. So the second piece above is really two, and compensation goes first,
-in `docs/plans/latency-compensation/`. That supersedes this document's
-"deliberately not now" entry on compensation, which was written on the
-opposite reading.
+twice. So the second piece above is really two, and compensation went first.
+**It landed on 2026-09-05** and `docs/plans/archive/latency-compensation/` is
+archived: a device declares its latency without being built, the tree compiles
+to a per-producer delay, the delays are installed structurally and reconciled
+by deriving the plan rather than tracking it, and an export is asserted
+sample-identical to a live render. Bypass was found not to be time transparent
+and now is. That supersedes this document's "deliberately not now" entry on
+compensation, which was written on the opposite reading. **The typed audio
+edges are what is left of step 1**, and they now go on top of an aligned
+tree.
 
 **Both directories archive together now, on this one gap.**
 `drum-synth-v2/` archives the moment its step 07 closes. `poly-synth-v2/` no
@@ -261,11 +267,12 @@ that is exactly why it can wait for the panes to stop moving. `ENHANCEMENTS.md`
 holds both in Adam's words, including the pywal/wallust half.
 
 **Parallel sends, sidechains, and plugin delay compensation for hosted
-plugins.** Still not now. But the *mixer's own* delay compensation is no
-longer parked: it turned out to be the prerequisite for step 1's typed audio
-edges rather than the other way round, and it is being built in
-`docs/plans/latency-compensation/`. Sends and sidechains themselves wait for a
-product task that wants them.
+plugins.** Still not now. But the *mixer's own* delay compensation is neither
+parked nor pending: it turned out to be the prerequisite for step 1's typed
+audio edges rather than the other way round, and it landed on 2026-09-05 in
+`docs/plans/archive/latency-compensation/`. Sends and sidechains themselves
+wait for a product task that wants them, and are no longer untrustworthy when
+one arrives.
 
 **Broad arrangement and recovery work.** Playlist clip manipulation, explicit
 loop ranges, autosave, crash recovery, and richer missing-sample relinking

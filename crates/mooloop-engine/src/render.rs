@@ -4893,6 +4893,82 @@ mod tests {
         assert_eq!(render_in_blocks(128), render_in_blocks(64));
     }
 
+    /// The offline renderer builds its own `RenderState`, so it is a second
+    /// place the plan is compiled -- and the only one a listener never hears
+    /// until the file is finished. An export that skipped `install_compensation`
+    /// would sound right in the room and arrive misaligned on disk.
+    ///
+    /// So this renders the aligned pair both ways and compares the file
+    /// against the live block path sample for sample. Float32 WAV, because
+    /// the comparison has to be exact: PCM24 would quantize the difference
+    /// this test exists to find.
+    #[test]
+    fn an_offline_render_compiles_the_same_compensation_as_a_live_one() {
+        const FRAMES: usize = 16_384;
+        let latency = mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES as usize;
+        let project = Project {
+            channels: vec![hit_channel(0, true), hit_channel(1, false)],
+            ..Project::default()
+        };
+
+        let temp = tempfile::tempdir().expect("a temporary directory");
+        let path = temp.path().join("compensated.wav");
+        crate::offline::OfflineRenderer::render(
+            &project,
+            &[],
+            48_000,
+            &crate::offline::ExportSpec {
+                path: path.clone(),
+                scope: crate::offline::RenderScope::Pattern { index: 0 },
+                tail_seconds: 0.0,
+                format: crate::offline::ExportFormat::Wav(
+                    crate::offline::WavEncoding::Float32,
+                ),
+            },
+        )
+        .expect("the project renders offline");
+
+        // Interleaved stereo; the left channel is what the live tests read.
+        let offline: Vec<f32> = hound::WavReader::open(&path)
+            .expect("the export is readable")
+            .samples::<f32>()
+            .map(|sample| sample.expect("a decoded sample"))
+            .step_by(2)
+            .take(FRAMES)
+            .collect();
+        assert_eq!(offline.len(), FRAMES, "the export was shorter than expected");
+
+        let mut live_state = RenderState::from_project(48_000, &project, &[]);
+        live_state.play();
+        let mut live = Vec::with_capacity(FRAMES);
+        while live.len() < FRAMES {
+            live_state.process_block(512);
+            live.extend_from_slice(&live_state.master().l[..512]);
+        }
+        live.truncate(FRAMES);
+
+        // The comparison is only worth anything against audio, and both hits
+        // are in the window: a silent pair of buffers would agree perfectly.
+        assert!(
+            offline.iter().any(|sample| sample.abs() > 0.01),
+            "the offline render is silent, so the comparison proves nothing"
+        );
+        // And the file itself waited: without the plan the plain channel
+        // would arrive `latency` frames before its neighbour, which is the
+        // defect the export could carry on its own.
+        assert!(
+            offline[..latency].iter().all(|sample| *sample == 0.0),
+            "the offline render arrived {latency} frames early"
+        );
+
+        for (frame, (exported, played)) in offline.iter().zip(live.iter()).enumerate() {
+            assert_eq!(
+                exported, played,
+                "frame {frame}: the export gave {exported}, the live render {played}"
+            );
+        }
+    }
+
     /// `docs/FOCUS.md` step 2's whole acceptance case: a modulation route and
     /// an automation lane both reach the v1 drum synth, which until now was
     /// the one source nothing could move.
