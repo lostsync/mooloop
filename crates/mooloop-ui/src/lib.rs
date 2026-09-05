@@ -3256,6 +3256,14 @@ impl AppUi {
         {
             log_warn!("app", "could not write the DS-01 factory bank: {error}");
         }
+        // The ML-P8 bank, on the same terms and for the same reason: its
+        // modulation is its own routes and its own LFO, so a patch reaches
+        // its sound with no channel rack at all.
+        if let Err(error) =
+            mooloop_project::seed_mlp8_bank(&settings::generator_presets_dir(DeviceKind::MlP8))
+        {
+            log_warn!("app", "could not write the ML-P8 factory bank: {error}");
+        }
         // The effect banks, one directory a kind, on the same terms.
         for kind in EffectKind::ALL {
             if let Err(error) =

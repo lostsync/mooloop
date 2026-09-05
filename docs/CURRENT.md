@@ -668,6 +668,21 @@ land on its own when it starts to matter:
   values that differ between two notes held at once. A route's amount is
   automatable through `ParamOwner::SourceRoute`, addressed by the route's
   durable id rather than by a parameter of the device.
+- The ML-P8 ships a factory bank of eight patches -- Init Saw, Crosswire
+  Brass, Furnace Stab, Cold Metal, Sub Pressure, Servo Pad, Broken Choir and
+  Wide Machine -- seeded once into `presets/generators/mlp8/` as generator
+  presets, since an ML-P8 patch's modulation is its own routes and its own LFO
+  and has no channel rack to re-scope. Seven of the eight run at Unison 1x
+  with the chorus off, and five leave Drift at 0: the bank's job is to show
+  that the *network* reaches eight sounds, so a patch that needed a duplicator
+  to be interesting would not have proved it, and a test asserts the counts
+  rather than a comment claiming them. Init Saw is the device default
+  unchanged, because the gain contract is calibrated against exactly that
+  signal. Those are the same patches the DSP acceptance test plays, so what
+  ships is what is checked. It has not had a recorded listening pass yet;
+  the bar it is held to is the one Adam set closing DS-01's bank -- enough to
+  prove the architecture reaches its range from the controls, not a curated
+  bank.
 - Clip automation is per (pattern, channel), lives in the clip that drew it,
   and may address a bus. Two clips automating one destination is not
   prevented; the lowest channel wins at render time.

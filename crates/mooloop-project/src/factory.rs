@@ -17,7 +17,10 @@ use std::fs;
 use std::path::Path;
 
 use mooloop_core::mlm1_factory::{self, FactoryPatch};
-use mooloop_core::{ds01_factory, effect_factory, ChannelSetup, ChannelSource, Ds01State, EffectKind};
+use mooloop_core::{
+    ds01_factory, effect_factory, mlp8_factory, ChannelSetup, ChannelSource, Ds01State, EffectKind,
+    MlP8State,
+};
 
 use crate::{
     sanitize_preset_name, save_channel_preset, save_effect_preset, save_generator_preset, AssetMode,
@@ -138,6 +141,11 @@ const GENERATOR_BUNDLE_EXTENSION: &str = "mooloop-generator";
 /// deleted on purpose stays deleted.
 const DS01_MARKER_FILE: &str = ".factory-v1";
 
+/// The ML-P8's own marker, in the ML-P8's own directory. The same name as
+/// DS-01's is not a collision: each device's generator presets live under
+/// `generator_presets_dir(kind)`, so the two never share a directory.
+const MLP8_MARKER_FILE: &str = ".factory-v1";
+
 /// Writes the DS-01 factory bank into `dir` — that device's own generator
 /// preset directory — unless it has been seeded before.
 ///
@@ -168,6 +176,56 @@ pub fn seed_ds01_bank(dir: &Path) -> Result<usize, Error> {
         save_generator_preset(
             &path,
             &ChannelSource::Ds01(Ds01State {
+                params: patch.params,
+            }),
+            PresetInfo {
+                name: patch.name.to_string(),
+                category: patch.category.to_string(),
+                tags: patch.tags.iter().map(|tag| (*tag).to_string()).collect(),
+            },
+            AssetMode::Embedded,
+        )?;
+        written += 1;
+    }
+
+    // Last, so a failure part-way through leaves the bank incomplete rather
+    // than marked complete.
+    fs::write(&marker, b"")?;
+    Ok(written)
+}
+
+/// Writes the ML-P8 factory bank into `dir` — that device's own generator
+/// preset directory — unless it has been seeded before.
+///
+/// Returns how many patches were written: `0` when the marker is already
+/// there, which is the normal case on every launch after the first.
+///
+/// Generator-scoped, for the reason the DS-01 bank gives. An ML-P8 patch's
+/// modulation is [`mooloop_core::MlP8Params::routes`] and its own LFO, inside
+/// the device where a polysynth needs it, so there is no
+/// [`mooloop_core::modulation::ModRack`] to carry and nothing to re-scope onto
+/// the channel it lands on. That is also what the bank exists to prove: the
+/// plan's rule is that a patch reaches its sound with no channel routes at
+/// all.
+pub fn seed_mlp8_bank(dir: &Path) -> Result<usize, Error> {
+    let marker = dir.join(MLP8_MARKER_FILE);
+    if marker.exists() {
+        return Ok(0);
+    }
+    fs::create_dir_all(dir)?;
+
+    let mut written = 0;
+    for patch in mlp8_factory::patches() {
+        let stem = sanitize_preset_name(patch.name);
+        let path = dir.join(format!("{stem}.{GENERATOR_BUNDLE_EXTENSION}"));
+        // A name collision means the user already has something under that
+        // name. Theirs wins.
+        if path.exists() {
+            continue;
+        }
+        save_generator_preset(
+            &path,
+            &ChannelSource::MlP8(MlP8State {
                 params: patch.params,
             }),
             PresetInfo {
@@ -302,6 +360,66 @@ mod tests {
                 report.repairs
             );
         }
+    }
+
+    /// The ML-P8 bank makes the same round trip, and carries something the
+    /// DS-01 bank does not: internal routes with durable ids. Those are what
+    /// an automation lane persists, so a bank that lost or renumbered them on
+    /// the way to disk would break every lane drawn against a factory patch.
+    #[test]
+    fn the_seeded_mlp8_bank_lists_and_loads_back_unchanged() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("generators/mlp8");
+
+        assert_eq!(
+            seed_mlp8_bank(&dir).unwrap(),
+            mooloop_core::mlp8_factory::BANK_SIZE
+        );
+
+        let listed = list_presets(&dir);
+        assert_eq!(listed.len(), mooloop_core::mlp8_factory::BANK_SIZE);
+        for summary in &listed {
+            assert_eq!(summary.kind, PresetKind::Generator(DeviceKind::MlP8));
+        }
+
+        for patch in mooloop_core::mlp8_factory::patches() {
+            let summary = listed
+                .iter()
+                .find(|found| found.name == patch.name)
+                .unwrap_or_else(|| panic!("{} is missing from the bank", patch.name));
+            let report = load_bundle(&summary.path).unwrap();
+            let LoadedDocument::Generator(source) = report.document else {
+                panic!("{} did not load as a generator", patch.name);
+            };
+            let ChannelSource::MlP8(state) = *source else {
+                panic!("{} did not load as an ML-P8", patch.name);
+            };
+            assert_eq!(state.params, patch.params, "{} changed on disk", patch.name);
+            // Spelled out beside the whole-struct comparison, because this is
+            // the part a serialization is most likely to quietly normalise:
+            // the routes are stored sparsely and rebuilt on the way in.
+            let authored: Vec<_> = patch.params.routes.iter().copied().collect();
+            let loaded: Vec<_> = state.params.routes.iter().copied().collect();
+            assert_eq!(authored, loaded, "{}'s routes changed on disk", patch.name);
+            assert!(
+                report.repairs.is_empty(),
+                "{} was repaired on load: {:?}",
+                patch.name,
+                report.repairs
+            );
+        }
+    }
+
+    /// The ML-P8 bank is seeded once too, and for the same reason.
+    #[test]
+    fn seeding_the_mlp8_bank_twice_writes_nothing_the_second_time() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("generators/mlp8");
+        assert_eq!(
+            seed_mlp8_bank(&dir).unwrap(),
+            mooloop_core::mlp8_factory::BANK_SIZE
+        );
+        assert_eq!(seed_mlp8_bank(&dir).unwrap(), 0);
     }
 
     /// The DS-01 bank is seeded once too, and for the same reason.

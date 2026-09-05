@@ -81,12 +81,28 @@ to be archived on account of it, because the contract gets designed once
 instead of twice, and because it is the only item on this list that is
 architecture rather than surface.
 
+**Note on ordering, recorded 2026-09-05.** `AUDIO_ARCHITECTURE.md`'s migration
+sequence puts typed audio and dependency edges at its step 6 and says step 6
+depends on its step 5 — preallocated compensation delays and compiled
+cumulative latency — which has *not* landed: `CompiledBusGraph` carries
+destinations and a render order and no latency at all. So the second piece
+above is really two, and the first of them is the compensation work this
+document parks under "deliberately not now". Whoever picks it up should decide
+deliberately whether to do compensation first (the documented order) or to
+build the edge type against the current uncompensated tree; do not discover
+the dependency halfway through.
+
 `drum-synth-v2/` archives the moment its step 07 closes. `poly-synth-v2/` has
 one more thing after this: its step 07 is ML-P8's factory bank and listening
-pass. ML-P8 has no bank and no recorded listening pass — nothing added since
-the ML-M1 bank on 2026-08-31 has been listened to except DS-01. Do that pass at
+pass. **The bank shipped on 2026-09-05** — eight patches in
+`presets/generators/mlp8/`, seven of them at Unison 1x with the chorus off —
+so what is left is the pass itself, which is Adam's. Nothing added since the
+ML-M1 bank on 2026-08-31 has been listened to except DS-01. Do that pass at
 the end of this step rather than deferring it again; it is the only thing
-between ML-P8 and being finished.
+between ML-P8 and being finished, and the range decisions step 07 lists (XMOD
+curve, self-feedback scaling, Sub balance, LP24 resonance, Voice Feedback
+bounds, LFO Warp/Slew, Detune maximum, whether Chorus needs a Mix) are ear
+decisions waiting on it.
 
 Done when: a route can name a device outlet from the picker; audio outlets obey
 their declared rate and latency contracts; ML-P8's bank has been played;

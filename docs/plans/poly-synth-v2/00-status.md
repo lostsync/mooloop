@@ -1,6 +1,7 @@
 # ML-P8 plan status
 
-**Steps 02, 03, 04 and 05 are in. 06 has started.** 07 is after it.
+**Steps 02, 03, 04 and 05 are in. 06's control half is in; its audio outlets
+wait on typed audio edges. 07's bank is in and has not been listened to.**
 
 ## The face was rebuilt on 2026-09-04
 
@@ -135,6 +136,49 @@ behaviour; the pane shows the declaration -- shape, rate, and block latency --
 and the arm button, which is the reason it is in the picker.
 
 **What 06 still needs:** the audio outlets.
+
+## Step 07's bank is shipped and unheard
+
+Eight patches, in `mlp8_factory`, seeded once into `presets/generators/mlp8/`
+as generator presets -- generator rather than channel, because an ML-P8 patch's
+modulation is its own routes and its own LFO and has no channel rack to
+re-scope. That is the DS-01 bank's shape rather than the ML-M1's, and it is
+the same argument: the plan's rule is that a patch reaches its sound with no
+channel routes at all, so a bank that needed one would have contradicted the
+step it belongs to.
+
+The plan's constraint is the interesting part, and it is a test rather than a
+note: **seven of the eight run at Unison 1x with the chorus off, and five
+leave Drift at 0.** A patch that needed a duplicator to be interesting would
+not have proved the network, so `the_bank_makes_its_case_before_the_finishers`
+counts them, and also checks that Wide Machine -- the one patch that is
+*about* the finishers -- actually uses all four, so the count cannot be
+satisfied by a bank that simply never turns them on.
+
+Three things authoring it turned up:
+
+- **Init Saw has to be the device default, byte for byte.** The gain contract
+  is calibrated against one saw at the reference level, so a reference patch
+  that differed from `MlP8Params::default()` would be measuring something the
+  contract does not describe. It is asserted rather than assumed.
+- **Unison sums, and the patch pays for it.** Wide Machine at 4x peaked at
+  1.46 on a single note: four voices at full level, because the device does
+  not normalise by voice count and the plan says it must not. The fix is the
+  patch's own Volume, not a normaliser, and the bank test asserts headroom
+  (peak <= 0.95) rather than merely "did not clip" -- which is what turned
+  this up.
+- **Distinctness needs a measure that is not loudness.** Eight copies at eight
+  volumes would pass a sample-for-sample inequality. The acceptance test spans
+  *brightness* -- high-frequency energy over total energy, which does not move
+  with level -- so the bank has to differ in timbre and not in gain.
+
+**What 07 still needs, and it is Adam's:** the listening pass. Nothing in the
+device has been played since the ML-M1 bank on 2026-08-31 except DS-01, and
+the range decisions the step lists -- XMOD curve, self-feedback scaling, Sub
+balance, LP24 resonance distribution, Voice Feedback bounds, LFO Warp/Slew,
+Detune maximum, whether Chorus needs a Mix -- are ear decisions and are still
+provisional. The bank exists to make that pass possible in one sitting: open
+a channel, switch it to ML-P8, and the eight patches are in its preset rail.
 
 The audio outlets stay declared and unconnectable, which is the split the step
 itself offers. Materialising seven stereo taps with nothing able to read them
@@ -315,7 +359,8 @@ The filenames are retained so existing references to this plan do not break;
 their headings describe their new scope.
 
 Step 02's own document records the ids, ranges, and curves as built, and what
-is still provisional until step 07's listening pass.
+is still provisional until step 07's listening pass. The bank that pass will
+use is shipped; the pass itself has not happened.
 
 The separate filter ADSR and keytracking that used to be an unnamed
 prerequisite are now part of step 03. The device's own modulation is part of

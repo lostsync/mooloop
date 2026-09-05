@@ -4520,6 +4520,143 @@ mod tests {
         noisy.osc[2].pulse_width = 0.2;
         assert_eq!(render(noisy, 60, 4096), with_third_silent);
     }
+
+    // --- The factory bank ---------------------------------------------
+
+    /// The bank's whole claim, asserted mechanically: **ML-P8 is a network
+    /// with its own modulation, not a supersaw followed by a chorus.**
+    ///
+    /// Seven of the eight patches run at Unison 1x with the chorus off, so if
+    /// they are distinct here they are distinct because of the network. Each
+    /// is played as an ordinary held note and then released, and has to be
+    /// audible, bounded, finite, and unlike every other patch in the bank.
+    /// These are the patches the seeder writes, so what ships is what is
+    /// checked.
+    #[test]
+    fn the_factory_bank_reaches_eight_sounds_from_one_network() {
+        let mut rendered = Vec::new();
+        for patch in mooloop_core::mlp8_factory::patches() {
+            let mut synth = MlP8::new(patch.params, SR);
+            let mut bus = StereoBus::with_capacity(SR as usize);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 1, 55));
+            events.push(TimedEvent {
+                offset: SR / 2,
+                event: Event::NoteOff { id: 1, note: 55 },
+            });
+            synth.process(&ctx(SR as usize), &mut bus, &events, None);
+            let out = bus.l[..SR as usize].to_vec();
+
+            let name = patch.name;
+            assert!(out.iter().all(|s| s.is_finite()), "{name} went non-finite");
+            let peak = out.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()));
+            assert!(peak > 0.02, "{name} is inaudible at {peak}");
+            // Headroom, not merely "did not clip": the plan asks factory
+            // patches to leave some, and a patch at 0.999 has none.
+            assert!(peak <= 0.95, "{name} peaked at {peak} with no headroom");
+
+            // It ends. A release that never finishes is a stranded voice, and
+            // on a polysynth that is one fewer note next time.
+            for _ in 0..8 {
+                let mut tail = StereoBus::with_capacity(SR as usize);
+                synth.process(&ctx(SR as usize), &mut tail, &EventList::empty(), None);
+            }
+            assert!(
+                synth.voices.iter().all(|voice| !voice.active),
+                "{name} stranded a voice"
+            );
+
+            rendered.push((name, out));
+        }
+
+        for (index, (name, out)) in rendered.iter().enumerate() {
+            for (other_name, other) in &rendered[index + 1..] {
+                assert_ne!(out, other, "{name} and {other_name} are the same sound");
+            }
+        }
+
+        // Distinct sample-for-sample is a low bar; the bank also has to span
+        // a range. Loudness is deliberately not the measure -- that would be
+        // satisfied by eight copies at eight volumes -- so this is brightness
+        // and length, the two axes the plan's patch list is organised along.
+        let brights: Vec<f32> = rendered
+            .iter()
+            .map(|(_, out)| bright_ratio(out))
+            .collect();
+        let span = |values: &[f32]| {
+            let low = values.iter().copied().fold(f32::INFINITY, f32::min);
+            let high = values.iter().copied().fold(0.0_f32, f32::max);
+            high / low.max(1.0e-6)
+        };
+        assert!(
+            span(&brights) > 3.0,
+            "the bank's brightnesses span only {}",
+            span(&brights)
+        );
+    }
+
+    /// Every patch renders identically in a fresh instance, which is what an
+    /// offline render of a project using one has to agree with.
+    #[test]
+    fn the_factory_bank_is_deterministic_across_instances() {
+        let once = |params: MlP8Params| {
+            let mut synth = MlP8::new(params, SR);
+            let mut bus = StereoBus::with_capacity(8192);
+            let mut events = EventList::empty();
+            for (index, note) in [43u8, 55, 62, 67].iter().enumerate() {
+                events.push(note_on(index as u32 * 64, index as u64 + 1, *note));
+            }
+            synth.process(&ctx(8192), &mut bus, &events, None);
+            bus.l[..8192].to_vec()
+        };
+        for patch in mooloop_core::mlp8_factory::patches() {
+            assert_eq!(
+                once(patch.params),
+                once(patch.params),
+                "{} is not deterministic",
+                patch.name
+            );
+        }
+    }
+
+    /// Eight notes at once, on every patch, is the worst case a polysynth
+    /// actually meets. Honest summing may be loud; it may not be infinite,
+    /// and it may not strand the pool.
+    #[test]
+    fn the_factory_bank_survives_a_full_pool() {
+        for patch in mooloop_core::mlp8_factory::patches() {
+            let mut synth = MlP8::new(patch.params, SR);
+            let mut bus = StereoBus::with_capacity(4096);
+            let mut events = EventList::empty();
+            for (index, note) in [36u8, 43, 48, 55, 60, 64, 67, 72].iter().enumerate() {
+                events.push(note_on(0, index as u64 + 1, *note));
+            }
+            synth.process(&ctx(4096), &mut bus, &events, None);
+            assert!(
+                bus.l[..4096].iter().all(|s| s.is_finite())
+                    && bus.r[..4096].iter().all(|s| s.is_finite()),
+                "{} went non-finite on eight notes",
+                patch.name
+            );
+        }
+    }
+
+    /// High-frequency energy over total energy: a crude brightness that does
+    /// not move with level, which is what makes it usable as a *span* across
+    /// patches whose loudnesses differ on purpose.
+    fn bright_ratio(samples: &[f32]) -> f32 {
+        let coeff = (-core::f32::consts::TAU * 2_000.0 / SR as f32).exp();
+        let mut lp = 0.0;
+        let mut high = 0.0;
+        let mut total = 0.0;
+        for &sample in samples {
+            lp += (1.0 - coeff) * (sample - lp);
+            let hp = sample - lp;
+            high += hp * hp;
+            total += sample * sample;
+        }
+        high / total.max(1.0e-12)
+    }
 }
 
 

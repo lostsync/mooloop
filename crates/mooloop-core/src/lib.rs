@@ -20,6 +20,7 @@ pub mod mixer;
 pub mod mod_metadata;
 pub mod mlm1;
 pub mod mlm1_factory;
+pub mod mlp8_factory;
 pub mod mlp8;
 pub mod outlet;
 pub mod pattern;
