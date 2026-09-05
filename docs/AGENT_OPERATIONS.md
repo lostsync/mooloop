@@ -302,7 +302,18 @@ a search over the tree rather than a guess at coordinates.
 
 `click_element` is a real pointer event, and the pointer stays where it left
 it: the next screenshot may show a hover tooltip the application is right to
-be drawing. The engine connects to JACK on startup and usually reports one
+be drawing.
+
+**It does not reach inside a `PopupWindow`.** A `PickerChip` or a `BusPicker`
+opens on click and its rows appear in the element tree with correct absolute
+positions, so clicking one looks like it should work — and does nothing. The
+popup closes and the value is unchanged, which is indistinguishable from a
+callback that never fired, and it is an easy half hour to spend concluding
+that a shipped widget is broken. It is not: `BusPicker` is the control test,
+because it reports its choice *before* closing and fails here identically.
+Verify a picker some other way — a snapshot test that sets the model directly,
+or a unit test of the handler's session half — and use the live application
+for the things it is uniquely good at, which is everything outside a popup. The engine connects to JACK on startup and usually reports one
 xrun while doing so, which is the connection, not a fault in what you are
 testing.
 
