@@ -137,6 +137,11 @@ pub struct Session {
     /// row through a reorder and is dropped with a removal, like every other
     /// thing on this side that names a slot.
     pub effect_preset_names: HashMap<(EffectTarget, u8), String>,
+    /// The preset each channel's generator was last loaded from or saved as,
+    /// for the source device's header. The generator half of
+    /// `effect_preset_names`, keyed by channel because a channel has exactly
+    /// one generator and it is not a slot in any chain.
+    pub source_preset_names: HashMap<u8, String>,
     pub pending_preset_save: Option<PresetSaveTarget>,
 }
 
@@ -182,6 +187,7 @@ impl Default for Session {
             channel_presets: Vec::new(),
             effect_presets: Vec::new(),
             effect_preset_names: HashMap::new(),
+            source_preset_names: HashMap::new(),
             pending_preset_save: None,
         }
     }
@@ -233,6 +239,8 @@ impl Session {
             return;
         };
         self.source_revision = self.source_revision.wrapping_add(1);
+        // A fresh device did not come from whatever preset the last one wore.
+        self.source_preset_names.remove(&(index as u8));
         channel.kind = kind;
         channel.name = match kind {
             DeviceKind::Sampler => format!("Sampler {}", index + 1),
@@ -751,7 +759,25 @@ impl Session {
         }
     }
 
+    /// The preset `channel`'s generator was last loaded from or saved as.
+    ///
+    /// Kept through a knob move for the same reason the effect label is: it
+    /// says where these settings came from, which stays true after they are
+    /// adjusted. Dropped when the channel changes source, since the device
+    /// wearing it is then gone.
+    pub fn source_preset_name(&self, channel: u8) -> Option<&str> {
+        self.source_preset_names.get(&channel).map(String::as_str)
+    }
 
+    /// Names `channel`'s generator after a preset, or clears it when `name`
+    /// is empty.
+    pub fn set_source_preset_name(&mut self, channel: u8, name: &str) {
+        if name.is_empty() {
+            self.source_preset_names.remove(&channel);
+        } else {
+            self.source_preset_names.insert(channel, name.to_string());
+        }
+    }
 
     pub fn modulation_depth_for(&self, source_slot: u8, destination: ParamAddr) -> f32 {
         self.channels

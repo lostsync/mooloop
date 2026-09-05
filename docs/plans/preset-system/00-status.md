@@ -264,3 +264,51 @@ opens a window is not verified until something has clicked it.**
 The list is also scrolled now, mirroring `MenuField`, because unlike the
 insert menu's fixed twelve entries this one fills from disk and would
 otherwise grow past the window.
+
+## The generator half was still in the toolbar — 2026-09-05
+
+Adam played DS-01, liked it, and reported that its presets were "in a diff
+place in the ui than effect presets" and should not be in that toolbar.
+
+He is right, and the reason is chronology rather than design: generator
+presets predate the decision that **a preset's unit is a device**. They were
+built as a `PRESET` field and a save button in the `DEVICE CHAIN` strip above
+the rack, which was a reasonable home while the only other preset was a whole
+channel. Once the effect half landed on each rack row's own rail, the same
+operation on the same kind of object existed in two places, and the older one
+was not on the device.
+
+The generator now uses the rail. `DeviceFrame` hosts the source device
+exactly as it hosts an effect, so its two preset buttons were already drawn
+and already disabled for want of an owner; the change is the source device
+opting in and the strip giving the controls up. A bus keeps them off, having
+no generator to save. The device-chain row is left owning the source type
+alone.
+
+`UI_DESIGN.md`'s composition grammar had said in as many words that generator
+preset controls sit beside the source selector. That sentence lost to the
+paragraph around it: a control belongs at the lowest level that owns its
+state, and the level that owns a device preset is the device. The grammar now
+names that level.
+
+The header label followed, since it was the other half of "the same as an
+effect". `Session::source_preset_names` is the generator's
+`effect_preset_names`, keyed by channel because a channel has exactly one
+generator and it is not a slot in any chain. It is dropped in
+`reset_channel_source`, which is the one place a channel's device is
+replaced.
+
+**What did not change, and deliberately:** a generator preset is still a
+document load. The lesson recorded above — that an effect preset is a rack
+edit, not a document load — does not generalise to this one. A sampler preset
+references audio that has to be decoded off the UI thread, which is the exact
+thing that pipeline exists for. The name is carried on
+`LoadTarget::Generator` rather than stashed beside the load, so two loads in
+flight cannot swap labels, and it is applied after the install because
+installing a project rebuilds the session's channels.
+
+Writing the "when is a label true" rule down found that the effect side never
+answered it either: `effect_preset_names` survived a song load, so every row
+in a newly opened song wore the label of whatever had been in that seat
+before. Both maps are dropped now at the one place a load can invalidate
+them.

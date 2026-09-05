@@ -113,6 +113,30 @@ mod tests {
     use super::*;
     use mooloop_core::TICKS_PER_STEP;
 
+    /// The generator's preset label belongs to the device wearing it, not to
+    /// the channel's seat: swapping in a different source drops it, and a
+    /// channel that was never loaded from a preset never claims one.
+    #[test]
+    fn a_generators_preset_label_dies_with_its_device() {
+        let mut session = Session::default();
+        session.add_channel(DeviceKind::Ds01);
+        session.select_channel(0);
+
+        session.set_source_preset_name(0, "Deep House Kick");
+        assert_eq!(session.source_preset_name(0), Some("Deep House Kick"));
+        assert_eq!(session.source_preset_name(1), None);
+
+        // A new device on the same channel did not come from that preset.
+        session.change_selected_source(DeviceKind::MlP8);
+        assert_eq!(session.source_preset_name(0), None);
+
+        // Nor does a channel added into a seat that once wore one.
+        session.set_source_preset_name(1, "Rimshot");
+        session.select_channel(1);
+        session.change_selected_source(DeviceKind::Sampler);
+        assert_eq!(session.source_preset_name(1), None);
+    }
+
     /// Clicking the channel already selected is a no-op -- unless the device
     /// rack has wandered off to a bus, which is the case the guard exists for.
     #[test]

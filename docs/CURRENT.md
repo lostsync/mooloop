@@ -398,7 +398,11 @@ land on its own when it starts to matter:
 - A *device* preset is saved and loaded from that device's own rail in the
   rack -- the same two buttons on the generator and on every effect row. The
   load button offers only the presets saved for that device's kind, and is
-  disabled when there are none.
+  disabled when there are none. The device's header then names the preset it
+  came from, and keeps saying so after its knobs are moved. A label is dropped
+  when the device wearing it goes: changing the channel's source, loading a
+  channel preset over it, or opening a song or kit, which replaces the whole
+  rack.
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.

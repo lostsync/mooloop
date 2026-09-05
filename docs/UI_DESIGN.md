@@ -182,7 +182,9 @@ alignment, and height contract as effects.
 - The rack scrolls horizontally. Device internals never compress when the
   application narrows.
 - Every device has a 28 px identity header with enabled state, name, kind, and
-  size. The host's bypass and wet/dry controls occupy the header's right edge;
+  size. When the device came from a preset the header names it beside the
+  device name, elided rather than allowed to push the kind tag off the end.
+  The host's bypass and wet/dry controls occupy the header's right edge;
   a device face must not add a second copy. Effect faces inherit the shared
   `EffectDeviceShell`, which owns that header and the drag-to-reorder handle;
   a face file contains only its working controls. Controls unique to that device

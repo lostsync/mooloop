@@ -2824,6 +2824,12 @@ impl UiState {
         window.set_selected_channel_name(ch.name.as_str().into());
         window.set_selected_channel_volume_db(linear_to_db(ch.volume));
         window.set_source_kind(device_kind_to_int(ch.kind));
+        window.set_source_preset_name(
+            self.session
+                .source_preset_name(self.session.selected as u8)
+                .unwrap_or_default()
+                .into(),
+        );
         self.sync_effects();
         self.refresh_modulation(window);
         // The lane's destination catalogue is built from the effect chains, so
@@ -3607,7 +3613,7 @@ impl AppUi {
             let tx = document_tx.clone();
             let weak = window.as_weak();
             let callback = move |index: i32| {
-                let Some(path) = ({
+                let Some((path, preset_name)) = ({
                     let st = st.borrow();
                     let presets = if generator {
                         &st.session.generator_presets
@@ -3616,7 +3622,7 @@ impl AppUi {
                     };
                     presets
                         .get(index as usize)
-                        .map(|preset| preset.path.clone())
+                        .map(|preset| (preset.path.clone(), preset.name.clone()))
                 }) else {
                     return;
                 };
@@ -3626,7 +3632,7 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 let target = if generator {
-                    LoadTarget::Generator
+                    LoadTarget::Generator { preset_name }
                 } else {
                     LoadTarget::Channel
                 };
@@ -3707,12 +3713,23 @@ impl AppUi {
                     category: category.trim().to_string(),
                     tags: Vec::new(),
                 };
-                // The row now wears the name it was saved under, the same way
-                // it wears the name of a preset loaded into it.
-                if let PresetSaveTarget::Effect { target, slot } = source.target {
-                    let mut state = st.borrow_mut();
-                    state.session.set_effect_preset_name(target, slot, &name);
-                    state.sync_effects();
+                // The device now wears the name it was saved under, the
+                // same way it wears the name of a preset loaded into it.
+                match source.target {
+                    PresetSaveTarget::Effect { target, slot } => {
+                        let mut state = st.borrow_mut();
+                        state.session.set_effect_preset_name(target, slot, &name);
+                        state.sync_effects();
+                    }
+                    PresetSaveTarget::Generator => {
+                        let mut state = st.borrow_mut();
+                        let channel = state.session.selected as u8;
+                        state.session.set_source_preset_name(channel, &name);
+                        window.set_source_preset_name(name.as_str().into());
+                    }
+                    // A channel preset spans the generator and the mixer, so
+                    // no one device is the thing it names.
+                    PresetSaveTarget::Channel => {}
                 }
                 let file_stem = mooloop_project::sanitize_preset_name(&name);
 
@@ -8892,6 +8909,11 @@ impl AppUi {
                                 .borrow()
                                 .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
                             let current_samples = st.borrow().session.sample_snapshots();
+                            // Cloned before the match consumes `target`, and
+                            // applied after the install: a preset label
+                            // describes the device in front of the user, and a
+                            // load has just replaced some or all of them.
+                            let load_target = target.clone();
                             let merged = match (target, document) {
                                 (LoadTarget::Song, LoadedDocument::Song(project)) => {
                                     Some((project, loaded_samples, true))
@@ -8976,7 +8998,7 @@ impl AppUi {
                                     samples[selected] = loaded_samples.into_iter().next().flatten();
                                     Some((project, samples, false))
                                 }
-                                (LoadTarget::Generator, LoadedDocument::Generator(source)) => {
+                                (LoadTarget::Generator { .. }, LoadedDocument::Generator(source)) => {
                                     let mut project = current;
                                     let selected = project.selected_channel as usize;
                                     project.channels[selected].setup.channel.kind = source.kind();
@@ -9021,6 +9043,37 @@ impl AppUi {
                                 } else {
                                     state.session.dirty = true;
                                     state.session.revision = state.session.revision.wrapping_add(1);
+                                }
+                                // A preset label says where a device's
+                                // settings came from, so a load either sets it
+                                // -- the device now wears the preset it came
+                                // from, the same way a rack row does -- or
+                                // drops the ones it just invalidated.
+                                match &load_target {
+                                    LoadTarget::Generator { preset_name } => {
+                                        let channel = state.session.selected as u8;
+                                        state
+                                            .session
+                                            .set_source_preset_name(channel, preset_name);
+                                        window.set_source_preset_name(preset_name.as_str().into());
+                                    }
+                                    // A channel preset brought its own
+                                    // generator, which did not come from
+                                    // whatever the seat was wearing.
+                                    LoadTarget::Channel => {
+                                        let channel = state.session.selected as u8;
+                                        state.session.set_source_preset_name(channel, "");
+                                        window.set_source_preset_name(Default::default());
+                                    }
+                                    // A song or kit replaced every device in
+                                    // the rack, so every label describes one
+                                    // that is no longer there.
+                                    LoadTarget::Song | LoadTarget::Kit => {
+                                        state.session.source_preset_names.clear();
+                                        state.session.effect_preset_names.clear();
+                                        window.set_source_preset_name(Default::default());
+                                        state.sync_effects();
+                                    }
                                 }
                                 state.update_document_title(&window);
                                 window.set_status_message(

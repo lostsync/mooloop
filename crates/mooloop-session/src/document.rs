@@ -133,12 +133,18 @@ pub enum DocumentResult {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum LoadTarget {
     Song,
     Kit,
     Channel,
-    Generator,
+    /// A generator preset, carrying the name it is offered under so the
+    /// device it lands on can wear it. The name travels with the load rather
+    /// than being stashed beside it: two loads in flight would otherwise race
+    /// for one field, and the label would name the wrong patch.
+    Generator {
+        preset_name: String,
+    },
 }
 
 

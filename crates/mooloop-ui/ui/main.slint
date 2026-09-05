@@ -374,6 +374,9 @@ export component MainWindow inherits Window {
     callback channel-preset-selected(int);
     callback save-generator-preset-requested();
     callback save-channel-preset-requested();
+    // The preset the source device was last loaded from or saved as, for its
+    // header. Empty when it did not come from one.
+    in property <string> source-preset-name;
     in-out property <bool> save-preset-open;
     in property <string> save-preset-title;
     in-out property <string> save-preset-name;
@@ -3069,6 +3072,7 @@ export component MainWindow inherits Window {
                                                         : root.source-kind == 4 ? "ML-M1"
                                                         : root.source-kind == 5 ? "ML-P8" : "DS-01";
                                                     kind: "SOURCE / " + source-device.source-units + "U";
+                                                    preset: root.source-preset-name;
                                                     device-color: Theme.accent;
                                                 }
                                             }
