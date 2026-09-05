@@ -134,3 +134,34 @@ half of this step that needs Adam at the keyboard. So these stay open:
   `mooloop_engine::ds01_tests`, which asserts a DS-01 channel renders
   identically at 128 and 1024 frames; what is missing is doing it with the
   bank.
+
+## Played, and closed — 2026-09-05
+
+Adam played the device and the bank extensively on the night of 2026-09-04 and
+closed the step: "ds-01 is good"; "they don't have to be flawless presets. for
+now we just need something there, mostly to prove the system works"; "im happy
+with what has been done so far."
+
+**That restates the bar, and the restatement is the finding.** This step was
+written as though the patches themselves were the deliverable, with range
+tuning driven by taste as its second half. They are not: the deliverable is
+the proof that one architecture reaches a kit from the controls, and seventeen
+patches a musician can play and hear the range of deliver it. Authoring a bank
+by taste is a later, dedicated push across every device, recorded under
+"Deliberately not now" in `FOCUS.md`. A device step does not stay open waiting
+for it.
+
+Resolved by the pass:
+
+- **Range tuning.** No corrections were raised against any range or curve. The
+  ROADMAP's drum range-and-scaling item closes against this step, as it was
+  always going to; reopen it against a concrete patch that a range fights.
+- **The acceptance case.** The claim is the one the pass was for, and it held
+  at the keyboard as well as in `one_architecture_reaches_a_kit`.
+
+Carried out of the step, because it is a decision rather than work:
+
+- **Whether the default new-song kit moves to DS-01.** The step said to make
+  that call after the listening pass; the pass has happened, so the call is
+  live. It is Adam's, nothing in the code waits on it, and v1 `DrumSynth`
+  stays either way.

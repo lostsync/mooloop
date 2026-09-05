@@ -1,7 +1,8 @@
 # DS-01 plan status
 
-**Steps 02 through 08 are in except step 07's outlets, and step 09's bank
-ships and waits on ears.** The device exists and plays: a new `Ds01` generator kind
+**Every step is in except step 07's published outlets, which are blocked
+rather than skipped.** Adam played the device and its bank on 2026-09-04 and
+closed step 09 on 2026-09-05. The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
 state-variable filter, the amplitude and pitch envelopes, and the voice pool
@@ -43,12 +44,20 @@ its own envelopes.
 **Step 07's published outlets are not built, and are blocked rather than
 skipped.** See below.
 
-Step 08 built the face: the adopted four-column layout, wired and live in the
-rack. Every one of the device's sixty non-matrix parameters is reachable on one
-screen — forty-eight as knobs and chips, twelve as handles on the scopes — and
-the scopes' span follows the patch, so a 5 ms hat and a 4 s ride both read.
+Step 08 built the face. It first fitted on one screen by making the scopes the
+envelope editor, and was rebuilt on 2026-09-04 into the six pages it ships as,
+for the reason ML-P8's face was rebuilt the day before: a face that fits by
+shrinking its controls has not fit. See "The face was rebuilt" below.
 
-Read `01-what-ds01-is.md`, then finish `08` and work `09`.
+Step 09 shipped the kit: seventeen patches, seeded once into
+`presets/generators/ds01/`, and the same patches the DSP acceptance test
+asserts.
+
+Read `01-what-ds01-is.md` for what the device is; the steps are done.
+
+**The directory stays out of `archive/` for one reason:** step 07's published
+outlets, which wait on the shared device-outlet mechanism ML-P8's step 06
+waits for. Nothing else in the plan is unbuilt.
 
 Four things step 02 turned up that the plan could not have known:
 
@@ -218,9 +227,9 @@ And four from step 07:
   without knowing anything about voices — because it is resolved before the
   block rather than inside it, so there is no order to depend on.
 
-## Evidence for step 09, which has not started
+## Evidence for step 09, before it was played
 
-Step 09 is the listening pass and needs ears. Its central claim does not:
+Step 09's listening needed ears. Its central claim did not:
 **one architecture reaches every drum type, from the controls rather than from
 hand-tuning.** `one_architecture_reaches_a_kit` in `mooloop_dsp::ds01` answers
 that mechanically. Thirteen patches — sub, kit and DnB kicks, tight and deep
@@ -483,7 +492,31 @@ once. Three things that file settled:
   rather than skipping the "it ends" assertion for the one patch that would
   fail it for a legitimate reason.
 
-`09-the-kit.md` lists what the step still owes, which is the listening.
+### Closed — 2026-09-05
+
+Adam played the device and the bank extensively on the night of 2026-09-04 and
+closed the step: "they don't have to be flawless presets. for now we just need
+something there, mostly to prove the system works."
+
+That is the step's bar, stated after the fact and worth keeping, because it is
+not the bar the plan implied. **Step 09's job was to prove the architecture
+reaches a kit from the controls, not to ship a curated bank.** Seventeen
+patches that a musician can play, load, and hear the range of do that. Range
+tuning driven by taste is deferred to a later, dedicated push at a factory
+bank across every device, when the application is complete enough for one to
+be worth authoring; the note under "Deliberately not now" in `FOCUS.md` says
+so.
+
+The pass raised no range or curve corrections, so the ROADMAP's drum
+range-and-scaling item closes against this step as planned. One thing is
+carried out of the step rather than closed with it: **whether the default
+new-song kit moves to DS-01**, which `09-the-kit.md` deliberately deferred
+until after the listening. That is a decision, not work; nothing in the code
+waits on it, and v1 `DrumSynth` stays either way.
+
+This also closes the standing listening debt: the last recorded pass before it
+was the ML-M1 bank on 2026-08-31, and a stretch engine, a slice mode, most of
+ML-P8, and a 12 dB drop in every default had landed since.
 
 The face is **not** part of steps 02 through 07. DS-01 is selectable, playable,
 automatable and modulatable without one — every parameter is
@@ -572,7 +605,7 @@ instrument. Hence DS-01.
 | `06-the-shape-stage.md` | **In.** Drive characters, the output stage, the gain contract |
 | `07-internal-modulation-and-outlets.md` | **Matrix in; outlets blocked** on the shared device-outlet mechanism |
 | `08-the-face.md` | **In.** Six pages, rebuilt from the one-screen face on 2026-09-04 |
-| `09-the-kit.md` | **Bank in; listening and range tuning open.** Seventeen patches, shipped and asserted |
+| `09-the-kit.md` | **In.** Seventeen patches, shipped, asserted, and played |
 
 `mockups/` holds three rendered face concepts at the real face size, against
 the real widgets. They are checked in because they are the argument for a

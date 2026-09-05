@@ -579,10 +579,11 @@ land on its own when it starts to matter:
   cowbell, clave and a zap -- seeded once into `presets/generators/ds01/` as
   generator presets, since a DS-01 patch's modulation is inside its own voice
   and has no channel rack to re-scope. Those are the same patches the DSP
-  acceptance test asserts, so what ships is what is checked; **nobody has
-  listened to them yet**, and the range tuning that follows from listening is
-  the open half of the plan's last step. Its published outlets are not built
-  and are blocked on the same device-outlet mechanism ML-P8's step 06 needs.
+  acceptance test asserts, so what ships is what is checked. The bank was
+  played on 2026-09-04 and raised no range corrections; it is there to prove
+  the architecture reaches a kit from the controls rather than to be a curated
+  bank. Its published outlets are not built and are blocked on the same
+  device-outlet mechanism ML-P8's step 06 needs.
 - **A device's published outlets can drive other devices.**
   `mooloop_core::outlet` states the vocabulary — control versus audio domain,
   the tap point an audio outlet is taken at, and the one-block latency every

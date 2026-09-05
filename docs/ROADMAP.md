@@ -32,10 +32,10 @@ Scope:
 - Finish sampler voice controls that do not require the new event model.
 - Audit drum synth time ranges and parameter scaling; defaults and useful
   knob travel should make sub-100 ms percussion easy without making the rest
-  of the range feel wrong. Now scoped to DS-01's step 09 rather than to v1:
-  the ranges to correct are the ones DS-01 chose, and the audit is what that
-  step's listening pass is for. Not closed — the bank the audit is against
-  ships as of 2026-09-04, and nobody has listened to it yet.
+  of the range feel wrong. **Done 2026-09-05**, scoped to DS-01 rather than to
+  v1: the ranges to correct were the ones DS-01 chose, and its step 09
+  listening pass on 2026-09-04 raised no corrections. Reopen it against a
+  concrete patch that a range fights, not on suspicion.
 - Add per-channel meters through the existing strip; volume and pan are exposed.
 - Replace terse implementation-style tooltips with user-facing wording. Done:
   the docked status bar carries longer hover text through `hover-hint`, and
@@ -227,7 +227,9 @@ external/internal routing, groups, sends, and resampling-source selection. The
 percussive synth's replacement is built: `DS-01` plays, is addressable from
 its first commit, has a six-page face and a seventeen-patch factory bank, and
 leaves the v1 drum synth — still the only source that cannot be modulated —
-where it is. What DS-01 has left is the listening pass above. `MIXER_PLAN.md` is the design for the
+where it is. It was played and signed off on 2026-09-04; what it has left is
+its published outlets, which wait on the typed device-outlet mechanism ML-P8
+waits for too. `MIXER_PLAN.md` is the design for the
 routing half of that, and replaces the fixed master-plus-16-bus bank rather
 than extending it.
 

@@ -105,13 +105,12 @@ Envelope times are handles dragged on the curve, not knobs. A scope without
 handles is not a smaller version of that face; it is a different one that needs
 a page. Build the parameter model knowing the face has already been decided.
 
-**Steps 02 through 08 are in, and step 09's bank ships.** What is left of
-DS-01 is the listening: seventeen factory patches exist, seed into
-`presets/generators/ds01/`, and are the same patches the DSP acceptance test
-asserts — but nobody has heard them, and the range tuning that follows from
-hearing them is the open half. That needs Adam at the keyboard rather than
-more code. Step 07's published outlets stay blocked on the shared
-device-outlet mechanism, which is the same one ML-P8's step 06 waits for.
+**Done, on 2026-09-05, except step 07's published outlets.** Adam played the
+device and its seventeen-patch bank on 2026-09-04 and closed step 09: the
+patches are there to prove the architecture reaches a kit from the controls,
+not to be a curated bank, and they do. The outlets stay blocked on the shared
+device-outlet mechanism, which is the same one ML-P8's step 06 waits for, so
+the plan directory stays active for that alone.
 
 Done when: one universal percussion voice covers kick, snare, hat, tom, rim,
 clap and roll from range and factory patches rather than from mode branches;
@@ -193,11 +192,27 @@ row's save and load controls — and every effect kind ships a factory bank.
 of the taxonomy done. `00-status.md` records what building it taught; the
 short form is that the specific form was a stepping stone, not a detour.
 
-What still waits for DS-01 is the rest: the browser, the taxonomy *surface*,
-and a factory-content mechanism that can update what it shipped. Those want
-two instrument banks to design against, and DS-01's step 09 ships the second.
-Do not let the rack row's preset menu grow into a browser to avoid the wait.
+What waited for DS-01 — the browser, the taxonomy *surface*, and a
+factory-content mechanism that can update what it shipped — is no longer
+waiting: those wanted two instrument banks to design against, and DS-01's
+step 09 shipped the second on 2026-09-04. They are unblocked rather than
+scheduled; this sequence still decides when.
 
+On 2026-09-05 the generator half of the preset surface moved onto the device,
+where the effect half already was. A device preset is saved and loaded from
+the device's own rail and named in its header, whether the device is a
+generator or an effect, and the device-chain strip above the rack owns the
+source type alone.
+
+
+**A curated factory bank.** Every device that ships presets ships them to
+prove its architecture reaches its range from the controls, and that is the
+only bar they are held to — Adam's ruling closing DS-01's step 09 was that
+"they don't have to be flawless presets. for now we just need something there,
+mostly to prove the system works." Authoring content by taste, across every
+device, is a deliberate later push, worth doing when the application is
+complete enough for a shipping bank to be worth authoring. Do not fold it into
+a device step, and do not hold a device step open waiting for it.
 
 **Metronome, plugin hosting, MIDI configuration, and the graph editor.** None is
 required to prove the active instrument workflows.
@@ -215,7 +230,8 @@ and the realtime rules in `AUDIO_ARCHITECTURE.md`. `AGENTS.md` governs
 worktrees, commits, and verification.
 
 **Listening is a step, not a formality.** The last recorded listening pass was
-the ML-M1 bank on 2026-08-31. A stretch engine, a slice mode, a commit path,
-and most of ML-P8 have landed since, and the gain contract deliberately moved
-every default 12 dB quieter. A step that changes what something sounds like is
-not done when its tests pass.
+DS-01 and its bank on 2026-09-04, which also cleared the debt standing behind
+it — a stretch engine, a slice mode, a commit path, most of ML-P8, and a gain
+contract that deliberately moved every default 12 dB quieter had all landed
+since the ML-M1 bank on 2026-08-31. A step that changes what something sounds
+like is not done when its tests pass.
