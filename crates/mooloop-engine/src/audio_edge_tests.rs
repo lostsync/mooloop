@@ -173,6 +173,58 @@ fn the_same_edge_works_through_ds01s_tone() {
     );
 }
 
+/// The producer's samples reach the consumer in the block they were made in,
+/// not the one after.
+///
+/// The block-size null below would catch a deferral too -- a delay whose
+/// length is the buffer size renders differently at 128 and 512 -- but it
+/// catches it as an inequality between two runs rather than as a statement
+/// about *when* the audio arrives. This is the alignment assertion, and it
+/// fails by exactly one block if delivery ever becomes deferred.
+///
+/// The frame is not computed from the tick; it is measured from the same note
+/// heard directly, so the test calibrates itself against the engine's own
+/// scheduling rather than against a second derivation of it.
+#[test]
+fn the_consumers_copy_lands_in_the_frame_the_producer_made_it() {
+    // A note part-way into the first bar, so "frame zero" cannot pass by
+    // accident and a one-block slip is visible on either side of it.
+    let mut heard = muted_osc3_producer();
+    heard.notes[0].clear();
+    heard.notes[0].push(NoteEvent::new(1, 96, 384, 60, 127));
+
+    let direct = Project {
+        channels: vec![heard.clone()],
+        ..Project::default()
+    };
+    let mut producer = heard;
+    producer.setup.channel.muted = true;
+    let through_edge = Project {
+        channels: vec![
+            producer,
+            // `Osc 1` rather than `Osc 3`: this is about *when* the samples
+            // arrive, so the outlet that carries the note's own fundamental
+            // is the one to compare against hearing it directly.
+            aux_in_channel(1, Some(AudioSubscription::new(0, mlp8::OUTLET_OSC1))),
+        ],
+        ..Project::default()
+    };
+
+    let onset = |samples: &[f32]| {
+        samples
+            .iter()
+            .position(|sample| sample.abs() > 1e-6)
+            .expect("the note is in the window")
+    };
+    let direct = render_blocks(&direct, 1.0, 256);
+    let through_edge = render_blocks(&through_edge, 1.0, 256);
+    assert_eq!(
+        onset(&through_edge),
+        onset(&direct),
+        "the consumer's copy did not land in the frame the producer made it"
+    );
+}
+
 /// Same block, and the same at any block size.
 ///
 /// This is the assertion a block-latency edge could never pass, and it is why

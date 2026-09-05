@@ -152,8 +152,8 @@ face. Four things the doing changed:
 
 ## Step 05: the measurements
 
-Ten tests in `mooloop_engine::audio_edge_tests`, plus the device-level ones in
-`mooloop_dsp`.
+Eleven tests in `mooloop_engine::audio_edge_tests`, plus the device-level ones
+in `mooloop_dsp`.
 
 - **The headline case, both halves.** An Aux In hears ML-P8's `Osc 3` while
   ML-P8's own output does not carry it, measured spectrally in both
@@ -163,6 +163,10 @@ Ten tests in `mooloop_engine::audio_edge_tests`, plus the device-level ones in
   the second.
 - **The same through DS-01's `Tone`**, because one device passing is not
   evidence that the edge type is general.
+- **Same block.** The consumer's copy lands in the frame the producer made
+  it, measured against the same note heard directly rather than computed from
+  the tick, so the test calibrates itself against the engine's own scheduling.
+  It fails by exactly one block if delivery ever becomes deferred.
 - **Same at any block size**, sample for sample at 128 and 512 — the
   assertion a block-latency edge could never pass.
 - **Offline equals live**, through the real `OfflineRenderer` to a Float32
