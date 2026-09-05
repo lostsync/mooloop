@@ -1641,33 +1641,41 @@ impl Ds01 {
         let voice_continuous = &self.voice_continuous;
         for frame in start..end {
             let mut sum = 0.0;
+            // Accumulated in the same pass that sums the voices, not a second
+            // one after it: a voice that falls idle on this sample is retired
+            // by the loop below, so a later pass filtering on `active` would
+            // drop the last sample it published while keeping the same sample
+            // in `sum`. The value is inaudible -- the envelope is at zero by
+            // then -- and the disagreement is not: the tap is meant to be
+            // what the device made, not a second derivation of it.
+            let mut published = [0.0_f32; DS01_TAPS];
             for (index, voice) in self.voices.iter_mut().enumerate() {
                 if !voice.active {
                     continue;
                 }
                 sum += voice.render_sample(&voice_continuous[index], body_live, sr);
+                if publishing {
+                    for (tap, value) in published.iter_mut().zip(voice.published.iter()) {
+                        *tap += *value;
+                    }
+                }
                 if voice.amp_env.is_idle() && !voice.burst_pending() {
                     voice.active = false;
                     voice.gate_held = false;
                 }
             }
             if publishing {
-                // Summed across sounding voices, and mono because DS-01 is:
-                // the outlet is declared stereo so a consumer hears the
-                // device's own image, and DS-01's image is centre.
+                // Mono because DS-01 is: the outlet is declared stereo so a
+                // consumer hears the device's own image, and DS-01's image is
+                // centre.
                 for (tap, port) in [TAP_TONE, TAP_NOISE, TAP_BODY, TAP_PRE_SHAPE]
                     .into_iter()
                     .enumerate()
                 {
-                    let Some(buffer) = ports.port(port) else {
-                        continue;
-                    };
-                    let mut published = 0.0;
-                    for voice in self.voices.iter().filter(|voice| voice.active) {
-                        published += voice.published[tap];
+                    if let Some(buffer) = ports.port(port) {
+                        buffer.l[frame] += published[tap];
+                        buffer.r[frame] += published[tap];
                     }
-                    buffer.l[frame] += published;
-                    buffer.r[frame] += published;
                 }
             }
             let sample =
