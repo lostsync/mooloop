@@ -75,6 +75,27 @@ pub enum OutletTap {
 }
 
 impl OutletTap {
+    /// Whether this tap sits upstream of the channel's effect chain.
+    ///
+    /// The question the audio-graph compiler asks, and the reason an edge
+    /// carries no latency term today: every tap declared so far is inside the
+    /// generator, so a consumer reading one is reading a signal that has not
+    /// been through an effect and is not late relative to anything.
+    ///
+    /// [`Self::Output`] is the tap that would break that, which is why this is
+    /// a method rather than a fact stated in a comment. An `Output`-tapped
+    /// outlet inherits its channel's whole chain latency, and subscribing to
+    /// one without compensating for it would misalign the consumer by however
+    /// many frames the producer's chain happens to cost -- a defect that is
+    /// inaudible until two channels are compared, which is the worst kind.
+    /// `compile_audio_graph` refuses such an edge rather than mis-timing it.
+    pub fn is_upstream_of_chain(self) -> bool {
+        match self {
+            Self::PreLevel | Self::PreFilter | Self::PreShape | Self::PreVca => true,
+            Self::Control | Self::Output => false,
+        }
+    }
+
     /// The status text a port surface shows. Empty for control outlets,
     /// which have a rate and a range to show instead of a tap point.
     pub fn status(self) -> &'static str {
@@ -191,6 +212,30 @@ pub trait PublishesOutlets {
     /// channel currently holds.
     fn control_outlet(&self, id: u16) -> Option<&'static OutletDescriptor> {
         self.control_outlets().iter().find(|outlet| outlet.id == id)
+    }
+}
+
+/// One channel's authored subscription to another channel's audio outlet.
+///
+/// It lives on the consuming device's parameters rather than in a routing
+/// table of its own, which is the decision a modulation route's destination
+/// already makes: the thing that owns the subscription is the thing that would
+/// be meaningless without it, so a channel that changes its generator kind
+/// cannot leave a stranded edge behind.
+///
+/// `channel` is an index, and channel indices move -- delete and paste
+/// renumber every channel-scoped address. This is one more such address and
+/// goes through `mooloop-session`'s existing integrity pass rather than
+/// growing a repair path of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct AudioSubscription {
+    pub channel: u8,
+    pub outlet: u16,
+}
+
+impl AudioSubscription {
+    pub const fn new(channel: u8, outlet: u16) -> Self {
+        Self { channel, outlet }
     }
 }
 

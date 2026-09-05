@@ -79,7 +79,7 @@ pub use mod_metadata::{
     TriggerPolicy,
 };
 pub use outlet::{
-    OutletDescriptor, OutletDomain, OutletTap, PublishesOutlets,
+    AudioSubscription, OutletDescriptor, OutletDomain, OutletTap, PublishesOutlets,
 };
 pub use generator::{
     DRUM_PARAM_DECAY, DRUM_PARAM_DRIVE, DRUM_PARAM_HAT_CHARACTER, DRUM_PARAM_HAT_HP_HZ,
