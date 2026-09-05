@@ -2935,10 +2935,17 @@ impl UiState {
         let mut source_names: Vec<SharedString> = vec!["None".into()];
         source_names.extend(sources.iter().map(|(_, name)| SharedString::from(name.as_str())));
         // Row zero is "None", so a channel's row is one past its position in
-        // the filtered list. A subscription naming a channel that is no
-        // longer offered -- deleted, or switched to a device that publishes
-        // nothing -- falls back to row zero, and the refusal below is what
-        // says so rather than the picker quietly forgetting it.
+        // the filtered list.
+        //
+        // A subscription naming a channel that is no longer *offered* --
+        // deleted, or switched to a device that publishes nothing -- shows
+        // row zero, and the refusal below is what says so. That is a
+        // deliberate split rather than the picker forgetting: the picker's
+        // job is what can be chosen, and a channel publishing no audio is not
+        // that, while the subscription itself is retained underneath and
+        // resolves again if the producer comes back. The face is only honest
+        // because both halves are drawn -- a "None" with no explanation beside
+        // it would be the bug this arrangement looks like.
         let subscription = params.subscription();
         let source_index = subscription
             .and_then(|s| sources.iter().position(|(index, _)| *index == s.channel))
