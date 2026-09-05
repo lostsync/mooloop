@@ -975,6 +975,7 @@ fn device_kind_from_int(value: i32) -> DeviceKind {
         4 => DeviceKind::MlM1,
         5 => DeviceKind::MlP8,
         6 => DeviceKind::Ds01,
+        7 => DeviceKind::AuxIn,
         _ => DeviceKind::Sampler,
     }
 }
@@ -988,6 +989,7 @@ fn device_kind_to_int(kind: DeviceKind) -> i32 {
         DeviceKind::MlM1 => 4,
         DeviceKind::MlP8 => 5,
         DeviceKind::Ds01 => 6,
+        DeviceKind::AuxIn => 7,
     }
 }
 

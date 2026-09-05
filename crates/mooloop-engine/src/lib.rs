@@ -36,13 +36,15 @@ mod sequencer;
 mod transport;
 
 #[cfg(test)]
+mod audio_edge_tests;
+#[cfg(test)]
 mod ds01_tests;
 #[cfg(test)]
 mod gain_structure_tests;
 
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
-pub use render::{ChannelStorage, EffectSlot};
+pub use render::{AudioTapBank, ChannelStorage, EffectSlot};
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
 pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
@@ -128,6 +130,21 @@ pub enum StructuralCommand {
         channel: u8,
         pool: Option<Box<StretchPool>>,
     },
+    /// Install the channels' audio edges, their render order, and the buffers
+    /// they carry, as one value.
+    ///
+    /// Structural for the reason [`Self::SetCompensation`] is: the buffers are
+    /// allocated on the control thread and the displaced ones are reclaimed
+    /// there. Whole rather than incremental because an edge without its
+    /// schedule, or a schedule against another generation's buffers, is not a
+    /// state the executor may ever observe -- the same rule
+    /// `CompiledBusGraph` and its render order already travel under.
+    ///
+    /// The plan is derived from the model on every pump tick and sent only
+    /// when it differs, exactly as `Session::sync_compensation` does, because
+    /// the answer is a property of every channel at once and a per-edit call
+    /// site is a list that grows silently.
+    SetAudioGraph { bank: Box<AudioTapBank> },
 }
 
 /// GUI -> audio for the sample browser's audition voice. Owned here rather
@@ -160,6 +177,9 @@ pub(crate) enum StructuralReclaim {
     /// A compensation delay displaced by a new one, or surrendered when a
     /// producer became the longest path and stopped needing one.
     Compensation(Box<IntegerDelay>),
+    /// The audio-edge plan a newer one replaced. Its buffers are 64 KB each
+    /// and must not be freed on the audio thread.
+    AudioGraph(Box<AudioTapBank>),
 }
 
 /// A project that has already been instantiated and allocated off the audio
@@ -437,6 +457,7 @@ impl EngineHandle {
                 StructuralReclaim::PreviewSample { sample } => drop(sample),
                 StructuralReclaim::SamplerStretch(pool) => drop(pool),
                 StructuralReclaim::Compensation(delay) => drop(delay),
+                StructuralReclaim::AudioGraph(bank) => drop(bank),
             }
         }
         loop {

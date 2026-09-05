@@ -6,7 +6,8 @@
 //! and automation banks.
 
 use mooloop_core::{
-    AutomationLane, DeviceKind, Ds01Params, EffectSlotState, GeneratorParams, MlM1Params,
+    AutomationLane, AuxInParams, DeviceKind, Ds01Params, EffectSlotState, GeneratorParams,
+    MlM1Params,
     MlP8Params, ModRack, MonoSynthParams, NoteEvent, NoteId, PolySynthParams, Project,
     ProjectChannel, SampleCommit, SampleReference, SamplerParams, SliceMap, DrumSynthParams,
     MASTER_BUS, MAX_CHANNELS,
@@ -27,6 +28,7 @@ pub struct ChannelState {
     pub mlm1_params: MlM1Params,
     pub mlp8_params: MlP8Params,
     pub ds01_params: Ds01Params,
+    pub aux_in_params: AuxInParams,
     pub poly_params: PolySynthParams,
     pub sample_name: String,
     pub sample_description: String,
@@ -84,6 +86,7 @@ impl ChannelState {
             DeviceKind::MlM1 => GeneratorParams::MlM1(self.mlm1_params),
             DeviceKind::MlP8 => GeneratorParams::MlP8(self.mlp8_params),
             DeviceKind::Ds01 => GeneratorParams::Ds01(self.ds01_params),
+            DeviceKind::AuxIn => GeneratorParams::AuxIn(self.aux_in_params),
             DeviceKind::DrumSynth => GeneratorParams::DrumSynth(self.drum_params),
         }
     }
@@ -103,6 +106,7 @@ impl ChannelState {
             mlm1_params: MlM1Params::default(),
             mlp8_params: MlP8Params::default(),
             ds01_params: Ds01Params::default(),
+            aux_in_params: AuxInParams::default(),
             poly_params: PolySynthParams::default(),
             sample_name: String::new(),
             sample_description: String::new(),

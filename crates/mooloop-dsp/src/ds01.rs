@@ -56,6 +56,7 @@
 //!   phase across a level move.
 
 use crate::bus::StereoBus;
+use crate::taps::AudioTaps;
 use crate::env::{shape, Ahd, AhdShape, DECAY_TAIL_CONSTANTS};
 use crate::event::{Event, EventList};
 use crate::filter::{apply_drive, soft_ceiling, OnePoleHp, Svf};
@@ -863,6 +864,17 @@ struct BurstShapes {
 }
 
 /// One independently enveloped hit.
+/// DS-01's tap numbers: each audio outlet's position in its declared audio
+/// run, which is the number the engine indexes the port group by. Pinned
+/// against `mooloop_core::audio_tap_index` by the test below.
+pub const TAP_TONE: usize = 0;
+pub const TAP_NOISE: usize = 1;
+pub const TAP_BODY: usize = 2;
+pub const TAP_PRE_SHAPE: usize = 3;
+
+/// How many audio outlets DS-01 declares.
+const DS01_TAPS: usize = 4;
+
 struct Voice {
     active: bool,
     age: u64,
@@ -913,6 +925,12 @@ struct Voice {
     noise_level: Smoothed,
     body_level: Smoothed,
     level: Smoothed,
+    /// The four published points of this voice's last rendered sample: the
+    /// three pre-Level layers and the mix that goes into the shaper.
+    ///
+    /// Recorded rather than recomputed, because publication is the value the
+    /// voice actually ran and not a second derivation of it.
+    published: [f32; DS01_TAPS],
 }
 
 impl Voice {
@@ -942,6 +960,7 @@ impl Voice {
             noise_level: Smoothed::new(0.0, SMOOTHING_S, sample_rate),
             body_level: Smoothed::new(0.0, SMOOTHING_S, sample_rate),
             level: Smoothed::new(0.0, SMOOTHING_S, sample_rate),
+            published: [0.0; DS01_TAPS],
         }
     }
 
@@ -966,6 +985,7 @@ impl Voice {
         self.sources = Sources::default();
         self.held_noise = 0.0;
         self.hold_phase = 1.0;
+        self.published = [0.0; DS01_TAPS];
     }
 
     /// Aim this voice's levels at what its own matrix resolved this tick.
@@ -1156,6 +1176,11 @@ impl Voice {
                 * amp
                 * self.latched.velocity_amp,
         );
+        // The declared taps, at the points the outlet table names: three
+        // pre-Level layers and the layer mix before the shaper. A layer at
+        // zero level still publishes, which is what `pre-level` means and why
+        // the status text says so.
+        self.published = [tone, noise, body, vca];
         shape_stage(vca, c.drive, c.character, c.bias, c.bit_step) * level
     }
 
@@ -1502,19 +1527,36 @@ impl Ds01 {
     /// roll — so a range resolved once at its start would hold the first
     /// tick's values for a whole block. `process` still splits at every event
     /// offset on top of this, which only makes the grid finer.
-    fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+    fn render_range(
+        &mut self,
+        bus: &mut StereoBus,
+        start: usize,
+        end: usize,
+        ports: &mut AudioTaps,
+    ) {
         let mut at = start;
         while at < end {
             let tick_end = (at + CONTROL_RATE_FRAMES).min(end);
-            self.render_tick(bus, at, tick_end);
+            self.render_tick(bus, at, tick_end, ports);
             at = tick_end;
         }
     }
 
-    fn render_tick(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+    fn render_tick(
+        &mut self,
+        bus: &mut StereoBus,
+        start: usize,
+        end: usize,
+        ports: &mut AudioTaps,
+    ) {
         if start >= end {
             return;
         }
+        // A subscriber is a reason to run the body, exactly as a nonzero
+        // level is: the pre-level tap of a layer nobody hears is the whole
+        // reason the outlet exists.
+        let body_wanted = ports.wants(TAP_BODY);
+        let publishing = !ports.is_empty();
         // The continuous controls are resolved once here and the smoothers
         // re-aimed, then every sample in the tick runs against them.
         let continuous = Continuous::new(&self.params);
@@ -1574,7 +1616,8 @@ impl Ds01 {
         // while the layer is live, so reading it here would be asking a
         // question whose answer this decision had already fixed — a route
         // from a live source could never lift the body off a zero knob.
-        let body_live = self.params.body_level > 0.0
+        let body_live = body_wanted
+            || self.params.body_level > 0.0
             || self.voices.iter().enumerate().any(|(index, voice)| {
                 voice.active
                     && (voice.body_level.value() > 0.0
@@ -1606,6 +1649,25 @@ impl Ds01 {
                 if voice.amp_env.is_idle() && !voice.burst_pending() {
                     voice.active = false;
                     voice.gate_held = false;
+                }
+            }
+            if publishing {
+                // Summed across sounding voices, and mono because DS-01 is:
+                // the outlet is declared stereo so a consumer hears the
+                // device's own image, and DS-01's image is centre.
+                for (tap, port) in [TAP_TONE, TAP_NOISE, TAP_BODY, TAP_PRE_SHAPE]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let Some(buffer) = ports.port(port) else {
+                        continue;
+                    };
+                    let mut published = 0.0;
+                    for voice in self.voices.iter().filter(|voice| voice.active) {
+                        published += voice.published[tap];
+                    }
+                    buffer.l[frame] += published;
+                    buffer.r[frame] += published;
                 }
             }
             let sample =
@@ -1671,7 +1733,7 @@ impl Ds01 {
         let mut node = Self::new(params, rate);
         node.trigger(0, 60, 127);
         let mut bus = StereoBus::with_capacity(frames);
-        node.render_range(&mut bus, 0, frames);
+        node.render_range(&mut bus, 0, frames, &mut AudioTaps::none());
 
         let mut minimums = vec![f32::INFINITY; bins];
         let mut maximums = vec![f32::NEG_INFINITY; bins];
@@ -1695,13 +1757,16 @@ impl Ds01 {
     }
 }
 
-impl AudioNode for Ds01 {
-    fn process(
+impl Ds01 {
+    /// Render one block, filling the audio outlets somebody has subscribed
+    /// to. The port group is supplied for the call and not retained, per
+    /// `AUDIO_ARCHITECTURE.md`.
+    pub fn process_publishing(
         &mut self,
         ctx: &ProcessContext,
         bus: &mut StereoBus,
         events_in: &EventList,
-        _events_out: Option<&mut EventList>,
+        ports: &mut AudioTaps,
     ) {
         let frames = ctx.frames.min(bus.capacity());
 
@@ -1716,7 +1781,7 @@ impl AudioNode for Ds01 {
         let mut pos = 0usize;
         for ev in events_in.iter() {
             let offset = (ev.offset as usize).min(frames).max(pos);
-            self.render_range(bus, pos, offset);
+            self.render_range(bus, pos, offset, ports);
             match ev.event {
                 Event::NoteOn { id, note, velocity } => self.trigger(id, note, velocity),
                 Event::NoteOff { id, .. } => self.note_off(id),
@@ -1733,7 +1798,19 @@ impl AudioNode for Ds01 {
             }
             pos = offset;
         }
-        self.render_range(bus, pos, frames);
+        self.render_range(bus, pos, frames, ports);
+    }
+}
+
+impl AudioNode for Ds01 {
+    fn process(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        _events_out: Option<&mut EventList>,
+    ) {
+        self.process_publishing(ctx, bus, events_in, &mut AudioTaps::none());
     }
 }
 
@@ -1807,6 +1884,107 @@ mod tests {
             .count()
     }
 
+    /// Render one hit with `tap` subscribed, and hand back what the channel
+    /// heard and what was published.
+    fn hit_publishing(params: Ds01Params, frames: usize, tap: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut node = Ds01::new(params, SR);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60, 127));
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut published = StereoBus::with_capacity(frames);
+        {
+            let mut ports = AudioTaps::none();
+            ports.set(tap, &mut published);
+            node.process_publishing(&ctx(frames), &mut bus, &events, &mut ports);
+        }
+        (bus.l[..frames].to_vec(), published.l[..frames].to_vec())
+    }
+
+    #[test]
+    fn the_declared_outlet_order_is_the_tap_numbering() {
+        use mooloop_core::ds01::{
+            DS01_OUTLET_BODY, DS01_OUTLET_NOISE, DS01_OUTLET_PRE_SHAPE, DS01_OUTLET_TONE,
+        };
+        use mooloop_core::{audio_tap_index, DeviceKind, PublishesOutlets};
+        let outlets = DeviceKind::Ds01.outlets();
+        for (id, tap) in [
+            (DS01_OUTLET_TONE, TAP_TONE),
+            (DS01_OUTLET_NOISE, TAP_NOISE),
+            (DS01_OUTLET_BODY, TAP_BODY),
+            (DS01_OUTLET_PRE_SHAPE, TAP_PRE_SHAPE),
+        ] {
+            assert_eq!(audio_tap_index(outlets, id), Some(tap));
+        }
+    }
+
+    /// The same claim ML-P8 makes, on the instrument whose mechanism is not
+    /// ML-P8's: a layer at zero level still publishes its pre-Level tap, and
+    /// the device's own output does not move because it does.
+    ///
+    /// The body is the interesting one here rather than the tone, because it
+    /// is the layer DS-01 skips entirely when nothing needs it -- so a
+    /// subscriber has to be one of the reasons it runs.
+    #[test]
+    fn a_silent_layer_still_publishes_its_pre_level_tap() {
+        let mut params = Ds01Params::default();
+        params.body_level = 0.0;
+        params.noise_level = 0.6;
+        let (heard, published) = hit_publishing(params, 8192, TAP_BODY);
+        assert!(rms(&published) > 0.0, "a silent body published nothing");
+        assert_eq!(
+            heard,
+            hit(params, 8192),
+            "publishing changed what the device sounds"
+        );
+    }
+
+    #[test]
+    fn each_declared_tap_carries_its_own_point_in_the_voice() {
+        let mut params = Ds01Params::default();
+        params.noise_level = 0.5;
+        params.body_level = 0.5;
+        for tap in [TAP_TONE, TAP_NOISE, TAP_BODY, TAP_PRE_SHAPE] {
+            let (_, published) = hit_publishing(params, 4096, tap);
+            assert!(
+                published.iter().all(|s| s.is_finite()),
+                "tap {tap} published a non-finite sample"
+            );
+            assert!(rms(&published) > 0.0, "tap {tap} published nothing");
+        }
+        let (_, tone) = hit_publishing(params, 4096, TAP_TONE);
+        let (_, mix) = hit_publishing(params, 4096, TAP_PRE_SHAPE);
+        assert!(
+            tone.iter().zip(mix.iter()).any(|(a, b)| (a - b).abs() > 1e-6),
+            "the tone and pre-shape taps carry the same signal"
+        );
+    }
+
+    /// A producer with nothing sounding publishes silence rather than the
+    /// tail of the last hit.
+    #[test]
+    fn an_idle_device_publishes_silence() {
+        let frames = 4096;
+        let mut node = Ds01::new(Ds01Params::default(), SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut published = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60, 127));
+        {
+            let mut ports = AudioTaps::none();
+            ports.set(TAP_TONE, &mut published);
+            node.process_publishing(&ctx(frames), &mut bus, &events, &mut ports);
+        }
+        assert!(published.peak(frames).0 > 0.0);
+        for _ in 0..8 {
+            published.clear(frames);
+            bus.clear(frames);
+            let mut ports = AudioTaps::none();
+            ports.set(TAP_TONE, &mut published);
+            node.process_publishing(&ctx(frames), &mut bus, &EventList::empty(), &mut ports);
+        }
+        assert_eq!(published.peak(frames), (0.0, 0.0));
+    }
+
     /// What a DS-01 costs a channel, split where the engine's own footprint
     /// test cannot see it. Every live channel holds one node of every
     /// generator kind, so this is paid whether or not the channel is a drum
@@ -1833,7 +2011,13 @@ mod tests {
         assert_eq!(size_of::<Body>(), 116);
         assert_eq!(size_of::<Burst>(), 36);
         assert_eq!(size_of::<Sources>(), 32);
-        assert_eq!(size_of::<Voice>(), 704);
+        // The typed audio edges add four floats: the three pre-Level layers
+        // and the layer mix, recorded as the voice runs them so publication
+        // is the value that was heard rather than a second derivation of it.
+        // Sixteen bytes a voice, paid whether or not anybody subscribes,
+        // against the 64 KB a materialised stereo tap costs -- which is why
+        // the buffers are allocated on subscription and these are not.
+        assert_eq!(size_of::<Voice>(), 720);
         // Eight of those, plus the parameter block — which the matrix's
         // eight rows dominate — and one resolved control set per voice,
         // because the matrix is per voice and two hits have to be able to
@@ -1847,8 +2031,8 @@ mod tests {
         // a per-voice copy of it would be eight numbers agreeing about one --
         // so publishing every hit's envelope, velocity and note to the rest
         // of the channel costs two words for the whole device.
-        assert_eq!(size_of::<Ds01>(), 6_832);
-        assert_eq!(size_of::<Voice>() * DS01_VOICES, 5_632);
+        assert_eq!(size_of::<Ds01>(), 6_960);
+        assert_eq!(size_of::<Voice>() * DS01_VOICES, 5_760);
     }
 
     #[test]

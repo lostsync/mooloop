@@ -671,7 +671,7 @@ const LFO_DESCRIPTORS: [ParamDescriptor; 8] = [
     stepped(
         PARAM_LFO_WAVE,
         "LFO wave",
-        MlP8LfoWave::ALL.len() as u8,
+        MlP8LfoWave::ALL.len() as u16,
         0.0,
     ),
     stepped(PARAM_LFO_SYNC, "LFO sync", 2, 0.0),
@@ -690,7 +690,7 @@ const LFO_DESCRIPTORS: [ParamDescriptor; 8] = [
         unit: "",
         min: 0.0,
         max: (ModTimeDivision::ALL.len() - 1) as f32,
-        curve: ParamCurve::Stepped(ModTimeDivision::ALL.len() as u8),
+        curve: ParamCurve::Stepped(ModTimeDivision::ALL.len() as u16),
         default: 7.0,
     },
     unit(PARAM_LFO_PHASE, "LFO phase", 0.0),
@@ -699,7 +699,7 @@ const LFO_DESCRIPTORS: [ParamDescriptor; 8] = [
     stepped(
         PARAM_LFO_RETRIGGER,
         "LFO trig",
-        MlP8LfoRetrigger::ALL.len() as u8,
+        MlP8LfoRetrigger::ALL.len() as u16,
         0.0,
     ),
 ];

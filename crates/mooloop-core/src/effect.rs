@@ -155,7 +155,14 @@ pub enum ParamCurve {
     /// Requires `min > 0`.
     Exponential,
     /// `n` discrete positions mapped across the range: mode selectors.
-    Stepped(u8),
+    ///
+    /// Wider than a `u8` because a selector may name a channel, and a
+    /// project may hold [`crate::MAX_CHANNELS`] of them plus the "none"
+    /// position -- 257 positions, which is two more than a byte of *count*
+    /// can express. The width was never a design decision; it was the
+    /// default integer, and the first selector that needed more than 255
+    /// positions is the one that says so.
+    Stepped(u16),
 }
 
 /// One parameter's identity, range, and mapping. The single source of truth:

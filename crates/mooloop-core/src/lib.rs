@@ -4,6 +4,7 @@
 //! realtime and GUI threads.
 
 pub mod automation;
+pub mod aux_in;
 pub mod bridge;
 pub mod buffer;
 pub mod channel;
@@ -35,6 +36,7 @@ pub use automation::{
     AutomationLane, AutomationPoint, PointId, MAX_AUTOMATION_LANES_PER_CHANNEL,
     MAX_AUTOMATION_POINTS_PER_LANE,
 };
+pub use aux_in::AuxInParams;
 pub use bridge::{EngineCommand, EngineEvent};
 pub use ds01::{
     body_mode_ratio, matrix_param, Ds01Character, Ds01EnvParams, Ds01ModSource, Ds01NoiseColor,
@@ -79,7 +81,8 @@ pub use mod_metadata::{
     TriggerPolicy,
 };
 pub use outlet::{
-    AudioSubscription, OutletDescriptor, OutletDomain, OutletTap, PublishesOutlets,
+    audio_tap_index, AudioSubscription, OutletDescriptor, OutletDomain, OutletTap,
+    PublishesOutlets, MAX_DEVICE_AUDIO_TAPS,
 };
 pub use generator::{
     DRUM_PARAM_DECAY, DRUM_PARAM_DRIVE, DRUM_PARAM_HAT_CHARACTER, DRUM_PARAM_HAT_HP_HZ,
@@ -134,10 +137,11 @@ pub use effect::{
     REVERB_PARAM_PREDELAY_MS, REVERB_PARAM_SIZE, REVERB_PARAM_WIDTH,
 };
 pub use mixer::{
-    chain_latency, clamp_bus, compile_bus_graph, compile_latency, compile_render_order, default_buses,
-    default_render_order, is_legal_route, sanitize_route, would_create_cycle, BusSetup,
-    CompiledBusGraph, CompiledLatency, EffectTarget, MixerBus, RenderOrder, INSERT_BUSES,
-    MASTER_BUS, MAX_BUSES,
+    chain_latency, clamp_bus, compile_audio_graph, compile_bus_graph, compile_latency,
+    compile_render_order, default_buses, default_render_order, is_legal_route, sanitize_route,
+    would_create_cycle, AudioEdge, AudioOrder, BusSetup, CompiledAudioGraph, CompiledBusGraph,
+    CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, INSERT_BUSES, MASTER_BUS,
+    MAX_BUSES,
 };
 pub use pattern::{
     ChannelPattern, NoteEvent, NoteId, Pattern, Step, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
@@ -148,7 +152,8 @@ pub use playlist::{
     STEPS_PER_BAR, TICKS_PER_BAR,
 };
 pub use project::{
-    ChannelPreset, ChannelSetup, ChannelSource, Ds01State, DrumSynthState, Kit, MonoSynthState,
+    AuxInState, ChannelPreset, ChannelSetup, ChannelSource, Ds01State, DrumSynthState, Kit,
+    MonoSynthState,
     MlM1State, MlP8State, PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
     DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };

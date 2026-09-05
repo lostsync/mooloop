@@ -88,6 +88,11 @@ pub struct PolySynthState {
     pub params: PolySynthParams,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AuxInState {
+    pub params: crate::AuxInParams,
+}
+
 /// Tagged now so later synth variants can join the v1 envelope additively.
 // Every variant here is one synth's state block, and the ML-P8 is simply the
 // newest and widest; the next synth will be wider still. Boxing whichever
@@ -117,6 +122,11 @@ pub enum ChannelSource {
     /// same way and for the same reason.
     #[serde(rename = "ds01")]
     Ds01(Ds01State),
+    /// Tagged `aux_in`, matching [`crate::DeviceKind::AuxIn`]. Old projects
+    /// have no such channel and load unchanged; a fresh one subscribes to
+    /// nothing and is silent rather than invalid.
+    #[serde(rename = "aux_in")]
+    AuxIn(AuxInState),
 }
 
 impl Default for ChannelSource {
@@ -135,6 +145,7 @@ impl ChannelSource {
             Self::MlM1(_) => DeviceKind::MlM1,
             Self::MlP8(_) => DeviceKind::MlP8,
             Self::Ds01(_) => DeviceKind::Ds01,
+            Self::AuxIn(_) => DeviceKind::AuxIn,
         }
     }
 
@@ -218,6 +229,43 @@ impl ChannelSource {
     pub fn ds01_state_mut(&mut self) -> Option<&mut Ds01State> {
         match self {
             Self::Ds01(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn aux_in_state(&self) -> Option<&AuxInState> {
+        match self {
+            Self::AuxIn(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn aux_in_state_mut(&mut self) -> Option<&mut AuxInState> {
+        match self {
+            Self::AuxIn(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    /// Follow a channel edit, for the one kind that names another channel.
+    ///
+    /// Returns whether anything moved. Every other source is unaffected: a
+    /// sampler does not care which seat it is in.
+    pub fn rescope_subscription(&mut self, edit: crate::structure::ChannelEdit) -> bool {
+        match self {
+            Self::AuxIn(state) => state.params.rescope(edit),
+            _ => false,
+        }
+    }
+
+    /// The audio edge this channel's generator is asking for.
+    ///
+    /// `None` for every kind but Aux In, and for an Aux In that has not been
+    /// pointed at anything. This is what `compile_audio_graph` is given, one
+    /// entry a channel.
+    pub fn audio_subscription(&self) -> Option<crate::AudioSubscription> {
+        match self {
+            Self::AuxIn(state) => state.params.subscription(),
             _ => None,
         }
     }
@@ -322,6 +370,19 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::Ds01),
             source: ChannelSource::Ds01(Ds01State { params }),
+            effects: Vec::new(),
+            modulation: ModRack::default(),
+        }
+    }
+
+    pub fn aux_in(name: impl Into<String>) -> Self {
+        Self::aux_in_with_params(name, crate::AuxInParams::default())
+    }
+
+    pub fn aux_in_with_params(name: impl Into<String>, params: crate::AuxInParams) -> Self {
+        Self {
+            channel: Channel::new(name, DeviceKind::AuxIn),
+            source: ChannelSource::AuxIn(AuxInState { params }),
             effects: Vec::new(),
             modulation: ModRack::default(),
         }
@@ -524,6 +585,23 @@ impl ProjectChannel {
         }
     }
 
+    pub fn aux_in(index: usize, pattern_count: usize) -> Self {
+        Self::aux_in_with_params(index, pattern_count, crate::AuxInParams::default())
+    }
+
+    pub fn aux_in_with_params(
+        index: usize,
+        pattern_count: usize,
+        params: crate::AuxInParams,
+    ) -> Self {
+        Self {
+            setup: ChannelSetup::aux_in_with_params(format!("Aux {}", index + 1), params),
+            notes: vec![Vec::new(); pattern_count.max(1)],
+            automation: vec![Vec::new(); pattern_count.max(1)],
+            next_note_id: 1,
+        }
+    }
+
     pub fn poly_synth(index: usize, pattern_count: usize) -> Self {
         Self::poly_synth_with_params(index, pattern_count, PolySynthParams::default())
     }
@@ -641,14 +719,42 @@ impl Project {
             return None;
         }
         let index = index.min(self.channels.len());
-        self.rescope_after(ChannelEdit::Inserted(index as u8));
+        let edit = ChannelEdit::Inserted(index as u8);
+        self.rescope_after(edit);
         channel.rescope(index as u8);
+        // The newcomer is not in the list yet, so `rescope_after` did not
+        // reach it -- and unlike its own addresses, a subscription names
+        // somebody else and has to follow the same shift everyone else did.
+        channel.setup.source.rescope_subscription(edit);
         self.channels.insert(index, channel);
         Some(index)
     }
 
+    /// The audio edges this project's channels compile to, and the order
+    /// that satisfies them.
+    ///
+    /// Derived rather than tracked, for the reason `Session::latency_plan`
+    /// gives: the answer is a property of every channel at once, so a flag
+    /// each edit had to remember to set is a list that grows silently. An
+    /// offline render compiles its own through here, which is what keeps an
+    /// export and a live take rendering in the same order.
+    pub fn audio_graph(&self) -> crate::CompiledAudioGraph {
+        let count = self.channels.len().min(MAX_CHANNELS);
+        let mut subscriptions = [None; MAX_CHANNELS];
+        let mut published: [&'static [crate::OutletDescriptor]; MAX_CHANNELS] = [&[]; MAX_CHANNELS];
+        for (index, channel) in self.channels.iter().take(count).enumerate() {
+            subscriptions[index] = channel.setup.source.audio_subscription();
+            published[index] = crate::PublishesOutlets::outlets(&channel.setup.source.kind());
+        }
+        crate::compile_audio_graph(&subscriptions[..count], &published[..count])
+    }
+
     fn rescope_after(&mut self, edit: ChannelEdit) {
         for channel in &mut self.channels {
+            // An Aux In's subscription is one more channel-scoped address and
+            // moves through this pass rather than growing a repair path of
+            // its own.
+            channel.setup.source.rescope_subscription(edit);
             channel.setup.modulation.rescope_channels(edit);
             for lanes in &mut channel.automation {
                 rescope_lanes(lanes, edit);

@@ -51,6 +51,7 @@
 //! the channel.
 
 use crate::bus::{pan_gains, StereoBus};
+use crate::taps::AudioTaps;
 use crate::effects::ModulationEffect;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
@@ -1016,8 +1017,18 @@ struct Voice {
     sync_carry: [f32; 3],
     sub: Osc,
     sub_carry: f32,
+    /// The sub's own pre-Level sample. Published, not fed back: unlike
+    /// [`Self::taps`] nothing internal reads it, and it exists only because
+    /// `Sub` is a declared audio outlet.
+    sub_tap: f32,
     noise: ColoredNoise,
     noise_tap: f32,
+    /// What went into the filter, and what came out of it, for the block
+    /// just rendered. The `Pre-Filter Mix` and `Filter` outlets, kept as two
+    /// fields rather than recomputed: they are the values the voice actually
+    /// ran, which is what publication means.
+    pre_filter_tap: f32,
+    filter_tap: f32,
     current_freq: f32,
     target_freq: f32,
     /// The velocity this voice's note was played at, in `[0, 1]`.
@@ -1083,6 +1094,9 @@ impl Voice {
             sync_carry: [0.0; 3],
             sub: Osc::new(),
             sub_carry: 0.0,
+            sub_tap: 0.0,
+            pre_filter_tap: 0.0,
+            filter_tap: 0.0,
             member: 0,
             members: 1,
             drift: Drift::for_slot(slot),
@@ -1120,8 +1134,11 @@ impl Voice {
         self.sync_carry = [0.0; 3];
         self.sub.reset();
         self.sub_carry = 0.0;
+        self.sub_tap = 0.0;
         self.noise.reset(noise_seed(self.slot));
         self.noise_tap = 0.0;
+        self.pre_filter_tap = 0.0;
+        self.filter_tap = 0.0;
         self.filter.reset();
         self.drive = PreDrive::new();
         self.mod_offsets = [0.0; MLP8_MOD_DESTS];
@@ -1292,6 +1309,47 @@ fn noise_seed(slot: u32) -> u32 {
 /// Built once per range rather than consulted per sample, and it is where the
 /// route topology is decided: an oscillator nothing reads is skipped, an
 /// oscillator that is only a modulator is not.
+/// ML-P8's tap numbers: each audio outlet's position in the device's declared
+/// audio run, which is the number the engine indexes its port group by.
+///
+/// Written out rather than derived at the call site so the inner loop indexes
+/// a constant, and pinned against `mooloop_core::audio_tap_index` by
+/// `the_declared_outlet_order_is_the_tap_numbering` -- one list, checked, not
+/// two that can disagree.
+pub const TAP_OSC1: usize = 0;
+pub const TAP_OSC2: usize = 1;
+pub const TAP_OSC3: usize = 2;
+pub const TAP_SUB: usize = 3;
+pub const TAP_NOISE: usize = 4;
+pub const TAP_PRE_FILTER: usize = 5;
+pub const TAP_FILTER: usize = 6;
+
+/// Which pre-level sources somebody is listening to this block.
+///
+/// Read once a render range, not once a sample: it decides whether a source
+/// is computed at all, which is the question `Prepared` already answers for
+/// the patch's own reasons. A subscriber is simply one more reason.
+#[derive(Debug, Clone, Copy, Default)]
+struct TapDemand {
+    osc: [bool; 3],
+    sub: bool,
+    noise: bool,
+}
+
+impl TapDemand {
+    fn from(ports: &AudioTaps) -> Self {
+        Self {
+            osc: [
+                ports.wants(TAP_OSC1),
+                ports.wants(TAP_OSC2),
+                ports.wants(TAP_OSC3),
+            ],
+            sub: ports.wants(TAP_SUB),
+            noise: ports.wants(TAP_NOISE),
+        }
+    }
+}
+
 struct Prepared<'a> {
     /// The patch's routes, compiled. Borrowed rather than copied: it is the
     /// one part of the prepared state that is rebuilt on a topology change
@@ -1344,7 +1402,12 @@ struct Prepared<'a> {
 }
 
 impl<'a> Prepared<'a> {
-    fn new(params: &MlP8Params, sample_rate: u32, routes: &'a CompiledRoutes) -> Self {
+    fn new(
+        params: &MlP8Params,
+        sample_rate: u32,
+        routes: &'a CompiledRoutes,
+        demand: TapDemand,
+    ) -> Self {
         let mut ratio = [1.0_f32; 3];
         let mut semitones = [0.0_f32; 3];
         let mut cents_ratio = [1.0_f32; 3];
@@ -1385,7 +1448,12 @@ impl<'a> Prepared<'a> {
         // question this block can settle. Skipping it would replace whatever
         // the route was about to do with silence.
         let routed = |slot: usize| routes.touched[slot];
-        let sub_needed = params.sub_level > 0.0 || routed(slot::SUB_LEVEL);
+        // A subscriber is a reason to run a source, and it is the *whole*
+        // point of a pre-level tap: `Osc 3` turned down to silence in ML-P8's
+        // own mix is exactly the outlet somebody else wants. Folded in here
+        // rather than at the sample loop so it reaches `osc_needed` below,
+        // which is what decides whether the oscillator is computed at all.
+        let sub_needed = params.sub_level > 0.0 || routed(slot::SUB_LEVEL) || demand.sub;
         let audible = |n: usize| params.osc[n].level > 0.0 || routed(slot::OSC_LEVEL[n]);
         // The same for the amounts that decide whether one oscillator reaches
         // another: an XMOD route can wake a path the knobs left at zero.
@@ -1398,14 +1466,16 @@ impl<'a> Prepared<'a> {
         // decide, because a muted oscillator is a legitimate modulator — that
         // is the point of the device.
         let osc_needed: [bool; 3] = std::array::from_fn(|n| {
-            audible(n)
+            demand.osc[n]
+                || audible(n)
                 || (0..3).any(|to| to != n && modulates(n, to))
                 || feedback[n] != 0.0
                 || routed(slot::OSC_FEEDBACK + n)
                 || sync_master.contains(&Some(n))
                 || (sub_needed && sub_source == n)
         });
-        let noise_needed = params.noise_level > 0.0
+        let noise_needed = demand.noise
+            || params.noise_level > 0.0
             || routed(slot::NOISE_LEVEL)
             || (0..3).any(|n| noise_to_osc[n] != 0.0 || routed(slot::NOISE_TO_OSC + n));
 
@@ -1843,17 +1913,31 @@ impl MlP8 {
         outlets
     }
 
-    fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize, bpm: f64) {
+    fn render_range(
+        &mut self,
+        bus: &mut StereoBus,
+        start: usize,
+        end: usize,
+        bpm: f64,
+        ports: &mut AudioTaps,
+    ) {
         let limit = self.scratch.capacity().max(1);
         let mut pos = start;
         while pos < end {
             let chunk = (pos + limit).min(end);
-            self.render_chunk(bus, pos, chunk, bpm);
+            self.render_chunk(bus, pos, chunk, bpm, ports);
             pos = chunk;
         }
     }
 
-    fn render_chunk(&mut self, bus: &mut StereoBus, start: usize, end: usize, bpm: f64) {
+    fn render_chunk(
+        &mut self,
+        bus: &mut StereoBus,
+        start: usize,
+        end: usize,
+        bpm: f64,
+        ports: &mut AudioTaps,
+    ) {
         if start >= end {
             return;
         }
@@ -1875,7 +1959,12 @@ impl MlP8 {
         } = self;
         let params = *params;
         let sr = *sample_rate;
-        let prepared = Prepared::new(&params, sr, routes);
+        let demand = TapDemand::from(ports);
+        // One check a range rather than one a voice-sample: with nobody
+        // subscribed the whole publication path is a single untaken branch,
+        // which is what a feature that is off by default has to cost.
+        let publishing = !ports.is_empty();
+        let prepared = Prepared::new(&params, sr, routes, demand);
         let glide_coeff = (-1.0 / (params.glide.max(MIN_GLIDE_S) * sr as f32)).exp();
         let master_volume = params.master_volume.clamp(0.0, 1.0);
         // With the chorus off the voices go straight onto the channel bus and
@@ -1979,6 +2068,17 @@ impl MlP8 {
                     shaped * voice.env.level() * amp * voice_level * VOICE_OUTPUT_REFERENCE;
                 target.l[frame - offset] += sample * gain_l;
                 target.r[frame - offset] += sample * gain_r;
+                if publishing {
+                    // Absolute frame index, not the chorus scratch's: a tap
+                    // is the engine's block-sized buffer whether or not this
+                    // range is being routed through the finisher.
+                    //
+                    // Summed across voices and panned with the voice, which
+                    // is what `poly-synth-v2/` step 06's table declares, and
+                    // added rather than assigned because the engine cleared
+                    // the buffer for the block and a range is a piece of one.
+                    publish_voice(ports, voice, frame, gain_l, gain_r);
+                }
             }
         }
 
@@ -2171,6 +2271,7 @@ impl Voice {
         // mixer leaves every route that reads it untouched.
         self.taps = value;
         self.noise_tap = noise;
+        self.sub_tap = sub;
 
         let mut mix = 0.0;
         for index in 0..3 {
@@ -2199,6 +2300,12 @@ impl Voice {
         let drive = self.dest(routes, slot::DRIVE, smoothed_drive);
         let feedback = self.dest(routes, slot::VOICE_FEEDBACK, smoothed_feedback);
         if prep.filter_open && feedback == 0.0 && drive == 0.0 {
+            // Nothing between the mix and the output, so both published
+            // points are the same sample. Recording it rather than leaving
+            // the last block's value behind is what makes an open filter
+            // publish honestly instead of freezing.
+            self.pre_filter_tap = mix;
+            self.filter_tap = mix;
             return mix;
         }
 
@@ -2207,6 +2314,9 @@ impl Voice {
         // untouched and only a runaway meets it.
         let returned = soft_ceiling(self.feedback_tap * feedback * VOICE_FEEDBACK_RANGE);
         let driven = self.drive.next_sample(mix + returned, drive, sample_rate);
+        // `Pre-Filter Mix` is declared as the source mix with voice feedback
+        // and drive applied, before the filter. That is this sample exactly.
+        self.pre_filter_tap = driven;
 
         // Drift's cutoff share rides on the authored corner rather than on
         // the tracked one, so it is a property of the voice and not something
@@ -2242,6 +2352,9 @@ impl Voice {
         self.dc_x = filtered;
         self.dc_y = blocked;
         self.feedback_tap = blocked;
+        // `Filter` is the filter's output before the VCA, which is the
+        // shaped sample before the envelope, velocity and level reach it.
+        self.filter_tap = filtered;
         filtered
     }
 }
@@ -2251,13 +2364,42 @@ impl Voice {
 /// offset becomes a problem.
 const DC_BLOCK_COEFF: f32 = 0.999;
 
-impl AudioNode for MlP8 {
-    fn process(
+/// Add one voice's declared taps into the buffers somebody is reading.
+///
+/// Seven `if let`s rather than a match on outlet ids: the tap number is a
+/// fixed offset, so an unsubscribed outlet costs an untaken branch and a
+/// subscribed one costs no lookup at all.
+#[inline]
+fn publish_voice(ports: &mut AudioTaps, voice: &Voice, frame: usize, gain_l: f32, gain_r: f32) {
+    let mut publish = |tap: usize, value: f32| {
+        if let Some(port) = ports.port(tap) {
+            port.l[frame] += value * gain_l;
+            port.r[frame] += value * gain_r;
+        }
+    };
+    publish(TAP_OSC1, voice.taps[0]);
+    publish(TAP_OSC2, voice.taps[1]);
+    publish(TAP_OSC3, voice.taps[2]);
+    publish(TAP_SUB, voice.sub_tap);
+    publish(TAP_NOISE, voice.noise_tap);
+    publish(TAP_PRE_FILTER, voice.pre_filter_tap);
+    publish(TAP_FILTER, voice.filter_tap);
+}
+
+impl MlP8 {
+    /// Render one block, filling the audio outlets somebody has subscribed
+    /// to.
+    ///
+    /// The port group is supplied for the duration of the call rather than
+    /// retained, which is `AUDIO_ARCHITECTURE.md`'s rule for auxiliary
+    /// buffers, and it is what lets a subscription be authored and dropped
+    /// without the device knowing anything about the graph.
+    pub fn process_publishing(
         &mut self,
         ctx: &ProcessContext,
         bus: &mut StereoBus,
         events_in: &EventList,
-        _events_out: Option<&mut EventList>,
+        ports: &mut AudioTaps,
     ) {
         let frames = ctx.frames.min(bus.capacity());
 
@@ -2268,7 +2410,7 @@ impl AudioNode for MlP8 {
         let mut pos = 0usize;
         for ev in events_in.iter() {
             let off = (ev.offset as usize).min(frames).max(pos);
-            self.render_range(bus, pos, off, ctx.bpm);
+            self.render_range(bus, pos, off, ctx.bpm, ports);
             match ev.event {
                 Event::NoteOn { id, note, velocity } => self.note_on(id, note, velocity),
                 Event::NoteOff { id, .. } => self.note_off(id),
@@ -2281,7 +2423,19 @@ impl AudioNode for MlP8 {
             }
             pos = off;
         }
-        self.render_range(bus, pos, frames, ctx.bpm);
+        self.render_range(bus, pos, frames, ctx.bpm, ports);
+    }
+}
+
+impl AudioNode for MlP8 {
+    fn process(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        _events_out: Option<&mut EventList>,
+    ) {
+        self.process_publishing(ctx, bus, events_in, &mut AudioTaps::none());
     }
 }
 
@@ -2314,6 +2468,145 @@ mod tests {
                 velocity: 127,
             },
         }
+    }
+
+    // --- Published audio outlets -----------------------------------------
+
+    /// A device's tap numbering is part of its interface, and the declared
+    /// outlet order *is* that numbering. One list, checked here, rather than
+    /// two that can disagree and send samples to the wrong buffer.
+    #[test]
+    fn the_declared_outlet_order_is_the_tap_numbering() {
+        use mooloop_core::mlp8::{
+            OUTLET_FILTER, OUTLET_NOISE, OUTLET_OSC1, OUTLET_OSC2, OUTLET_OSC3, OUTLET_PRE_FILTER,
+            OUTLET_SUB,
+        };
+        use mooloop_core::{audio_tap_index, DeviceKind, PublishesOutlets};
+        let outlets = DeviceKind::MlP8.outlets();
+        for (id, tap) in [
+            (OUTLET_OSC1, TAP_OSC1),
+            (OUTLET_OSC2, TAP_OSC2),
+            (OUTLET_OSC3, TAP_OSC3),
+            (OUTLET_SUB, TAP_SUB),
+            (OUTLET_NOISE, TAP_NOISE),
+            (OUTLET_PRE_FILTER, TAP_PRE_FILTER),
+            (OUTLET_FILTER, TAP_FILTER),
+        ] {
+            assert_eq!(audio_tap_index(outlets, id), Some(tap));
+        }
+    }
+
+    /// Render a note with one outlet subscribed, and hand back what the
+    /// channel heard and what was published, so the two can be compared.
+    fn render_publishing(
+        params: MlP8Params,
+        note: u8,
+        frames: usize,
+        tap: usize,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut published = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, note));
+        {
+            let mut ports = AudioTaps::none();
+            ports.set(tap, &mut published);
+            synth.process_publishing(&ctx(frames), &mut bus, &events, &mut ports);
+        }
+        (bus.l[..frames].to_vec(), published.l[..frames].to_vec())
+    }
+
+    /// The headline case, and `poly-synth-v2/` step 06's acceptance: an
+    /// oscillator muted in ML-P8's own mix still publishes, because the tap
+    /// is before its Level. Both halves matter -- an edge that leaked the
+    /// oscillator into the device's output would pass the first assertion
+    /// and fail the second.
+    #[test]
+    fn a_muted_oscillator_still_publishes_and_stays_out_of_the_mix() {
+        let mut params = init_saw();
+        // Osc 1 audible, Osc 3 present but silent in the mix.
+        params.osc[1].level = 0.0;
+        params.osc[2].level = 0.0;
+        params.osc[2].semitones = 7.0;
+        let (heard, published) = render_publishing(params, 60, 4096, TAP_OSC3);
+        assert!(
+            rms(&published) > 0.05,
+            "a muted oscillator published nothing"
+        );
+        // And the device's own output is the same as it was without the
+        // subscription -- sample for sample, since publication is a copy of
+        // a value the voice already ran rather than a second signal path.
+        let alone = render(params, 60, 4096);
+        assert_eq!(heard, alone, "publishing changed what the device sounds");
+    }
+
+    /// A tap is a pre-Level signal, so it is not the device's output with a
+    /// different gain: it carries the oscillator whether or not the mix does.
+    #[test]
+    fn each_declared_tap_carries_its_own_point_in_the_voice() {
+        let mut params = init_saw();
+        params.osc[1].level = 0.0;
+        params.noise_level = 0.5;
+        params.sub_level = 0.5;
+        params.filter_mode = MlP8FilterMode::Lp12;
+        params.filter_cutoff = 0.3;
+        for tap in [
+            TAP_OSC1,
+            TAP_OSC2,
+            TAP_OSC3,
+            TAP_SUB,
+            TAP_NOISE,
+            TAP_PRE_FILTER,
+            TAP_FILTER,
+        ] {
+            let (_, published) = render_publishing(params, 60, 2048, tap);
+            assert!(
+                published.iter().all(|s| s.is_finite()),
+                "tap {tap} published a non-finite sample"
+            );
+            assert!(rms(&published) > 0.0, "tap {tap} published nothing");
+        }
+        // The filter is doing work, so its tap is not the pre-filter one.
+        let (_, pre) = render_publishing(params, 60, 2048, TAP_PRE_FILTER);
+        let (_, post) = render_publishing(params, 60, 2048, TAP_FILTER);
+        assert!(
+            pre.iter().zip(post.iter()).any(|(a, b)| (a - b).abs() > 1e-6),
+            "the pre-filter and filter taps carry the same signal"
+        );
+    }
+
+    /// A producer with nothing sounding publishes silence rather than the
+    /// previous block's audio. The engine clears the buffer, and the device
+    /// adds nothing to it: the test is that no voice writes while idle.
+    #[test]
+    fn a_device_with_no_active_voices_publishes_silence() {
+        let frames = 512;
+        let mut synth = MlP8::new(init_saw(), SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut published = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        {
+            let mut ports = AudioTaps::none();
+            ports.set(TAP_OSC1, &mut published);
+            synth.process_publishing(&ctx(frames), &mut bus, &events, &mut ports);
+        }
+        assert!(published.peak(frames).0 > 0.0);
+        synth.release_all();
+        // Long enough for the release tail to finish.
+        for _ in 0..40 {
+            published.clear(frames);
+            bus.clear(frames);
+            let mut ports = AudioTaps::none();
+            ports.set(TAP_OSC1, &mut published);
+            synth.process_publishing(&ctx(frames), &mut bus, &EventList::empty(), &mut ports);
+        }
+        assert_eq!(
+            published.peak(frames),
+            (0.0, 0.0),
+            "an idle device published stale audio"
+        );
     }
 
     /// A held note, rendered as one block. `note` is MIDI; the returned

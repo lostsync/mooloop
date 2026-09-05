@@ -96,7 +96,7 @@ pub(crate) const fn seconds(id: u32, name: &'static str, default: f32) -> ParamD
     }
 }
 
-pub(crate) const fn stepped(id: u32, name: &'static str, steps: u8, default: f32) -> ParamDescriptor {
+pub(crate) const fn stepped(id: u32, name: &'static str, steps: u16, default: f32) -> ParamDescriptor {
     ParamDescriptor {
         id,
         name,
@@ -269,7 +269,7 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 36] = [
         unit: "",
         min: 1.0,
         max: MAX_SAMPLER_VOICES as f32,
-        curve: ParamCurve::Stepped(MAX_SAMPLER_VOICES),
+        curve: ParamCurve::Stepped(MAX_SAMPLER_VOICES as u16),
         default: 1.0,
     },
     stepped(SAMPLER_PARAM_RETRIGGER_MODE, "Retrigger", 2, 0.0),
@@ -632,7 +632,7 @@ static POLY_DESCRIPTORS: [ParamDescriptor; 32] = {
         unit: "",
         min: 1.0,
         max: MAX_POLY_VOICES as f32,
-        curve: ParamCurve::Stepped(MAX_POLY_VOICES),
+        curve: ParamCurve::Stepped(MAX_POLY_VOICES as u16),
         default: 8.0,
     };
     out[31] = unit(SYNTH_PARAM_SPREAD, "Spread", 0.0);
@@ -694,6 +694,10 @@ impl DeviceKind {
             // its table lives beside the struct it describes.
             Self::Ds01 => &crate::ds01::DESCRIPTORS,
             Self::DrumSynth => &DRUM_DESCRIPTORS,
+            // Three parameters, and every one of them descriptor-addressed
+            // from the device's first commit: the argument that a device can
+            // ship without a table has been checked twice and lost twice.
+            Self::AuxIn => &crate::aux_in::DESCRIPTORS,
         }
     }
 
@@ -740,6 +744,7 @@ impl crate::PublishesOutlets for DeviceKind {
         match self {
             Self::MlP8 => &crate::mlp8::OUTLETS,
             Self::Ds01 => &crate::ds01::OUTLETS,
+            Self::AuxIn => &crate::aux_in::OUTLETS,
             _ => &[],
         }
     }
@@ -820,6 +825,7 @@ pub enum GeneratorParams {
     MlP8(MlP8Params),
     Ds01(Ds01Params),
     DrumSynth(DrumSynthParams),
+    AuxIn(crate::AuxInParams),
 }
 
 impl GeneratorParams {
@@ -843,6 +849,15 @@ impl GeneratorParams {
         }
     }
 
+    /// The audio edge this generator is asking for, for the one kind that
+    /// asks for one.
+    pub fn audio_subscription(&self) -> Option<crate::AudioSubscription> {
+        match self {
+            Self::AuxIn(params) => params.subscription(),
+            _ => None,
+        }
+    }
+
     pub fn kind(&self) -> DeviceKind {
         match self {
             Self::Sampler(_) => DeviceKind::Sampler,
@@ -852,6 +867,7 @@ impl GeneratorParams {
             Self::MlP8(_) => DeviceKind::MlP8,
             Self::Ds01(_) => DeviceKind::Ds01,
             Self::DrumSynth(_) => DeviceKind::DrumSynth,
+            Self::AuxIn(_) => DeviceKind::AuxIn,
         }
     }
 
@@ -975,6 +991,7 @@ impl GeneratorParams {
             }
             Self::MlP8(p) => crate::mlp8::get(p, id),
             Self::Ds01(p) => crate::ds01::get(p, id),
+            Self::AuxIn(p) => crate::aux_in::get(p, id),
             Self::DrumSynth(p) => Some(match id {
                 DRUM_PARAM_MODE => p.mode.to_index() as f32,
                 DRUM_PARAM_KICK_CHARACTER => p.kick_character.to_index() as f32,
@@ -1161,6 +1178,14 @@ impl GeneratorParams {
                     return None;
                 }
             }
+            Self::AuxIn(p) => {
+                if !crate::aux_in::set(p, id, value) {
+                    return None;
+                }
+                // Stepped, so the value that lands is the snapped one and
+                // the caller is told what it actually got.
+                return crate::aux_in::get(p, id);
+            }
             Self::DrumSynth(p) => match id {
                 DRUM_PARAM_MODE => p.mode = DrumMode::from_index(value.round() as i32),
                 DRUM_PARAM_KICK_CHARACTER => {
@@ -1200,7 +1225,7 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn all() -> [GeneratorParams; 7] {
+    fn all() -> [GeneratorParams; 8] {
         [
             GeneratorParams::Sampler(SamplerParams::default()),
             GeneratorParams::DrumSynth(DrumSynthParams::default()),
@@ -1209,6 +1234,7 @@ mod tests {
             GeneratorParams::MlM1(MlM1Params::default()),
             GeneratorParams::MlP8(crate::MlP8Params::default()),
             GeneratorParams::Ds01(Ds01Params::default()),
+            GeneratorParams::AuxIn(crate::AuxInParams::default()),
         ]
     }
 

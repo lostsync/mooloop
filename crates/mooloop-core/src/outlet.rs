@@ -70,7 +70,18 @@ pub enum OutletTap {
     PreShape,
     /// After the filter, before the amplifier.
     PreVca,
-    /// The device's finished output.
+    /// The generator's finished output, before the channel's effect chain.
+    ///
+    /// The one tap point that is not inside a voice. It exists for a
+    /// generator whose whole content is its output -- Aux In, which is a
+    /// level and a subscription -- where a pre-level tap would republish
+    /// exactly what was read and say nothing.
+    PreChain,
+    /// The channel's finished output, after its effect chain.
+    ///
+    /// Nothing declares one yet. It is named here because it is the tap that
+    /// would carry latency, and [`Self::is_upstream_of_chain`] is where that
+    /// is written down.
     Output,
 }
 
@@ -91,7 +102,9 @@ impl OutletTap {
     /// `compile_audio_graph` refuses such an edge rather than mis-timing it.
     pub fn is_upstream_of_chain(self) -> bool {
         match self {
-            Self::PreLevel | Self::PreFilter | Self::PreShape | Self::PreVca => true,
+            Self::PreLevel | Self::PreFilter | Self::PreShape | Self::PreVca | Self::PreChain => {
+                true
+            }
             Self::Control | Self::Output => false,
         }
     }
@@ -105,6 +118,7 @@ impl OutletTap {
             Self::PreFilter => "pre-filter",
             Self::PreShape => "pre-shape",
             Self::PreVca => "pre-vca",
+            Self::PreChain => "pre-chain",
             Self::Output => "output",
         }
     }
@@ -239,9 +253,35 @@ impl AudioSubscription {
     }
 }
 
+/// The widest audio-outlet table any device may declare.
+///
+/// It bounds the port group a producer is handed each block, which is a
+/// fixed-size array on the stack rather than a slice the engine builds, so it
+/// is a real ceiling rather than a guess. ML-P8 declares seven, which is the
+/// widest today; `check_table` fails the day a device declares more instead of
+/// letting the extra outlets go quietly unwritable.
+pub const MAX_DEVICE_AUDIO_TAPS: usize = 8;
+
 /// Look one outlet up by its durable id.
 pub fn find(outlets: &'static [OutletDescriptor], id: u16) -> Option<&'static OutletDescriptor> {
     outlets.iter().find(|outlet| outlet.id == id)
+}
+
+/// One audio outlet's **tap number**: its position in the device's declared
+/// audio run.
+///
+/// This is the number a device indexes its port group by, and it is part of
+/// the device's interface in the same way its parameter ids are. It is derived
+/// from the declared outlet order rather than declared a second time, so there
+/// is one list rather than two that can disagree -- the id is what a project
+/// saves, and the tap number is where the samples go this block.
+///
+/// `None` for a control outlet or an id this device does not publish, which
+/// are the same answer to a producer: nothing to write.
+pub fn audio_tap_index(outlets: &[OutletDescriptor], id: u16) -> Option<usize> {
+    outlets[control_count(outlets)..]
+        .iter()
+        .position(|outlet| outlet.id == id)
 }
 
 /// How many of `outlets` are control outlets, given that they are declared
@@ -302,6 +342,22 @@ pub(crate) mod tests {
             outlets[control..].iter().all(|outlet| !outlet.is_control()),
             "control and audio outlets are interleaved"
         );
+        // The port group a producer is handed is a fixed-size array, so a
+        // table wider than it would leave its last outlets unwritable with
+        // nothing to say so.
+        assert!(
+            outlets.len() - control <= MAX_DEVICE_AUDIO_TAPS,
+            "more audio outlets than MAX_DEVICE_AUDIO_TAPS can carry"
+        );
+        // The tap number is the audio run's index, and every audio outlet has
+        // one. A control outlet has none, which is the same answer a producer
+        // needs: nothing to write.
+        for (tap, outlet) in outlets[control..].iter().enumerate() {
+            assert_eq!(audio_tap_index(outlets, outlet.id), Some(tap));
+        }
+        for outlet in &outlets[..control] {
+            assert_eq!(audio_tap_index(outlets, outlet.id), None);
+        }
     }
 
     #[test]

@@ -84,6 +84,11 @@ fn one_note_channel(kind: DeviceKind) -> ProjectChannel {
         DeviceKind::MlM1 => ProjectChannel::mlm1(0, 1),
         DeviceKind::MlP8 => ProjectChannel::mlp8(0, 1),
         DeviceKind::Ds01 => ProjectChannel::ds01(0, 1),
+        // No note reaches it and it has nothing to play without an edge, so
+        // it is not part of the calibration sweep. It is here to keep this
+        // match exhaustive, which is what makes a new generator's absence
+        // from the sweep a decision rather than an oversight.
+        DeviceKind::AuxIn => ProjectChannel::aux_in(0, 1),
     };
     if let Some(state) = channel.setup.sampler_state_mut() {
         state.sample = SampleReference::Builtin {

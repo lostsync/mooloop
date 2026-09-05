@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-05
-- Sessions: 51
+- Sessions: 52
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -83,7 +83,8 @@ Alphabetical by model name, then by harness.
   rewrote `FOCUS.md` around Adam's new list, the `v0.1.2` release, and the
   modulation shelf's OUTLETS pane that made a published outlet routable by
   hand, DS-01's own published outlets, ML-P8's factory bank, and the v1 drum
-  synth's descriptor table, and mixer latency compensation. Longer accounts of
+  synth's descriptor table, mixer latency compensation, and the typed audio
+  edges with the Aux In device that consumes them. Longer accounts of
   most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

@@ -15,7 +15,7 @@ use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, DEFAULT_STEPS,
     MASTER_BUS, MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
     retarget_lanes, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelSetup,
-    ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
+    AuxInParams, AuxInState, ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
     EffectParams, EffectSlotState, EffectTarget, MlM1Params, MlM1State, MlP8Params, MlP8State,
     ModDestinationDescriptor, ModEnvelopeParams, ModPolarity, ModRoute, ModulatorParams,
     MonoSynthParams, MonoSynthState, NoteId, ParamAddr,
@@ -83,6 +83,11 @@ pub struct Session {
     /// record of what has been said to the audio thread, and a fresh session
     /// has said nothing.
     pub compensation_sent: mooloop_core::CompiledLatency,
+    /// The audio-edge plan the engine has been told about, so the pump's
+    /// reconcile sends only what changed. Same status as
+    /// [`Self::compensation_sent`]: a record of what has been said to the
+    /// audio thread, not document state.
+    pub audio_graph_sent: mooloop_core::CompiledAudioGraph,
     /// Snapshot captured at the start of a direct knob gesture. Intermediate
     /// control updates still reach audio immediately, while one release
     /// becomes one undoable route edit.
@@ -166,6 +171,7 @@ impl Default for Session {
             modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
             modulation_ui_channel: Cell::new(None),
             compensation_sent: mooloop_core::CompiledLatency::default(),
+            audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
             modulation_edit_before: None,
             modulation_edit_changed: false,
             browser_locations: Vec::new(),
@@ -256,6 +262,7 @@ impl Session {
             DeviceKind::MlM1 => format!("ML-M1 {}", index + 1),
             DeviceKind::MlP8 => format!("ML-P8 {}", index + 1),
             DeviceKind::Ds01 => format!("DS-01 {}", index + 1),
+            DeviceKind::AuxIn => format!("Aux {}", index + 1),
         };
         match kind {
             DeviceKind::Sampler => {
@@ -305,6 +312,21 @@ impl Session {
             }
             DeviceKind::Ds01 => {
                 channel.ds01_params = Ds01Params::default();
+                channel.sample_name.clear();
+                channel.sample_description.clear();
+                channel.sample_duration = 0.0;
+                channel.sample_path = None;
+                channel.sample_embedded = false;
+                channel.sample_data = None;
+                channel.committed_sample = None;
+                channel.commit = None;
+                channel.slices.clear();
+                channel.waveform.clear();
+                channel.can_previous_sample = false;
+                channel.can_next_sample = false;
+            }
+            DeviceKind::AuxIn => {
+                channel.aux_in_params = AuxInParams::default();
                 channel.sample_name.clear();
                 channel.sample_description.clear();
                 channel.sample_duration = 0.0;
@@ -405,6 +427,9 @@ impl Session {
                     }),
                     DeviceKind::Ds01 => ChannelSource::Ds01(Ds01State {
                         params: channel.ds01_params,
+                    }),
+                    DeviceKind::AuxIn => ChannelSource::AuxIn(AuxInState {
+                        params: channel.aux_in_params,
                     }),
                 };
                 ProjectChannel {
@@ -933,6 +958,7 @@ impl Session {
                 let mlm1_params = source.mlm1_state().map(|s| s.params).unwrap_or_default();
                 let mlp8_params = source.mlp8_state().map(|s| s.params).unwrap_or_default();
                 let ds01_params = source.ds01_state().map(|s| s.params).unwrap_or_default();
+                let aux_in_params = source.aux_in_state().map(|s| s.params).unwrap_or_default();
                 let sample = sampler
                     .is_some()
                     .then(|| samples.get(index).cloned().flatten())
@@ -1054,6 +1080,7 @@ impl Session {
                     mlm1_params,
                     mlp8_params,
                     ds01_params,
+                    aux_in_params,
                     sample_name,
                     sample_description: description,
                     sample_duration: duration,
@@ -1096,6 +1123,10 @@ impl Session {
         // what this side thinks was sent so the next reconcile re-derives
         // against the new project rather than trusting a plan for the old one.
         self.compensation_sent = mooloop_core::CompiledLatency::default();
+        // Same for the audio edges: `RenderState::load_project` compiles and
+        // allocates its own, so this side must re-derive rather than trust a
+        // plan for the document that just left.
+        self.audio_graph_sent = mooloop_core::CompiledAudioGraph::default();
         // A load points the device rack back at a channel; the bus the
         // previous document had open means nothing in this one.
         self.effect_target = EffectTarget::Channel(project.selected_channel);

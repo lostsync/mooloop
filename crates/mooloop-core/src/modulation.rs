@@ -471,7 +471,7 @@ const fn division(id: u32, name: &'static str, default: f32) -> ParamDescriptor 
         unit: "",
         min: 0.0,
         max: (ModTimeDivision::ALL.len() - 1) as f32,
-        curve: ParamCurve::Stepped(ModTimeDivision::ALL.len() as u8),
+        curve: ParamCurve::Stepped(ModTimeDivision::ALL.len() as u16),
         default,
     }
 }
@@ -502,7 +502,7 @@ pub const LFO_DESCRIPTORS: [ParamDescriptor; 12] = [
         unit: "",
         min: 0.0,
         max: (ModLfoWaveform::ALL.len() - 1) as f32,
-        curve: ParamCurve::Stepped(ModLfoWaveform::ALL.len() as u8),
+        curve: ParamCurve::Stepped(ModLfoWaveform::ALL.len() as u16),
         default: 0.0,
     },
     ParamDescriptor {
@@ -604,7 +604,7 @@ pub const ENVELOPE_DESCRIPTORS: [ParamDescriptor; 11] = [
 
 /// An enum as a descriptor: `positions` discrete slots carried as the
 /// enum's `ALL` index, the same projection `division` makes for time.
-const fn selector(id: u32, name: &'static str, positions: u8, default: f32) -> ParamDescriptor {
+const fn selector(id: u32, name: &'static str, positions: u16, default: f32) -> ParamDescriptor {
     ParamDescriptor {
         id,
         name,
@@ -640,7 +640,7 @@ pub const STEP_DESCRIPTORS: [ParamDescriptor; 4 + MOD_STEP_MAX_STEPS] = {
         unit: "",
         min: 1.0,
         max: MOD_STEP_MAX_STEPS as f32,
-        curve: ParamCurve::Stepped(MOD_STEP_MAX_STEPS as u8),
+        curve: ParamCurve::Stepped(MOD_STEP_MAX_STEPS as u16),
         default: 8.0,
     };
     table[1] = division(STEP_PARAM_DIVISION, "Rate", 13.0);
@@ -656,7 +656,7 @@ pub const STEP_DESCRIPTORS: [ParamDescriptor; 4 + MOD_STEP_MAX_STEPS] = {
     table[3] = selector(
         STEP_PARAM_TRIGGER,
         "Trigger",
-        ModStepTrigger::ALL.len() as u8,
+        ModStepTrigger::ALL.len() as u16,
         0.0,
     );
     let mut index = 0;
@@ -690,7 +690,7 @@ pub const RANDOM_DESCRIPTORS: [ParamDescriptor; 9] = [
     selector(
         RANDOM_PARAM_TRIGGER,
         "Trigger",
-        ModRandomTrigger::ALL.len() as u8,
+        ModRandomTrigger::ALL.len() as u16,
         0.0,
     ),
     // Bipolar is the rack's resting convention, so this toggle starts on.
@@ -725,10 +725,10 @@ pub const MATH_DESCRIPTORS: [ParamDescriptor; 5] = [
     selector(
         MATH_PARAM_INPUT_SLOT,
         "Input",
-        MAX_MODULATORS_PER_CHANNEL as u8,
+        MAX_MODULATORS_PER_CHANNEL as u16,
         0.0,
     ),
-    selector(MATH_PARAM_OP, "Operator", ModMathOp::ALL.len() as u8, 2.0),
+    selector(MATH_PARAM_OP, "Operator", ModMathOp::ALL.len() as u16, 2.0),
     ParamDescriptor {
         id: MATH_PARAM_OPERAND,
         name: "Operand",

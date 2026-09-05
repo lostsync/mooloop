@@ -8,12 +8,13 @@
 use crate::channel::ChannelState;
 use crate::project::ProjectEdit;
 use mooloop_core::{
-    chain_latency, compile_bus_graph, compile_latency, CompiledLatency, DeviceKind, EffectTarget,
-    EngineCommand, SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
+    chain_latency, compile_audio_graph, compile_bus_graph, compile_latency, CompiledAudioGraph,
+    CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor, PublishesOutlets,
+    SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
 };
 use mooloop_dsp::{IntegerDelay, SampleData};
 use crate::session::Session;
-use mooloop_engine::{EngineHandle, StructuralCommand};
+use mooloop_engine::{AudioTapBank, EngineHandle, StructuralCommand};
 use std::sync::Arc;
 
 /// UI callbacks all run on one thread, but boxed structural edits and POD
@@ -247,6 +248,48 @@ impl Session {
             }
         }
         self.compensation_sent = plan;
+    }
+
+    /// The audio edges this project's channels compile to, from the model as
+    /// it stands.
+    ///
+    /// Derived rather than tracked, for the reason [`Self::latency_plan`]
+    /// gives: an edge's fate is a property of every channel at once -- one
+    /// channel changing generator can refuse another channel's subscription,
+    /// and breaking a ring can give a third one back -- so a flag each edit
+    /// had to set is a list that grows silently.
+    pub fn audio_graph_plan(&self) -> CompiledAudioGraph {
+        let count = self.channels.len().min(MAX_CHANNELS);
+        let mut subscriptions = [None; MAX_CHANNELS];
+        let mut published: [&'static [OutletDescriptor]; MAX_CHANNELS] = [&[]; MAX_CHANNELS];
+        for (index, channel) in self.channels.iter().take(count).enumerate() {
+            subscriptions[index] = channel.generator_params().audio_subscription();
+            published[index] = channel.kind.outlets();
+        }
+        compile_audio_graph(&subscriptions[..count], &published[..count])
+    }
+
+    /// Reconcile the engine's audio edges with the plan.
+    ///
+    /// Called from the pump beside [`Self::sync_compensation`] and for the
+    /// same reasons: deriving and diffing once a tick cannot be forgotten,
+    /// costs a comparison when nothing changed, and converges within one
+    /// frame of any edit.
+    ///
+    /// The buffers are allocated here, on the pump thread, and only when the
+    /// plan says somebody is listening: a project that has never authored an
+    /// edge allocates nothing and this sends nothing. Deliberately does not
+    /// mark the document dirty -- this is derived state, not something the
+    /// user did.
+    pub fn sync_audio_graph(&mut self, handle: &mut EngineHandle) {
+        let plan = self.audio_graph_plan();
+        if plan == self.audio_graph_sent {
+            return;
+        }
+        handle.send_structural(StructuralCommand::SetAudioGraph {
+            bank: Box::new(AudioTapBank::new(plan)),
+        });
+        self.audio_graph_sent = plan;
     }
 
     /// Applies one queued message that needs nothing but the engine handle.

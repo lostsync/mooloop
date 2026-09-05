@@ -1438,6 +1438,38 @@ fn check_source(doctor: &mut Doctor, who: &str, source: &mut ChannelSource) {
         ChannelSource::MlM1(state) => check_mlm1(doctor, who, &mut state.params),
         ChannelSource::MlP8(state) => check_mlp8(doctor, who, &mut state.params),
         ChannelSource::Ds01(state) => check_ds01(doctor, who, &mut state.params),
+        ChannelSource::AuxIn(state) => check_aux_in(doctor, who, &mut state.params),
+    }
+}
+
+/// An Aux In's subscription and level, against the descriptors the device
+/// clamps through at runtime.
+///
+/// The subscription's *target* is deliberately not checked here. Whether the
+/// named channel exists, publishes audio, publishes that outlet, or would
+/// close a ring is `compile_audio_graph`'s question, asked every time the
+/// project changes rather than once at load -- and a subscription refused
+/// there is retained as inspectable orphan state, which is exactly what
+/// repairing it here would destroy. What the doctor owns is the stored value
+/// being a number the parameter can hold at all.
+fn check_aux_in(doctor: &mut Doctor, who: &str, params: &mut mooloop_core::AuxInParams) {
+    use mooloop_core::aux_in;
+    for descriptor in aux_in::DESCRIPTORS.iter() {
+        let Some(stored) = aux_in::get(params, descriptor.id) else {
+            continue;
+        };
+        let mut value = stored;
+        doctor.fit(
+            "channel.aux_in.range",
+            who,
+            &format!("the {} (Aux In)", descriptor.name.to_lowercase()),
+            &mut value,
+            descriptor.min,
+            descriptor.max,
+        );
+        if value != stored {
+            aux_in::set(params, descriptor.id, descriptor.clamp_natural(value));
+        }
     }
 }
 

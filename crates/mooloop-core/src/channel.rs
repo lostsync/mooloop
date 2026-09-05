@@ -62,6 +62,15 @@ pub enum DeviceKind {
     /// so it is worth picking on purpose the first time.
     #[serde(rename = "ds01")]
     Ds01,
+    /// Aux In: a source whose sound is another channel's published audio
+    /// outlet. The consumer half of the typed audio edge; see
+    /// [`crate::aux_in`].
+    ///
+    /// Serialized as `aux_in`, which is what `rename_all` would spell it
+    /// anyway -- written out for the reason the two above give, so nobody has
+    /// to derive an on-disk identifier from an attribute.
+    #[serde(rename = "aux_in")]
+    AuxIn,
 }
 
 /// One mixer channel.

@@ -25,6 +25,7 @@
 
 pub mod align;
 pub mod analysis;
+pub mod aux_in;
 pub mod biquad;
 pub mod buffer_device;
 pub mod commit;
@@ -53,10 +54,13 @@ pub mod scale;
 pub mod shaper;
 pub mod smooth;
 pub mod stretch;
+pub mod taps;
 
 mod synth_voice;
 
 pub use align::IntegerDelay;
+pub use aux_in::AuxIn;
+pub use taps::AudioTaps;
 pub use stretch::{render_stretched, StretchPool, StretchReader, StretchRender, Stretcher};
 pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};
 pub use buffer_device::{buffer_allocation_key, BufferDevice, TimedBufferEvent};

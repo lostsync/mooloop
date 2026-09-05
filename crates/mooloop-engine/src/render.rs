@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    compile_bus_graph, AutomationLane, ChannelSource, CompiledBusGraph, DeviceKind,
+    audio_tap_index, compile_bus_graph, AutomationLane, AuxInParams, ChannelSource,
+    CompiledAudioGraph, CompiledBusGraph, DeviceKind, OutletDescriptor, PublishesOutlets,
     Ds01Params, DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams,
     ModDestinationDescriptor,
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
@@ -21,7 +22,8 @@ use mooloop_dsp::build_effect;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, Ds01,
     DrumSynth,
-    IntegerDelay, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8, NoteGateEvents, PolySynth,
+    AudioTaps, AuxIn, IntegerDelay, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8,
+    NoteGateEvents, PolySynth,
     ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, StretchPool, TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
 };
@@ -30,6 +32,92 @@ use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, P
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
 use crate::{PreviewCommand, StructuralCommand, StructuralReclaim};
+
+/// One generation's audio edges and the buffers they carry.
+///
+/// Prepared whole on the control thread and installed as one value, so the
+/// executor can never observe a schedule against another generation's
+/// buffers -- the same reason `CompiledBusGraph` and its render order travel
+/// together.
+///
+/// **A tap exists only when somebody is subscribed to it.** ML-P8 declares
+/// seven stereo outlets; materializing them all would be 448 KB a channel and
+/// 7 MB across a full bank for a feature that is off by default. `buffers` is
+/// as long as the number of distinct (producer, outlet) pairs somebody reads,
+/// which on every project that has never authored an edge is zero.
+pub struct AudioTapBank {
+    graph: CompiledAudioGraph,
+    /// One buffer per tap index the graph handed out, deduplicated by the
+    /// (producer, outlet) pair: two channels reading the same `Osc 3` share
+    /// one buffer rather than getting two copies of the same samples.
+    buffers: Vec<StereoBus>,
+}
+
+impl AudioTapBank {
+    /// Allocate the storage `graph` asks for. Control thread only: this is
+    /// where the megabytes would be, which is why they are conditional.
+    pub fn new(graph: CompiledAudioGraph) -> Self {
+        Self {
+            buffers: (0..graph.tap_count())
+                .map(|_| StereoBus::with_capacity(MAX_BLOCK_SIZE))
+                .collect(),
+            graph,
+        }
+    }
+
+    /// Whether `producer` owes a tap this block.
+    ///
+    /// The question the mute check asks: a muted producer still fills its
+    /// tap, because mute is an output-stage decision about what reaches the
+    /// bus and a pre-level tap is exactly the signal a muted source still
+    /// has. A muted channel nobody reads still skips, which is what keeps
+    /// mute a way of not spending the work.
+    fn produces(&self, producer: usize) -> bool {
+        self.graph
+            .taps()
+            .any(|(_, tap)| usize::from(tap.channel) == producer)
+    }
+
+    /// The buffer `consumer`'s resolved edge reads, if it has one.
+    fn source(&self, consumer: usize) -> Option<&StereoBus> {
+        self.buffers.get(self.graph.edge(consumer).tap()? as usize)
+    }
+
+    /// The port group `producer` owes this block, indexed by its own tap
+    /// numbers.
+    ///
+    /// Built by walking the buffers rather than the device's outlet table, so
+    /// each buffer is borrowed exactly once and the whole group is one set of
+    /// disjoint mutable references with no unsafe code.
+    fn ports(&mut self, producer: usize, outlets: &'static [OutletDescriptor]) -> AudioTaps<'_> {
+        let mut ports = AudioTaps::none();
+        let Self { graph, buffers } = self;
+        for (index, buffer) in buffers.iter_mut().enumerate() {
+            let Some(subscription) = graph.tap(index) else {
+                continue;
+            };
+            if usize::from(subscription.channel) != producer {
+                continue;
+            }
+            let Some(tap) = audio_tap_index(outlets, subscription.outlet) else {
+                continue;
+            };
+            ports.set(tap, buffer);
+        }
+        ports
+    }
+
+    /// Empty every tap for the block about to render.
+    ///
+    /// Once for the whole bank rather than per producer, so a producer that
+    /// stops playing -- or stops existing -- publishes silence rather than
+    /// the block before.
+    fn clear(&mut self, frames: usize) {
+        for buffer in &mut self.buffers {
+            buffer.clear(frames);
+        }
+    }
+}
 
 /// A displaced effect-slot occupant: the node plus the dry-align delay the
 /// container allocated alongside it. Both halves are heap objects built on
@@ -92,6 +180,7 @@ fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
         DeviceKind::MlP8 => GeneratorParams::MlP8(MlP8Params::default()),
         DeviceKind::Ds01 => GeneratorParams::Ds01(Ds01Params::default()),
         DeviceKind::DrumSynth => GeneratorParams::DrumSynth(DrumSynthParams::default()),
+        DeviceKind::AuxIn => GeneratorParams::AuxIn(AuxInParams::default()),
     }
 }
 
@@ -987,6 +1076,7 @@ pub struct ChannelStrip {
     mlm1: MlM1,
     mlp8: MlP8,
     ds01: Ds01,
+    aux_in: AuxIn,
     active_source: DeviceKind,
     /// What this channel's generator published during the block just
     /// rendered, indexed by outlet id.
@@ -1032,6 +1122,7 @@ impl ChannelStrip {
             mlm1: MlM1::new(MlM1Params::default(), sample_rate),
             mlp8: MlP8::new(MlP8Params::default(), sample_rate),
             ds01: Ds01::new(Ds01Params::default(), sample_rate),
+            aux_in: AuxIn::new(AuxInParams::default(), sample_rate),
             active_source: DeviceKind::Sampler,
             published_outlets: [0.0; MAX_GENERATOR_OUTLETS],
             source_base: GeneratorParams::Sampler(SamplerParams::default()),
@@ -1052,6 +1143,7 @@ impl ChannelStrip {
         self.mlm1.reset();
         self.mlp8.reset();
         self.ds01.reset();
+        self.aux_in.reset();
         self.sampler.set_params(SamplerParams::default());
         self.drum_synth.set_params(DrumSynthParams::default());
         self.mono_synth.set_params(MonoSynthParams::default());
@@ -1059,6 +1151,7 @@ impl ChannelStrip {
         self.mlm1.set_params(MlM1Params::default());
         self.mlp8.set_params(MlP8Params::default());
         self.ds01.set_params(Ds01Params::default());
+        self.aux_in.set_params(AuxInParams::default());
         self.active_source = source;
     }
 
@@ -1101,6 +1194,7 @@ impl ChannelStrip {
             GeneratorParams::MlP8(params) => self.mlp8.set_params(params),
             GeneratorParams::Ds01(params) => self.ds01.set_params(params),
             GeneratorParams::DrumSynth(params) => self.drum_synth.set_params(params),
+            GeneratorParams::AuxIn(params) => self.aux_in.set_params(params),
         }
     }
 
@@ -1155,6 +1249,13 @@ impl ChannelStrip {
                 self.ds01.set_params(state.params);
                 GeneratorParams::Ds01(state.params)
             }
+            ChannelSource::AuxIn(state) => {
+                self.aux_in.set_params(state.params);
+                // Snapped rather than ramped: a loaded project starts at the
+                // level it was saved at, with nothing to click.
+                self.aux_in.reset();
+                GeneratorParams::AuxIn(state.params)
+            }
         };
     }
 
@@ -1166,11 +1267,26 @@ impl ChannelStrip {
             DeviceKind::MonoSynth
             | DeviceKind::PolySynth
             | DeviceKind::MlM1
-            | DeviceKind::MlP8 => 0,
+            | DeviceKind::MlP8
+            | DeviceKind::AuxIn => 0,
         }
     }
 
-    fn process(&mut self, context: &ProcessContext, events: &EventList) {
+    /// Render the generator, filling whatever audio outlets are subscribed
+    /// and reading whatever edge resolved.
+    ///
+    /// `source` and `ports` are supplied for the duration of the call and not
+    /// retained, which is `AUDIO_ARCHITECTURE.md`'s rule for auxiliary
+    /// buffers. Both are empty on every project that has never authored an
+    /// edge, and the devices that can use them branch once a render range on
+    /// that fact.
+    fn process(
+        &mut self,
+        context: &ProcessContext,
+        events: &EventList,
+        source: Option<&StereoBus>,
+        ports: &mut AudioTaps,
+    ) {
         match self.active_source {
             DeviceKind::Sampler => self.sampler.process(context, &mut self.bus, events, None),
             DeviceKind::DrumSynth => self
@@ -1183,8 +1299,15 @@ impl ChannelStrip {
                 .poly_synth
                 .process(context, &mut self.bus, events, None),
             DeviceKind::MlM1 => self.mlm1.process(context, &mut self.bus, events, None),
-            DeviceKind::MlP8 => self.mlp8.process(context, &mut self.bus, events, None),
-            DeviceKind::Ds01 => self.ds01.process(context, &mut self.bus, events, None),
+            DeviceKind::MlP8 => self
+                .mlp8
+                .process_publishing(context, &mut self.bus, events, ports),
+            DeviceKind::Ds01 => self
+                .ds01
+                .process_publishing(context, &mut self.bus, events, ports),
+            DeviceKind::AuxIn => self
+                .aux_in
+                .process_from(context, &mut self.bus, source, events, ports),
         }
         self.publish_outlets();
     }
@@ -1338,6 +1461,20 @@ pub(crate) struct RenderState {
     /// Destinations and their matching render order, compiled together off the
     /// audio thread. The executor only installs or walks this value.
     bus_graph: CompiledBusGraph,
+    /// The channels' audio edges, the order that satisfies them, and the
+    /// buffers they carry. Boxed so a whole generation crosses to the
+    /// executor as one pointer swap and the displaced one is freed off the
+    /// audio thread.
+    audio: Box<AudioTapBank>,
+    /// One block of the tap a consumer is reading, copied in before its
+    /// generator runs.
+    ///
+    /// A copy rather than a borrow because the same call may write this
+    /// channel's own taps: those are provably different buffers -- a device
+    /// cannot subscribe to itself -- but nothing in the type system knows it,
+    /// and one scratch buffer for the whole bank is a far smaller price than
+    /// unsafe aliasing or one buffer a channel.
+    aux_scratch: StereoBus,
     events: Vec<Box<EventList>>,
     /// The saved matrix and the runnable sources are deliberately separate:
     /// the former is editable/persisted configuration; the latter contains
@@ -1416,6 +1553,11 @@ impl RenderState {
             slice_slots: slice_slots_for_growth,
             buses: (0..MAX_BUSES).map(|_| BusStrip::new()).collect(),
             bus_graph: CompiledBusGraph::default(),
+            // A project with no subscriptions holds no buffers at all, which
+            // is the whole design: the identity order costs nothing and
+            // renders exactly what the engine rendered before this existed.
+            audio: Box::new(AudioTapBank::new(CompiledAudioGraph::default())),
+            aux_scratch: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             events: Vec::with_capacity(MAX_CHANNELS),
             // Small enough that reserving the addressable length outright
             // costs 433 KiB and saves boxing every control-path access.
@@ -1698,6 +1840,11 @@ impl RenderState {
         // opens and makes sound.
         self.bus_graph = compile_bus_graph(&project.buses).unwrap_or_default();
         self.install_compensation(project);
+        // Here as well as through the session's incremental sync, and for the
+        // same reason `install_compensation` is: an offline render builds its
+        // own `RenderState` and never runs a pump, so without this an export
+        // would be the one place the channels rendered in index order.
+        self.audio = Box::new(AudioTapBank::new(project.audio_graph()));
     }
 
     /// Build and install the tree's latency compensation from `project`.
@@ -2112,6 +2259,15 @@ impl RenderState {
                     return delay.map(StructuralReclaim::Compensation);
                 };
                 std::mem::replace(slot, delay).map(StructuralReclaim::Compensation)
+            }
+            StructuralCommand::SetAudioGraph { bank } => {
+                // One swap: the executor never sees an edge without its
+                // schedule or a schedule against another generation's
+                // buffers.
+                Some(StructuralReclaim::AudioGraph(std::mem::replace(
+                    &mut self.audio,
+                    bank,
+                )))
             }
         }
     }
@@ -2723,7 +2879,27 @@ impl RenderState {
         for strip in &mut self.buses {
             strip.bus.clear(frames);
         }
-        for (index, &ticks) in modulator_ticks.iter().take(active_channels).enumerate() {
+        // Emptied before anything renders, so a producer that stopped playing
+        // -- or a channel that stopped existing -- publishes silence rather
+        // than the block before.
+        self.audio.clear(frames);
+        // The compiled schedule, not index order: a producer has to render
+        // before the consumer that reads it, in the same block, because a
+        // block-sized delay is a delay whose length is the host's buffer
+        // size. `order()` is the identity permutation on a project with no
+        // subscriptions, which is what makes the edge inaudible until one is
+        // authored.
+        //
+        // The modulator tick pass above stays in index order on purpose. A
+        // modulator's phase must not depend on a subscription somebody made
+        // on another channel, so the two passes are separate and only this
+        // one is scheduled.
+        for slot in 0..MAX_CHANNELS {
+            let index = self.audio.graph.order()[slot] as usize;
+            if index >= active_channels {
+                continue;
+            }
+            let ticks = modulator_ticks[index];
             // Published before the mute check: a muted channel's modulators
             // still run, so its knobs should still animate rather than freeze
             // on whatever the last audible block left behind.
@@ -2742,7 +2918,14 @@ impl RenderState {
                 // block, unlike the per-tick table this is taken from.
                 self.modulator_meters.publish(index, &row);
             }
-            if self.strips[index].output.muted {
+            let muted = self.strips[index].output.muted;
+            // A muted producer that nobody reads still skips, which is what
+            // keeps mute a way of not spending the work. One that somebody
+            // reads renders its generator and stops there: mute is an
+            // output-stage decision about what reaches the bus, and a
+            // pre-level tap is exactly the signal a source muted in its own
+            // mix still has.
+            if muted && !self.audio.produces(index) {
                 // A muted channel renders nothing, so its compensation ring
                 // would still be holding the audio from before the mute and
                 // would emit it on unmute. Emptying it is fifteen writes, and
@@ -2872,9 +3055,33 @@ impl RenderState {
                 &modulation,
                 automation.as_ref(),
             );
+            // The edge this channel reads, taken before the port group so the
+            // bank is borrowed once each way rather than both at once.
+            let source = self.audio.source(index).is_some_and(|tap| {
+                self.aux_scratch.l[..frames].copy_from_slice(&tap.l[..frames]);
+                self.aux_scratch.r[..frames].copy_from_slice(&tap.r[..frames]);
+                true
+            });
+            let published = self.strips[index].active_source.outlets();
+            let mut ports = self.audio.ports(index, published);
             let strip = &mut self.strips[index];
             strip.bus.clear(frames);
-            strip.process(&context, &self.events[index]);
+            strip.process(
+                &context,
+                &self.events[index],
+                source.then_some(&self.aux_scratch),
+                &mut ports,
+            );
+            drop(ports);
+            if muted {
+                // Its tap is filled and its bus is not read: a muted producer
+                // publishes, and reaches nothing else.
+                if let Some(delay) = self.strips[index].compensation.as_mut() {
+                    delay.reset();
+                }
+                continue;
+            }
+            let strip = &mut self.strips[index];
             let source_peak = strip.bus.peak(frames);
             self.device_meters
                 .publish_output(index, 0, source_peak.0, source_peak.1);
@@ -6275,7 +6482,13 @@ mod footprint {
         // its note was played at. The seven outlet *values* are computed on
         // demand from state the voices already carry, so nothing here stores
         // them.
-        assert_eq!(size_of::<MlP8>(), 5_776);
+        //
+        // The typed audio edges added 64: eight bytes a voice for the sub,
+        // pre-filter and filter samples it publishes, recorded as it runs
+        // them. Nothing on the node at all, and nothing per outlet -- a tap's
+        // *buffer* is 64 KB and is allocated only when somebody subscribes,
+        // which is the whole shape of that plan.
+        assert_eq!(size_of::<MlP8>(), 5_840);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -6301,7 +6514,9 @@ mod footprint {
         // trigger flag, both node state rather than voice state, because the
         // focus is a fact about this channel's run of hits and a per-voice
         // copy would be eight numbers agreeing about one.
-        assert_eq!(size_of::<Ds01>(), 6_832);
+        // The typed audio edges added 128 on top: sixteen bytes a voice for
+        // the three pre-Level layers and the layer mix it publishes.
+        assert_eq!(size_of::<Ds01>(), 6_960);
         // The strip pays the parameter block twice: once inside the node
         // above, and once for `source_base`, whose `GeneratorParams` is as
         // wide as its widest variant and the ML-P8 is that variant. Step 05's
@@ -6316,7 +6531,15 @@ mod footprint {
         // that actually owes a delay — `4 * 2 * frames`, so fifteen frames is
         // 120 bytes — which is why the common project, where every path is the
         // same length, pays exactly this pointer and no buffer at all.
-        assert_eq!(size_of::<ChannelStrip>(), 41_712);
+        // The typed audio edges added 208. Sixty-four of it is ML-P8's
+        // published samples and 128 is DS-01's, both paid inside the nodes
+        // above; the Aux In node itself is 20 bytes -- a subscription, a
+        // level and its smoother -- and `GeneratorParams` did not widen,
+        // because the ML-P8's parameter block is still much the largest
+        // variant. A channel that is not an Aux In and publishes nothing pays
+        // 20 bytes for a node it never runs, which is what every generator
+        // kind already costs every channel.
+        assert_eq!(size_of::<ChannelStrip>(), 41_920);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -6333,7 +6556,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_152);
+        assert_eq!(per_live, 60_360);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -6367,7 +6590,15 @@ mod footprint {
         // the flat *address space* routes and projects depend on while
         // storing each half at the rate it is actually captured. This test
         // is what asked the question.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_410);
+        // The typed audio edges moved it by 4 KiB across sixteen channels,
+        // and that is the entire cost of the feature on a project that never
+        // uses it: no buffers, no plan storage beyond one boxed value for the
+        // whole engine, and an identity render order. Materialising ML-P8's
+        // seven stereo outlets unconditionally would have been 448 KB a
+        // channel instead -- 7 MB across a full bank for something switched
+        // off -- which is the design `03-materialized-taps.md` exists to
+        // avoid, and this is the measurement that says it was avoided.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_414);
     }
 }
 
