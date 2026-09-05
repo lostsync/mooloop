@@ -458,6 +458,47 @@ mod tests {
         );
     }
 
+    /// The audio-edge plan is derived from the model the same way the
+    /// compensation plan is, and this is the derivation the pump reconciles
+    /// against. What matters is that it follows the *session's* channels --
+    /// an edit path that changed `aux_in_params` without telling anybody is
+    /// the failure this design exists to make impossible.
+    #[test]
+    fn the_audio_graph_plan_follows_the_session_rather_than_being_tracked() {
+        use mooloop_core::{AudioSubscription, DeviceKind, EdgeRefusal};
+
+        let mut session = Session::default();
+        while session.channels.len() < 2 {
+            let index = session.channels.len();
+            session.channels.push(ChannelState::new(index));
+        }
+        session.reset_channel_source(0, DeviceKind::MlP8);
+        session.reset_channel_source(1, DeviceKind::AuxIn);
+        // Nothing subscribed: no edges, and nothing for the engine to hold.
+        assert!(session.audio_graph_plan().is_empty());
+
+        // The consumer's own parameters are the only thing that changes.
+        session.channels[1]
+            .aux_in_params
+            .set_subscription(Some(AudioSubscription::new(
+                0,
+                mooloop_core::mlp8::OUTLET_OSC3,
+            )));
+        let plan = session.audio_graph_plan();
+        assert_eq!(plan.tap_count(), 1);
+        assert_eq!(
+            plan.edge(1).resolved(),
+            Some(AudioSubscription::new(0, mooloop_core::mlp8::OUTLET_OSC3))
+        );
+
+        // And a change on the *producer* refuses it, without the consumer
+        // being touched: that is why the plan cannot be a flag each edit sets.
+        session.reset_channel_source(0, DeviceKind::Sampler);
+        let plan = session.audio_graph_plan();
+        assert_eq!(plan.edge(1).refusal(), Some(EdgeRefusal::NotAProducer));
+        assert_eq!(plan.tap_count(), 0, "a refused edge kept its buffer");
+    }
+
     fn transparent_drive() -> mooloop_core::EffectSlotState {
         mooloop_core::EffectSlotState::drive(mooloop_core::DriveParams::default())
     }
