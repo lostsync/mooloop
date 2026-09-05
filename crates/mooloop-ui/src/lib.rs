@@ -56,7 +56,7 @@ use mooloop_core::{
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
-    buffer_allocation_key, build_effect_at_tempo, Ds01, DrumSynth, DryAlign, SampleData,
+    buffer_allocation_key, build_effect_at_tempo, Ds01, DrumSynth, IntegerDelay, SampleData,
     SpectrumAnalyzer, StretchPool,
 };
 use mooloop_engine::{
@@ -6374,7 +6374,7 @@ impl AppUi {
                     // structural command as the slot they belong to.
                     let bpm = window.get_bpm() as f64;
                     let node = build_effect_at_tempo(added.params, sample_rate, bpm);
-                    let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
+                    let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
                     let _ = stx.send(StructuralCommand::InstallEffect {
                         target: added.target,
                         slot: added.tail as u8,
@@ -9346,6 +9346,12 @@ impl AppUi {
                         }
                     }
                 }
+                // After the drain, so a chain edit queued this tick is already
+                // in the model the plan is derived from. Sends nothing unless
+                // the plan actually moved, which is every tick but the few
+                // after a structural edit
+                // (`docs/plans/latency-compensation/04-preallocated-delays.md`).
+                st.borrow_mut().session.sync_compensation(&mut handle);
                 if document_title_needs_refresh {
                     let Some(window) = weak.upgrade() else { return };
                     st.borrow().update_document_title(&window);

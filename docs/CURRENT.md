@@ -703,6 +703,20 @@ land on its own when it starts to matter:
 - Clip automation is per (pattern, channel), lives in the clip that drew it,
   and may address a bus. Two clips automating one destination is not
   prevented; the lowest channel wins at render time.
+- **The mixer is latency compensated.** Every device declares the frames it
+  adds, the bus tree compiles into a per-producer delay, and each channel and
+  bus waits by the difference before it sums — so two channels hitting on the
+  same tick land in the same frame even when one carries an oversampled device
+  and the other does not. Only Drive costs anything today (fifteen frames), so
+  the audible effect is small; what it removes is the comb filtering that was
+  worst exactly when two channels were most alike, and what it unblocks is
+  parallel sends and sidechains, which are untrustworthy without it.
+  Bypass keeps its device's latency — a bypassed node's signal goes through
+  the same delay rather than past it — so A/B-ing an effect A/Bs the effect
+  and not the timing. Removing the device is what gives the latency back. The
+  plan is derived from the project rather than tracked alongside it, so no
+  edit path can forget to update it, and an offline render compiles the same
+  plan as a live one.
 - Buses are insert points, not sends: a channel feeds exactly one, with no
   parallel send, return, or wet/dry split. There are no sidechains, external
   inputs, solo, or per-bus stem export, and buses cannot be renamed from the

@@ -223,8 +223,13 @@ shorter input by the difference. A sidechain also adds a dependency edge to
 the schedule even when it is not mixed into the consumer's output.
 
 Changing latency while active requires a new prepared plan or a bounded,
-declicked transition between preallocated delays. Bypass normally retains the
-declared latency so toggling it does not move the channel in time.
+declicked transition between preallocated delays. The mixer takes the first:
+a changed delay arrives zero-filled and the displaced one is reclaimed, which
+is a short gap rather than a click, on an edit that already interrupts what it
+edits. Bypass retains the declared latency so toggling it does not move the
+channel in time — which means the *container* delays a bypassed node's signal
+by its declared frames rather than passing it through, since the compensation
+plan sums bypassed slots.
 
 ## Lifecycle And Fault Model
 
@@ -243,7 +248,7 @@ ownership queue.
 
 ## Migration Sequence
 
-Steps 1 through 4 have landed. Step 5 has not, and steps 6 and 7 depend on it.
+Steps 1 through 5 have landed. Steps 6 and 7 are next; 6 depended on 5.
 
 1. Move project construction out of the JACK callback. Prepare a complete
    render state on the control thread, swap it at a block boundary, and return
@@ -255,8 +260,12 @@ Steps 1 through 4 have landed. Step 5 has not, and steps 6 and 7 depend on it.
 4. Add node latency reporting and align effects' internal parallel paths,
    beginning with the oversampled drive.
 5. Introduce preallocated compensation delays and compile cumulative latency
-   for the existing mixer tree. **Next, and blocking:** parallel sends,
-   sidechains, and limiter lookahead all wait on it.
+   for the existing mixer tree. **Landed 2026-09-05**, in
+   `docs/plans/latency-compensation/`: a device declares its latency without
+   being built, `compile_latency` turns the tree into a per-producer delay, and
+   the delays are installed structurally and reconciled by deriving the plan
+   rather than tracking it. Parallel sends, sidechains and limiter lookahead no
+   longer wait on it.
 6. Generalize the render plan from one audio output edge per bus to typed audio
    and dependency edges. Add parallel sends, then auxiliary sidechain inputs.
 7. Route retained-audio buffers and explicit feedback through the same port,

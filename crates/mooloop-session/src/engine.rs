@@ -7,8 +7,11 @@
 
 use crate::channel::ChannelState;
 use crate::project::ProjectEdit;
-use mooloop_core::{DeviceKind, EffectTarget, EngineCommand, SliceMap};
-use mooloop_dsp::SampleData;
+use mooloop_core::{
+    chain_latency, compile_bus_graph, compile_latency, CompiledLatency, DeviceKind, EffectTarget,
+    EngineCommand, SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
+};
+use mooloop_dsp::{IntegerDelay, SampleData};
 use crate::session::Session;
 use mooloop_engine::{EngineHandle, StructuralCommand};
 use std::sync::Arc;
@@ -181,6 +184,71 @@ pub struct TransportPosition {
 }
 
 impl Session {
+    /// What each producer must wait, from the project as it stands.
+    ///
+    /// Derived rather than tracked, because latency is a consequence of five
+    /// different edits (installing, replacing or removing an effect; adding a
+    /// channel; changing a channel's bus; changing a bus's output; loading a
+    /// project) and a flag each of those had to remember to set is a list that
+    /// grows silently. Deriving it costs a walk of the chains, which is a few
+    /// hundred additions.
+    pub fn latency_plan(&self) -> CompiledLatency {
+        let graph = compile_bus_graph(&self.buses).unwrap_or_default();
+        let mut channel_latency = [0u32; MAX_CHANNELS];
+        let mut channel_bus = [MASTER_BUS; MAX_CHANNELS];
+        for (index, channel) in self.channels.iter().take(MAX_CHANNELS).enumerate() {
+            channel_latency[index] = chain_latency(&channel.effects);
+            channel_bus[index] = channel.bus;
+        }
+        let mut bus_latency = [0u32; MAX_BUSES];
+        for (index, bus) in self.buses.iter().take(MAX_BUSES).enumerate() {
+            bus_latency[index] = chain_latency(&bus.effects);
+        }
+        compile_latency(&graph, &channel_latency, &channel_bus, &bus_latency)
+    }
+
+    /// Reconcile the engine's compensation delays with the plan.
+    ///
+    /// Called from the pump rather than from each edit, and that is the whole
+    /// design: the plan is **global** — installing a Drive on channel 3 changes
+    /// what channels 1, 2 and 4 owe, because it moves the master's arrival —
+    /// so a per-edit call site would have to be added to every path that can
+    /// move a chain, and forgetting one produces a misalignment nothing
+    /// reports. Deriving and diffing once a tick cannot be forgotten, costs a
+    /// comparison when nothing changed, and converges within one frame of any
+    /// edit. A structural edit already interrupts the thing being edited, so
+    /// that frame is not a cost anyone hears.
+    ///
+    /// Sends nothing when the plan is unchanged, which is every tick but the
+    /// few after an edit. Deliberately does **not** mark the document dirty:
+    /// this is derived state, not something the user did.
+    pub fn sync_compensation(&mut self, handle: &mut EngineHandle) {
+        let plan = self.latency_plan();
+        if plan == self.compensation_sent {
+            return;
+        }
+        let channels = self.channels.len().min(MAX_CHANNELS);
+        for channel in 0..channels {
+            let frames = plan.channel(channel);
+            if frames != self.compensation_sent.channel(channel) {
+                handle.send_structural(StructuralCommand::SetCompensation {
+                    target: EffectTarget::Channel(channel as u8),
+                    delay: IntegerDelay::new(frames).map(Box::new),
+                });
+            }
+        }
+        for bus in 0..MAX_BUSES {
+            let frames = plan.bus(bus);
+            if frames != self.compensation_sent.bus(bus) {
+                handle.send_structural(StructuralCommand::SetCompensation {
+                    target: EffectTarget::Bus(bus as u8),
+                    delay: IntegerDelay::new(frames).map(Box::new),
+                });
+            }
+        }
+        self.compensation_sent = plan;
+    }
+
     /// Applies one queued message that needs nothing but the engine handle.
     ///
     /// Returns whether the document just became dirty, which the caller turns
@@ -345,5 +413,57 @@ mod tests {
             (second_beat.bar, second_beat.beat, second_beat.tick),
             (1, 2, 3)
         );
+    }
+
+    fn transparent_drive() -> mooloop_core::EffectSlotState {
+        mooloop_core::EffectSlotState::drive(mooloop_core::DriveParams::default())
+    }
+
+    /// The plan is derived from the model rather than tracked alongside it,
+    /// which is what makes it impossible for an edit path to forget. This is
+    /// that derivation: what the session holds in, what each producer owes
+    /// out.
+    #[test]
+    fn the_plan_is_derived_from_the_chains_as_they_stand() {
+        let latency = mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES;
+        let mut session = Session::default();
+        session.add_channel(mooloop_core::DeviceKind::Sampler);
+        assert_eq!(session.channels.len(), 2);
+
+        // Nothing installed: nothing owed, by anybody.
+        assert_eq!(session.latency_plan(), mooloop_core::CompiledLatency::default());
+
+        // One latent device on channel 0 and its neighbour has to wait.
+        session.channels[0].effects.push(transparent_drive());
+        let plan = session.latency_plan();
+        assert_eq!(plan.channel(0), 0, "the longest path must not move");
+        assert_eq!(plan.channel(1), latency);
+        assert_eq!(plan.total(), latency);
+
+        // A bypassed slot still counts, which is what keeps toggling one from
+        // moving the channel in time.
+        session.channels[0].effects[0].bypassed = true;
+        assert_eq!(session.latency_plan().channel(1), latency);
+
+        // Removing it is what gives the latency back.
+        session.channels[0].effects.clear();
+        assert_eq!(session.latency_plan(), mooloop_core::CompiledLatency::default());
+    }
+
+    /// A bus's own chain is part of the tree, so a channel that does not go
+    /// through it still waits for it. This is the case a plan derived from
+    /// channels alone would miss.
+    #[test]
+    fn a_channel_waits_for_a_latent_bus_it_does_not_use() {
+        let latency = mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES;
+        let mut session = Session::default();
+        session.add_channel(mooloop_core::DeviceKind::Sampler);
+        session.channels[0].bus = 1;
+        session.buses[1].effects.push(transparent_drive());
+
+        let plan = session.latency_plan();
+        assert_eq!(plan.channel(0), 0, "nothing else feeds bus 1");
+        assert_eq!(plan.channel(1), latency, "the direct channel waits for the bus");
+        assert_eq!(plan.total(), latency);
     }
 }

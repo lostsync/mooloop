@@ -22,7 +22,7 @@ use mooloop_core::{
     DeviceKind, SliceMap,
 };
 use mooloop_dsp::{
-    buffer_allocation_key, build_effect_at_tempo, AudioNode, DryAlign, SampleData,
+    buffer_allocation_key, build_effect_at_tempo, AudioNode, IntegerDelay, SampleData,
     SpectrumAnalyzer, StretchPool, SPECTRUM_BINS,
 };
 use rtrb::{Consumer, Producer};
@@ -69,7 +69,7 @@ pub enum StructuralCommand {
         kind: EffectKind,
         resource_key: Option<u64>,
         node: Box<dyn AudioNode + Send>,
-        align: Option<Box<DryAlign>>,
+        align: Option<Box<IntegerDelay>>,
         analyzer: Box<SpectrumAnalyzer>,
         /// The slot's host and control state. Allocated here with the node
         /// rather than reserved for all 256 addressable slots up front, which
@@ -88,7 +88,7 @@ pub enum StructuralCommand {
         expected_resource_key: u64,
         resource_key: u64,
         node: Box<dyn AudioNode + Send>,
-        align: Option<Box<DryAlign>>,
+        align: Option<Box<IntegerDelay>>,
     },
     /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
     RemoveEffect { target: EffectTarget, slot: u8 },
@@ -99,6 +99,21 @@ pub enum StructuralCommand {
     AddChannel {
         storage: Box<ChannelStorage>,
         source: DeviceKind,
+    },
+    /// Install (or clear) a producer's latency compensation delay.
+    ///
+    /// `target` is the channel or bus whose *output* waits; `None` means it
+    /// is the longest path into its destination and needs no delay, which is
+    /// the common case and costs nothing.
+    ///
+    /// Structural for the same reason as [`Self::SetSamplerStretch`]: the ring
+    /// is allocated on the control thread and the displaced one is reclaimed
+    /// there, because the audio thread may do neither. The length comes from
+    /// `mooloop_core::compile_latency`, which is recomputed whenever anything
+    /// that could change a chain's latency moves.
+    SetCompensation {
+        target: EffectTarget,
+        delay: Option<Box<IntegerDelay>>,
     },
     /// Give a channel's sampler its time-stretch state, or take it away.
     ///
@@ -142,6 +157,9 @@ pub(crate) enum StructuralReclaim {
     /// stopped stretching. Same reason as the rest: megabytes of `Box` must
     /// not be freed on the audio thread.
     SamplerStretch(Box<StretchPool>),
+    /// A compensation delay displaced by a new one, or surrendered when a
+    /// producer became the longest path and stopped needing one.
+    Compensation(Box<IntegerDelay>),
 }
 
 /// A project that has already been instantiated and allocated off the audio
@@ -391,7 +409,7 @@ impl EngineHandle {
         bpm: f64,
     ) -> bool {
         let node = build_effect_at_tempo(EffectParams::Buffer(next), self.sample_rate, bpm);
-        let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
+        let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
         self.cmd_tx
             .push(RealtimeCommand::Structural(
                 StructuralCommand::ReplaceEffect {
@@ -418,6 +436,7 @@ impl EngineHandle {
                 StructuralReclaim::RenderState(render) => drop(render),
                 StructuralReclaim::PreviewSample { sample } => drop(sample),
                 StructuralReclaim::SamplerStretch(pool) => drop(pool),
+                StructuralReclaim::Compensation(delay) => drop(delay),
             }
         }
         loop {

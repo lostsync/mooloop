@@ -12,7 +12,7 @@ use mooloop_core::{
     SlotRemap,
     Project,
     SamplerParams, SliceMap,
-    clamp_bus, DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
+    chain_latency, clamp_bus, compile_latency, DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
 use mooloop_core::modulation::{CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS};
@@ -21,7 +21,7 @@ use mooloop_dsp::build_effect;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, Ds01,
     DrumSynth,
-    DryAlign, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8, NoteGateEvents, PolySynth,
+    IntegerDelay, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8, NoteGateEvents, PolySynth,
     ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, StretchPool, TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
 };
@@ -37,7 +37,7 @@ use crate::{PreviewCommand, StructuralCommand, StructuralReclaim};
 /// thread never frees a `Box` itself.
 pub(crate) struct ReclaimedEffect {
     pub node: Option<Box<dyn AudioNode + Send>>,
-    pub align: Option<Box<DryAlign>>,
+    pub align: Option<Box<IntegerDelay>>,
     pub analyzer: Option<Box<SpectrumAnalyzer>>,
     /// The slot's own state, which is a box like the rest and so must leave
     /// the realtime thread the same way rather than being dropped on it.
@@ -293,7 +293,7 @@ struct EffectChain {
     /// Per-slot dry-path delay matching the installed node's reported
     /// latency, so the wet/dry blend never mixes time-misaligned signals.
     /// Allocated off the realtime thread, next to the node it belongs to.
-    dry_align: [Option<Box<DryAlign>>; MAX_EFFECTS_PER_CHANNEL],
+    dry_align: [Option<Box<IntegerDelay>>; MAX_EFFECTS_PER_CHANNEL],
     /// Input analyzers follow effect slots during reorders. They are generic
     /// host instrumentation, not EQ-specific DSP state. The boxes are built
     /// with nodes so empty addressable slots stay compact.
@@ -380,7 +380,7 @@ impl EffectChain {
         kind: mooloop_core::EffectKind,
         resource_key: Option<u64>,
         node: Box<dyn AudioNode + Send>,
-        align: Option<Box<DryAlign>>,
+        align: Option<Box<IntegerDelay>>,
         analyzer: Box<SpectrumAnalyzer>,
         mut state: Box<EffectSlot>,
     ) -> ReclaimedEffect {
@@ -425,7 +425,7 @@ impl EffectChain {
         expected_resource_key: u64,
         resource_key: u64,
         node: Box<dyn AudioNode + Send>,
-        align: Option<Box<DryAlign>>,
+        align: Option<Box<IntegerDelay>>,
     ) -> ReclaimedEffect {
         let matches = self.slot(slot).is_some_and(|state| {
             state.kind == Some(expected_kind) && state.resource_key == Some(expected_resource_key)
@@ -637,7 +637,7 @@ impl EffectChain {
         self.clear(reclaim);
         for (slot, effect) in slots.iter().take(MAX_EFFECTS_PER_CHANNEL).enumerate() {
             let node = build_effect_at_tempo(effect.params, sample_rate, bpm);
-            let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
+            let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
             let displaced = self.install(
                 slot,
                 effect.kind(),
@@ -688,14 +688,26 @@ impl EffectChain {
                 // A bypassed slot keeps its queued events until re-enabled, so
                 // knob turns made while bypassed are not lost.
                 if let Some(align) = &mut self.dry_align[slot] {
-                    // Keep the dry ring tracking the passing signal, so
-                    // re-enabling the slot never blends in audio captured
-                    // before the bypass.
-                    self.dry.l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
-                    self.dry.r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
+                    // **Bypass is time transparent, not latency free.** The
+                    // signal goes through the slot's own ring, so a bypassed
+                    // node still costs exactly the frames it declares.
+                    //
+                    // Two things depend on this. The latency plan sums a
+                    // chain's *declared* latency including bypassed slots
+                    // (`mooloop_core::chain_latency`, and every host works this
+                    // way), so a bypass that shortened the path would leave
+                    // every other channel over-compensated against it. And
+                    // toggling one would move the channel in time, so A/B-ing
+                    // an effect would also A/B the timing and neither answer
+                    // would be about the effect.
+                    //
+                    // This also subsumes what the branch did before, which was
+                    // to push a shadow copy through the ring so re-enabling
+                    // never blended in pre-bypass audio: the ring sees the same
+                    // samples either way.
                     align.process(
-                        &mut self.dry.l[..context.frames],
-                        &mut self.dry.r[..context.frames],
+                        &mut bus.l[..context.frames],
+                        &mut bus.r[..context.frames],
                     );
                 }
                 if let Some((meters, _, target)) = device_display {
@@ -921,6 +933,10 @@ struct BusStrip {
     effects: EffectChain,
     bus: StereoBus,
     output: OutputStage,
+    /// How long this bus waits before summing into the bus it feeds. Same
+    /// contract as a channel's, and always `None` on the master, which feeds
+    /// nothing.
+    compensation: Option<Box<IntegerDelay>>,
 }
 
 impl BusStrip {
@@ -930,12 +946,26 @@ impl BusStrip {
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             // Unity, not a channel's 0.8: see `mooloop_core::MixerBus::new`.
             output: OutputStage::new(1.0),
+            compensation: None,
         }
     }
 
     fn reset(&mut self, reclaim: &mut Reclaim) {
         self.effects.clear(reclaim);
         self.output = OutputStage::new(1.0);
+        // The displaced ring leaves on the same carrier a displaced dry-path
+        // aligner does: it is the same type doing the same job one level out,
+        // and inventing a second channel for it would only mean two things to
+        // drain.
+        if let Some(delay) = self.compensation.take() {
+            reclaim.push(ReclaimedEffect {
+                node: None,
+                align: Some(delay),
+                analyzer: None,
+                state: None,
+                channel: None,
+            });
+        }
     }
 }
 
@@ -978,6 +1008,14 @@ pub struct ChannelStrip {
     output: OutputStage,
     /// Mixer bus this channel feeds.
     destination: u8,
+    /// How long this channel waits before summing into its bus, so that
+    /// everything arriving there comes from the same moment.
+    ///
+    /// `None` is the common case and means this channel *is* the longest path
+    /// into its bus, so nothing is owed. The length is decided off-thread by
+    /// `mooloop_core::compile_latency` and the ring arrives preallocated;
+    /// see `docs/plans/latency-compensation/`.
+    compensation: Option<Box<IntegerDelay>>,
 }
 
 impl ChannelStrip {
@@ -1001,6 +1039,7 @@ impl ChannelStrip {
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             output: OutputStage::new(0.8),
             destination: MASTER_BUS,
+            compensation: None,
         }
     }
 
@@ -1658,6 +1697,43 @@ impl RenderState {
         // rather than rejected, so a hand-edited or future-format song still
         // opens and makes sound.
         self.bus_graph = compile_bus_graph(&project.buses).unwrap_or_default();
+        self.install_compensation(project);
+    }
+
+    /// Build and install the tree's latency compensation from `project`.
+    ///
+    /// Here as well as through the session's incremental sync, because this is
+    /// the path an **offline render** takes: it builds its own `RenderState`
+    /// and never runs a pump, so without this an export would be the one
+    /// place the mixer was not time aligned — which is exactly the disagreement
+    /// between offline and live that everything else in this engine is
+    /// arranged to prevent.
+    ///
+    /// Allocates, and is allowed to: `load_project` runs on the control thread
+    /// while a state is being prepared, never from the callback.
+    fn install_compensation(&mut self, project: &Project) {
+        let mut channel_latency = [0u32; MAX_CHANNELS];
+        let mut channel_bus = [MASTER_BUS; MAX_CHANNELS];
+        for (index, channel) in project.channels.iter().take(MAX_CHANNELS).enumerate() {
+            channel_latency[index] = chain_latency(&channel.setup.effects);
+            channel_bus[index] = channel.setup.channel.bus;
+        }
+        let mut bus_latency = [0u32; MAX_BUSES];
+        for (index, bus) in project.buses.iter().take(MAX_BUSES).enumerate() {
+            bus_latency[index] = chain_latency(&bus.effects);
+        }
+        let plan = compile_latency(
+            &self.bus_graph,
+            &channel_latency,
+            &channel_bus,
+            &bus_latency,
+        );
+        for (index, strip) in self.strips.iter_mut().enumerate() {
+            strip.compensation = IntegerDelay::new(plan.channel(index)).map(Box::new);
+        }
+        for (index, strip) in self.buses.iter_mut().enumerate() {
+            strip.compensation = IntegerDelay::new(plan.bus(index)).map(Box::new);
+        }
     }
 
     /// Resolve an effect address to the chain that owns it. Both arms are
@@ -2016,6 +2092,26 @@ impl RenderState {
                     None => strip.sampler.take_stretch(),
                 }
                 .map(StructuralReclaim::SamplerStretch)
+            }
+            StructuralCommand::SetCompensation { target, delay } => {
+                let slot = match target {
+                    EffectTarget::Channel(channel) => self
+                        .strips
+                        .get_mut(channel as usize)
+                        .map(|strip| &mut strip.compensation),
+                    EffectTarget::Bus(bus) => self
+                        .buses
+                        .get_mut(bus as usize)
+                        .map(|strip| &mut strip.compensation),
+                };
+                let Some(slot) = slot else {
+                    // Nothing to install into. Hand the ring straight back
+                    // rather than dropping it here: this is the realtime
+                    // thread, and an unaddressable producer is not a reason to
+                    // free memory on it.
+                    return delay.map(StructuralReclaim::Compensation);
+                };
+                std::mem::replace(slot, delay).map(StructuralReclaim::Compensation)
             }
         }
     }
@@ -2647,6 +2743,14 @@ impl RenderState {
                 self.modulator_meters.publish(index, &row);
             }
             if self.strips[index].output.muted {
+                // A muted channel renders nothing, so its compensation ring
+                // would still be holding the audio from before the mute and
+                // would emit it on unmute. Emptying it is fifteen writes, and
+                // it is the honest state: a silent producer's pipeline is
+                // silent too.
+                if let Some(delay) = self.strips[index].compensation.as_mut() {
+                    delay.reset();
+                }
                 continue;
             }
             let modulation = ModulationBlock {
@@ -2787,6 +2891,12 @@ impl RenderState {
             strip
                 .output
                 .apply_pan_segments(&mut strip.bus, frames, strip_segments.as_ref());
+            // Wait, if this channel is shorter than something else feeding the
+            // same bus. Last, so what waits is the finished channel, and
+            // immediately before the sum it is being aligned for.
+            if let Some(delay) = strip.compensation.as_mut() {
+                delay.process(&mut strip.bus.l[..frames], &mut strip.bus.r[..frames]);
+            }
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
                 destination.bus.add_from(&strip.bus, frames);
             }
@@ -2820,6 +2930,13 @@ impl RenderState {
                 automation.as_ref(),
             );
             strip.output.apply_balance(&mut strip.bus, frames);
+            // Before the meter and before the mute check on purpose: from here
+            // the bus's audio genuinely *is* delayed, so metering the delayed
+            // signal is honest, and a muted bus still advances its ring rather
+            // than holding stale audio to emit when it is unmuted.
+            if let Some(delay) = strip.compensation.as_mut() {
+                delay.process(&mut strip.bus.l[..frames], &mut strip.bus.r[..frames]);
+            }
             // A muted bus still processes, so a delay or reverb tail on it
             // decays instead of freezing, but contributes nothing — and meters
             // as silent, matching what is heard rather than what is running.
@@ -4617,6 +4734,165 @@ mod tests {
         );
     }
 
+    // --- Latency compensation ------------------------------------------
+
+    /// A Drive that is a pure fifteen-frame delay and nothing else.
+    ///
+    /// At `mix: 0` the effect outputs its own aligned dry path, so the shaper
+    /// contributes nothing audible and what is left is exactly the
+    /// oversampler's latency. That makes it the cleanest possible probe: any
+    /// difference these tests find is timing rather than timbre.
+    fn transparent_drive() -> mooloop_core::EffectSlotState {
+        mooloop_core::EffectSlotState::drive(mooloop_core::DriveParams {
+            drive: 1.0,
+            curve: mooloop_core::DriveCurve::Soft,
+            tone: 0.0,
+            mix: 0.0,
+            output: 1.0,
+        })
+    }
+
+    /// One drum channel that hits on the downbeat, optionally through the
+    /// transparent Drive.
+    fn hit_channel(index: usize, latent: bool) -> ProjectChannel {
+        let mut channel = ProjectChannel::drum_synth(index, 1);
+        if latent {
+            channel.setup.effects.push(transparent_drive());
+        }
+        channel.notes[0].push(NoteEvent::new(index as u32 + 1, 0, 24, 60, 127));
+        channel
+    }
+
+    fn render_master(project: &Project, frames: usize) -> Vec<f32> {
+        let mut render = RenderState::from_project(48_000, project, &[]);
+        render.play();
+        render.process_block(frames);
+        render.master().l[..frames].to_vec()
+    }
+
+    /// The headline case, and the one that is silently wrong without this
+    /// plan: two channels hitting on the same tick, one of them through a
+    /// device that costs fifteen frames. They must land in the same frame.
+    ///
+    /// Both assertions fail on `main`. The plain channel would start at frame
+    /// zero while its neighbour started at fifteen, and the master would carry
+    /// one copy of the hit followed by a second — which is comb filtering,
+    /// worst exactly when the two channels are most alike.
+    #[test]
+    fn two_channels_of_different_depths_land_in_the_same_frame() {
+        const FRAMES: usize = 512;
+        let latency = mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES as usize;
+
+        let together = render_master(
+            &Project {
+                channels: vec![hit_channel(0, true), hit_channel(1, false)],
+                ..Project::default()
+            },
+            FRAMES,
+        );
+        // Nothing arrives early: the shorter channel waited for the longer.
+        assert!(
+            together[..latency].iter().all(|sample| *sample == 0.0),
+            "the plain channel arrived {latency} frames early"
+        );
+
+        // And they are aligned *exactly*, not merely both late. One channel
+        // alone is the longest path and is compensated by nothing, so it is
+        // the reference; two identical channels summed on top of each other
+        // must be it, doubled, sample for sample.
+        let alone = render_master(
+            &Project {
+                channels: vec![hit_channel(0, true)],
+                ..Project::default()
+            },
+            FRAMES,
+        );
+        for (frame, (summed, single)) in together.iter().zip(alone.iter()).enumerate() {
+            assert!(
+                (summed - single * 2.0).abs() < 1.0e-6,
+                "frame {frame}: two aligned copies gave {summed}, one copy doubled is {}",
+                single * 2.0
+            );
+        }
+    }
+
+    /// The same through a bus, which is the case a per-channel-only scheme
+    /// gets wrong: the latency is on the *bus*, so what has to wait is the
+    /// channel that does not go through it.
+    #[test]
+    fn a_channel_waits_for_a_latent_bus_beside_it() {
+        const FRAMES: usize = 512;
+        let latency = mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES as usize;
+
+        let mut project = Project {
+            channels: vec![hit_channel(0, false), hit_channel(1, false)],
+            ..Project::default()
+        };
+        // Channel 0 through bus 1, which carries the cost; channel 1 straight
+        // to the master with nothing.
+        project.channels[0].setup.channel.bus = 1;
+        project.buses[1].effects.push(transparent_drive());
+
+        let master = render_master(&project, FRAMES);
+        assert!(
+            master[..latency].iter().all(|sample| *sample == 0.0),
+            "the direct channel did not wait for the bus"
+        );
+    }
+
+    /// Bypass keeps its latency, which is the convention every host follows
+    /// and the reason is audible: a bypass that shortened the chain would move
+    /// the channel in time, so A/B-ing an effect would also A/B the timing.
+    ///
+    /// This is also what makes the plan safe to compute from the *declared*
+    /// chain — it sums bypassed slots too, so the two would disagree if the
+    /// container let a bypassed node pass audio through untouched.
+    #[test]
+    fn bypassing_a_device_does_not_move_the_channel_in_time() {
+        const FRAMES: usize = 512;
+        let live = Project {
+            channels: vec![hit_channel(0, true), hit_channel(1, false)],
+            ..Project::default()
+        };
+        let mut bypassed = live.clone();
+        bypassed.channels[0].setup.effects[0].bypassed = true;
+
+        let live_master = render_master(&live, FRAMES);
+        let bypassed_master = render_master(&bypassed, FRAMES);
+
+        let onset = |samples: &[f32]| samples.iter().position(|sample| sample.abs() > 1.0e-9);
+        assert_eq!(
+            onset(&live_master),
+            onset(&bypassed_master),
+            "bypassing the device moved the channel in time"
+        );
+    }
+
+    /// Compensation must not make the output depend on where the block
+    /// boundaries fall. A ring advanced per block rather than per frame would
+    /// pass every alignment test above and fail this one.
+    #[test]
+    fn compensation_renders_the_same_at_any_block_size() {
+        const FRAMES: usize = 1_024;
+        let project = Project {
+            channels: vec![hit_channel(0, true), hit_channel(1, false)],
+            ..Project::default()
+        };
+        let render_in_blocks = |block: usize| {
+            let mut render = RenderState::from_project(48_000, &project, &[]);
+            render.play();
+            let mut out = Vec::with_capacity(FRAMES);
+            while out.len() < FRAMES {
+                render.process_block(block);
+                out.extend_from_slice(&render.master().l[..block]);
+            }
+            out.truncate(FRAMES);
+            out
+        };
+        assert_eq!(render_in_blocks(128), render_in_blocks(256));
+        assert_eq!(render_in_blocks(128), render_in_blocks(64));
+    }
+
     /// `docs/FOCUS.md` step 2's whole acceptance case: a modulation route and
     /// an automation lane both reach the v1 drum synth, which until now was
     /// the one source nothing could move.
@@ -4824,7 +5100,7 @@ mod tests {
         slot: u8,
         node: Box<dyn AudioNode + Send>,
     ) -> StructuralCommand {
-        let align = DryAlign::new(node.dry_path_latency_frames()).map(Box::new);
+        let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
         StructuralCommand::InstallEffect {
             target,
             slot,
@@ -5287,7 +5563,7 @@ mod tests {
         const LATENCY: usize = 15;
         let mut chain = EffectChain::new();
         let node = Box::new(LatentDelay::new(LATENCY));
-        let align = DryAlign::new(node.latency_frames()).map(Box::new);
+        let align = IntegerDelay::new(node.latency_frames()).map(Box::new);
         let displaced = chain.install(
             0,
             mooloop_core::EffectKind::Delay,
@@ -5337,7 +5613,7 @@ mod tests {
     fn prepared_resource_replacement_refuses_a_stale_slot_key() {
         let mut chain = EffectChain::new();
         let initial = Box::new(LatentDelay::new(1));
-        let initial_align = DryAlign::new(initial.latency_frames()).map(Box::new);
+        let initial_align = IntegerDelay::new(initial.latency_frames()).map(Box::new);
         let displaced = chain.install(
             0,
             mooloop_core::EffectKind::Buffer,
@@ -5350,7 +5626,7 @@ mod tests {
         assert!(displaced.is_empty());
 
         let stale = Box::new(LatentDelay::new(2));
-        let stale_align = DryAlign::new(stale.latency_frames()).map(Box::new);
+        let stale_align = IntegerDelay::new(stale.latency_frames()).map(Box::new);
         let rejected = chain.replace_if_kind(
             0,
             mooloop_core::EffectKind::Buffer,
@@ -5363,7 +5639,7 @@ mod tests {
         assert_eq!(chain.slot(0).unwrap().resource_key, Some(10));
 
         let current = Box::new(LatentDelay::new(2));
-        let current_align = DryAlign::new(current.latency_frames()).map(Box::new);
+        let current_align = IntegerDelay::new(current.latency_frames()).map(Box::new);
         let replaced = chain.replace_if_kind(
             0,
             mooloop_core::EffectKind::Buffer,
@@ -5959,7 +6235,12 @@ mod footprint {
         // it is the eight `f32` the strip holds of what its generator
         // published last block, which is where the one block of declared
         // outlet latency physically lives.
-        assert_eq!(size_of::<ChannelStrip>(), 41_704);
+        // Latency compensation adds eight: a nullable pointer to the ring, and
+        // nothing else. The ring itself is heap and exists only on a channel
+        // that actually owes a delay — `4 * 2 * frames`, so fifteen frames is
+        // 120 bytes — which is why the common project, where every path is the
+        // same length, pays exactly this pointer and no buffer at all.
+        assert_eq!(size_of::<ChannelStrip>(), 41_712);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -5976,7 +6257,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_144);
+        assert_eq!(per_live, 60_152);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -5999,7 +6280,10 @@ mod footprint {
         // for the published row, and 16 KiB of the reserved figure above for
         // the wider route. DS-01 publishing its own six added sixteen bytes a
         // live channel -- a focus age and a trigger flag on the node, and
-        // nothing on any voice.
+        // nothing on any voice. Latency compensation added eight more, which
+        // is a pointer: the ring is allocated only for a producer that is
+        // genuinely shorter than its neighbours, so an aligned project pays
+        // nothing beyond the pointer.
         //
         // It nearly cost 8 KiB a live channel instead. Putting the outlet
         // band in the per-tick control table would have stored eight

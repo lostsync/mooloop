@@ -100,6 +100,19 @@ mod tests {
                     node.latency_frames(),
                     kind.latency_frames()
                 );
+                // The container's bypass path delays the signal through the
+                // ring it sized from the *dry path* length, while the latency
+                // plan sums the declared `latency_frames`. They are the same
+                // number for every device today, and a device that broke that
+                // would make a bypassed slot cost a different number of frames
+                // than the plan compensated for. Asserted rather than assumed,
+                // because the symptom would be a misalignment nothing reports.
+                assert_eq!(
+                    node.dry_path_latency_frames(),
+                    node.latency_frames(),
+                    "{kind:?} declares a dry-path latency apart from its own; \
+                     the bypass path and the latency plan would disagree"
+                );
             }
         }
     }

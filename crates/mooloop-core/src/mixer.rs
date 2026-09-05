@@ -263,6 +263,20 @@ pub fn clamp_bus(bus: u8) -> u8 {
     }
 }
 
+/// Total declared latency of one effect chain, in base-rate frames.
+///
+/// A bypassed slot counts. That is the convention every host follows and the
+/// reason is that the alternative is worse: a bypass that shortened the chain
+/// would move the channel in time relative to every other one, so A/B-ing an
+/// effect would also A/B the timing and neither answer would be about the
+/// effect. Removing the device is what gives the latency back.
+pub fn chain_latency(effects: &[EffectSlotState]) -> u32 {
+    effects
+        .iter()
+        .map(|effect| effect.kind().latency_frames())
+        .sum()
+}
+
 /// What each producer must be delayed by so that everything summing at a
 /// point arrives from the same moment.
 ///

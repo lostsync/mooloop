@@ -78,6 +78,11 @@ pub struct Session {
     /// channels clears both even when the new channel happens to occupy the
     /// same runtime slot.
     pub modulation_ui_channel: Cell<Option<usize>>,
+    /// The compensation plan the engine has been told about, so the pump's
+    /// reconcile can send only what changed. Not document state: it is a
+    /// record of what has been said to the audio thread, and a fresh session
+    /// has said nothing.
+    pub compensation_sent: mooloop_core::CompiledLatency,
     /// Snapshot captured at the start of a direct knob gesture. Intermediate
     /// control updates still reach audio immediately, while one release
     /// becomes one undoable route edit.
@@ -160,6 +165,7 @@ impl Default for Session {
             modulation_armed_slot: Cell::new(None),
             modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
             modulation_ui_channel: Cell::new(None),
+            compensation_sent: mooloop_core::CompiledLatency::default(),
             modulation_edit_before: None,
             modulation_edit_changed: false,
             browser_locations: Vec::new(),
@@ -1085,6 +1091,11 @@ impl Session {
         // never document state. A newly loaded project must start unarmed
         // even if it selects the same channel index as the previous one.
         self.modulation_ui_channel.set(None);
+        // The engine's state is replaced wholesale by a load, and
+        // `RenderState::load_project` installs its own compensation. Forget
+        // what this side thinks was sent so the next reconcile re-derives
+        // against the new project rather than trusting a plan for the old one.
+        self.compensation_sent = mooloop_core::CompiledLatency::default();
         // A load points the device rack back at a channel; the bus the
         // previous document had open means nothing in this one.
         self.effect_target = EffectTarget::Channel(project.selected_channel);
