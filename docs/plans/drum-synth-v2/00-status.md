@@ -1,7 +1,7 @@
 # DS-01 plan status
 
-**Every step is in except step 07's published outlets, which are blocked
-rather than skipped.** Adam played the device and its bank on 2026-09-04 and
+**Every step is in except step 07's four audio outlets, which are blocked
+rather than skipped. Its six control outlets are built.** Adam played the device and its bank on 2026-09-04 and
 closed step 09 on 2026-09-05. The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
@@ -55,11 +55,11 @@ asserts.
 
 Read `01-what-ds01-is.md` for what the device is; the steps are done.
 
-**The directory stays out of `archive/` for one reason:** step 07's published
-outlets. Their shared mechanism has landed with ML-P8's step 06 -- a route can
-name a control outlet, and the shelf offers one -- so what remains is DS-01
-publishing its own six control values, and the audio outlets, which still wait
-on typed auxiliary audio edges. Nothing else in the plan is unbuilt.
+**The directory stays out of `archive/` for one reason:** step 07's four audio
+outlets, which wait on the typed auxiliary audio edges `AUDIO_ARCHITECTURE.md`
+describes. The control half is finished -- the shared mechanism landed with
+ML-P8's step 06, and DS-01 publishes its own six values -- and nothing else in
+the plan is unbuilt.
 
 Four things step 02 turned up that the plan could not have known:
 
@@ -329,28 +329,45 @@ reaches them, which is the right level for a device-wide control — and
 
 ## What is blocked
 
-**Step 07's published outlets are not built.** The shared mechanism the
-control half waited for has since landed; the audio half still waits. Building
-either one for DS-01 alone would have been the special-case knowledge
-`COMPOSABLE_DEVICE_UNITS.md` exists to prevent:
+**Step 07's audio outlets are not built.** The shared mechanism the control
+half waited for landed with ML-P8's step 06 and DS-01's six control values
+followed it; the audio half still waits. Building either one for DS-01 alone
+would have been the special-case knowledge `COMPOSABLE_DEVICE_UNITS.md` exists
+to prevent:
 
-- **Control outlets** (`Amp Envelope`, `Mod Envelope`, `Velocity`, `Note`,
-  `Gate`, `Trigger`) needed the per-channel published table
-  `MODULATOR_SYSTEM_SPEC.md` describes, and a way to route from it. **That
-  mechanism now exists and is complete**, built once through ML-P8's step 06
-  rather than twice: `mooloop_core::outlet` is the declaration, a route names
-  an outlet through `ModSourceRef::GeneratorOutlet`, the engine fills the
-  outlet half of the flat control table a block ahead of the strips, and the
+- **Control outlets are in.** `Amp Envelope`, `Mod Envelope`, `Velocity`,
+  `Note`, `Gate` and `Trigger` are declared with frozen ids and published once
+  a block. The shared mechanism was built once through ML-P8's step 06 rather
+  than twice: `mooloop_core::outlet` is the declaration, a route names an
+  outlet through `ModSourceRef::GeneratorOutlet`, the engine fills the outlet
+  half of the flat control table a block ahead of the strips, and the
   modulation shelf offers a publishing generator's outlets as sources in their
-  own pane. Note that it did *not* turn out to need a device-outlet
-  `ModulatorKind`, which is what this entry expected: an outlet is a source a
-  route names, not a module the rack holds, and giving it a slot in the rack
-  would have made it removable and reorderable when it is neither.
+  own pane.
 
-  What is left for DS-01 is its own half: the voice has to *compute and
-  publish* the six values, the way `MlP8::publish_outlets` does, and
-  `DeviceKind::outlets` has to answer with a DS-01 table. Both are DS-01 work
-  now rather than shared infrastructure, and neither is blocked.
+  It did *not* turn out to need a device-outlet `ModulatorKind`, which is what
+  this entry expected: an outlet is a source a route names, not a module the
+  rack holds, and giving it a rack slot would have made it removable and
+  reorderable when it is neither.
+
+  Three things DS-01's half turned up:
+
+  - **The focus is one voice, not a group.** ML-P8 reduces over the unison
+    group its newest Note On created, because a group is allocated whole.
+    DS-01 allocates a hit to a slot, so there is nothing to average: the focus
+    is the newest hit, it stays the focus for its whole life so the envelope
+    outlets have a coherent tail, and it falls to zero when idle rather than
+    stepping backward onto an older hit that is still ringing.
+  - **`Gate` is honest rather than useful on this instrument.** It answers
+    "any hit is still waiting on its note-off", and DS-01's one-shot envelopes
+    never wait for one -- so it is low for most of the kit however loudly it
+    is playing. That is exactly why `Trigger` is the outlet a drum channel
+    wants, and it is what step 07 predicted.
+  - **Publication costs the node sixteen bytes and no voice anything.** The
+    focus age and the trigger flag are node state, because the focus is a fact
+    about this channel's run of hits; a per-voice copy would be eight numbers
+    agreeing about one. The footprint test measures it.
+
+  What is left is the four audio outlets.
 - **Audio outlets** (`Tone`, `Noise`, `Body`, `Pre-Shape`) need the typed
   auxiliary audio edges `AUDIO_ARCHITECTURE.md` describes, which
   `COMPOSABLE_DEVICE_UNITS.md` explicitly says a device may not bypass.
@@ -617,7 +634,7 @@ instrument. Hence DS-01.
 | `04-the-body-resonator.md` | **In.** The tuned modal layer — toms, rims, bells, clangs |
 | `05-the-burst.md` | **In.** Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | **In.** Drive characters, the output stage, the gain contract |
-| `07-internal-modulation-and-outlets.md` | **Matrix in; outlets unbuilt.** The shared control mechanism landed with ML-P8's step 06; DS-01 has yet to publish its six, and the audio four wait on typed audio edges |
+| `07-internal-modulation-and-outlets.md` | **Matrix and the six control outlets in; the four audio outlets wait** on typed auxiliary audio edges |
 | `08-the-face.md` | **In.** Six pages, rebuilt from the one-screen face on 2026-09-04 |
 | `09-the-kit.md` | **In.** Seventeen patches, shipped, asserted, and played |
 

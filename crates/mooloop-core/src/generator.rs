@@ -624,7 +624,8 @@ impl crate::PublishesOutlets for DeviceKind {
     /// What this generator publishes to the rest of the channel.
     ///
     /// Empty for a device that has not designed an interface yet, which is
-    /// every kind but the ML-P8. Empty is the honest answer rather than a
+    /// every kind but the two synths that have one. Empty is the honest
+    /// answer rather than a
     /// gap: an outlet is designed, not discovered
     /// (`crate::outlet`), so a device publishes nothing until somebody has
     /// decided what is worth publishing. A picker reading this shows no
@@ -632,6 +633,7 @@ impl crate::PublishesOutlets for DeviceKind {
     fn outlets(&self) -> &'static [crate::OutletDescriptor] {
         match self {
             Self::MlP8 => &crate::mlp8::OUTLETS,
+            Self::Ds01 => &crate::ds01::OUTLETS,
             _ => &[],
         }
     }

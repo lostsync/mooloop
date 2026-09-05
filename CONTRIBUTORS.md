@@ -82,7 +82,7 @@ Alphabetical by model name, then by harness.
   September 2026 documentation audit, the 2026-09-05 refresh that
   rewrote `FOCUS.md` around Adam's new list, the `v0.1.2` release, and the
   modulation shelf's OUTLETS pane that made a published outlet routable by
-  hand. Longer accounts of most of this are in
+  hand, and DS-01's own published outlets. Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

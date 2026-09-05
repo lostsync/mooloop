@@ -596,8 +596,17 @@ land on its own when it starts to matter:
   acceptance test asserts, so what ships is what is checked. The bank was
   played on 2026-09-04 and raised no range corrections; it is there to prove
   the architecture reaches a kit from the controls rather than to be a curated
-  bank. Its published outlets are not built and are blocked on the same
-  device-outlet mechanism ML-P8's step 06 needs.
+  bank. It publishes six control outlets — `Amp Envelope`, `Mod Envelope`,
+  `Velocity`, `Note`, `Gate` and `Trigger` — reduced through the hit created
+  by the most recent trigger, which stays the focus for its whole life and
+  falls to zero rather than stepping backward onto an older hit that is still
+  ringing. `Trigger` is the one a drum channel wants: one publication wide per
+  hit, so a kick can duck a bass, open a gate, or fire an envelope on another
+  device with no sidechain graph. `Gate` is honest rather than useful here —
+  it answers "any hit is still waiting on its note-off", which is low for the
+  one-shot patches most of the kit uses. Its four audio outlets (`Tone`,
+  `Noise`, `Body`, `Pre-Shape`) are declared with frozen ids and tap points
+  and are not connectable, pending typed audio edges.
 - **A device's published outlets can drive other devices.**
   `mooloop_core::outlet` states the vocabulary — control versus audio domain,
   the tap point an audio outlet is taken at, and the one-block latency every
@@ -612,15 +621,21 @@ land on its own when it starts to matter:
   The shelf offers them: a channel whose generator publishes control outlets
   grows an OUTLETS pane beside its module grid, one named chip per outlet with
   the same live meter a module tile carries. A chip selects and arms like a
-  module, so the ordinary assign-then-drag gesture builds an outlet route —
-  and the route it writes names the outlet by its durable id, taking its
-  polarity from the outlet's declared shape, so a Gate or a Trigger rests at
-  the destination's base rather than half a depth below it. An outlet has no
+  module, so the ordinary assign-then-drag gesture builds an outlet route, and
+  the route it writes names the outlet by its durable id. An outlet has no
   editor, because the device that publishes it owns its behaviour; the pane
   beside it shows the declaration instead. A generator that publishes nothing
   has no pane at all rather than an empty one. The audio outlets are declared
   and not connectable, pending typed audio edges, and are never offered as
   control sources.
+  **The two kinds of source publish in different ranges, and a route's
+  polarity is about the module convention.** A rack module always emits
+  `-1..1`, and `Unipolar` lifts that into `0..1` so a one-way module rests at
+  the destination's base. An outlet publishes in its *declared* range, where a
+  unipolar one is already `0..1`, so an outlet route takes the destination's
+  own default — `Bipolar`, which passes the value through. `Unipolar` on an
+  outlet remains meaningful, but only for a genuinely bipolar one such as
+  ML-P8's `LFO`.
 - The ML-P8 has a device output stage: Volume and Pan, before the channel
   strip's own. They exist to be the base its per-voice `VcaLevel` and `Pan`
   modulation destinations offset from, which resolved from hardcoded unity and

@@ -169,7 +169,7 @@ module's `input_slot`, a slot reference the user never sees.
 | Envelope | Gate-driven attack, decay, sustain, and release contour. | Implemented with an explicit channel-note gate adapter; typed device gate outlets are planned. |
 | Step / random generator | Clocked patterns, probability, and controlled variation. | Implemented as the Step and Random modules. |
 | Macro / internal value | User macro, transport phase, velocity, key track, pressure, or another declared channel value. | Planned. The Math module covers user arithmetic over an existing module's output, not a channel value source. |
-| Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Implemented for the ML-P8's seven, through `ModSourceRef::GeneratorOutlet` and the one-block control table, and offered by the shelf's own OUTLETS pane: a chip selects and arms exactly like a module, so the assign gesture builds the route. Only the control run is offered; an audio outlet is refused by domain. |
+| Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Implemented for the ML-P8's seven and DS-01's six, through `ModSourceRef::GeneratorOutlet` and the one-block control table, and offered by the shelf's own OUTLETS pane: a chip selects and arms exactly like a module, so the assign gesture builds the route. Only the control run is offered; an audio outlet is refused by domain. Note the range convention below. |
 | Device outlet | Named effect signals such as gain reduction, envelope-following level, or gate state. | Planned. The vocabulary is shared with generator outlets; no effect declares one. |
 | Audio-derived control | Explicit envelope follower, transient detector, or another control extractor. | Deferred until it has an outlet contract. |
 | External / cross-channel control | Another channel's note gate is an explicit source-inlet adapter. MIDI/CV, buses, global sources, and general cross-channel outlets remain deferred by routing policy. | Note-gate adapter implemented; general routing deferred. |
@@ -281,7 +281,22 @@ read that table on the following block, with one declared block of latency.
 This rule is mandatory: it makes realtime/offline results identical, prevents
 graph-order accidents, and avoids same-block feedback exceptions. A generator
 reduces per-voice values to a single named signal; the first policy may be
-last-note, with alternatives added as explicit outlet modes.
+last-note, with alternatives added as explicit outlet modes. ML-P8 and DS-01
+both reduce through a **focus** — the group or voice created by the most recent
+Note On, held through its life so an envelope outlet has a coherent tail, and
+falling to zero when it goes idle rather than stepping backward onto an older
+sounding note.
+
+**An outlet does not use the rack's signed convention, and a route's polarity
+is about that convention.** A rack module always emits `-1..1`, which is why
+`Unipolar` lifts it — `(v + 1) / 2` — so a one-way module contributes no
+offset at idle. An outlet publishes in the range its `SignalShape` declares,
+where a unipolar one is *already* `0..1`. So an outlet route takes the
+destination's default polarity, `Bipolar`, which passes the value through:
+zero rests at the base and one reaches full depth. Lifting a unipolar outlet
+again would sit it half a depth above the base at idle and give it half the
+swing. `Unipolar` stays meaningful on an outlet, but only for a genuinely
+bipolar one such as ML-P8's `LFO`.
 
 True audio-rate FM **through a channel route** and true audio sidechain are
 excluded. A device's fixed/internal oscillator network is outside this

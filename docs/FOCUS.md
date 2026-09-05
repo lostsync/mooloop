@@ -26,12 +26,12 @@ are done but for one thing, and it is the same thing in both.**
   branches, every parameter is descriptor-addressed, and the six-page face
   holds all ninety-two of them at a readable size.
 - **What both are waiting on is one mechanism.** ML-P8 step 06 and DS-01 step
-  07 both publish device outlets. The control half is built and reachable —
-  `mooloop_core::outlet` is the vocabulary, ML-P8 declares fourteen outlets and
-  publishes its seven control values, a route can name one, and as of
-  2026-09-05 the shelf offers them. The audio half needs the typed auxiliary
-  audio edges `AUDIO_ARCHITECTURE.md` describes and that do not exist. Two plan
-  directories are held out of `archive/` by that one gap.
+  07 both publish device outlets. **The control half is finished** as of
+  2026-09-05 — `mooloop_core::outlet` is the vocabulary, ML-P8 publishes seven
+  control values and DS-01 six, a route can name one, and the shelf offers
+  them. The audio half needs the typed auxiliary audio edges
+  `AUDIO_ARCHITECTURE.md` describes and that do not exist. Two plan directories
+  are held out of `archive/` by that one gap.
 
 So the sequence below starts by clearing the debt those two instruments left,
 and only then moves to the interface, which is where Adam's standing list has
@@ -62,12 +62,12 @@ once is the point.
 
 Two pieces, in order:
 
-- ~~**The control slice's last mile.**~~ **Done, 2026-09-05.** The shelf grows
-  an OUTLETS pane beside its module grid on any channel whose generator
-  publishes control outlets, and a chip selects and arms exactly like a
-  module, so the ordinary assign-then-drag gesture builds an outlet route.
-  What remains of the control half is DS-01 publishing its own six values,
-  which is DS-01 work rather than shared infrastructure.
+- ~~**The control slice.**~~ **Done, 2026-09-05.** The shelf grows an OUTLETS
+  pane beside its module grid on any channel whose generator publishes control
+  outlets, and a chip selects and arms exactly like a module, so the ordinary
+  assign-then-drag gesture builds an outlet route. DS-01 publishes its six —
+  `Trigger` reaches a later device one block after the hit, which is what a
+  kick ducking a bass needs and what its step 07 asked for.
 - **Typed auxiliary audio edges.** ML-P8's `Osc 1/2/3`, `Sub`, `Noise`,
   `Pre-Filter Mix` and `Filter` taps are audio-rate ports. The one-block
   control table cannot carry them and downsampling them destroys the reason

@@ -926,6 +926,82 @@ const MOD_ENV_DESCRIPTORS: [ParamDescriptor; ENV_BLOCK as usize] = env_block(
 /// The complete DS-01 table for this step.
 pub static DESCRIPTORS: [ParamDescriptor; 92] = concat();
 
+// --- Step 07: what the instrument publishes --------------------------------
+//
+// Outlet ids are a second durable namespace beside the parameter ids above
+// and are frozen the same way: a project that saves a route to `Trigger` as
+// outlet 5 must find `Trigger` there forever. Control outlets are declared
+// first, because a surface that can only make control edges takes the leading
+// run and stops.
+
+pub const DS01_OUTLET_AMP_ENV: u16 = 0;
+pub const DS01_OUTLET_MOD_ENV: u16 = 1;
+pub const DS01_OUTLET_VELOCITY: u16 = 2;
+pub const DS01_OUTLET_NOTE: u16 = 3;
+pub const DS01_OUTLET_GATE: u16 = 4;
+pub const DS01_OUTLET_TRIGGER: u16 = 5;
+pub const DS01_OUTLET_TONE: u16 = 6;
+pub const DS01_OUTLET_NOISE: u16 = 7;
+pub const DS01_OUTLET_BODY: u16 = 8;
+pub const DS01_OUTLET_PRE_SHAPE: u16 = 9;
+
+/// How many of the outlets below are control signals.
+pub const DS01_CONTROL_OUTLETS: usize = 6;
+
+/// The control run has to fit the channel's outlet band, which is a ceiling on
+/// the *address space* rather than on any device. A table that overran it
+/// would publish signals no route could name, so this is checked when the
+/// table is compiled rather than when a test happens to run.
+const _: () = assert!(DS01_CONTROL_OUTLETS <= crate::modulation::MAX_GENERATOR_OUTLETS);
+
+/// What DS-01 publishes.
+///
+/// Six control signals and four audio taps, per
+/// `docs/plans/drum-synth-v2/07-internal-modulation-and-outlets.md`. Not every
+/// internal value: an outlet is designed rather than discovered, so this is
+/// the list another device has a use for.
+///
+/// `Trigger` is the valuable one on a drum channel, and it is the reason this
+/// table exists at all: it is what lets a kick duck a bass, open a gate, or
+/// fire an envelope on another device without a sidechain graph.
+///
+/// The per-hit signals reduce through the **focus voice** — the voice created
+/// by the most recent trigger, which stays the focus for its whole life so an
+/// envelope outlet has a coherent tail. When it falls idle they return to
+/// zero rather than jumping backward to an older hit that happens to still be
+/// ringing. `Gate` deliberately does not follow the focus: "any hit is still
+/// waiting on its note-off" is the channel-level fact, and on this instrument
+/// it is low for most patches, because a one-shot envelope never waits.
+///
+/// The four audio outlets are declared here and are not connectable yet: they
+/// need the typed auxiliary audio edges `AUDIO_ARCHITECTURE.md` describes.
+/// They are written down now because their ids and tap points are the part
+/// that has to be decided once — the same argument ML-P8's table records.
+pub static OUTLETS: [crate::outlet::OutletDescriptor; 10] = {
+    use crate::mod_metadata::SignalShape;
+    use crate::outlet::{OutletDescriptor as O, OutletTap};
+    [
+        O::control(DS01_OUTLET_AMP_ENV, "Amp Envelope", SignalShape::Unipolar),
+        O::control(DS01_OUTLET_MOD_ENV, "Mod Envelope", SignalShape::Unipolar),
+        O::control(DS01_OUTLET_VELOCITY, "Velocity", SignalShape::Unipolar),
+        O::control(DS01_OUTLET_NOTE, "Note", SignalShape::Unipolar),
+        O::control(DS01_OUTLET_GATE, "Gate", SignalShape::Gate),
+        O::control(DS01_OUTLET_TRIGGER, "Trigger", SignalShape::Trigger),
+        O::audio(DS01_OUTLET_TONE, "Tone", OutletTap::PreLevel),
+        O::audio(DS01_OUTLET_NOISE, "Noise", OutletTap::PreLevel),
+        O::audio(DS01_OUTLET_BODY, "Body", OutletTap::PreLevel),
+        O::audio(DS01_OUTLET_PRE_SHAPE, "Pre-Shape", OutletTap::PreShape),
+    ]
+};
+
+/// The instrument's published control signals, in outlet-id order, as the
+/// realtime path carries them.
+///
+/// One array rather than six fields because it is written once a block and
+/// read by index: the outlet id *is* the index for the control run, which is
+/// what keeps publication free of a lookup on the audio thread.
+pub type Ds01ControlOutlets = [f32; DS01_CONTROL_OUTLETS];
+
 const fn concat() -> [ParamDescriptor; 92] {
     let mut out = [GLOBAL_DESCRIPTORS[0]; 92];
     let mut at = 0;
@@ -1884,5 +1960,49 @@ mod tests {
         let d = descriptor(PARAM_TUNE).unwrap();
         assert_eq!(d.clamp_natural(11.4), 11.0);
         assert_eq!(d.clamp_natural(-11.6), -12.0);
+    }
+
+    /// The shared rules every published table obeys, plus this one's frozen
+    /// ids. A renumbering here breaks a saved route silently, so the pairs
+    /// are spelled out rather than derived from the table they check.
+    #[test]
+    fn the_outlet_table_is_well_formed_and_frozen() {
+        crate::outlet::tests::check_table(&OUTLETS);
+        assert_eq!(crate::outlet::control_count(&OUTLETS), DS01_CONTROL_OUTLETS);
+
+        for (id, name) in [
+            (DS01_OUTLET_AMP_ENV, "Amp Envelope"),
+            (DS01_OUTLET_MOD_ENV, "Mod Envelope"),
+            (DS01_OUTLET_VELOCITY, "Velocity"),
+            (DS01_OUTLET_NOTE, "Note"),
+            (DS01_OUTLET_GATE, "Gate"),
+            (DS01_OUTLET_TRIGGER, "Trigger"),
+            (DS01_OUTLET_TONE, "Tone"),
+            (DS01_OUTLET_NOISE, "Noise"),
+            (DS01_OUTLET_BODY, "Body"),
+            (DS01_OUTLET_PRE_SHAPE, "Pre-Shape"),
+        ] {
+            let outlet = crate::outlet::find(&OUTLETS, id)
+                .unwrap_or_else(|| panic!("outlet {id} is missing"));
+            assert_eq!(outlet.name, name, "outlet {id} was renamed");
+        }
+        // The control run is indexable by outlet id, which is what lets the
+        // realtime path publish without a lookup.
+        for (index, outlet) in OUTLETS[..DS01_CONTROL_OUTLETS].iter().enumerate() {
+            assert_eq!(usize::from(outlet.id), index);
+        }
+        // Every layer tap is pre-level, which is the reason the audio list is
+        // worth having: a layer turned down to nothing in DS-01's own mix
+        // still publishes, so it can drive somebody else while contributing
+        // nothing here.
+        for id in [DS01_OUTLET_TONE, DS01_OUTLET_NOISE, DS01_OUTLET_BODY] {
+            let outlet = crate::outlet::find(&OUTLETS, id).unwrap();
+            assert_eq!(outlet.tap, crate::outlet::OutletTap::PreLevel);
+            assert_eq!(outlet.tap.status(), "pre-level");
+        }
+        assert_eq!(
+            crate::outlet::find(&OUTLETS, DS01_OUTLET_PRE_SHAPE).unwrap().tap.status(),
+            "pre-shape"
+        );
     }
 }

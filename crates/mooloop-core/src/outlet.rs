@@ -63,6 +63,11 @@ pub enum OutletTap {
     PreLevel,
     /// After the source mix and the drive, before the filter.
     PreFilter,
+    /// After the layer mix, before the drive and output stage. DS-01's
+    /// equivalent of [`Self::PreFilter`]: the same "everything the voice
+    /// made, before the stage that colours it" point, on an instrument whose
+    /// colouring stage is a shaper rather than a filter.
+    PreShape,
     /// After the filter, before the amplifier.
     PreVca,
     /// The device's finished output.
@@ -77,6 +82,7 @@ impl OutletTap {
             Self::Control => "",
             Self::PreLevel => "pre-level",
             Self::PreFilter => "pre-filter",
+            Self::PreShape => "pre-shape",
             Self::PreVca => "pre-vca",
             Self::Output => "output",
         }
@@ -302,6 +308,24 @@ pub(crate) mod tests {
             "an audio tap was offered as a control source"
         );
 
+        let published = DeviceKind::Ds01.control_outlets();
+        assert_eq!(published.len(), crate::ds01::DS01_CONTROL_OUTLETS);
+        assert!(published.iter().all(OutletDescriptor::is_control));
+        assert_eq!(
+            DeviceKind::Ds01.control_outlet(crate::ds01::DS01_OUTLET_TRIGGER).unwrap().name,
+            "Trigger"
+        );
+        assert!(DeviceKind::Ds01.control_outlet(crate::ds01::DS01_OUTLET_TONE).is_none());
+
+        // The two tables are separate namespaces. Outlet 4 is `Gate` on one
+        // and `Velocity` on the other, and neither is wrong: an outlet id
+        // belongs to the device's interface, which is why a route that
+        // outlives its generator is left unresolved rather than re-aimed.
+        assert_ne!(
+            DeviceKind::MlP8.control_outlet(4).unwrap().name,
+            DeviceKind::Ds01.control_outlet(4).unwrap().name
+        );
+
         // A device that has not designed an interface publishes nothing, and
         // says so rather than leaving the question open.
         for kind in [
@@ -310,7 +334,6 @@ pub(crate) mod tests {
             DeviceKind::MonoSynth,
             DeviceKind::PolySynth,
             DeviceKind::MlM1,
-            DeviceKind::Ds01,
         ] {
             assert!(kind.outlets().is_empty(), "{kind:?} publishes unexpectedly");
             assert!(kind.control_outlet(0).is_none());

@@ -64,6 +64,10 @@ use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{Noise, Osc};
 use crate::shaper;
 use crate::smooth::Smoothed;
+use mooloop_core::ds01::{
+    Ds01ControlOutlets, DS01_CONTROL_OUTLETS, DS01_OUTLET_AMP_ENV, DS01_OUTLET_GATE,
+    DS01_OUTLET_MOD_ENV, DS01_OUTLET_NOTE, DS01_OUTLET_TRIGGER, DS01_OUTLET_VELOCITY,
+};
 use mooloop_core::{
     body_mode_ratio, ds01, Ds01Character, Ds01EnvParams, Ds01ModSource, Ds01NoiseColor,
     Ds01Params, Ds01Retrigger, DriveCurve, OscWave, ParamDescriptor,
@@ -1261,6 +1265,21 @@ pub struct Ds01 {
     /// two hits at different velocities have to be able to disagree about
     /// where the filter is.
     voice_continuous: [Continuous; DS01_VOICES],
+    /// The age of the **focus voice**: the voice created by the most recent
+    /// trigger, which is what the per-hit control outlets reduce over.
+    ///
+    /// A drum channel can have eight hits ringing at once, so a reduction has
+    /// to pick one deterministically or it is not a signal. The newest is the
+    /// one a listener is hearing start, and it stays the focus for its whole
+    /// life so an envelope outlet has a coherent tail. Zero means nothing has
+    /// played yet, and no voice ever carries that age.
+    focus: u64,
+    /// Whether a trigger has arrived since the outlets were last published.
+    ///
+    /// `Trigger` is "a hit started since you last looked", so it is defined by
+    /// the publication cadence rather than by a length in samples. That is
+    /// also why publishing is the thing that clears it.
+    triggered: bool,
 }
 
 impl Ds01 {
@@ -1277,6 +1296,8 @@ impl Ds01 {
             matrix_dests: resolve_dests(&params),
             hit_count: 0,
             voice_continuous: [Continuous::new(&params); DS01_VOICES],
+            focus: 0,
+            triggered: false,
         }
     }
 
@@ -1324,6 +1345,62 @@ impl Ds01 {
         self.next_age = 1;
         self.hit_count = 0;
         self.output_hp.reset();
+        // Publication state goes with the voices it describes. A node reset
+        // that left the focus pointing at a departed age would publish an
+        // envelope tail for a hit that no longer exists.
+        self.focus = 0;
+        self.triggered = false;
+    }
+
+    /// The instrument's published control signals, in outlet-id order.
+    ///
+    /// Reading is what clears `Trigger`, because a trigger is "a hit started
+    /// since you last looked" rather than a pulse of some length in samples:
+    /// its width is the publication cadence, and only the caller knows that.
+    /// The engine publishes once a block, which is what the outlet table
+    /// declares; two hits inside one block therefore raise `Trigger` once,
+    /// and that is the documented rate rather than a dropped event. Every
+    /// other outlet is a level, and reading one changes nothing.
+    ///
+    /// This is publication, not telemetry: the envelope levels are read from
+    /// the envelopes the voice is actually being driven by rather than from
+    /// the matrix's per-tick `Sources` copy of them, so what a consumer gets
+    /// is the value at the end of the block and not a tick-old one.
+    pub fn publish_outlets(&mut self) -> Ds01ControlOutlets {
+        // The focus voice, which is one voice rather than a group: DS-01
+        // allocates a hit to a slot, so there is nothing to average over.
+        let focus = self
+            .voices
+            .iter()
+            .find(|voice| voice.active && voice.age == self.focus);
+        // When the focus falls idle its outlets return to zero rather than
+        // jumping backward to an older hit that is still ringing. That is the
+        // plan's rule, and it is what makes a decay readable as a decay
+        // rather than as a step to whatever else is sounding.
+        let (amp, mod_env, velocity, note) = focus.map_or((0.0, 0.0, 0.0, 0.0), |voice| {
+            (
+                voice.amp_env.level(),
+                voice.mod_env.level(),
+                voice.sources.velocity,
+                voice.sources.note,
+            )
+        });
+        // Gate is deliberately not the focus voice's gate. "Any hit is still
+        // waiting on its note-off" is the useful channel-level fact. On this
+        // instrument it is low for most patches, because a one-shot envelope
+        // never waits for one -- which is exactly why `Trigger` is the outlet
+        // a drum channel actually wants.
+        let gate = self.voices.iter().any(|voice| voice.active && voice.gate_held);
+        let triggered = std::mem::take(&mut self.triggered);
+
+        let mut outlets: Ds01ControlOutlets = [0.0; DS01_CONTROL_OUTLETS];
+        outlets[DS01_OUTLET_AMP_ENV as usize] = amp;
+        outlets[DS01_OUTLET_MOD_ENV as usize] = mod_env;
+        outlets[DS01_OUTLET_VELOCITY as usize] = velocity;
+        outlets[DS01_OUTLET_NOTE as usize] = note;
+        outlets[DS01_OUTLET_GATE as usize] = f32::from(u8::from(gate));
+        outlets[DS01_OUTLET_TRIGGER as usize] = f32::from(u8::from(triggered));
+        outlets
     }
 
     pub fn choke(&mut self) {
@@ -1368,6 +1445,11 @@ impl Ds01 {
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1).max(1);
         self.hit_count = self.hit_count.wrapping_add(1);
+        // The newest hit is the focus, including when it stole the slot the
+        // old focus was on: the stealing trigger is the new focus event, so
+        // there is no case where the focus names a voice that is gone.
+        self.focus = age;
+        self.triggered = true;
 
         // The four latched sources, decided here rather than in the voice:
         // the alternator and the random are properties of *this channel's*
@@ -1759,7 +1841,13 @@ mod tests {
         // same reason: a route to a level has to land per hit, which one
         // device-wide smoother cannot do.
         assert_eq!(size_of::<Ds01Params>(), 352);
-        assert_eq!(size_of::<Ds01>(), 6_816);
+        // Step 07's publication adds sixteen: the focus age and the trigger
+        // flag, plus their padding. Both are node state rather than voice
+        // state on purpose -- the focus is a fact about the run of hits, and
+        // a per-voice copy of it would be eight numbers agreeing about one --
+        // so publishing every hit's envelope, velocity and note to the rest
+        // of the channel costs two words for the whole device.
+        assert_eq!(size_of::<Ds01>(), 6_832);
         assert_eq!(size_of::<Voice>() * DS01_VOICES, 5_632);
     }
 
@@ -3323,6 +3411,152 @@ mod tests {
         let out = render(&mut node, 4_800, &events);
         assert!(node.voices.iter().any(|voice| voice.active));
         assert!(peak(&out[2_400..]) > 0.01);
+    }
+
+    // --- Published outlets --------------------------------------------
+
+    /// Render one block with `events`, then publish. Returns the outlets as
+    /// they stand at the end of that block.
+    fn outlets_after(node: &mut Ds01, events: EventList, frames: usize) -> Ds01ControlOutlets {
+        let mut bus = StereoBus::with_capacity(frames);
+        node.process(&ctx(frames), &mut bus, &events, None);
+        node.publish_outlets()
+    }
+
+    fn one_hit(note: u8, velocity: u8) -> EventList {
+        let mut events = EventList::empty();
+        events.push(note_on(0, note, velocity));
+        events
+    }
+
+    /// `Trigger` is one publication wide, not one block wide and not a pulse
+    /// of some length in samples: it says a hit started since the last read,
+    /// and reading it is what clears it.
+    #[test]
+    fn trigger_is_high_for_exactly_one_publication_per_hit() {
+        let mut node = Ds01::new(Ds01Params::default(), SR);
+        assert_eq!(
+            outlets_after(&mut node, EventList::empty(), 256)[DS01_OUTLET_TRIGGER as usize],
+            0.0
+        );
+
+        let hit = outlets_after(&mut node, one_hit(60, 127), 256);
+        assert_eq!(hit[DS01_OUTLET_TRIGGER as usize], 1.0);
+
+        // Still ringing, but nothing started.
+        let after = outlets_after(&mut node, EventList::empty(), 256);
+        assert_eq!(after[DS01_OUTLET_TRIGGER as usize], 0.0);
+        assert!(after[DS01_OUTLET_AMP_ENV as usize] > 0.0);
+
+        // Two hits inside one block raise it once. That is the declared
+        // per-block rate rather than a dropped event.
+        let mut two = EventList::empty();
+        two.push(note_on(0, 60, 127));
+        two.push(note_on(64, 60, 127));
+        assert_eq!(
+            outlets_after(&mut node, two, 256)[DS01_OUTLET_TRIGGER as usize],
+            1.0
+        );
+    }
+
+    /// The per-hit outlets follow the newest hit for its whole life and then
+    /// fall to zero, rather than stepping backward onto an older one that is
+    /// still ringing.
+    #[test]
+    fn the_focus_follows_the_newest_hit_and_falls_to_zero_rather_than_backward() {
+        let mut params = Ds01Params::default();
+        // A long tail on both, so the older hit is unambiguously still
+        // sounding when the newer one arrives and when it ends.
+        params.amp.decay = 2.0;
+        params.mod_env.decay = 2.0;
+        let mut node = Ds01::new(params, SR);
+
+        let low = outlets_after(&mut node, one_hit(36, 64), 512);
+        assert!((low[DS01_OUTLET_NOTE as usize] - 36.0 / 127.0).abs() < 1.0e-6);
+        assert!((low[DS01_OUTLET_VELOCITY as usize] - 64.0 / 127.0).abs() < 1.0e-6);
+
+        let high = outlets_after(&mut node, one_hit(84, 127), 512);
+        assert!((high[DS01_OUTLET_NOTE as usize] - 84.0 / 127.0).abs() < 1.0e-6);
+        assert_eq!(high[DS01_OUTLET_VELOCITY as usize], 1.0);
+        assert!(high[DS01_OUTLET_AMP_ENV as usize] > 0.0);
+        assert!(high[DS01_OUTLET_MOD_ENV as usize] > 0.0);
+
+        // The focus decays away. Both hits are one-shot, so the older one is
+        // still sounding -- and the outlets go to zero regardless, which is
+        // the rule under test.
+        let quiet = outlets_after(&mut node, EventList::empty(), 48_000 * 3);
+        assert!(node.voices.iter().all(|voice| !voice.active));
+        assert_eq!(quiet[DS01_OUTLET_NOTE as usize], 0.0);
+        assert_eq!(quiet[DS01_OUTLET_VELOCITY as usize], 0.0);
+        assert_eq!(quiet[DS01_OUTLET_AMP_ENV as usize], 0.0);
+    }
+
+    /// A stealing hit is the new focus event, so there is no window in which
+    /// the focus names a voice that has been taken.
+    #[test]
+    fn voice_stealing_moves_the_focus_with_it() {
+        let mut params = Ds01Params::default();
+        params.amp.decay = 4.0;
+        let mut node = Ds01::new(params, SR);
+        for _ in 0..DS01_VOICES {
+            outlets_after(&mut node, one_hit(60, 40), 128);
+        }
+        let stolen = outlets_after(&mut node, one_hit(72, 127), 128);
+        assert_eq!(stolen[DS01_OUTLET_VELOCITY as usize], 1.0);
+        assert!((stolen[DS01_OUTLET_NOTE as usize] - 72.0 / 127.0).abs() < 1.0e-6);
+    }
+
+    /// `Gate` is "any hit is still waiting on a note-off", which is low for a
+    /// one-shot patch however loudly it is playing. That is the honest answer
+    /// on this instrument and it is why `Trigger` exists beside it.
+    #[test]
+    fn gate_answers_for_the_channel_and_only_for_gated_patches() {
+        let mut node = Ds01::new(Ds01Params::default(), SR);
+        let sounding = outlets_after(&mut node, one_hit(60, 127), 256);
+        assert!(sounding[DS01_OUTLET_AMP_ENV as usize] > 0.0);
+        assert_eq!(
+            sounding[DS01_OUTLET_GATE as usize], 0.0,
+            "a one-shot patch reported a held gate"
+        );
+
+        let mut params = Ds01Params::default();
+        params.amp.gate = true;
+        params.amp.decay = 2.0;
+        let mut gated = Ds01::new(params, SR);
+        assert_eq!(
+            outlets_after(&mut gated, one_hit(60, 127), 256)[DS01_OUTLET_GATE as usize],
+            1.0
+        );
+
+        let mut off = EventList::empty();
+        off.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOff { id: 0, note: 60 },
+        });
+        assert_eq!(
+            outlets_after(&mut gated, off, 256)[DS01_OUTLET_GATE as usize],
+            0.0
+        );
+    }
+
+    /// Publication is a function of the event stream and nothing else, which
+    /// is what makes an offline render agree with a live take.
+    #[test]
+    fn the_outlets_publish_identically_across_instances() {
+        let run = || {
+            let mut node = Ds01::new(Ds01Params::default(), SR);
+            let mut published = Vec::new();
+            for block in 0..8 {
+                let events = if block % 3 == 0 {
+                    one_hit(48 + block as u8, 90)
+                } else {
+                    EventList::empty()
+                };
+                published.push(outlets_after(&mut node, events, 512));
+            }
+            published
+        };
+        assert_eq!(run(), run());
     }
 
     #[test]

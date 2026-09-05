@@ -21,7 +21,7 @@ use mooloop_core::{
     MonoSynthParams, MonoSynthState, NoteId, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerParams, SamplerState,
-    SignalShape, modulation::CONTROL_SOURCE_SLOTS,
+    modulation::CONTROL_SOURCE_SLOTS,
     SlotRemap, MAX_MODULATORS_PER_CHANNEL, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
     TICKS_PER_STEP,
 };
@@ -1110,9 +1110,7 @@ impl Session {
             return ArmedRoute::Unchanged;
         }
         let depth = policy.clamp_depth(depth);
-        // Which kind of source is armed decides both the route's polarity and
-        // how it is authored, and both answers come from the same place: an
-        // outlet declares its signal shape, a module is its kind.
+        // Which kind of source is armed decides how the route is authored.
         let outlet = self.selected_channel_outlet(source_slot);
         // A slot in the outlet band that resolves to no outlet names nothing:
         // the generator was swapped while the gesture was armed. Refusing
@@ -1125,14 +1123,20 @@ impl Session {
             return ArmedRoute::Unchanged;
         };
         let default_polarity = match outlet {
-            // An outlet's declared shape is the answer, and it is a better
-            // one than a module's kind: a Gate or a Trigger that defaulted to
-            // bipolar would rest at half its depth below the base value with
-            // nothing playing.
-            Some(outlet) => match outlet.signal {
-                SignalShape::Bipolar => policy.default_polarity,
-                _ => ModPolarity::Unipolar,
-            },
+            // An outlet takes the destination's own default, whatever shape
+            // it declares, and the reason is that the two kinds of source
+            // publish in different ranges.
+            //
+            // `ModPolarity` describes how a route reads a **rack module**,
+            // which always emits `-1..1`: `Unipolar` lifts that to `0..1` so
+            // a one-way module rests at the destination's base rather than
+            // at its midpoint. An outlet publishes in its *declared* range,
+            // and a unipolar one is already `0..1` -- so `Bipolar` is what
+            // passes it through, resting at the base at zero and reaching
+            // full depth at one. Lifting it again would make a Gate sit half
+            // a depth above the base with nothing playing, and give it only
+            // half the swing when something did.
+            Some(_) => policy.default_polarity,
             None => match channel.modulation.params(source_slot as usize) {
                 // Sources that only ever swing one way default to a unipolar
                 // route, so their resting value is the destination's base.

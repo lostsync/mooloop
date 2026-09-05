@@ -114,10 +114,17 @@ half of it. Three things it took:
   with the control prefix, so an audio tap cannot reach a control destination
   by being in the same table as one -- the refusal is a domain check rather
   than a rule the picker has to remember.
-- **An outlet's polarity comes from its declared shape, not from a kind.** A
-  module's default polarity is read off what kind of module it is. An outlet
-  has no kind, and a `Gate` or `Trigger` route defaulting to bipolar would rest
-  half a depth *below* the destination's base with nothing playing.
+- **An outlet route's polarity is the destination's default, and the obvious
+  guess is wrong.** `ModPolarity` describes how a route reads a *rack module*,
+  which always emits `-1..1`: `Unipolar` lifts it into `0..1` so a one-way
+  module rests at the base. An outlet publishes in the range its `SignalShape`
+  declares, where a unipolar one is *already* `0..1`, so `Bipolar` is what
+  passes it through. This was got backwards on the first pass -- a `Gate`
+  route was defaulted to `Unipolar`, which sat it half a depth *above* the
+  base at idle and gave it half the swing -- and corrected the same day. The
+  two conventions are now written down in `MODULATOR_SYSTEM_SPEC.md`, which is
+  where the trap belongs: they share one address space and disagree about
+  rest.
 - **An outlet does not move, and a reorder must not disturb it.** Selection and
   arming follow a module's durable id across a drag; an outlet has no rack
   identity to follow, so it keeps its slot. Re-deriving it through the rack

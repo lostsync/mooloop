@@ -460,10 +460,15 @@ mod tests {
         assert!(!mlp8.select_modulation_source(osc.into()));
     }
 
-    /// The gesture authors an outlet route by its durable outlet id, not by
-    /// the slot it was armed from, and takes its polarity from the outlet's
-    /// declared shape -- a Gate that defaulted to bipolar would rest half a
-    /// depth below the base value with nothing playing.
+    /// The gesture authors an outlet route by its durable outlet id rather
+    /// than by the slot it was armed from, and leaves the polarity at the
+    /// destination's default.
+    ///
+    /// The polarity is worth asserting because the obvious guess is wrong.
+    /// `ModPolarity::Unipolar` lifts a rack module's `-1..1` into `0..1`; an
+    /// outlet already publishes in its declared range, so a unipolar outlet
+    /// under a unipolar route would rest half a depth *above* the base and
+    /// reach only half the swing.
     #[test]
     fn assigning_from_an_outlet_authors_a_durable_outlet_route() {
         let mut session = mlp8_channel();
@@ -481,10 +486,8 @@ mod tests {
             mooloop_core::ModSourceRef::GeneratorOutlet(mooloop_core::mlp8::OUTLET_GATE)
         );
         assert_eq!(gate.source_slot, outlet_slot(mooloop_core::mlp8::OUTLET_GATE));
-        assert_eq!(gate.polarity, ModPolarity::Unipolar);
+        assert_eq!(gate.polarity, ModPolarity::Bipolar);
 
-        // The LFO outlet swings both ways and says so, so it keeps the
-        // destination's own default.
         session.select_modulation_source(outlet_slot(mooloop_core::mlp8::OUTLET_LFO).into());
         let crate::session::ArmedRoute::Added(lfo) =
             session.arm_modulation_route(destination, 0.4)
@@ -492,6 +495,10 @@ mod tests {
             panic!("selecting a second outlet did not follow the arming");
         };
         assert_eq!(lfo.polarity, ModPolarity::Bipolar);
+        assert_eq!(
+            lfo.source,
+            mooloop_core::ModSourceRef::GeneratorOutlet(mooloop_core::mlp8::OUTLET_LFO)
+        );
 
         // Two rows, one per outlet: an outlet route dedupes on its source the
         // way a module's does, rather than stacking.

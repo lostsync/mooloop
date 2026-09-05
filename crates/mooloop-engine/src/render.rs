@@ -1160,9 +1160,16 @@ impl ChannelStrip {
     /// implemented outlets yet.
     fn publish_outlets(&mut self) {
         self.published_outlets = [0.0; MAX_GENERATOR_OUTLETS];
-        if let DeviceKind::MlP8 = self.active_source {
-            let published = self.mlp8.publish_outlets();
-            self.published_outlets[..published.len()].copy_from_slice(&published);
+        match self.active_source {
+            DeviceKind::MlP8 => {
+                let published = self.mlp8.publish_outlets();
+                self.published_outlets[..published.len()].copy_from_slice(&published);
+            }
+            DeviceKind::Ds01 => {
+                let published = self.ds01.publish_outlets();
+                self.published_outlets[..published.len()].copy_from_slice(&published);
+            }
+            _ => {}
         }
     }
 }
@@ -3869,6 +3876,77 @@ mod tests {
         );
     }
 
+    /// The same contract from the other instrument, and the one DS-01's plan
+    /// says is worth wanting soonest: a kick's `Trigger` reaching a later
+    /// device without a sidechain graph.
+    ///
+    /// `Trigger` is the sharper timing test of the two. It is one publication
+    /// wide, so three blocks tell the whole story -- base in the block the
+    /// hit lands in, moved in the block after it, and back to base in the one
+    /// after that. A trigger that leaked into a second block would be a
+    /// device inventing a pulse width the table does not declare.
+    #[test]
+    fn a_ds01_trigger_drives_another_device_for_exactly_one_block() {
+        use mooloop_core::ds01::DS01_OUTLET_TRIGGER;
+
+        let mut channel = filter_channel(1_000.0);
+        channel.setup.source = mooloop_core::ChannelSource::Ds01(mooloop_core::Ds01State::default());
+        assert!(channel
+            .setup
+            .modulation
+            .add_route(mooloop_core::ModRoute::from_outlet(
+                DS01_OUTLET_TRIGGER,
+                CUTOFF,
+                0.4,
+                // Bipolar is what passes a `0..1` outlet through unchanged;
+                // `Session::arm_modulation_route` is where the two source
+                // conventions are written down.
+                mooloop_core::ModPolarity::Bipolar,
+            ))
+            .is_some());
+
+        let mut project = mooloop_core::Project {
+            channels: vec![channel],
+            ..mooloop_core::Project::default()
+        };
+        // One hit at the top of the pattern. Its length does not matter: a
+        // DS-01 one-shot ignores the note-off, and `Trigger` is about the
+        // start either way.
+        project.channels[0].notes[0].push(NoteEvent::new(1, 0, 24, 60, 127));
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+
+        let block = |render: &mut RenderState| {
+            render.process_block(128);
+            cutoff_events(render)
+                .iter()
+                .map(|(_, value)| *value)
+                .collect::<Vec<f32>>()
+        };
+
+        let first = block(&mut render);
+        assert_eq!(first.len(), 4, "the route was not resolving: {first:?}");
+        assert!(
+            first.iter().all(|value| (value - 1_000.0).abs() < 1.0),
+            "the trigger arrived in its own block: {first:?}"
+        );
+
+        let second = block(&mut render);
+        assert_eq!(second.len(), 4, "the route stopped resolving: {second:?}");
+        assert!(
+            second.iter().all(|value| *value > 1_100.0),
+            "the trigger never reached the cutoff: {second:?}"
+        );
+
+        let third = block(&mut render);
+        assert_eq!(third.len(), 4, "the route stopped resolving: {third:?}");
+        assert!(
+            third.iter().all(|value| (value - 1_000.0).abs() < 1.0),
+            "the trigger stayed high for a second block: {third:?}"
+        );
+    }
+
     /// The property a narrow command could get wrong rather than merely
     /// cheap: dropping one route has to hand the device back its knob value.
     /// Without it the filter would hold whatever the LFO last resolved, until
@@ -5739,7 +5817,7 @@ mod footprint {
         // demand from state the voices already carry, so nothing here stores
         // them.
         assert_eq!(size_of::<MlP8>(), 5_776);
-        // DS-01 is 6,816, and almost all of it is the eight-voice pool: a
+        // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
         // filter, the rate reducer's hold, four envelopes, the body's three
@@ -5759,7 +5837,12 @@ mod footprint {
         // is smaller than `MlP8Params`, which is still the widest
         // `GeneratorParams` variant and therefore still what every channel
         // pays for.
-        assert_eq!(size_of::<Ds01>(), 6_816);
+        //
+        // Step 07's publication is the last sixteen: the focus age and the
+        // trigger flag, both node state rather than voice state, because the
+        // focus is a fact about this channel's run of hits and a per-voice
+        // copy would be eight numbers agreeing about one.
+        assert_eq!(size_of::<Ds01>(), 6_832);
         // The strip pays the parameter block twice: once inside the node
         // above, and once for `source_base`, whose `GeneratorParams` is as
         // wide as its widest variant and the ML-P8 is that variant. Step 05's
@@ -5769,7 +5852,7 @@ mod footprint {
         // it is the eight `f32` the strip holds of what its generator
         // published last block, which is where the one block of declared
         // outlet latency physically lives.
-        assert_eq!(size_of::<ChannelStrip>(), 41_688);
+        assert_eq!(size_of::<ChannelStrip>(), 41_704);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -5786,7 +5869,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_128);
+        assert_eq!(per_live, 60_144);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -5807,7 +5890,9 @@ mod footprint {
         // publication is a reduction of state that already exists. Making
         // them routable moved it by half of one more: 32 bytes a live channel
         // for the published row, and 16 KiB of the reserved figure above for
-        // the wider route.
+        // the wider route. DS-01 publishing its own six added sixteen bytes a
+        // live channel -- a focus age and a trigger flag on the node, and
+        // nothing on any voice.
         //
         // It nearly cost 8 KiB a live channel instead. Putting the outlet
         // band in the per-tick control table would have stored eight
