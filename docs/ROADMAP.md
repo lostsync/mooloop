@@ -2,7 +2,7 @@
 
 Status: dependency-ordered working plan, September 2026.
 
-Phase accuracy swept 2026-09-02. `docs/FOCUS.md` names the active sequence;
+Phase accuracy swept 2026-09-05. `docs/FOCUS.md` names the active sequence;
 this document only orders the whole product by dependency.
 
 The old labels treated effects as Phase 3 and synths as Phase 4. That order no
@@ -18,7 +18,11 @@ use while deeper models change underneath it.
 Scope:
 
 - Resolve remaining single-click, focus, selection, zoom, scrolling, and
-  narrow-window issues.
+  narrow-window issues. The focus half is the one still open and it is
+  confirmed rather than suspected as of 2026-09-05: the window has a single
+  root `FocusScope`, so anything focusable inside it eats the key before the
+  action dispatcher runs, and shortcuts — spacebar included — need a click on
+  a background area first. This is a dependability defect, not a polish item.
 - Bring the piano roll closer to normal DAW behavior. Done: keyboard/header
   scroll sync, single-click selection without accidental note creation,
   double-click note insertion, double-click-drag length entry, independent
@@ -27,7 +31,11 @@ Scope:
   cut/copy/paste of notes; Select All; arrow-key nudge and transpose.
   Remaining: keyboard-driven selection and navigation — the arrow keys move
   a selection, they do not build one.
-- Establish consistent right-click removal and keyboard navigation.
+- Establish consistent right-click removal and keyboard navigation. Right-click
+  removal is consistent. Keyboard navigation is not: the piano roll's arrow
+  keys move a selection without building one, and the sample browser's tree
+  cannot be driven from the keyboard at all. Both sit downstream of the focus
+  defect above.
 - Make labeled knobs draggable from their labels as well as from the knob body.
 - Finish sampler voice controls that do not require the new event model.
 - Audit drum synth time ranges and parameter scaling; defaults and useful
@@ -226,12 +234,65 @@ Remaining work in this phase is the source-to-buffer workflow,
 external/internal routing, groups, sends, and resampling-source selection. The
 percussive synth's replacement is built: `DS-01` plays, is addressable from
 its first commit, has a six-page face and a seventeen-patch factory bank, and
-leaves the v1 drum synth — still the only source that cannot be modulated —
-where it is. It was played and signed off on 2026-09-04; what it has left is
-its published outlets, which wait on the typed device-outlet mechanism ML-P8
-waits for too. `MIXER_PLAN.md` is the design for the
+was played and signed off on 2026-09-04. `MIXER_PLAN.md` is the design for the
 routing half of that, and replaces the fixed master-plus-16-bus bank rather
 than extending it.
+
+Two things carry forward out of this phase, and `FOCUS.md` puts both at the
+front of the current sequence:
+
+- **Typed auxiliary audio edges.** ML-P8 step 06 and DS-01 step 07 both
+  publish device outlets. The control half is built; the audio half needs an
+  edge type `AUDIO_ARCHITECTURE.md` describes and nothing implements. It is
+  the last real architecture gap the instrument push left, and it is the same
+  prerequisite parallel sends and sidechain will want, so it is an edge type
+  rather than an ML-P8 feature.
+- **The v1 drum synth's descriptor table.** It is still the only source that
+  cannot be modulated. The recorded reason — that `DrumSynthParams` is a
+  mode-union — does not hold up: it is a flat struct whose fields keep one
+  meaning regardless of the Mode switch, which selects which of them are
+  audible. Sixteen continuous fields and one table. The device itself does not
+  change; it stays the simple three-mode instrument it is.
+
+## Phase 7: The 1.0 Interface Shell
+
+Goal: give the finished instruments a window that can be driven, from the
+keyboard as well as the mouse.
+
+This phase is late by dependency and not by importance. A channel sidebar
+cannot be designed before it is settled what a channel holds; a preset browser
+needs banks to browse; a modulation panel's redesign needs to know what a
+modulator is for. All three of those are now answered, which is what puts this
+phase in reach rather than in the section below.
+`reference/img/mooloop-1.0-mockup.png` is the target layout.
+
+Scope:
+
+- Fix the focus caret so every registered action fires from wherever it
+  sensibly should. Phase 1 names this too; it is listed twice on purpose,
+  because it is both a dependability defect and the prerequisite for
+  everything else here.
+- A left channel sidebar: name, track colour, input channel, and the rest of
+  the per-channel settings currently spread across the rack row. Track colour
+  is new persisted state and crosses `PROJECT_FORMAT.md`.
+- Move and redesign the modulation rack into its own panel, preserving the
+  assign gesture and destination policy in `MODULATOR_SYSTEM_SPEC.md`. Settle
+  first whether its tracker notation and the automation-event tracker in
+  `IDEAS.md` are one design or two.
+- Keyboard navigation in the browser, and preset browsing beside samples.
+  `docs/plans/preset-system/` decided the unit; both instrument banks ship.
+- A text-label-to-icon pass, and colour scheme support built out from the
+  existing three-seed Appearance model. Both come after the panes stop moving,
+  and the colour work has a design question to answer first — whether a named
+  scheme is three seeds or a full ramp — which base16 and pywal/wallust
+  effectively decide.
+
+Exit criteria:
+
+- No shortcut requires clicking somewhere neutral first.
+- A channel's identity is set and saved in one place.
+- The browser and the modulation panel are both fully keyboard-drivable.
+- Panes moved without losing an existing gesture.
 
 ## Later, Not Scheduled
 

@@ -65,3 +65,20 @@ Later, that transform language could grow into a constrained control-script devi
 Those are related artistically, but they have very different determinism, safety, save/load, and UI requirements. Keeping them separate lets Mooloop become expressive without becoming a shell first.
 
 The current product direction already supports this: “one automation language,” sample-timed `ParamValue` events, and the buffer’s sequenced read-head behavior are all aligned. The next design work is an automation-event document that defines the event schema, curve compilation, tracker notation, and typed buffer actions.
+
+---
+
+**2026-09-05, on the entry above.** Adam's 1.0 mockup
+(`reference/img/mooloop-1.0-mockup.png`) draws the modulation panel's modulator
+as a tracker — numbered rows, a value column, a per-row cursor, and
+PATTERN/CONTROL/PLAYBACK/MAPPING tabs — which is the same notation this entry
+proposed for automation events, arriving from the other direction. They are not
+obviously the same feature: automation events are *persisted document data* on
+a timeline, while a modulator is a *bounded realtime control signal* with no
+document behind it, and this entry's own closing paragraph is the argument for
+keeping those two apart. But they clearly want the same editor.
+
+That is the thing to settle before either is built, and it is a real fork:
+one tracker widget over two different backing models, or one of them borrowing
+the other's look and nothing else. `FOCUS.md` step 3 names it as the first
+question the modulation-rack redesign has to answer.

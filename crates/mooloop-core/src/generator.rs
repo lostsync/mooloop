@@ -553,14 +553,26 @@ impl DeviceKind {
     /// This generator's parameter table, or empty for a kind that is not
     /// descriptor-addressed yet.
     ///
-    /// The v1 drum synth is the one still empty, and it stays that way. An
-    /// earlier note here called giving it a table mechanical work rather than
-    /// a design question; that was wrong, and `docs/plans/drum-synth-v2/` is
-    /// the correction. `DrumSynthParams` is a mode-union, so a flat table over
-    /// it would hand out ids whose meaning changes with the Mode switch —
-    /// which is a route that addresses a live parameter and then silently
-    /// stops doing anything. [`Self::Ds01`] is that work done as a device
-    /// whose parameters do not depend on a mode.
+    /// The v1 drum synth is the one still empty, and it is scheduled to stop
+    /// being empty — `docs/FOCUS.md` step 2, at Adam's request on 2026-09-05.
+    ///
+    /// This note has now been wrong in both directions. It first called the
+    /// table mechanical work rather than a design question; the correction
+    /// called [`DrumSynthParams`](crate::synth::DrumSynthParams) a mode-union
+    /// that would hand out ids whose meaning changes with the Mode switch, and
+    /// pointed at `docs/plans/drum-synth-v2/`. It is not a union. It is a flat
+    /// struct of named fields, each of which means one thing forever —
+    /// `kick_start_hz` is the kick sweep start whatever the Mode switch says,
+    /// which is exactly why the other modes' knobs are retained across a mode
+    /// change. Mode selects which fields are *audible*, and a voice latches it
+    /// at note-on.
+    ///
+    /// What survives is smaller: a route onto `kick_start_hz` does nothing
+    /// while the device is in Snare mode. That is an audibility gate, the same
+    /// one a route onto a bypassed effect already lives with, not an
+    /// addressing bug. [`Self::Ds01`] remains the better instrument and the
+    /// reason the v1 device does not need to grow; it is not the reason the v1
+    /// device cannot have a table.
     pub fn descriptors(self) -> &'static [ParamDescriptor] {
         match self {
             Self::Sampler => &SAMPLER_DESCRIPTORS,

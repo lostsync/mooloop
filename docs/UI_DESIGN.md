@@ -258,6 +258,13 @@ selection's edges.
 
 ### Channel modulation shelf
 
+**Its location is under review as of 2026-09-05.** Adam wants the modulation
+rack moved and redesigned into its own panel; `reference/img/mooloop-1.0-mockup.png`
+puts it on the right with its own tabs, and `FOCUS.md` step 3 carries the work.
+What follows describes where it is today and, more usefully, the two rules that
+a move must carry with it — one shelf for the whole channel, and no fixed row
+of permanent empty slots.
+
 The channel's modulation shelf lives immediately below the device rack and is
 collapsed by default. Its header is a small `MOD` affordance; opening it shows
 existing source chips and an add-source action. It is one shelf for the whole

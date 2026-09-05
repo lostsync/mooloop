@@ -4,7 +4,8 @@ Adam's standing wish list, in his own words. It is not a plan and not
 ordered; items leave it by becoming a plan under `docs/plans/` or by being
 built. Indented notes are agent annotations recording what has landed against
 an item — they are the only additions to Adam's text, and they should be kept
-short. Last audited September 2026.
+short. Last audited September 2026; eight items added 2026-09-05, in the
+block at the bottom.
 
 ---
 
@@ -70,6 +71,8 @@ At this point, minimally, we just need to add the ability to configure some comm
 GUI focus issues:
 
 There seems to be something in slint where there's sort of an input caret. in the first few version of this app, every control had to be clicked once to select and again to use it. that's not really an issue now, thank god, but that select caret can still intercept e.g. spacebar for play/pause in some situations. i should probably note them when they occur. I do think keyboard navigation is important so i see the need for such a caret, but we'll have to be intentional and thoughtful about how we use that so that we aren't blocking key commands that should work wherever you are.
+  CONFIRMED 2026-09-05, and no longer hypothetical — see the first item in the
+  2026-09-05 block below. It is a live defect, not a suspicion.
 
 General application design:
 
@@ -86,3 +89,66 @@ In appearance prefs, we should be able to set up different shading options.
   STILL OPEN. Appearance prefs now derive the whole palette from three seeds
   plus roundness and contrast scalars, so there is a place for this to live,
   but no shading pattern is configurable. Like, right now i think every 4th step in the step seq is brighter. Let the user configure that by setting a pattern. Maybe I want to brighten every 3rd step, or 6th. Maybe I want 8 bright, 8 dark, 8 bright, 8 dark. Maybe this shading could extend to the piano roll's grid? It would help a lot with editing sequences.
+
+---
+
+## Added 2026-09-05
+
+Eight items, in Adam's words, none of which were written down anywhere before
+this. `FOCUS.md` decides which of them are in the active sequence; three are.
+
+keyboard is still wonky. you often have to click into a background area to make shortcuts work, even spacebar
+  IN THE SEQUENCE (`FOCUS.md` step 3, and named as a fix that may interrupt).
+  The cause is structural rather than per-control: the window has one
+  `FocusScope` (`main.slint:1253`) reached by `forward-focus`, so any focusable
+  thing inside it — a text field, a touch area that takes focus — consumes the
+  key before the dispatcher ever runs. Clicking the background works because it
+  hands focus back. This is the same thing the "GUI focus issues" section above
+  guessed at; it is now confirmed and reproducible.
+
+og drumsynth was simple but honestly sounded pretty good. why has simply updating it for automation support never been on the table? let's put it up there
+  IN THE SEQUENCE (`FOCUS.md` step 2). It was off the table because of a note
+  on `DeviceKind::descriptors` calling `DrumSynthParams` a mode-union. It is not one —
+  it is a flat struct whose fields keep one meaning forever, and the module
+  comment at `drumsynth.rs:7` says so. Sixteen continuous fields, one
+  descriptor table, the shape every other generator already has.
+
+i want to move and redesign the modulation rack. i have an image somewhere, a mockup from chatgpt. ah its here: reference/img/mooloop-1.0-mockup.png
+  IN THE SEQUENCE (`FOCUS.md` step 3). The mockup puts modulation in a
+  right-hand panel with PATTERN/CONTROL/PLAYBACK/MAPPING tabs, and draws the
+  modulator itself as a *tracker* — which is the same shape as the automation
+  idea already sitting in `IDEAS.md`. Whether those are one design or two is
+  the first thing to settle. `MODULATOR_SYSTEM_SPEC.md` holds the contracts a
+  move must not break.
+
+i want to make a sidebar on the left that lets you change channel settings like name, track color, input channel, etc. its also illustrated in the mockup
+  IN THE SEQUENCE (`FOCUS.md` step 3). Track colour does not exist anywhere
+  today — not as a field, not in the project format — so this one adds
+  persisted state and `PROJECT_FORMAT.md`'s defaulted-field rule applies. The
+  mockup's MIDI input/output/channel rows are settings for a MIDI path that is
+  wired but reaches nothing; build the rows, leave them inert, and do not let
+  the sidebar pull MIDI configuration forward.
+
+we need keyboard nav in the sample browser panel
+  IN THE SEQUENCE (`FOCUS.md` step 3). Downstream of the focus fix above: a
+  tree that cannot hold focus predictably cannot be navigated either.
+
+i think i want that panel to also be able to browse and load presets
+  IN THE SEQUENCE (`FOCUS.md` step 3). This is the browser that
+  `docs/plans/preset-system/` has been holding for two instrument banks to
+  design against. Both banks now ship, so nothing is blocking it.
+
+i want to do a text label -> icon pass at some point
+  DELIBERATELY NOT YET. Wanted, but it is polish over panes that step 3 is
+  about to move, so doing it first means doing it twice.
+
+i think i want to expand our use of color. some of the app is ide-inspired so maybe we should build toward colorscheme support. imo it would be dope as hell to have a music app that had dracula, monokai, everforest, nord, etc built in. base16? mmm. this idea holds hands with pywal/wallust support
+  DELIBERATELY NOT YET, same reason, and there is somewhere real for it to
+  land: Appearance already derives the entire palette from three seeds (base,
+  accent, alert) plus roundness and contrast scalars, with six built-in schemes
+  and user schemes that save and remove. The open design question is whether a
+  named scheme like Nord is *three seeds* — in which case this is content, and
+  cheap — or a full sixteen-colour ramp, in which case the seed model has to
+  grow a second form and the shading-pattern item further up this file wants
+  the same thing. base16 and pywal/wallust both answer "full ramp", so they
+  decide it. That question is worth answering before any of it is built.
