@@ -39,7 +39,7 @@ no channel modulator.
 | Cowbell | Two partials, no noise, medium body |
 | Clave | Body, impulse excite, high Ratio, very short |
 | Zap | Tone with a large negative pitch depth |
-| Ghost | Tight Snare with velocity routed to decay and cutoff |
+| Ghost Snare | Tight Snare with velocity routed to decay and cutoff |
 
 **Tom Low / Mid / High must be one patch at three tunings**, not three
 authored sounds. If tuning a tom two octaves makes it stop sounding like the
@@ -85,3 +85,52 @@ Correct these from the sounds, not from the spec:
   true.
 - Write the findings into `00-status.md`, including anything the plan could
   not have known before it was built.
+
+## What landed, and what still needs ears — 2026-09-04
+
+**The bank exists and is shipped.** `mooloop_core::ds01_factory` holds
+seventeen patches as data — the fifteen rows above, with the toms as three
+tunings of one patch and Ghost Snare beside Tight Snare — and
+`mooloop_project::seed_ds01_bank` writes them into
+`presets/generators/ds01/` on first run, marker-guarded, on exactly the terms
+the ML-M1 and effect banks already use.
+
+Three things are worth recording about the shape it took:
+
+- **They are generator presets, not channel presets.** The ML-M1 bank is
+  channel-scoped because Sequence Bleep is nothing without a channel rack.
+  DS-01's modulation is inside its voice, so a patch is a bare `Ds01Params`
+  with nothing to re-scope — which is the simpler of the two forms and the one
+  the preset plan says the source slot already covers.
+- **The bank is the test fixture.** `one_architecture_reaches_a_kit` in
+  `mooloop_dsp::ds01` used to hold its own thirteen patches; it now reads
+  `ds01_factory::patches()`, so the patches that ship are the patches that are
+  asserted. All seventeen sound, stay bounded, end, and are a different sound
+  from every other, and between them they span more than eight times in length
+  and four times in brightness. `one_tom_patch_tunes_across_a_range` and
+  `a_ghost_hit_is_a_different_sound_not_a_quieter_one` now name bank patches
+  rather than rebuilding them.
+- **The Ride needed the gate, and the gate needed the test to release a
+  note.** A gated patch rings for as long as it is written, so the acceptance
+  loop's "it ends" assertion sends a note-off to any patch whose amplitude or
+  noise envelope is gated. Excusing the Ride from that assertion instead would
+  have left the one patch that uses the gate untested for termination.
+
+**What has not happened is the listening.** Nobody has heard these. They are
+patches reached by reasoning about the architecture and checked mechanically;
+whether they sound *good*, and the range tuning that follows from that, is the
+half of this step that needs Adam at the keyboard. So these stay open:
+
+- Every item under "Range tuning" above. Each is a judgement against a sound,
+  and a patch that turns out wrong is a finding about a range or a curve
+  rather than a case to delete.
+- The ROADMAP's drum range-and-scaling item, which this step is supposed to
+  close. It stays open, and it stays pointed here.
+- The recommendation on whether the default new-song kit moves to DS-01. The
+  step says to make that call *after* the listening pass, and the listening
+  pass has not happened.
+- A full pattern using six of the patches, played, saved, reloaded and
+  rendered offline. The mechanical half of that is already covered by
+  `mooloop_engine::ds01_tests`, which asserts a DS-01 channel renders
+  identically at 128 and 1024 frames; what is missing is doing it with the
+  bank.

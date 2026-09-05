@@ -8,6 +8,7 @@ pub mod bridge;
 pub mod buffer;
 pub mod channel;
 pub mod ds01;
+pub mod ds01_factory;
 pub mod effect;
 pub mod effect_factory;
 pub mod gain;

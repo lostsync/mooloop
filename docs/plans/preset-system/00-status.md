@@ -35,7 +35,10 @@ sequencing:
 
 Still queued behind DS-01, and unchanged by this: the browser, the taxonomy
 surface, and the factory-content mechanism. Those want two factory banks to
-design against, and DS-01's step 09 ships the second.
+design against, and DS-01's step 09 shipped the second on 2026-09-04:
+seventeen patches in `presets/generators/ds01/`. It is the *generator*-scoped
+form, where the ML-M1's is channel-scoped, so the two banks between them
+already exercise both shapes the browser will have to present.
 
 ## What the run found — 2026-09-04
 

@@ -34,7 +34,8 @@ Scope:
   knob travel should make sub-100 ms percussion easy without making the rest
   of the range feel wrong. Now scoped to DS-01's step 09 rather than to v1:
   the ranges to correct are the ones DS-01 chose, and the audit is what that
-  step's listening pass is for. Not closed — nobody has listened yet.
+  step's listening pass is for. Not closed — the bank the audit is against
+  ships as of 2026-09-04, and nobody has listened to it yet.
 - Add per-channel meters through the existing strip; volume and pan are exposed.
 - Replace terse implementation-style tooltips with user-facing wording. Done:
   the docked status bar carries longer hover text through `hover-hint`, and
@@ -221,10 +222,12 @@ Implemented foundation:
   a cyclic file flattens to everything-to-master on load rather than refusing
   to open.
 
-Remaining work in this phase is the percussive synth's replacement (`DS-01`,
-which is the only source that cannot be modulated), the source-to-buffer
-workflow, external/internal routing, groups, sends, and resampling-source
-selection. `MIXER_PLAN.md` is the design for the
+Remaining work in this phase is the source-to-buffer workflow,
+external/internal routing, groups, sends, and resampling-source selection. The
+percussive synth's replacement is built: `DS-01` plays, is addressable from
+its first commit, has a six-page face and a seventeen-patch factory bank, and
+leaves the v1 drum synth — still the only source that cannot be modulated —
+where it is. What DS-01 has left is the listening pass above. `MIXER_PLAN.md` is the design for the
 routing half of that, and replaces the fixed master-plus-16-bus bank rather
 than extending it.
 

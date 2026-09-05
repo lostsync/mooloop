@@ -3500,197 +3500,25 @@ mod tests {
         rms(&difference) / level
     }
 
-    fn env(decay: f32) -> Ds01EnvParams {
-        Ds01EnvParams::one_shot(decay)
-    }
-
-    /// The end-state test from `01-what-ds01-is.md`, made concrete.
+    /// The end-state test from `01-what-ds01-is.md`, made concrete — and the
+    /// kit under test is the kit that ships.
     ///
-    /// **These are not the factory bank.** Step 09 is the listening pass, and
-    /// nobody has listened yet; these are patches reached by reasoning about
-    /// the architecture, and their job here is to answer the question the
-    /// plan says matters most — whether the *controls reach*, or whether the
-    /// range would depend on hand-tuning. If one of these turns out to sound
-    /// wrong, that is a finding for step 09 about a range or a curve, not a
+    /// `mooloop_core::ds01_factory` is the bank the preset seeder writes, so
+    /// these assertions are about the patches a musician actually gets rather
+    /// than about a set of values that exists only in this file. Step 09's
+    /// central claim — one architecture reaches every drum type, from the
+    /// controls rather than from hand-tuning — is a claim about *that* bank.
+    ///
+    /// It is still not the *listening* pass. These patches were reached by
+    /// reasoning about the architecture and nobody has heard them; their job
+    /// here is to answer whether the controls reach. One that turns out to
+    /// sound wrong is a finding for step 09 about a range or a curve, not a
     /// reason to delete the case.
     fn kit() -> Vec<(&'static str, Ds01Params)> {
-        let base = Ds01Params::default();
-        vec![
-            (
-                "sub kick",
-                Ds01Params {
-                    tone_pitch: 45.0,
-                    pitch: Ds01PitchEnvParams { attack: 0.0, decay: 0.06, curve: 0.0, depth: 24.0 },
-                    amp: env(0.6),
-                    ..base
-                },
-            ),
-            (
-                "kit kick",
-                Ds01Params {
-                    noise_level: 0.35,
-                    filter_cutoff: 3_000.0,
-                    noise_env: env(0.008),
-                    ..base
-                },
-            ),
-            (
-                "dnb kick",
-                Ds01Params {
-                    drive: 0.8,
-                    character: Ds01Character::Fold,
-                    pitch: Ds01PitchEnvParams { attack: 0.0, decay: 0.03, curve: 0.0, depth: 30.0 },
-                    amp: env(0.35),
-                    ..base
-                },
-            ),
-            (
-                "tight snare",
-                Ds01Params {
-                    tone_pitch: 190.0,
-                    noise_level: 0.8,
-                    filter_morph: 0.5,
-                    filter_cutoff: 2_500.0,
-                    filter_res: 0.3,
-                    amp: env(0.12),
-                    noise_env: env(0.09),
-                    pitch: Ds01PitchEnvParams { depth: 8.0, ..base.pitch },
-                    ..base
-                },
-            ),
-            (
-                "deep snare",
-                Ds01Params {
-                    tone_pitch: 160.0,
-                    noise_level: 0.7,
-                    filter_morph: 0.5,
-                    filter_cutoff: 1_800.0,
-                    body_level: 0.4,
-                    body_pitch: 180.0,
-                    amp: env(0.25),
-                    noise_env: env(0.2),
-                    ..base
-                },
-            ),
-            (
-                "rimshot",
-                Ds01Params {
-                    tone_level: 0.2,
-                    noise_level: 0.2,
-                    body_level: 1.0,
-                    body_ratio: 0.9,
-                    body_pitch: 420.0,
-                    body_decay: 0.08,
-                    amp: env(0.06),
-                    ..base
-                },
-            ),
-            (
-                "clap",
-                Ds01Params {
-                    tone_level: 0.0,
-                    noise_level: 1.0,
-                    filter_morph: 0.5,
-                    filter_cutoff: 1_200.0,
-                    burst_repeats: 4,
-                    burst_spacing: 0.011,
-                    burst_spread: -0.6,
-                    burst_level_step: -0.3,
-                    amp: env(0.25),
-                    noise_env: env(0.02),
-                    ..base
-                },
-            ),
-            (
-                "tom",
-                Ds01Params {
-                    tone_level: 0.5,
-                    tone_pitch: 150.0,
-                    body_level: 0.9,
-                    body_pitch: 150.0,
-                    body_decay: 0.5,
-                    pitch: Ds01PitchEnvParams { depth: 8.0, ..base.pitch },
-                    amp: env(0.5),
-                    ..base
-                },
-            ),
-            (
-                "closed hat",
-                Ds01Params {
-                    tone_pitch: 320.0,
-                    tone_wave: 1.0,
-                    tone_partials: 6,
-                    tone_spread: 1.0,
-                    noise_level: 0.6,
-                    noise_color: Ds01NoiseColor::Metal,
-                    filter_cutoff: 8_000.0,
-                    amp: env(0.05),
-                    noise_env: env(0.04),
-                    pitch: Ds01PitchEnvParams { depth: 0.0, ..base.pitch },
-                    ..base
-                },
-            ),
-            (
-                "open hat",
-                Ds01Params {
-                    tone_pitch: 320.0,
-                    tone_wave: 1.0,
-                    tone_partials: 6,
-                    tone_spread: 1.0,
-                    noise_level: 0.6,
-                    noise_color: Ds01NoiseColor::Metal,
-                    filter_cutoff: 8_000.0,
-                    choke_group: 1,
-                    amp: env(0.5),
-                    noise_env: env(0.45),
-                    pitch: Ds01PitchEnvParams { depth: 0.0, ..base.pitch },
-                    ..base
-                },
-            ),
-            (
-                "cowbell",
-                Ds01Params {
-                    tone_pitch: 540.0,
-                    tone_wave: 1.0,
-                    tone_partials: 2,
-                    tone_spread: 0.55,
-                    body_level: 0.5,
-                    body_ratio: 0.6,
-                    body_pitch: 540.0,
-                    body_decay: 0.25,
-                    amp: env(0.28),
-                    pitch: Ds01PitchEnvParams { depth: 0.0, ..base.pitch },
-                    ..base
-                },
-            ),
-            (
-                "clave",
-                Ds01Params {
-                    tone_level: 0.0,
-                    body_level: 1.0,
-                    body_ratio: 0.85,
-                    body_pitch: 1_200.0,
-                    body_decay: 0.05,
-                    amp: env(0.05),
-                    ..base
-                },
-            ),
-            (
-                "zap",
-                Ds01Params {
-                    tone_pitch: 200.0,
-                    tone_wave: 0.6,
-                    pitch: Ds01PitchEnvParams {
-                        attack: 0.0,
-                        decay: 0.08,
-                        curve: 0.0,
-                        depth: -48.0,
-                    },
-                    amp: env(0.12),
-                    ..base
-                },
-            ),
-        ]
+        mooloop_core::ds01_factory::patches()
+            .into_iter()
+            .map(|patch| (patch.name, patch.params))
+            .collect()
     }
 
     /// One universal voice, and the range comes from the controls reaching
@@ -3703,6 +3531,16 @@ mod tests {
             let mut node = Ds01::new(params, SR);
             let mut events = EventList::empty();
             events.push(note_on(0, 60, 127));
+            // A gated patch rings for as long as it is written, which is the
+            // point of the gate and the reason the Ride is in the bank — so
+            // it gets a written length rather than being excused the "it
+            // ends" assertion below.
+            if params.amp.gate || params.noise_env.gate {
+                events.push(TimedEvent {
+                    offset: SR / 2,
+                    event: Event::NoteOff { id: 0, note: 60 },
+                });
+            }
             let out = render(&mut node, SR as usize, &events);
 
             assert!(out.iter().all(|s| s.is_finite()), "{name} went non-finite");
@@ -3751,7 +3589,7 @@ mod tests {
     fn one_tom_patch_tunes_across_a_range() {
         let tom = kit()
             .into_iter()
-            .find(|(name, _)| *name == "tom")
+            .find(|(name, _)| *name == "Tom Mid")
             .expect("the kit has a tom")
             .1;
         let at = |note: u8| {
@@ -3787,27 +3625,14 @@ mod tests {
     /// the matrix, step 07's source set would be wrong.
     #[test]
     fn a_ghost_hit_is_a_different_sound_not_a_quieter_one() {
-        let mut ghost = kit()
+        // The shipped Ghost Snare, not a copy of it: the acceptance case is
+        // that the bank contains a patch with this property, and rebuilding
+        // it here would let the bank drift away from what is asserted.
+        let ghost = kit()
             .into_iter()
-            .find(|(name, _)| *name == "tight snare")
-            .expect("the kit has a snare")
+            .find(|(name, _)| *name == "Ghost Snare")
+            .expect("the kit has a ghost snare")
             .1;
-        ghost.matrix[0] = mooloop_core::Ds01Route {
-            source: Ds01ModSource::Velocity,
-            dest: ds01::PARAM_AMP_DECAY,
-            amount: 0.35,
-            curve: 0.0,
-        };
-        ghost.matrix[1] = mooloop_core::Ds01Route {
-            source: Ds01ModSource::Velocity,
-            dest: ds01::PARAM_FILTER_CUTOFF,
-            amount: 0.35,
-            curve: 0.0,
-        };
-        // The route carries velocity now, so the plain control steps aside.
-        ghost.velocity_amount = 0.4;
-        ghost.amp = env(0.05);
-        ghost.filter_cutoff = 900.0;
 
         let at = |velocity: u8| {
             let mut node = Ds01::new(ghost, SR);

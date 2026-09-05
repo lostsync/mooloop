@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 pub mod factory;
 pub mod integrity;
 
-pub use factory::{rescope_modulation, seed_effect_bank, seed_mlm1_bank};
+pub use factory::{rescope_modulation, seed_ds01_bank, seed_effect_bank, seed_mlm1_bank};
 pub use integrity::{Diagnosis, Issue, Remedy};
 
 pub const FORMAT_VERSION: u32 = 1;

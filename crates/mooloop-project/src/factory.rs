@@ -17,10 +17,11 @@ use std::fs;
 use std::path::Path;
 
 use mooloop_core::mlm1_factory::{self, FactoryPatch};
-use mooloop_core::{effect_factory, ChannelSetup, EffectKind};
+use mooloop_core::{ds01_factory, effect_factory, ChannelSetup, ChannelSource, Ds01State, EffectKind};
 
 use crate::{
-    sanitize_preset_name, save_channel_preset, save_effect_preset, AssetMode, Error, PresetInfo,
+    sanitize_preset_name, save_channel_preset, save_effect_preset, save_generator_preset, AssetMode,
+    Error, PresetInfo,
 };
 
 /// Written once the bank has been seeded. Its presence — not the presence of
@@ -127,6 +128,64 @@ pub fn seed_effect_bank(dir: &Path, kind: EffectKind) -> Result<usize, Error> {
     Ok(written)
 }
 
+/// Bundle extension for a generator-only preset, matching what the save
+/// dialog writes.
+const GENERATOR_BUNDLE_EXTENSION: &str = "mooloop-generator";
+
+/// Written once the DS-01 bank has been seeded into its directory. Its own
+/// marker, in its own directory, on the same terms as the other two: the
+/// bank is seeded once and is ordinary user content from then on, so a patch
+/// deleted on purpose stays deleted.
+const DS01_MARKER_FILE: &str = ".factory-v1";
+
+/// Writes the DS-01 factory bank into `dir` — that device's own generator
+/// preset directory — unless it has been seeded before.
+///
+/// Returns how many patches were written: `0` when the marker is already
+/// there, which is the normal case on every launch after the first.
+///
+/// Generator-scoped rather than channel-scoped, which is the opposite of the
+/// ML-M1 bank and for the reason that bank gives. A DS-01 patch's modulation
+/// is [`mooloop_core::Ds01Params::matrix`], inside the voice where a drum
+/// needs it, so there is no [`mooloop_core::modulation::ModRack`] to carry
+/// and nothing to re-scope onto the channel it lands on.
+pub fn seed_ds01_bank(dir: &Path) -> Result<usize, Error> {
+    let marker = dir.join(DS01_MARKER_FILE);
+    if marker.exists() {
+        return Ok(0);
+    }
+    fs::create_dir_all(dir)?;
+
+    let mut written = 0;
+    for patch in ds01_factory::patches() {
+        let stem = sanitize_preset_name(patch.name);
+        let path = dir.join(format!("{stem}.{GENERATOR_BUNDLE_EXTENSION}"));
+        // A name collision means the user already has something under that
+        // name. Theirs wins.
+        if path.exists() {
+            continue;
+        }
+        save_generator_preset(
+            &path,
+            &ChannelSource::Ds01(Ds01State {
+                params: patch.params,
+            }),
+            PresetInfo {
+                name: patch.name.to_string(),
+                category: patch.category.to_string(),
+                tags: patch.tags.iter().map(|tag| (*tag).to_string()).collect(),
+            },
+            AssetMode::Embedded,
+        )?;
+        written += 1;
+    }
+
+    // Last, so a failure part-way through leaves the bank incomplete rather
+    // than marked complete.
+    fs::write(&marker, b"")?;
+    Ok(written)
+}
+
 fn channel_setup(patch: &FactoryPatch) -> ChannelSetup {
 
     let mut setup = ChannelSetup::mlm1_with_params(patch.name, patch.params);
@@ -197,6 +256,64 @@ mod tests {
                 patch.name
             );
         }
+    }
+
+    /// The DS-01 bank has to survive the round trip it will actually make:
+    /// written as generator bundles, found by the browser, and read back as
+    /// the same patch. A bank that only existed in memory would pass every
+    /// DSP test in the suite and still ship nothing.
+    #[test]
+    fn the_seeded_ds01_bank_lists_and_loads_back_unchanged() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("generators/ds01");
+
+        assert_eq!(
+            seed_ds01_bank(&dir).unwrap(),
+            mooloop_core::ds01_factory::BANK_SIZE
+        );
+
+        let listed = list_presets(&dir);
+        assert_eq!(listed.len(), mooloop_core::ds01_factory::BANK_SIZE);
+        for summary in &listed {
+            assert_eq!(summary.category, "DS-01");
+            assert_eq!(summary.kind, PresetKind::Generator(DeviceKind::Ds01));
+        }
+
+        for patch in mooloop_core::ds01_factory::patches() {
+            let summary = listed
+                .iter()
+                .find(|found| found.name == patch.name)
+                .unwrap_or_else(|| panic!("{} is missing from the bank", patch.name));
+            let report = load_bundle(&summary.path).unwrap();
+            let LoadedDocument::Generator(source) = report.document else {
+                panic!("{} did not load as a generator", patch.name);
+            };
+            let ChannelSource::Ds01(state) = *source else {
+                panic!("{} did not load as a DS-01", patch.name);
+            };
+            assert_eq!(state.params, patch.params, "{} changed on disk", patch.name);
+            // Nothing shipped may need repairing on the way in: a doctored
+            // factory patch is the bank telling the user its own content was
+            // broken.
+            assert!(
+                report.repairs.is_empty(),
+                "{} was repaired on load: {:?}",
+                patch.name,
+                report.repairs
+            );
+        }
+    }
+
+    /// The DS-01 bank is seeded once too, and for the same reason.
+    #[test]
+    fn seeding_the_ds01_bank_twice_writes_nothing_the_second_time() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("generators/ds01");
+        assert_eq!(
+            seed_ds01_bank(&dir).unwrap(),
+            mooloop_core::ds01_factory::BANK_SIZE
+        );
+        assert_eq!(seed_ds01_bank(&dir).unwrap(), 0);
     }
 
     /// Seeding is a first-run action, not a repair. Running it again must be
