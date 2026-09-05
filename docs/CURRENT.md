@@ -826,10 +826,16 @@ land on its own when it starts to matter:
 
 1. Add probability and explicit microtiming controls without weakening the
    tick-addressed event contract before broad automation.
-2. Extend `docs/AUDIO_ARCHITECTURE.md`'s compiled plan from the current
-   one-destination bus tree to typed audio and dependency edges before adding
-   parallel sends or sidechains. An auxiliary-input processing view is also
-   required; topology alone does not give an effect another audio input.
+2. ~~Extend `docs/AUDIO_ARCHITECTURE.md`'s compiled plan from the current
+   one-destination bus tree to typed audio~~ — done 2026-09-05. The audio
+   edge exists: `compile_audio_graph` orders producers before consumers,
+   refuses rings, and hands out the tap indices, and a device is given its
+   auxiliary outputs for the duration of one process call rather than
+   retaining them. **Dependency edges are still missing**, and they are what
+   a sidechain needs: a signal that schedules a producer without being summed
+   into the consumer. The processing view is half built for the same reason —
+   a *generator* takes an auxiliary input today (that is what Aux In is);
+   an effect does not, and topology alone will not give it one.
 3. Budget channel buffer memory and specify read/write collision behavior
    before buffers become part of every strip.
 4. Add deferred reclamation for replaced samples, graphs, and future buffers.
