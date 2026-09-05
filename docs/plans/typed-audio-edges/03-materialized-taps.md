@@ -23,6 +23,23 @@ already use, reconciled from the pump by deriving the plan from the model
 exactly as `Session::sync_compensation` does. That mechanism is built, tested,
 and its failure mode — forgetting a call site — is already designed out.
 
+## Storage is keyed by the pair, not by the consumer
+
+The obvious shape — one buffer per consumer — is wrong, and the test that
+catches it is `one_outlet_feeds_as_many_consumers_as_ask_for_it` from step 02.
+Two channels subscribed to the same `Osc 3` would get two buffers holding the
+same samples, and the producer would write it twice.
+
+So a tap is keyed by the **(producer, outlet) pair**, deduplicated when the
+graph compiles, and a resolved edge carries a tap *index* rather than a buffer
+of its own. That bounds storage by the number of distinct pairs, which is at
+most the number of consumers, and it makes the producer's work proportional to
+what is actually being listened to rather than to how many listeners there are.
+
+Assigning the index is the compiler's job, because it is the only place that
+sees every subscription at once. Step 02 built the edges; this step adds the
+index to them.
+
 ## Filling a tap
 
 A generator is told, once per block, which of its outlets to write and where.
@@ -30,6 +47,29 @@ Not a borrowed reference held at construction: `AUDIO_ARCHITECTURE.md` is
 explicit that "a node must not retain a borrowed bus reference received at
 construction", and the taps are supplied for the duration of the call like a
 plugin's port group.
+
+The shape that survived thinking about it is **a slice of optional buffers
+indexed by the device's own tap number**, prepared by the engine once per
+block from the device's declared outlet order:
+
+```rust
+if let Some(tap) = &mut taps[MlP8::TAP_OSC3] {
+    tap.l[frame] = pre_level_left;
+    tap.r[frame] = pre_level_right;
+}
+```
+
+Two alternatives were rejected. Passing the outlet *ids* and having the device
+match on them puts a lookup in the sample loop. Handing the device one buffer
+at a time cannot work at all: ML-P8's inner loop computes `Osc 1`, `Osc 2` and
+`Osc 3` in the same pass and would need three simultaneous mutable borrows out
+of one slice. Indexing by tap number is a fixed offset, costs an untaken
+branch when nobody is subscribed, and keeps the id-to-index mapping in the
+engine where the descriptor table already is.
+
+It also means a device's tap numbering is part of its interface, in the same
+way its parameter ids are. The declared outlet order is that numbering, so
+there is one list rather than two that can disagree.
 
 The device fills the tap at the point its descriptor declares, which is the
 whole content of `OutletTap`:
