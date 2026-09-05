@@ -1346,3 +1346,84 @@ fn render_the_ds01_face() {
     );
     write_snapshot(&long_tail, "MOOLOOP_DS01_LONG_TAIL_SNAPSHOT");
 }
+
+/// Aux In's face, in the three states it can be in.
+///
+/// It is here rather than in its own file because a new test binary is most
+/// of what a `mooloop-ui` workspace run costs, and this file already stands
+/// up the window a source face needs.
+///
+/// The assertions are the point rather than the pictures: a refusal has to be
+/// *drawn* -- a face that showed the same thing whether or not the edge
+/// resolved would leave the user with silence and no explanation, which is
+/// the whole reason `compile_audio_graph` keeps a refusal inspectable.
+#[test]
+fn render_aux_in_source_editor() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .ok();
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_pattern_length(16);
+    ui.set_editor_page(0);
+    ui.set_selected_channel_name(SharedString::from("Aux 2"));
+    ui.set_source_kind(7);
+    ui.set_aux_in_source_names(
+        ["None", "ML-P8 1"]
+            .map(SharedString::from)
+            .as_slice()
+            .into(),
+    );
+    ui.set_aux_in_outlet_names(
+        ["Osc 1", "Osc 2", "Osc 3", "Sub", "Noise", "Pre-Filter Mix", "Filter"]
+            .map(SharedString::from)
+            .as_slice()
+            .into(),
+    );
+    // Source Channel and Source Outlet are stepped and therefore ineligible;
+    // Level is the one destination on this face.
+    ui.set_source_modulation_allowed([false, false, true].as_slice().into());
+    ui.set_source_modulation_depths([0.0, 0.0, 0.0].as_slice().into());
+    ui.set_source_modulation_offsets([0.0, 0.0, 0.0].as_slice().into());
+    ui.set_source_modulation_route_counts([0, 0, 0].as_slice().into());
+
+    // Nothing subscribed: the face says so rather than showing an outlet
+    // picker for a source that does not exist.
+    ui.set_aux_in_source_index(0);
+    ui.set_aux_in_level(0.355_234_4);
+    ui.set_aux_in_level_text(SharedString::from("-9.0 dB"));
+    let unsubscribed = ui.window().take_snapshot().unwrap();
+    assert_eq!((unsubscribed.width(), unsubscribed.height()), (960, 760));
+    assert!(unsubscribed.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&unsubscribed, "MOOLOOP_AUX_IN_NONE_SNAPSHOT");
+
+    // Subscribed to a pre-level tap: the outlet picker appears and the face
+    // says where the signal comes from, including the surprising part.
+    ui.set_aux_in_source_index(1);
+    ui.set_aux_in_outlet_index(2);
+    ui.set_aux_in_tap_text(SharedString::from("pre-level"));
+    let connected = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        unsubscribed.as_bytes(),
+        connected.as_bytes(),
+        "subscribing to an outlet drew nothing"
+    );
+    write_snapshot(&connected, "MOOLOOP_AUX_IN_SNAPSHOT");
+
+    // Refused: same subscription, and it has to look different.
+    ui.set_aux_in_refusal_text(SharedString::from("Refused: this would close a loop of inputs."));
+    let refused = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        connected.as_bytes(),
+        refused.as_bytes(),
+        "a refused edge drew the same as a resolved one"
+    );
+    write_snapshot(&refused, "MOOLOOP_AUX_IN_REFUSED_SNAPSHOT");
+}
