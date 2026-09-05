@@ -1,8 +1,9 @@
 # Typed audio edges plan status
 
-**Step 02 is in. Nothing is audible yet, and nothing has moved: a project with
-no subscriptions compiles to the order the engine already walks, which is
-asserted rather than believed.**
+**Step 02 is in, and step 03's compiler half with it. Nothing is audible yet,
+and nothing has moved: a project with no subscriptions compiles to the order
+the engine already walks and allocates nothing, both asserted rather than
+believed.**
 
 ## Step 02 landed: the graph compiles
 
@@ -60,10 +61,37 @@ outlet feeding three consumers, all six per-edge refusals in one table, a
 two-cycle, a three-cycle, a broken ring, and a short project that still
 compiles a whole-bank order.
 
-## What is next
+## Step 03, so far: the tap table
 
-Step 03: the taps. Nothing writes an outlet's samples anywhere yet, so a
-resolved edge currently resolves to a buffer that does not exist.
+Storage is keyed by the **(producer, outlet) pair**, not by the consumer, and
+the compiler assigns the indices because it is the only place that sees every
+subscription at once. Two channels reading the same `Osc 3` share one buffer;
+step 02's `one_outlet_feeds_as_many_consumers_as_ask_for_it` is the case that
+makes a per-consumer scheme visibly wrong, since it would write the same
+samples twice and cost storage proportional to how many are listening rather
+than to what is listened to.
+
+Two things this half turned up:
+
+- **A refusal has to give its tap back.** Assigning an index while resolving
+  and then losing the edge to a cycle leaves the engine holding a buffer
+  nothing reads. The table is rebuilt from the survivors in one pass at the
+  end rather than un-assigned as refusals happen, which keeps the indices
+  dense -- and dense is what lets the engine treat `tap_count()` as the number
+  of buffers to allocate rather than as a high-water mark.
+- **`is_empty` became the tap count.** It was "does any edge resolve", which
+  is the same question asked of the wrong table. What the engine actually
+  needs to know is whether there is anything to allocate, and on every project
+  that has never used an edge the answer is zero.
+
+**What 03 still needs:** the buffers themselves and the devices that fill
+them. A resolved edge names a tap index; nothing allocates one, no producer
+writes an outlet's samples anywhere, and the channel loop still walks
+`0..active_channels` rather than `graph.order()`.
+
+`03-materialized-taps.md` records the interface a device sees -- a slice of
+optional buffers indexed by its own tap number, prepared once per block from
+its declared outlet order -- and why the two obvious alternatives do not work.
 
 ## Reading order
 

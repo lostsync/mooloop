@@ -452,7 +452,16 @@ pub enum EdgeRefusal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioEdge {
     Unsubscribed,
-    Resolved(crate::AudioSubscription),
+    Resolved {
+        subscription: crate::AudioSubscription,
+        /// Which buffer carries these samples.
+        ///
+        /// Assigned here rather than by the engine because this is the only
+        /// place that sees every subscription at once, which is what
+        /// deduplication needs: two channels reading the same outlet are one
+        /// tap, not two copies of the same samples written twice.
+        tap: u8,
+    },
     Refused {
         subscription: crate::AudioSubscription,
         reason: EdgeRefusal,
@@ -463,7 +472,15 @@ impl AudioEdge {
     /// The subscription that actually carries audio this generation.
     pub fn resolved(self) -> Option<crate::AudioSubscription> {
         match self {
-            Self::Resolved(subscription) => Some(subscription),
+            Self::Resolved { subscription, .. } => Some(subscription),
+            _ => None,
+        }
+    }
+
+    /// The buffer this edge reads, when it resolves to one.
+    pub fn tap(self) -> Option<u8> {
+        match self {
+            Self::Resolved { tap, .. } => Some(tap),
             _ => None,
         }
     }
@@ -486,6 +503,11 @@ impl AudioEdge {
 pub struct CompiledAudioGraph {
     edges: [AudioEdge; MAX_CHANNELS],
     order: AudioOrder,
+    /// The distinct (producer, outlet) pairs somebody reads, in the order
+    /// their indices were handed out. This is the buffer table the engine
+    /// allocates, and its length is what an unused feature costs: zero.
+    taps: [Option<crate::AudioSubscription>; MAX_CHANNELS],
+    tap_count: u16,
 }
 
 impl CompiledAudioGraph {
@@ -497,14 +519,34 @@ impl CompiledAudioGraph {
         &self.order
     }
 
+    /// How many buffers the engine has to hold for this generation.
+    pub fn tap_count(&self) -> usize {
+        self.tap_count as usize
+    }
+
+    /// What tap `index` carries: whose outlet, and which one.
+    pub fn tap(&self, index: usize) -> Option<crate::AudioSubscription> {
+        self.taps.get(index).copied().flatten()
+    }
+
+    /// Every tap this generation needs, as `(index, producer, outlet)`.
+    ///
+    /// The engine walks this to prepare storage, and a producer walks it to
+    /// find the buffers it owes -- which is why it is a list rather than a
+    /// per-channel table: it is short, usually empty, and iterating it beats
+    /// indexing a 256-entry array that is almost always all `None`.
+    pub fn taps(&self) -> impl Iterator<Item = (usize, crate::AudioSubscription)> + '_ {
+        self.taps[..self.tap_count as usize]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tap)| tap.map(|tap| (index, tap)))
+    }
+
     /// Whether any channel reads any other. The engine asks once per block to
     /// decide whether it needs the tap machinery at all, and the answer on
     /// every project that has never used an edge is `false`.
     pub fn is_empty(&self) -> bool {
-        !self
-            .edges
-            .iter()
-            .any(|edge| matches!(edge, AudioEdge::Resolved(_)))
+        self.tap_count == 0
     }
 }
 
@@ -513,6 +555,8 @@ impl Default for CompiledAudioGraph {
         Self {
             edges: [AudioEdge::Unsubscribed; MAX_CHANNELS],
             order: identity_audio_order(),
+            taps: [None; MAX_CHANNELS],
+            tap_count: 0,
         }
     }
 }
@@ -546,6 +590,8 @@ pub fn compile_audio_graph(
     published: &[&'static [crate::OutletDescriptor]],
 ) -> CompiledAudioGraph {
     let mut edges = [AudioEdge::Unsubscribed; MAX_CHANNELS];
+    let mut taps: [Option<crate::AudioSubscription>; MAX_CHANNELS] = [None; MAX_CHANNELS];
+    let mut tap_count = 0usize;
     let live = subscriptions.len().min(MAX_CHANNELS);
 
     // Pass one: every subscription judged on its own, without reference to the
@@ -571,7 +617,27 @@ pub fn compile_audio_graph(
                     Some(outlet) if !outlet.tap.is_upstream_of_chain() => {
                         refuse(EdgeRefusal::TapIsLate)
                     }
-                    Some(_) => AudioEdge::Resolved(subscription),
+                    Some(_) => {
+                        // One buffer per distinct pair. The scan is over the
+                        // taps handed out so far, which is at most the number
+                        // of consumers and is zero on every project that has
+                        // never used an edge.
+                        let existing = taps[..tap_count]
+                            .iter()
+                            .position(|tap| *tap == Some(subscription));
+                        let tap = match existing {
+                            Some(index) => index,
+                            None => {
+                                taps[tap_count] = Some(subscription);
+                                tap_count += 1;
+                                tap_count - 1
+                            }
+                        };
+                        AudioEdge::Resolved {
+                            subscription,
+                            tap: tap as u8,
+                        }
+                    }
                 },
             }
         };
@@ -623,7 +689,7 @@ pub fn compile_audio_graph(
         if !waiting[channel] {
             continue;
         }
-        if let AudioEdge::Resolved(subscription) = edges[channel] {
+        if let AudioEdge::Resolved { subscription, .. } = edges[channel] {
             edges[channel] = AudioEdge::Refused {
                 subscription,
                 reason: EdgeRefusal::Cycle,
@@ -641,7 +707,42 @@ pub fn compile_audio_graph(
     }
     debug_assert_eq!(emitted, MAX_CHANNELS);
 
-    CompiledAudioGraph { edges, order }
+    // A tap assigned to an edge that a cycle went on to refuse is a buffer
+    // nothing reads, so the table is rebuilt from what survived. Doing it in
+    // one pass at the end rather than un-assigning as refusals happen keeps
+    // the indices dense, which is what lets the engine treat the count as the
+    // number of buffers it needs.
+    if edges.iter().any(|edge| edge.refusal() == Some(EdgeRefusal::Cycle)) {
+        taps = [None; MAX_CHANNELS];
+        tap_count = 0;
+        for channel in 0..live {
+            let AudioEdge::Resolved { subscription, .. } = edges[channel] else {
+                continue;
+            };
+            let existing = taps[..tap_count]
+                .iter()
+                .position(|tap| *tap == Some(subscription));
+            let tap = match existing {
+                Some(index) => index,
+                None => {
+                    taps[tap_count] = Some(subscription);
+                    tap_count += 1;
+                    tap_count - 1
+                }
+            };
+            edges[channel] = AudioEdge::Resolved {
+                subscription,
+                tap: tap as u8,
+            };
+        }
+    }
+
+    CompiledAudioGraph {
+        edges,
+        order,
+        taps,
+        tap_count: tap_count as u16,
+    }
 }
 
 #[cfg(test)]
@@ -744,6 +845,62 @@ mod tests {
             );
             assert!(position(&graph, 3) < position(&graph, consumer));
         }
+        // Reading an outlet does not consume it, so one producer renders once
+        // however many channels asked.
+        assert_eq!(position(&graph, 3), 0);
+    }
+
+    /// Two consumers of one outlet are one buffer. The alternative -- a tap
+    /// per consumer -- would have the producer write the same samples twice
+    /// and cost storage proportional to how many are listening rather than to
+    /// what is being listened to.
+    #[test]
+    fn two_consumers_of_one_outlet_share_a_tap() {
+        let mut subscriptions = none(4);
+        subscriptions[0] = Some(AudioSubscription::new(3, 1));
+        subscriptions[1] = Some(AudioSubscription::new(3, 1));
+        subscriptions[2] = Some(AudioSubscription::new(3, 2));
+        let graph = compile_audio_graph(&subscriptions, &bank(4));
+
+        assert_eq!(graph.tap_count(), 2, "one outlet was tapped twice");
+        assert_eq!(graph.edge(0).tap(), graph.edge(1).tap());
+        assert_ne!(graph.edge(0).tap(), graph.edge(2).tap());
+        // The table says what each buffer carries, which is what the engine
+        // hands the producer.
+        let taps: Vec<_> = graph.taps().collect();
+        assert_eq!(taps.len(), 2);
+        assert!(taps.iter().all(|(_, tap)| tap.channel == 3));
+    }
+
+    /// Nothing subscribed is nothing allocated. This is the figure that
+    /// matters -- an unused feature costing 448 KB a channel is the design
+    /// this plan exists to avoid.
+    #[test]
+    fn a_project_with_no_edges_needs_no_buffers() {
+        let graph = compile_audio_graph(&none(16), &bank(16));
+        assert_eq!(graph.tap_count(), 0);
+        assert_eq!(graph.taps().count(), 0);
+    }
+
+    /// A refused edge holds no buffer. It is easy to assign a tap while
+    /// resolving and then forget it when a cycle takes the edge away, which
+    /// would leave the engine holding a buffer nothing ever reads.
+    #[test]
+    fn a_refused_edge_gives_its_tap_back() {
+        let mut subscriptions = none(4);
+        // One edge that survives, and a ring that does not.
+        subscriptions[0] = Some(AudioSubscription::new(3, 1));
+        subscriptions[1] = Some(AudioSubscription::new(2, 1));
+        subscriptions[2] = Some(AudioSubscription::new(1, 1));
+        let graph = compile_audio_graph(&subscriptions, &bank(4));
+
+        assert_eq!(graph.edge(1).refusal(), Some(EdgeRefusal::Cycle));
+        assert_eq!(graph.edge(2).refusal(), Some(EdgeRefusal::Cycle));
+        assert_eq!(graph.tap_count(), 1, "the ring kept its buffers");
+        // And the survivor's index still points at its own tap: the table is
+        // rebuilt dense, so an index is never stale.
+        let tap = graph.edge(0).tap().expect("the surviving edge has a tap");
+        assert_eq!(graph.tap(tap as usize), Some(AudioSubscription::new(3, 1)));
     }
 
     #[test]
