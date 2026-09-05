@@ -5688,7 +5688,7 @@ mod footprint {
         assert_eq!(size_of::<EffectChain>(), 20_544);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
-        // The ML-P8 is 5,768 bytes of it. Its eight voices are the bulk -- a
+        // The ML-P8 is 5,776 bytes of it. Its eight voices are the bulk -- a
         // voice carries three oscillators, their modulation taps and sync
         // carries, a sub, coloured noise, two envelopes, two filter stages, a
         // drive follower and the feedback loop's delay.
@@ -5738,7 +5738,7 @@ mod footprint {
         // its note was played at. The seven outlet *values* are computed on
         // demand from state the voices already carry, so nothing here stores
         // them.
-        assert_eq!(size_of::<MlP8>(), 5_768);
+        assert_eq!(size_of::<MlP8>(), 5_776);
         // DS-01 is 6,816, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -5769,7 +5769,7 @@ mod footprint {
         // it is the eight `f32` the strip holds of what its generator
         // published last block, which is where the one block of declared
         // outlet latency physically lives.
-        assert_eq!(size_of::<ChannelStrip>(), 41_672);
+        assert_eq!(size_of::<ChannelStrip>(), 41_688);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -5786,7 +5786,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_112);
+        assert_eq!(per_live, 60_128);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved

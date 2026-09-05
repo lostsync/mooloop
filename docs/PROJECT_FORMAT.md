@@ -184,7 +184,8 @@ the whole table for version 1 manifests written before the LFO was added.
 `state.params` envelope: the ML-M1's two ADSRs, filter model, drive,
 keytracking, note-priority and glide fields; the ML-P8's oscillator network
 matrix, sub, noise, sync sources, two envelopes, filter, own LFO and internal
-routes, and its Unison, Detune, Spread, Drift and Chorus settings. Neither
+routes, its Unison, Detune, Spread, Drift and Chorus settings, and its output
+stage's volume and pan. Neither
 shares the v1 synths' parameter ids — see `CURRENT.md` on ML-P8's separate id
 namespace — but both are ordinary `#[serde(default)]` structures, so a field
 added later reads as its default rather than failing the load.

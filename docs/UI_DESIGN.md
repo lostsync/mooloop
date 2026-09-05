@@ -331,21 +331,30 @@ plot responds to waveform, tuning, level, and pulse width.
   and drive.
 - **ML-M1** pages as `Osc` / `Amp/Filter` / `Perf`. `Perf` is the page that
   makes it a distinct device: note priority, legato and glide, and accent.
-- **ML-P8** is one screen rather than a stack of pages, divided into SOURCE,
-  NETWORK, and VOICE by rules along the signal path. Its centre is a
-  source-by-destination grid — rows are sources, columns the oscillators they
-  reach, the diagonal is an oscillator on itself, and a MIX column carries the
-  levels, because a level is a route to the output. The grid's cells are
-  `ParameterKnob` with `show-dial: false`, not a second draggable control,
-  so arming a modulation source changes what a cell means exactly as it
-  changes what any other knob means. VOICE ends in allocation and character:
-  Detune, Drift and Spread as knobs, and Unison and Chorus as selectors under
-  a fixed `VOICES 8`. Eight is instrument information rather than a control —
-  nothing on the face can change the pool — so the number that moves beside
-  the Unison selector is the derived one: how many notes are left to play.
-  Those two columns are what took the face from three rack units to four:
-  three fitted the VOICE region exactly, with no slack, and the alternative
-  was taking width from the network grid.
+- **ML-P8** pages as `OSC` / `NETWORK` / `FILTER` / `AMP` / `ML-P8 MOD`. It was
+  one screen until 2026-09-04, and that is the layout lesson worth keeping:
+  sixty-nine parameters on one 884x240 face fit only at a 20px dial and a 9px
+  caption, which is a smudge on a 14" laptop. **A face that fits by shrinking
+  its controls has not fit.** Pages cost a click and buy a dial you can read.
+  NETWORK is the source-by-destination grid with a page to itself — rows are
+  sources, columns the oscillators they reach, the diagonal is an oscillator
+  on itself, and a MIX column carries the levels, because a level is a route
+  to the output. Its cells are `ParameterKnob` with `show-dial: false`, not a
+  second draggable control, so arming a modulation source changes what a cell
+  means exactly as it changes what any other knob means. On AMP, eight is
+  instrument information rather than a control — nothing on the face can
+  change the pool — so the number that moves beside the Unison selector is the
+  derived one: how many notes are left to play.
+- **`KnobStack` is the knob a device page reaches for**, and it exists because
+  the other two each give up one half of what a page needs. `ParameterKnob`
+  stacks a caption and a value around a large dial, but the value is
+  read-only. `KnobField` makes the value typed into, but lays label, dial and
+  field in a *row* — 130px wide once the dial is legible, so four of them do
+  not fit in a quarter of a face. `KnobStack` is stacked *and* typed into, and
+  its dial is a real `ParameterKnob` with its own captions turned off, so
+  there is one implementation of what a drag, a wheel, a double-click and an
+  armed modulation source do. A timing control adds `show-sync` for the shared
+  `O.` LED rather than dropping to a smaller widget for it.
 
 No synth face owns a general LFO page. The common frame exposes the channel
 modulation shelf and the routes that terminate in that device's parameters.

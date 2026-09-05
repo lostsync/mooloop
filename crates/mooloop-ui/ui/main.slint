@@ -987,7 +987,6 @@ export component MainWindow inherits Window {
     // Which oscillator the ML-P8's left column is editing, and which of its
     // two pages is showing. Face state; neither is a device parameter and
     // neither ever reaches the engine.
-    in-out property <int> mlp8-source-selected;
     in-out property <int> mlp8-device-page;
     in-out property <int> mlp8-osc1-wave: 2;
     in-out property <float> mlp8-osc1-semitones;
@@ -1034,6 +1033,10 @@ export component MainWindow inherits Window {
     in-out property <float> mlp8-filter-sustain: 0.7;
     in-out property <float> mlp8-filter-release: 0.15;
     // ---- Allocation, character, and the finisher ----
+    in-out property <float> mlp8-master-volume: 1;
+    in-out property <float> mlp8-master-pan;
+    callback mlp8-master-volume-changed(float);
+    callback mlp8-master-pan-changed(float);
     in-out property <float> mlp8-drift;
     in-out property <int> mlp8-unison;
     in-out property <float> mlp8-detune;
@@ -2938,7 +2941,6 @@ export component MainWindow inherits Window {
                                                     y: DeviceRackMetrics.header-height;
                                                     width: parent.content-width;
                                                     height: parent.height - DeviceRackMetrics.header-height;
-                                                    source-selected <=> root.mlp8-source-selected;
                                                     page <=> root.mlp8-device-page;
                                                     lfo-wave <=> root.mlp8-lfo-wave;
                                                     lfo-synced <=> root.mlp8-lfo-synced;
@@ -3003,6 +3005,10 @@ export component MainWindow inherits Window {
                                                     filter-decay <=> root.mlp8-filter-decay;
                                                     filter-sustain <=> root.mlp8-filter-sustain;
                                                     filter-release <=> root.mlp8-filter-release;
+                                                    master-volume <=> root.mlp8-master-volume;
+                                                    master-pan <=> root.mlp8-master-pan;
+                                                    master-volume-changed(v) => { root.mlp8-master-volume-changed(v); }
+                                                    master-pan-changed(v) => { root.mlp8-master-pan-changed(v); }
                                                     drift <=> root.mlp8-drift;
                                                     unison <=> root.mlp8-unison;
                                                     detune <=> root.mlp8-detune;

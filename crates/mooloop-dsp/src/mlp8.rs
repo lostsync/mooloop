@@ -1221,7 +1221,7 @@ impl Voice {
     /// controls that an automation lane can sweep, and none of them is a
     /// modulation destination — so a range boundary is the finest they can
     /// change, and paying for them per sample would buy nothing.
-    fn refresh_character(&mut self, drift: f32, detune: f32, spread: f32) {
+    fn refresh_character(&mut self, drift: f32, detune: f32, spread: f32, pan: f32) {
         // Squared magnitude, like every other depth on this device, so the
         // low half of the knob is the fine beating rather than a rounding
         // error. Zero is exactly zero cents, not a small number.
@@ -1232,7 +1232,10 @@ impl Voice {
             ((detune_cents + voice_cents + osc_cents) / 1200.0).exp2()
         });
         self.cutoff_scale = (drift * self.drift.cutoff * DRIFT_CUTOFF_OCTAVES).exp2();
-        self.spread_pan = spread * self.pan_offset();
+        // Spread widens *around* where the patch put the device, so a patch
+        // that sits left stays left when it spreads. Clamped because the two
+        // together can reach past the field.
+        self.spread_pan = (pan + spread * self.pan_offset()).clamp(-1.0, 1.0);
         self.spread_gain = pan_gains(self.spread_pan);
     }
 
@@ -1874,6 +1877,7 @@ impl MlP8 {
         let sr = *sample_rate;
         let prepared = Prepared::new(&params, sr, routes);
         let glide_coeff = (-1.0 / (params.glide.max(MIN_GLIDE_S) * sr as f32)).exp();
+        let master_volume = params.master_volume.clamp(0.0, 1.0);
         // With the chorus off the voices go straight onto the channel bus and
         // the finisher costs nothing at all — not a copy, not a delay line
         // write, not a branch in the sample loop. That is what "OFF is a true
@@ -1910,6 +1914,7 @@ impl MlP8 {
                 params.drift.clamp(0.0, 1.0),
                 params.detune.clamp(0.0, 1.0),
                 params.spread.clamp(0.0, 1.0),
+                params.master_pan.clamp(-1.0, 1.0),
             );
         }
 
@@ -1957,7 +1962,10 @@ impl MlP8 {
                 // the channel strip already provides -- unity and centre --
                 // so with nothing routed they cost one untaken branch and
                 // change not a sample.
-                let voice_level = voice.dest(routes, slot::VCA_LEVEL, 1.0);
+                // The device's output level is the base each voice's own
+                // level route offsets from. It was unity here, which is why a
+                // route could only ever duck a voice from full.
+                let voice_level = voice.dest(routes, slot::VCA_LEVEL, master_volume);
                 // Spread is the base a Pan route moves from, so the two are
                 // one position rather than two that fight. With neither in
                 // play the pair is the centre one the channel strip would
@@ -3891,6 +3899,45 @@ mod tests {
             .map(|w| (w[1] - w[0]).abs())
             .fold(0.0_f32, f32::max);
         assert!(step < 0.1, "the handoff stepped by {step}");
+    }
+
+    /// The output stage is a base, not a second fader. At its defaults the
+    /// render is bit-identical to what it was when the routes offset from
+    /// hardcoded unity and centre, and turning it down scales the whole
+    /// device rather than one voice.
+    #[test]
+    fn the_output_stage_is_transparent_at_its_defaults_and_scales_the_device() {
+        let params = sine_bed();
+        assert_eq!(params.master_volume, 1.0);
+        assert_eq!(params.master_pan, 0.0);
+        let unity = render_chord(params, &[48, 60], 8192);
+
+        let mut halved = params;
+        halved.master_volume = 0.5;
+        let quieter = render_chord(halved, &[48, 60], 8192);
+        let peak = |signal: &[f32]| signal.iter().fold(0.0, |a: f32, s| a.max(s.abs()));
+        let (loud, soft) = (peak(&unity), peak(&quieter));
+        assert!(loud > 0.05, "the bed was silent");
+        assert!(
+            (soft / loud - 0.5).abs() < 0.01,
+            "half volume gave {soft} against {loud}"
+        );
+
+        // Pan moves the device, and Spread still widens around wherever it
+        // was put rather than snapping back to the middle.
+        let mut left = params;
+        left.master_pan = -0.8;
+        let mut synth = MlP8::new(left, SR);
+        let mut bus = StereoBus::with_capacity(2048);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        synth.process(&ctx(2048), &mut bus, &events, None);
+        assert!(
+            peak(&bus.l[..2048]) > peak(&bus.r[..2048]) * 1.5,
+            "a panned device did not move"
+        );
+        let voice = synth.voices.iter().find(|v| v.gate).unwrap();
+        assert!((voice.spread_pan + 0.8).abs() < 1.0e-6);
     }
 
     /// Choke and transport stop reach whole groups by construction, and a

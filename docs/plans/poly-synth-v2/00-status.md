@@ -2,6 +2,41 @@
 
 **Steps 02, 03, 04 and 05 are in. 06 has started.** 07 is after it.
 
+## The face was rebuilt on 2026-09-04
+
+Not a step: Adam played the shipped face on a 14" laptop and the verdict was
+that the controls are "small and hard to see", with the cutoff knob a smudge.
+He is right, and the reason is measurable. ML-P8 has sixty-nine parameters and
+one 884x240 face, and the only way that ever fit was a 20px dial with a 9px
+caption. **A face that fits by shrinking its controls has not fit.**
+
+It is five pages now -- OSC, NETWORK, FILTER, AMP, ML-P8 MOD -- the way the v1
+mono and poly faces are, and every control is a 34px dial. The width did not
+change; the density did. `mockups/` holds the concept and the three rounds of
+Adam's notes that shaped it.
+
+Three things the rewrite turned up:
+
+- **The knob it needed did not exist.** `ParameterKnob` stacks a caption and a
+  value around a large dial but the value is read-only; `KnobField` makes the
+  value typed into but lays the parts in a row, 130px wide at a legible dial
+  size. ML-P8 has typed entry on every control, so swapping to `ParameterKnob`
+  would have quietly removed it. `KnobStack` is both, and its dial is a real
+  `ParameterKnob` with its captions off so there is still one implementation of
+  what a drag or an armed route does to a gesture.
+- **The grid did not need redrawing.** It is absolutely placed off four
+  constants, so giving it a page to itself was `cell-w: 46px` becoming 176px.
+  The concept reimplemented it and got the fill directions wrong on the first
+  try; the shipped one was already right.
+- **The output stage earns its place.** Adam asked for a master volume and pan.
+  They are new ids 69 and 70, and they are not a second channel fader:
+  `VcaLevel` and `Pan` were already per-voice modulation destinations resolving
+  from *hardcoded* unity and centre, so a Velocity route on Pan swung around
+  dead centre whatever the patch wanted. They are the authored base now, and
+  Spread widens around wherever the device sits rather than around the middle.
+  A test pins that the render is bit-identical at their defaults, so the gain
+  contract is untouched.
+
 ## Step 06, so far
 
 What a device publishes now has a vocabulary, and ML-P8 has filled it in. What

@@ -1530,6 +1530,143 @@ export component SyncMiniKnob inherits Rectangle {
     }
 }
 
+// A knob with its name above it and an editable value below it.
+//
+// The two knobs that already exist each give up one of those. `ParameterKnob`
+// stacks a label and a value around the dial, but the value is read-only;
+// `KnobField` makes the value typed into, but lays the three parts out in a
+// *row*, which is 130px wide once the dial is big enough to read. A device
+// page that wants four legible knobs across a quarter of a face needs both:
+// stacked, and typed into.
+//
+// The dial is a real `ParameterKnob` with its own captions turned off, so the
+// drag, wheel, double-click-to-default, keyboard and modulation-arming
+// contract is the one every other knob in the program has rather than a
+// second implementation of it.
+export component KnobStack inherits Rectangle {
+    in property <string> label;
+    in property <string> tooltip: root.label;
+    /// What the field shows when it is not being edited. The caller formats
+    /// it, so units and precision stay where the rest of that parameter's
+    /// formatting lives.
+    in property <string> display-text;
+    in-out property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> default-value: root.minimum;
+    in property <float> step: 0;
+    in property <ValueScale> scale: ValueScale.linear;
+    in property <bool> bipolar;
+    in property <length> diameter: 34px;
+    in property <bool> modulation-armed;
+    in property <bool> modulation-allowed: true;
+    in-out property <float> modulation-depth;
+    in property <float> modulation-offset;
+    in property <int> modulation-route-count;
+    /// A timing control that can be free-running or tempo-locked shows a
+    /// clickable LED beside its caption. The dial itself does not change: the
+    /// caller hands over whichever value, range and text the current mode
+    /// means, exactly as `SyncMiniKnob` does internally. This is the shared
+    /// `O.` affordance from `MODULATOR_SYSTEM_SPEC.md`, at a size the rest of
+    /// a device page can sit next to.
+    in property <bool> show-sync;
+    in property <bool> synced;
+    callback sync-toggled(bool);
+    callback changed(float);
+    /// The typed string, unparsed. Rust owns the parsing because it owns the
+    /// formatting, exactly as for `KnobField`.
+    callback text-committed(string);
+    callback modulation-depth-changed(float);
+    callback modulation-edit-started();
+    callback modulation-edit-finished();
+
+    width: 50px;
+    height: 11px + root.diameter + 20px + 4px;
+
+    VerticalLayout {
+        spacing: 2px;
+        HorizontalLayout {
+            height: 11px;
+            spacing: 2px;
+            alignment: center;
+            Text {
+                text: root.label;
+                color: root.modulation-armed && root.modulation-allowed
+                    ? Theme.warning : Theme.text-muted;
+                font-size: 9px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.show-sync : Rectangle {
+                width: 9px;
+                height: 11px;
+                accessible-role: button;
+                accessible-label: "Tempo sync " + root.label;
+                LedIndicator {
+                    y: 2px;
+                    diameter: 8px;
+                    on: root.synced;
+                    tooltip: root.synced ? "Tempo sync on" : "Tempo sync off";
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.sync-toggled(!root.synced); }
+                }
+            }
+        }
+        ParameterKnob {
+            height: root.diameter;
+            show-label: false;
+            show-value-text: false;
+            diameter: root.diameter;
+            tooltip: root.tooltip;
+            value <=> root.value;
+            minimum: root.minimum;
+            maximum: root.maximum;
+            default-value: root.default-value;
+            step: root.step;
+            scale: root.scale;
+            bipolar: root.bipolar;
+            modulation-armed: root.modulation-armed;
+            modulation-allowed: root.modulation-allowed;
+            modulation-depth <=> root.modulation-depth;
+            modulation-offset: root.modulation-offset;
+            modulation-route-count: root.modulation-route-count;
+            changed(v) => { root.changed(v); }
+            modulation-depth-changed(v) => { root.modulation-depth-changed(v); }
+            modulation-edit-started => { root.modulation-edit-started(); }
+            modulation-edit-finished => { root.modulation-edit-finished(); }
+        }
+        Rectangle {
+            height: 18px;
+            border-radius: Theme.radius-md;
+            background: Theme.surface-raised;
+            border-width: 1px;
+            border-color: stacked-entry.has-focus ? Theme.accent : Theme.border;
+            accessible-role: text-input;
+            accessible-label: root.tooltip;
+            stacked-entry := TextInput {
+                x: 3px;
+                width: parent.width - 6px;
+                height: 100%;
+                text: root.display-text;
+                color: Theme.text;
+                font-size: 9px;
+                font-family: "monospace";
+                single-line: true;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                selection-background-color: Theme.accent;
+                accepted => {
+                    root.text-committed(self.text);
+                    self.clear-focus();
+                }
+                edited => { }
+            }
+        }
+    }
+}
+
 export component IconButton inherits ToolButton {
     in property <length> size: 26px;
     min-width: root.size;

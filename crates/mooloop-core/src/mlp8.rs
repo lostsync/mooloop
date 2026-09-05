@@ -276,6 +276,19 @@ pub const PARAM_DETUNE: u32 = 66;
 pub const PARAM_SPREAD: u32 = 67;
 pub const PARAM_CHORUS: u32 = 68;
 
+// --- The device's own output stage ----------------------------------------
+//
+// These exist to be the *base* the per-voice output routes offset from.
+// Before them `MlP8ModDest::VcaLevel` and `Pan` resolved from hardcoded
+// constants -- unity and centre -- so a Velocity route on Pan swung around
+// dead centre whatever the patch wanted, and there was no way to say "this
+// patch sits left". They are not a second copy of the channel strip's fader:
+// the strip is after the whole device, and these are inside it, underneath
+// every voice.
+
+pub const PARAM_MASTER_VOLUME: u32 = 69;
+pub const PARAM_MASTER_PAN: u32 = 70;
+
 /// How many of the eight physical slots one note takes.
 ///
 /// Unison spends the pool rather than adding to it, so the effective note
@@ -1326,6 +1339,14 @@ const VOICE_DESCRIPTORS: [ParamDescriptor; 13] = [
 /// from Detune's percentage to cents lives in the DSP, because it is a
 /// musical shape rather than a range. Unison and Chorus are stepped, which is
 /// what keeps them out of the route destination list without a second rule.
+/// The device's output stage: the base every voice starts from.
+const OUTPUT_DESCRIPTORS: [ParamDescriptor; 2] = [
+    // Unity by default and read in dB, like every other level on this device,
+    // so the gain contract's reference patch is still one saw at 0 dB.
+    unit(PARAM_MASTER_VOLUME, "Volume", 1.0),
+    bipolar(PARAM_MASTER_PAN, "Pan"),
+];
+
 const CHARACTER_DESCRIPTORS: [ParamDescriptor; 5] = [
     unit(PARAM_DRIFT, "Drift", 0.0),
     stepped(PARAM_UNISON, "Unison", 4, 0.0),
@@ -1339,32 +1360,40 @@ const CHARACTER_DESCRIPTORS: [ParamDescriptor; 5] = [
 /// Written as one `static` so the engine can enumerate it without allocating,
 /// and assembled by a `const fn` rather than by hand so the ids stay derived
 /// from the constants above.
-pub static DESCRIPTORS: [ParamDescriptor; 67] = concat(
-    osc_descriptors(0, "Osc 1 wave"),
-    osc_descriptors(1, "Osc 2 wave"),
-    osc_descriptors(2, "Osc 3 wave"),
+pub static DESCRIPTORS: [ParamDescriptor; 69] = concat(
+    [
+        osc_descriptors(0, "Osc 1 wave"),
+        osc_descriptors(1, "Osc 2 wave"),
+        osc_descriptors(2, "Osc 3 wave"),
+    ],
     NETWORK_DESCRIPTORS,
     VOICE_DESCRIPTORS,
     LFO_DESCRIPTORS,
     CHARACTER_DESCRIPTORS,
+    OUTPUT_DESCRIPTORS,
 );
 
+/// The three oscillator blocks arrive as one array rather than three
+/// arguments: they are the same shape and the same idea, and spelling them out
+/// separately was what pushed this past the argument count anything should
+/// have.
 const fn concat(
-    a: [ParamDescriptor; 5],
-    b: [ParamDescriptor; 5],
-    c: [ParamDescriptor; 5],
+    oscillators: [[ParamDescriptor; 5]; 3],
     network: [ParamDescriptor; 26],
     voice: [ParamDescriptor; 13],
     lfo: [ParamDescriptor; 8],
     character: [ParamDescriptor; 5],
-) -> [ParamDescriptor; 67] {
-    let mut out = [a[0]; 67];
-    let mut i = 0;
-    while i < 5 {
-        out[i] = a[i];
-        out[5 + i] = b[i];
-        out[10 + i] = c[i];
-        i += 1;
+    output: [ParamDescriptor; 2],
+) -> [ParamDescriptor; 69] {
+    let mut out = [oscillators[0][0]; 69];
+    let mut osc = 0;
+    while osc < 3 {
+        let mut i = 0;
+        while i < 5 {
+            out[osc * 5 + i] = oscillators[osc][i];
+            i += 1;
+        }
+        osc += 1;
     }
     let mut j = 0;
     while j < 26 {
@@ -1385,6 +1414,11 @@ const fn concat(
     while m < 5 {
         out[62 + m] = character[m];
         m += 1;
+    }
+    let mut n = 0;
+    while n < 2 {
+        out[67 + n] = output[n];
+        n += 1;
     }
     out
 }
@@ -1463,6 +1497,12 @@ pub struct MlP8Params {
     pub spread: f32,
     /// The finishing chorus over the instrument's own summed output.
     pub chorus: MlP8Chorus,
+    /// The device's output level in `[0, 1]`, and the base every voice's
+    /// `VcaLevel` route offsets from.
+    pub master_volume: f32,
+    /// The device's position in `[-1, 1]`, and the base Spread and every
+    /// `Pan` route offset from.
+    pub master_pan: f32,
 
     // --- The instrument's own modulation --------------------------------
     pub lfo: MlP8LfoParams,
@@ -1538,6 +1578,8 @@ impl Default for MlP8Params {
             detune: 0.0,
             spread: 0.0,
             chorus: MlP8Chorus::Off,
+            master_volume: 1.0,
+            master_pan: 0.0,
             lfo: MlP8LfoParams::default(),
             routes: MlP8Routes::default(),
         }
@@ -1552,7 +1594,7 @@ impl Default for MlP8Params {
 /// assumed separately by the face and by the handler that parses the text,
 /// which is how the two would come to disagree.
 pub fn is_gain_param(id: u32) -> bool {
-    matches!(id, PARAM_SUB_LEVEL | PARAM_NOISE_LEVEL)
+    matches!(id, PARAM_SUB_LEVEL | PARAM_NOISE_LEVEL | PARAM_MASTER_VOLUME)
         || (id < 15 && id % 5 == OSC_OFFSET_LEVEL)
 }
 
@@ -1633,6 +1675,8 @@ pub fn get(p: &MlP8Params, id: u32) -> Option<f32> {
         PARAM_DETUNE => p.detune,
         PARAM_SPREAD => p.spread,
         PARAM_CHORUS => p.chorus.to_index() as f32,
+        PARAM_MASTER_VOLUME => p.master_volume,
+        PARAM_MASTER_PAN => p.master_pan,
         _ => return None,
     })
 }
@@ -1710,6 +1754,8 @@ pub fn set(p: &mut MlP8Params, id: u32, value: f32) -> bool {
         PARAM_DETUNE => p.detune = value,
         PARAM_SPREAD => p.spread = value,
         PARAM_CHORUS => p.chorus = MlP8Chorus::from_index(value.round() as i32),
+        PARAM_MASTER_VOLUME => p.master_volume = value,
+        PARAM_MASTER_PAN => p.master_pan = value,
         _ => return false,
     }
     true
@@ -1733,11 +1779,11 @@ mod tests {
     #[test]
     fn descriptor_ids_stay_inside_the_reserved_band() {
         for d in &DESCRIPTORS {
-            assert!(d.id <= 68, "{} ({}) is outside 0-68", d.id, d.name);
+            assert!(d.id <= 70, "{} ({}) is outside 0-70", d.id, d.name);
             assert_ne!(d.id, 24, "24 is reserved for a fifth sub control");
             assert_ne!(d.id, 63, "63 closes the LFO band and stays reserved");
         }
-        assert_eq!(DESCRIPTORS.len(), 67);
+        assert_eq!(DESCRIPTORS.len(), 69);
     }
 
     #[test]
@@ -1798,7 +1844,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gain_parameters_are_exactly_the_five_mix_levels() {
+    fn the_gain_parameters_are_exactly_the_levels() {
         let gains: Vec<u32> = DESCRIPTORS
             .iter()
             .map(|d| d.id)
@@ -1812,6 +1858,7 @@ mod tests {
                 osc_param(2, OSC_OFFSET_LEVEL),
                 PARAM_SUB_LEVEL,
                 PARAM_NOISE_LEVEL,
+                PARAM_MASTER_VOLUME,
             ]
         );
         // Every one of them is a linear unit range, which is what makes the
@@ -1937,13 +1984,13 @@ mod tests {
     #[test]
     fn an_unknown_id_is_neither_readable_nor_writable() {
         let mut params = MlP8Params::default();
-        // 24 and 63 are holes inside the band, 69 is past its end.
+        // 24 and 63 are holes inside the band, 71 is past its end.
         assert_eq!(get(&params, 24), None);
         assert!(!set(&mut params, 24, 1.0));
         assert_eq!(get(&params, 63), None);
         assert!(!set(&mut params, 63, 1.0));
-        assert_eq!(get(&params, 69), None);
-        assert!(!set(&mut params, 69, 1.0));
+        assert_eq!(get(&params, 71), None);
+        assert!(!set(&mut params, 71, 1.0));
     }
 
     /// Unison spends the pool; it never grows it. Stated here rather than
@@ -2039,6 +2086,28 @@ mod tests {
             assert_eq!(outlet.tap, crate::outlet::OutletTap::PreLevel);
             assert_eq!(outlet.tap.status(), "pre-level");
         }
+    }
+
+    /// The output stage exists to be a base, so it has to be continuous,
+    /// routable in its own right, and default to the values the routes used
+    /// to hardcode.
+    #[test]
+    fn the_output_stage_is_the_base_the_voice_routes_offset_from() {
+        let params = MlP8Params::default();
+        assert_eq!(params.master_volume, 1.0, "unity was the old VcaLevel base");
+        assert_eq!(params.master_pan, 0.0, "centre was the old Pan base");
+
+        // The same spans the per-voice destinations declare, so a route
+        // reaches the same places whether it offsets from the knob or from
+        // the constant the knob replaced.
+        let volume = descriptor(PARAM_MASTER_VOLUME).unwrap();
+        assert_eq!((volume.min, volume.max), MlP8ModDest::VcaLevel.range());
+        let pan = descriptor(PARAM_MASTER_PAN).unwrap();
+        assert_eq!((pan.min, pan.max), MlP8ModDest::Pan.range());
+
+        // Read in dB, like every other level on the device.
+        assert!(is_gain_param(PARAM_MASTER_VOLUME));
+        assert!(!is_gain_param(PARAM_MASTER_PAN));
     }
 
     /// Both selectors round-trip through the index the face and the wire use.

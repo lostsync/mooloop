@@ -18,6 +18,18 @@ date above; treat them as of that date, not as invariants. Line numbers in
 Two entries are live bugs rather than duplication, marked **bug**. They are
 here because the missing component is why they happened.
 
+**Closed 2026-09-04: the stacked, editable knob.** `KnobStack` in
+`controls.slint`. `ParameterKnob` stacks a caption and a value around a large
+dial but the value is read-only; `KnobField` makes the value typed into but
+lays the three parts in a row, which is 130px wide once the dial is legible.
+A device page that wants four readable knobs across a quarter of a face needs
+both, and ML-P8's face rewrite is where that became load-bearing rather than
+theoretical. Its dial is a real `ParameterKnob` with its own captions off, so
+there is still one implementation of what a drag, a wheel, a
+double-click-to-default and an armed modulation source do. `show-sync` adds
+the shared `O.` LED beside the caption, which is what let the LFO's Rate stop
+being a visibly smaller widget than its neighbours.
+
 ---
 
 ## 1. `PolylinePlot` — there is no plotting primitive

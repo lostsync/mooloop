@@ -119,14 +119,17 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Osc, Amp/Filter, and Perf pages expose separate amplitude and filter ADSRs,
   three low-pass filter characters, pre-filter drive, keytracking, a held-note
   priority stack, legato/retrigger and glide modes, and velocity Accent. The
-  ML-P8 face is two pages: the instrument -- SOURCE, the network grid, and
-  VOICE on one screen -- and ML-P8 MOD, which holds the device's own LFO and
-  the list of its internal modulation routes. The name distinguishes it from
-  the frame's MOD button, which opens the channel shelf. Its VOICE region's
-  last two columns are allocation and character: Detune, Drift and Spread as
-  knobs, and Unison and Chorus as selectors under a fixed `VOICES 8` and the
-  note count that Unison leaves. Those two columns are why the ML-P8 face is
-  four rack units rather than three; DS-01 is five, for the same reason. The
+  ML-P8 face is five pages -- OSC, NETWORK, FILTER, AMP and ML-P8 MOD, whose
+  name distinguishes it from the frame's MOD button, which opens the channel
+  shelf. It was one dense screen until 2026-09-04: at four rack units that fit
+  sixty-nine parameters only at a 20px dial and a 9px caption, which is
+  unreadable on a laptop, so the face spends a click per group and every
+  control is a 34px `KnobStack` with its value still typed into. NETWORK is
+  the source-by-destination grid with a page to itself, at 176px a column
+  rather than 46. AMP carries the amp envelope beside allocation and
+  character: Unison and Chorus as selectors under a fixed `VOICES 8` and the
+  note count Unison leaves, with Detune, Spread, Drift and Glide as knobs. The
+  face stays four rack units; DS-01 is five. The
   drum face keeps family, character, shared shaping, and voice-specific controls
   visible together. Replacing a source does not change the channel's notes or
   mixer state. Closed and open hats share a choke group in the generated
@@ -567,6 +570,12 @@ land on its own when it starts to matter:
   What is missing is the *surface*: the source picker does not list outlets,
   so such a route can be written by a project file but not built by hand. The
   audio outlets are declared and not connectable, pending typed audio edges.
+- The ML-P8 has a device output stage: Volume and Pan, before the channel
+  strip's own. They exist to be the base its per-voice `VcaLevel` and `Pan`
+  modulation destinations offset from, which resolved from hardcoded unity and
+  centre before them -- so a Velocity route on Pan now swings around wherever
+  the patch put the device, and Spread widens around that rather than around
+  the middle.
 - The ML-P8 allocates its eight physical voices as *groups*. Unison at 1x, 2x,
   4x and 8x spends the pool rather than growing it, leaving 8, 4, 2 and 1 notes
   of polyphony; a note allocates a complete group and steals complete older

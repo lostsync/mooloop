@@ -964,7 +964,9 @@ fn render_mlp8_modulation_page() {
     ui.set_mlp8_route_dest_names(names(&["Cutoff", "Drive", "XM 1>2", "Voice pan"]));
 
     let instrument = ui.window().take_snapshot().unwrap();
-    ui.set_mlp8_device_page(1);
+    // ML-P8 MOD is the fifth page now, not the second: the face spends
+    // pages on legibility, so the LFO and the route list sit behind index 4.
+    ui.set_mlp8_device_page(4);
     let empty = ui.window().take_snapshot().unwrap();
     assert_ne!(
         instrument.as_bytes(),
@@ -1078,8 +1080,11 @@ fn render_mlp8_source_editor() {
         8_i32, 4, 2, 1,
     ]))));
 
-    // One screen: oscillators, the whole network, and the other two sources
-    // are all on it at once, so this first shot is the entire face.
+    // Five pages now, not one screen: the face traded density for a dial you
+    // can read on a laptop. Each assertion below therefore says which page it
+    // is looking at, because a control that is not on the open page cannot
+    // change the picture.
+    ui.set_mlp8_device_page(1);
     let idle = ui.window().take_snapshot().unwrap();
     assert_eq!((idle.width(), idle.height()), (960, 760));
     assert!(idle.as_bytes().iter().any(|byte| *byte != 0));
@@ -1112,31 +1117,32 @@ fn render_mlp8_source_editor() {
     assert_ne!(wired.as_bytes(), synced.as_bytes());
     write_snapshot(&synced, "MOOLOOP_MLP8_SYNC_SNAPSHOT");
 
-    // The source column's five tabs are the grid's five rows. Each shows
-    // controls the others do not have, so every one has to draw differently.
+    // Every page draws something the others do not, which is the whole
+    // argument for spending a click on them.
     let mut previous = synced.as_bytes().to_vec();
-    for (tab, name) in [
-        (1, "MOOLOOP_MLP8_OSC2_SNAPSHOT"),
-        (3, "MOOLOOP_MLP8_SUB_SNAPSHOT"),
-        (4, "MOOLOOP_MLP8_NOISE_SNAPSHOT"),
+    for (page, name) in [
+        (0, "MOOLOOP_MLP8_OSC_SNAPSHOT"),
+        (2, "MOOLOOP_MLP8_FILTER_PAGE_SNAPSHOT"),
+        (3, "MOOLOOP_MLP8_AMP_SNAPSHOT"),
     ] {
-        ui.set_mlp8_source_selected(tab);
+        ui.set_mlp8_device_page(page);
         let shot = ui.window().take_snapshot().unwrap();
-        assert_ne!(previous, shot.as_bytes(), "source tab {tab} drew the last one");
+        assert_ne!(previous, shot.as_bytes(), "page {page} drew the last one");
         write_snapshot(&shot, name);
         previous = shot.as_bytes().to_vec();
     }
 
-    ui.set_mlp8_source_selected(0);
+    ui.set_mlp8_device_page(0);
     ui.set_mlp8_sub_level(0.7);
     ui.set_mlp8_noise_level(0.4);
     ui.set_mlp8_noise_color(-70.0);
     let sources = ui.window().take_snapshot().unwrap();
-    assert_ne!(synced.as_bytes(), sources.as_bytes());
+    assert!(sources.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&sources, "MOOLOOP_MLP8_SOURCES_SNAPSHOT");
 
     // The filter is the other half of the voice, and its response display has
     // to follow both the mode and the cutoff.
+    ui.set_mlp8_device_page(2);
     ui.set_mlp8_filter_cutoff(0.35);
     ui.set_mlp8_filter_resonance(0.8);
     ui.set_mlp8_filter_env(0.6);
@@ -1165,6 +1171,7 @@ fn render_mlp8_source_editor() {
     // than scroll it, so the shot shows the region the way a maximized
     // window does and the assertions below are looking at drawn pixels.
     ui.window().set_size(LogicalSize::new(1440.0, 760.0));
+    ui.set_mlp8_device_page(3);
     let wide = ui.window().take_snapshot().unwrap();
 
     // Eight is fixed information; what moves beside the Unison selector is

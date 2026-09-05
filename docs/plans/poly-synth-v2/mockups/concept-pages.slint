@@ -1,0 +1,512 @@
+// ML-P8 face concept -- "pages", at the face's existing four rack units.
+//
+// The face as shipped is one dense screen: 20px knobs and 9px captions, and on
+// a 14" laptop the cutoff knob is a smudge. This concept spends pages instead,
+// the way the v1 mono and poly faces do, so every control can be the 34px
+// ParameterKnob the poly face already uses.
+//
+// The failure to avoid is the one `docs/plans/drum-synth-v2/mockups` names:
+// "pages of knob rows". So every page is a few large controls inside modules
+// that share one chrome, and a display is sized by what it has to show rather
+// than by whatever width was left over.
+//
+// Concept only: values are literals and nothing is wired.
+
+import { Theme } from "theme.slint";
+import { ParameterKnob, SectionLabel, SelectorBank, ToolButton } from "controls.slint";
+import { EnvelopeEditor } from "envelope.slint";
+import { FilterResponseDisplay, OscillatorTrace } from "device-displays.slint";
+
+component PageTab inherits ToolButton {
+    min-width: 56px;
+    max-width: 84px;
+    min-height: 22px;
+    max-height: 22px;
+}
+
+// Every knob on the face is this one. 34px against the 20px the shipped face
+// uses, which is the whole argument.
+component Big inherits ParameterKnob {
+    width: 50px;
+    diameter: 34px;
+}
+
+// One bounded group. Every module on every page has the same padding, the same
+// title row, and the same corner, so nothing has to be aligned by eye.
+//
+// `caption` is the right-hand end of the title row -- a count, a derived
+// number, a unit. It is text only on purpose: a *control* on the title row
+// would need a second slot, and one slot is what keeps every module's header
+// the same height.
+component Module inherits Rectangle {
+    in property <string> title;
+    in property <string> caption;
+    background: Theme.panel;
+    border-radius: Theme.radius-sm;
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            height: 12px;
+            spacing: 6px;
+            SectionLabel { text: root.title; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.caption;
+                color: Theme.text-muted;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+        }
+        @children
+    }
+}
+
+component Page inherits Rectangle {
+    in property <int> active;
+    width: 884px;
+    height: 240px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: Theme.radius-md;
+    VerticalLayout {
+        padding: 6px;
+        spacing: 5px;
+        HorizontalLayout {
+            spacing: 3px;
+            PageTab { text: "OSC"; active: root.active == 0; }
+            PageTab { text: "NETWORK"; active: root.active == 1; }
+            PageTab { text: "FILTER"; active: root.active == 2; }
+            PageTab { text: "AMP"; active: root.active == 3; }
+            PageTab { text: "MOD"; active: root.active == 4; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        @children
+    }
+}
+
+// One cell of the network grid.
+//
+// A well, not a button: the background is the page's, the border is the quiet
+// one, and the only bright thing is the fill. The previous pass gave every
+// live cell an accent border *and* a fill, which made a patch with four routes
+// in it look like a warning light.
+component Cell inherits Rectangle {
+    in property <string> text: "";
+    in property <float> fill: 0;
+    // Amount cells show where zero is; a selector or an empty diagonal does
+    // not, because it has no centre to be off.
+    in property <bool> bipolar;
+    in property <bool> inert;
+    height: 26px;
+    background: root.inert ? Theme.surface : Theme.background;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    // A bipolar amount fills from the centre so its sign is visible; a level
+    // is unipolar and fills from the left, because it has no negative half to
+    // be on the other side of.
+    Rectangle {
+        x: !root.bipolar ? 0
+            : root.fill >= 0 ? parent.width / 2
+            : parent.width / 2 * (1 + root.fill);
+        width: (root.bipolar ? parent.width / 2 : parent.width) * min(abs(root.fill), 1.0);
+        height: parent.height;
+        background: Theme.accent.with-alpha(root.bipolar ? 0.28 : 0.20);
+    }
+    if root.bipolar : Rectangle {
+        x: parent.width / 2;
+        width: 1px;
+        height: parent.height;
+        background: Theme.border;
+    }
+    Text {
+        text: root.text;
+        color: root.fill != 0 ? Theme.text : Theme.text-faint;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+}
+
+// Four knobs in a square. A display beside a 2x2 reads better than a display
+// above a row of four: the display stops being a 420px-wide picture of very
+// little, and the knobs stay 34px.
+component KnobQuad inherits VerticalLayout {
+    spacing: 0px;
+    @children
+}
+
+component ColumnHead inherits SectionLabel {
+    horizontal-alignment: center;
+}
+
+// One oscillator. Four knobs is exactly the width of a quarter of the face, so
+// the four modules on the OSC page are equal and the gutters are even.
+component OscColumn inherits Rectangle {
+    in property <string> title;
+    in property <int> wave;
+    in property <float> level: 1.0;
+    in property <float> width-value: 0.5;
+    in property <float> trace-semitones: 0;
+    in property <string> semis-text: "0 st";
+    in property <string> fine-text: "0 ct";
+    in property <string> level-text: "0.0 dB";
+    background: Theme.panel;
+    border-radius: Theme.radius-sm;
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        SectionLabel { text: root.title; }
+        SelectorBank {
+            options: ["SIN", "TRI", "SAW", "PLS"];
+            selected-index: root.wave;
+            segment-width: 44px;
+        }
+        // Scales by level on purpose: an oscillator muted in the mix draws
+        // flat, so the page says which of the three you are actually hearing.
+        OscillatorTrace {
+            vertical-stretch: 1;
+            wave: root.wave;
+            pulse-width: root.width-value;
+            level: root.level;
+            semitones: root.trace-semitones;
+        }
+        HorizontalLayout {
+            Big { label: "Semi"; value: 0.5; value-text: root.semis-text; }
+            Big { label: "Fine"; value: 0.5; value-text: root.fine-text; }
+            Big { label: "Level"; value: root.level; value-text: root.level-text; }
+            Big { label: "Width"; value: root.width-value; value-text: "50%"; }
+        }
+    }
+}
+
+export component Concept inherits Window {
+    width: 904px;
+    height: 1290px;
+    background: Theme.background;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 10px;
+
+        // ---- OSC ---------------------------------------------------------
+        // Four equal modules with even gutters. The fourth is narrower in
+        // content, not in width, so its one knob centres instead of leaving a
+        // hole at the right edge.
+        Page {
+            active: 0;
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                OscColumn { horizontal-stretch: 1; title: "OSC 1"; wave: 2; level: 1.0; }
+                OscColumn { horizontal-stretch: 1; title: "OSC 2"; wave: 0; level: 0.45; trace-semitones: 12; semis-text: "+12 st"; fine-text: "+4 ct"; level-text: "-9.0 dB"; }
+                OscColumn { horizontal-stretch: 1; title: "OSC 3"; wave: 3; level: 0.0; trace-semitones: -12; semis-text: "-12 st"; fine-text: "-4 ct"; level-text: "-inf"; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.panel;
+                    border-radius: Theme.radius-sm;
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 4px;
+                        SectionLabel { text: "SUB"; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            VerticalLayout {
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    SectionLabel { text: "OCT"; width: 34px; vertical-alignment: center; }
+                                    SelectorBank { options: ["-1", "-2"]; selected-index: 0; segment-width: 42px; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    SectionLabel { text: "WAVE"; width: 34px; vertical-alignment: center; }
+                                    SelectorBank { options: ["SIN", "SQR"]; selected-index: 0; segment-width: 42px; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    SectionLabel { text: "FROM"; width: 34px; vertical-alignment: center; }
+                                    SelectorBank { options: ["1", "2", "3"]; selected-index: 0; segment-width: 28px; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                            }
+                            // NOISE has exactly one control of its own, so it
+                            // is a captioned knob rather than a section.
+                            VerticalLayout {
+                                spacing: 2px;
+                                SectionLabel { text: "NOISE"; horizontal-alignment: center; }
+                                Big { label: "Colour"; value: 0.5; bipolar: true; value-text: "0%"; }
+                                Rectangle { vertical-stretch: 1; }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                        // The device's own output stage. New parameters --
+                        // see the note in the plan status.
+                        SectionLabel { text: "OUTPUT"; }
+                        HorizontalLayout {
+                            alignment: center;
+                            Big { label: "Volume"; value: 0.8; value-text: "0.0 dB"; }
+                            Big { label: "Pan"; value: 0.5; bipolar: true; value-text: "C"; }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- NETWORK -----------------------------------------------------
+        // One GridLayout, so the heads and the rows share their columns by
+        // construction rather than by two lists of widths agreeing.
+        Page {
+            active: 1;
+            Module {
+                vertical-stretch: 1;
+                title: "NETWORK  ·  ROW MODULATES COLUMN";
+                GridLayout {
+                    spacing: 4px;
+                    Row {
+                        Rectangle { width: 62px; }
+                        ColumnHead { text: "> OSC 1"; }
+                        ColumnHead { text: "> OSC 2"; }
+                        ColumnHead { text: "> OSC 3"; }
+                        ColumnHead { text: "MIX"; }
+                    }
+                    Row {
+                        SectionLabel { text: "OSC 1"; vertical-alignment: center; }
+                        Cell { text: "FB 60%"; fill: 0.6; bipolar: true; }
+                        Cell { text: "+80%"; fill: 0.8; bipolar: true; }
+                        Cell { bipolar: true; }
+                        Cell { text: "0.0 dB"; fill: 0.9; }
+                    }
+                    Row {
+                        SectionLabel { text: "OSC 2"; vertical-alignment: center; }
+                        Cell { text: "-45%"; fill: -0.45; bipolar: true; }
+                        Cell { bipolar: true; }
+                        Cell { bipolar: true; }
+                        Cell { text: "-9.0 dB"; fill: 0.45; }
+                    }
+                    Row {
+                        SectionLabel { text: "OSC 3"; vertical-alignment: center; }
+                        Cell { bipolar: true; }
+                        Cell { bipolar: true; }
+                        Cell { bipolar: true; }
+                        Cell { text: "-inf"; }
+                    }
+                    Row {
+                        SectionLabel { text: "SUB"; vertical-alignment: center; }
+                        Cell { inert: true; }
+                        Cell { inert: true; }
+                        Cell { inert: true; }
+                        Cell { text: "-14 dB"; fill: 0.3; }
+                    }
+                    Row {
+                        SectionLabel { text: "NOISE"; vertical-alignment: center; }
+                        Cell { bipolar: true; }
+                        Cell { bipolar: true; }
+                        Cell { text: "-30%"; fill: -0.3; bipolar: true; }
+                        Cell { text: "-22 dB"; fill: 0.2; }
+                    }
+                    Row {
+                        SectionLabel { text: "SYNC"; vertical-alignment: center; }
+                        Cell { text: "< OSC 3"; fill: 0.0001; }
+                        Cell { text: "OFF"; }
+                        Cell { text: "OFF"; }
+                        Cell { inert: true; }
+                    }
+                }
+            }
+        }
+
+        // ---- FILTER ------------------------------------------------------
+        // Two peers at the same size: the response and the contour that moves
+        // it. The previous pass gave the response the whole width and the
+        // envelope a corner, which said they were not equally important.
+        Page {
+            active: 2;
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                Module {
+                    width: 430px;
+                    title: "FILTER";
+                    SelectorBank { options: ["LP12", "LP24", "BP", "HP"]; selected-index: 0; segment-width: 60px; }
+                    HorizontalLayout {
+                        vertical-stretch: 1;
+                        spacing: 6px;
+                        FilterResponseDisplay {
+                            horizontal-stretch: 1;
+                            cutoff: 0.55; resonance: 0.35; env-amount: 0.4;
+                        }
+                        KnobQuad {
+                            HorizontalLayout {
+                                Big { label: "Cutoff"; value: 0.55; value-text: "2.4 kHz"; }
+                                Big { label: "Reso"; value: 0.35; value-text: "35%"; }
+                            }
+                            HorizontalLayout {
+                                Big { label: "Drive"; value: 0.5; value-text: "50%"; }
+                                Big { label: "Feedback"; value: 0.85; bipolar: true; value-text: "+70%"; }
+                            }
+                        }
+                    }
+                }
+                Module {
+                    horizontal-stretch: 1;
+                    title: "FILTER ENV";
+                    EnvelopeEditor {
+                        vertical-stretch: 1;
+                        attack: 0.05; decay: 0.3; sustain: 0.5; release: 0.2;
+                        attack-text: "5 ms"; decay-text: "300 ms"; sustain-text: "50%"; release-text: "200 ms";
+                    }
+                    // The handles on the curve stay, and these are the same
+                    // four values as numbers you can read and dial exactly.
+                    HorizontalLayout {
+                        alignment: center;
+                        Big { label: "Attack"; value: 0.1; value-text: "5 ms"; }
+                        Big { label: "Decay"; value: 0.4; value-text: "300 ms"; }
+                        Big { label: "Sustain"; value: 0.5; value-text: "50%"; }
+                        Big { label: "Release"; value: 0.3; value-text: "200 ms"; }
+                        Big { label: "Env Amt"; value: 0.7; bipolar: true; value-text: "+40%"; }
+                        Big { label: "Keytrack"; value: 0.5; value-text: "100%"; }
+                        Big { label: "Velocity"; value: 0.5; bipolar: true; value-text: "0%"; }
+                    }
+                }
+            }
+        }
+
+        // ---- AMP ---------------------------------------------------------
+        Page {
+            active: 3;
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                Module {
+                    horizontal-stretch: 1;
+                    title: "AMP ENV";
+                    EnvelopeEditor {
+                        vertical-stretch: 1;
+                        attack: 0.02; decay: 0.2; sustain: 0.7; release: 0.15;
+                        attack-text: "2 ms"; decay-text: "200 ms"; sustain-text: "70%"; release-text: "150 ms";
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        Big { label: "Attack"; value: 0.05; value-text: "2 ms"; }
+                        Big { label: "Decay"; value: 0.35; value-text: "200 ms"; }
+                        Big { label: "Sustain"; value: 0.7; value-text: "70%"; }
+                        Big { label: "Release"; value: 0.28; value-text: "150 ms"; }
+                        Big { label: "Velocity"; value: 1.0; value-text: "100%"; }
+                        Big { label: "Glide"; value: 0; value-text: "0 ms"; }
+                    }
+                }
+                Module {
+                    width: 430px;
+                    title: "VOICES  ·  8";
+                    caption: "2 NOTES";
+                    HorizontalLayout {
+                        spacing: 6px;
+                        SectionLabel { text: "UNISON"; width: 52px; vertical-alignment: center; }
+                        SelectorBank { options: ["1x", "2x", "4x", "8x"]; selected-index: 2; segment-width: 44px; }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        SectionLabel { text: "CHORUS"; width: 52px; vertical-alignment: center; }
+                        SelectorBank { options: ["OFF", "I", "II", "ENS"]; selected-index: 0; segment-width: 44px; }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        Big { label: "Detune"; value: 0.35; value-text: "35%"; }
+                        Big { label: "Spread"; value: 0.6; value-text: "60%"; }
+                        Big { label: "Drift"; value: 0.2; value-text: "20%"; }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+
+        // ---- MOD ---------------------------------------------------------
+        // The LFO shows its own shape, which is what fills the left column and
+        // lets the route rows stop being 660px of black.
+        Page {
+            active: 4;
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                Module {
+                    width: 340px;
+                    title: "LFO";
+                    SelectorBank { options: ["SIN", "TRI", "SAW", "SQR", "S+H", "CHA"]; selected-index: 0; segment-width: 52px; }
+                    HorizontalLayout {
+                        vertical-stretch: 1;
+                        spacing: 6px;
+                        OscillatorTrace { horizontal-stretch: 1; wave: 0; level: 1.0; }
+                        KnobQuad {
+                            HorizontalLayout {
+                                Big { label: "Rate"; value: 0.4; value-text: "2.0 Hz"; }
+                                Big { label: "Warp"; value: 0.5; bipolar: true; value-text: "0%"; }
+                            }
+                            HorizontalLayout {
+                                Big { label: "Slew"; value: 0.2; value-text: "20%"; }
+                                Big { label: "Phase"; value: 0; value-text: "0 deg"; }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        SectionLabel { text: "RETRIG"; width: 40px; vertical-alignment: center; }
+                        SelectorBank { options: ["FREE", "CHORD", "NOTE"]; selected-index: 1; segment-width: 60px; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                Module {
+                    horizontal-stretch: 1;
+                    title: "ROUTES";
+                    caption: "3 of 16";
+                    for route in [
+                        { s: "LFO", d: "Cutoff", a: "+62%", f: 0.62 },
+                        { s: "Amp Env", d: "XM 1>2", a: "-30%", f: -0.3 },
+                        { s: "Velocity", d: "Drive", a: "+45%", f: 0.45 },
+                    ] : Rectangle {
+                        height: 26px;
+                        background: Theme.background;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 8px;
+                            Text { text: route.s; color: Theme.text; font-size: 11px; vertical-alignment: center; width: 74px; }
+                            Text { text: "->"; color: Theme.text-faint; font-size: 11px; vertical-alignment: center; }
+                            Text { text: route.d; color: Theme.text; font-size: 11px; vertical-alignment: center; horizontal-stretch: 1; }
+                            Rectangle {
+                                width: 88px;
+                                height: 12px;
+                                y: (parent.height - 12px) / 2;
+                                background: Theme.surface;
+                                border-radius: 2px;
+                                Rectangle {
+                                    x: route.f >= 0 ? parent.width / 2 : parent.width / 2 * (1 + route.f);
+                                    width: parent.width / 2 * abs(route.f);
+                                    height: parent.height;
+                                    background: Theme.accent.with-alpha(0.55);
+                                }
+                                Rectangle { x: parent.width / 2; width: 1px; height: parent.height; background: Theme.border; }
+                            }
+                            Text { text: route.a; color: Theme.text; font-size: 11px; vertical-alignment: center; width: 42px; horizontal-alignment: right; }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    HorizontalLayout {
+                        alignment: start;
+                        PageTab { text: "+ ADD"; }
+                    }
+                }
+            }
+        }
+    }
+}

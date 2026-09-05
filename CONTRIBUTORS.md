@@ -73,7 +73,8 @@ Alphabetical by model name, then by harness.
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
   ML-P8, DS-01 and modulator-module plans, and the build of DS-01 and of
-  ML-P8's own modulation and voice pool; the `mooloop-session` extraction;
+  ML-P8's own modulation, voice pool, outlets and paged face; the
+  `mooloop-session` extraction;
   the Slint MCP server behind `scripts/mooloop-mcp`; `scripts/antibox`,
   `scripts/slint-sketch` and `scripts/loop-profile`;
   `docs/WIDGET_INVENTORY.md`; `docs/ARCHITECTURE_REVIEW.md`; and the

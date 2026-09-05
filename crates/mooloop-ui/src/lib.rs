@@ -2858,6 +2858,8 @@ impl UiState {
         window.set_mlp8_filter_decay(mlp8.filter_decay);
         window.set_mlp8_filter_sustain(mlp8.filter_sustain);
         window.set_mlp8_filter_release(mlp8.filter_release);
+        window.set_mlp8_master_volume(mlp8.master_volume);
+        window.set_mlp8_master_pan(mlp8.master_pan);
         window.set_mlp8_drift(mlp8.drift);
         window.set_mlp8_unison(mlp8.unison.to_index());
         window.set_mlp8_detune(mlp8.detune);
@@ -8027,6 +8029,8 @@ impl AppUi {
         wire_mlp8!(on_mlp8_filter_decay_changed, p8::PARAM_FILTER_DECAY, f32);
         wire_mlp8!(on_mlp8_filter_sustain_changed, p8::PARAM_FILTER_SUSTAIN, f32);
         wire_mlp8!(on_mlp8_filter_release_changed, p8::PARAM_FILTER_RELEASE, f32);
+        wire_mlp8!(on_mlp8_master_volume_changed, p8::PARAM_MASTER_VOLUME, f32);
+        wire_mlp8!(on_mlp8_master_pan_changed, p8::PARAM_MASTER_PAN, f32);
         wire_mlp8!(on_mlp8_drift_changed, p8::PARAM_DRIFT, f32);
         wire_mlp8!(on_mlp8_unison_changed, p8::PARAM_UNISON, i32);
         wire_mlp8!(on_mlp8_detune_changed, p8::PARAM_DETUNE, f32);
