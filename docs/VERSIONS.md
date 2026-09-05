@@ -10,7 +10,7 @@ supporting types merely exist.
 
 ## 0.1.1 — A usable post-0.1.0 instrument
 
-Status: in progress.
+Status: shipped 2026-08-27.
 
 This is the first point release after the `v0.1.0` baseline. It collects the
 work that turns the prototype into a more dependable instrument before the
@@ -42,6 +42,38 @@ The effect suite is finished for this release: twelve kinds, the whole
 
 This release does not claim general automation, retained audio, sends,
 sidechains, recording, or a metronome.
+
+## 0.1.2 — Three instruments, and a grid to modulate them with
+
+Status: shipped 2026-09-05.
+
+This release does not change the architecture 0.1.1 settled; it fills it.
+Three addressable generators, a modulator grid on every channel, device
+presets, and the sampler's stretch and slice work.
+
+Milestones:
+
+- **Done.** Three new generators ship, addressable through `GeneratorParams`
+  from their first commit and each with a paged face sized in rack units:
+  the ML-M1 filter/performance mono, the eight-voice ML-P8 and its
+  oscillator network, and the DS-01 drum synth with its seventeen-patch
+  factory bank.
+- **Done.** The channel modulation shelf is a module grid: five module
+  kinds, eight modules and sixteen routes per channel, and durable route
+  identities, so reordering the grid or the device chain moves a module
+  without changing what a route means.
+- **Done.** A device preset is saved and loaded from that device's own rail,
+  every effect kind ships a factory bank, and the header names the preset
+  the device came from.
+- **Done.** The sampler stretches and slices, and a stretch can be committed
+  to the buffer and reverted. The four gaps that push left open are recorded
+  in `CURRENT.md` rather than hidden.
+- **Partly.** The tooltip debt 0.1.1 recorded is still open on the sampler
+  face: `hover-hint` reaches the effect faces, not that one, so the ON toggle
+  that Slice mode bypasses cannot yet say so.
+
+This release does not claim MIDI input that reaches the engine, recording, a
+metronome, sends, or sidechains.
 
 ## 0.2.0 — Automation that is audible
 

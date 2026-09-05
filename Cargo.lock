@@ -2999,7 +2999,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "mooloop-core",
  "mooloop-dsp",
@@ -3009,7 +3009,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "toml",
@@ -3017,7 +3017,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-dsp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "arc-swap",
  "mooloop-core",
@@ -3025,7 +3025,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-engine"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "arc-swap",
  "hound",
@@ -3039,7 +3039,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-project"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "mooloop-core",
  "pathdiff",
@@ -3050,7 +3050,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-session"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "hound",
  "mooloop-core",
@@ -3063,7 +3063,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-spike-time-stretch"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "hound",
  "rustfft",
@@ -3071,7 +3071,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "hound",
  "i-slint-backend-testing",
