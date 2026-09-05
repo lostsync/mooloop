@@ -1844,7 +1844,7 @@ impl RenderState {
         // same reason `install_compensation` is: an offline render builds its
         // own `RenderState` and never runs a pump, so without this an export
         // would be the one place the channels rendered in index order.
-        self.audio = Box::new(AudioTapBank::new(project.audio_graph()));
+        *self.audio = AudioTapBank::new(project.audio_graph());
     }
 
     /// Build and install the tree's latency compensation from `project`.
@@ -3062,20 +3062,32 @@ impl RenderState {
                 self.aux_scratch.r[..frames].copy_from_slice(&tap.r[..frames]);
                 true
             });
-            let published = self.strips[index].active_source.outlets();
-            let mut ports = self.audio.ports(index, published);
-            let strip = &mut self.strips[index];
-            strip.bus.clear(frames);
-            strip.process(
-                &context,
-                &self.events[index],
-                source.then_some(&self.aux_scratch),
-                &mut ports,
-            );
-            drop(ports);
+            // Scoped, because the port group holds the bank borrowed and the
+            // mute check below needs it back.
+            {
+                let published = self.strips[index].active_source.outlets();
+                let mut ports = self.audio.ports(index, published);
+                let strip = &mut self.strips[index];
+                strip.bus.clear(frames);
+                strip.process(
+                    &context,
+                    &self.events[index],
+                    source.then_some(&self.aux_scratch),
+                    &mut ports,
+                );
+            }
             if muted {
                 // Its tap is filled and its bus is not read: a muted producer
                 // publishes, and reaches nothing else.
+                //
+                // It also publishes its *control* outlets, where a muted
+                // channel nobody reads freezes them at the last audible
+                // block. That is a difference between two muted channels, and
+                // the moving one is the honest answer: a muted channel's
+                // modulators already keep running so its knobs keep animating,
+                // and a device that has stopped sounding should publish a
+                // decayed envelope rather than the one it had when it was
+                // silenced.
                 if let Some(delay) = self.strips[index].compensation.as_mut() {
                     delay.reset();
                 }

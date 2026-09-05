@@ -140,10 +140,12 @@ fn an_aux_in_hears_an_oscillator_its_producer_does_not_carry() {
 /// the edge type is general.
 #[test]
 fn the_same_edge_works_through_ds01s_tone() {
-    let mut params = Ds01Params::default();
-    // Silent in DS-01's own mix, so this is the pre-level claim again.
-    params.tone_level = 0.0;
-    params.noise_level = 0.5;
+    let params = Ds01Params {
+        // Silent in DS-01's own mix, so this is the pre-level claim again.
+        tone_level: 0.0,
+        noise_level: 0.5,
+        ..Ds01Params::default()
+    };
     let mut producer = ProjectChannel::ds01_with_params(0, 1, params);
     producer.setup.channel.volume = 1.0;
     producer.notes[0].push(NoteEvent::new(1, 0, 96, 48, 120));

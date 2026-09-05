@@ -332,6 +332,16 @@ from `AUDIO_ARCHITECTURE.md`. A composite may still implement an explicit
 fixed/delayed audio-rate network internally. The conceptual public interface
 does not bypass the graph work for an external connection.
 
+**The typed audio edge landed 2026-09-05.** A unit may publish audio outlets
+beside its control ones, declaring where inside itself each is tapped, and a
+consumer reads one in the same block: `compile_audio_graph` orders producers
+before consumers, buffer ownership is the engine's, a cycle is refused and
+its subscription retained, and every tap declared so far is upstream of its
+channel's effect chain so no compensation term is owed. `Aux In` is the first
+consumer. Sidechain audio and feedback still wait, on a *dependency* edge and
+on step 7's delay policy respectively — the two things that paragraph names
+which the edge type does not yet carry.
+
 ## UI independence
 
 DSP units do not know about Slint or a future node-editor implementation.

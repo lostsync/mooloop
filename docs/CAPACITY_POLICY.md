@@ -47,6 +47,20 @@ test measuring the whole graph rather than a paragraph.
   on the realtime path buys a bounds check every tick and an allocation story
   every edit, to save memory the reservation fix already recovered.
 
+- Typed audio edges reserve nothing at all, which is the shape this policy
+  asks for. A channel's subscription is one optional value; the *buffers* are
+  the expensive part — 64 KB each — and exist only for the distinct
+  (producer, outlet) pairs somebody actually reads, allocated off the audio
+  thread and installed with the schedule they belong to. A project that has
+  never authored an edge holds none, and the footprint test says so. The two
+  finite numbers around it are declaration bounds rather than caps on
+  anything a user creates: `MAX_DEVICE_AUDIO_TAPS` (8) is the widest audio
+  outlet table a *device* may declare, checked by `outlet::tests::check_table`
+  so an over-wide table fails at its own test rather than losing its last
+  outlets silently; `aux_in::MAX_SOURCE_OUTLET` (63) is the highest outlet id
+  the Aux In selector can name, eight times the widest table declared, with a
+  test that fails the day a device publishes an id past it.
+
 ## Rule for new work
 
 Before adding a numerical cap to a user-created collection, first use an

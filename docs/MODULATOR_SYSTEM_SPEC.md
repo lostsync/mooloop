@@ -10,7 +10,13 @@ Delivery steps 1 through 3 of the order at the end of this document have
 landed: `docs/plans/archive/modulator-modules/` built the module grid and five
 module kinds, and `docs/plans/archive/modulator-capacity/` made capacity a
 constant with a measured price. Steps 4 and 5 — device outlets, then typed
-auxiliary edges — have not.
+auxiliary edges — landed on 2026-09-05, in `docs/plans/archive/poly-synth-v2/`,
+`docs/plans/archive/drum-synth-v2/` and
+`docs/plans/archive/typed-audio-edges/`: a route can name a generator's
+published control outlet, and an `Aux In` channel can read a published *audio*
+outlet in the same block. A control outlet still crosses a device boundary
+with one declared block of latency; an audio one does not, and cannot, because
+a block-sized delay is a delay whose length is the host's buffer size.
 
 ## Purpose
 

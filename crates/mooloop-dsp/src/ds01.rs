@@ -1926,9 +1926,11 @@ mod tests {
     /// subscriber has to be one of the reasons it runs.
     #[test]
     fn a_silent_layer_still_publishes_its_pre_level_tap() {
-        let mut params = Ds01Params::default();
-        params.body_level = 0.0;
-        params.noise_level = 0.6;
+        let params = Ds01Params {
+            body_level: 0.0,
+            noise_level: 0.6,
+            ..Ds01Params::default()
+        };
         let (heard, published) = hit_publishing(params, 8192, TAP_BODY);
         assert!(rms(&published) > 0.0, "a silent body published nothing");
         assert_eq!(
@@ -1940,9 +1942,11 @@ mod tests {
 
     #[test]
     fn each_declared_tap_carries_its_own_point_in_the_voice() {
-        let mut params = Ds01Params::default();
-        params.noise_level = 0.5;
-        params.body_level = 0.5;
+        let params = Ds01Params {
+            noise_level: 0.5,
+            body_level: 0.5,
+            ..Ds01Params::default()
+        };
         for tap in [TAP_TONE, TAP_NOISE, TAP_BODY, TAP_PRE_SHAPE] {
             let (_, published) = hit_publishing(params, 4096, tap);
             assert!(

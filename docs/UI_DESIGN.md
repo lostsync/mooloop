@@ -173,7 +173,13 @@ alignment, and height contract as effects.
 - Device faces have one fixed 268 px height.
 - Width is quantized in 220 px units with 4 px inter-device gaps. Half-unit
   widths are valid for compact effects.
-- Every source device uses 3U. An effect uses only the units its working
+- A source device declares its width the same way an effect does, and for the
+  same reason: 3U for the sampler, the two v1 synths and the ML-M1; 4U for the
+  ML-P8 and the DS-01, which spend pages rather than one dense screen and
+  need the fourth unit to hold three modules of 34 px dials without shrinking
+  one; 2U for Aux In, whose whole content is a source, an outlet and a level,
+  and which at 3U would be empty rather than generous. A bus's output stage
+  stands in the same position at 2U. An effect uses only the units its working
   controls require, declared once in `effect_kind_units`
   (`mooloop-ui/src/lib.rs`) rather than in each face: 1U for filter, drive,
   bitcrush, limiter, plate, and Buffer; 2U for gate, compressor, EQ, and Mod;
