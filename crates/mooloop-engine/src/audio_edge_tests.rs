@@ -12,9 +12,9 @@
 
 use crate::render::RenderState;
 use mooloop_core::{
-    aux_in, ds01, mlp8, AudioSubscription, AuxInParams, Ds01Params, MlP8Params, ModLfoParams,
-    ModPolarity, ModRoute, ModulatorParams, NoteEvent, ParamAddr, Project, ProjectChannel,
-    EffectTarget, STRIP_PARAM_PAN,
+    aux_in, ds01, mlp8, AudioSubscription, AutomationLane, AutomationPoint, AuxInParams,
+    Ds01Params, MlP8Params, ModLfoParams, ModPolarity, ModRoute, ModulatorParams, NoteEvent,
+    ParamAddr, ParamOwner, Project, ProjectChannel, EffectTarget, STRIP_PARAM_PAN,
 };
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -434,6 +434,65 @@ fn an_unused_edge_costs_no_buffers_at_all() {
         ..Project::default()
     };
     assert_eq!(shared.audio_graph().tap_count(), 1);
+}
+
+/// Level is an ordinary continuous parameter: it takes a route and it takes a
+/// lane, exactly like any other. That is the whole of `04`'s second "done
+/// when", and it is worth asserting through the engine rather than trusting
+/// the descriptor table, because it is the generic parameter path that has to
+/// reach a generator kind that did not exist when it was written.
+#[test]
+fn aux_in_level_takes_a_lane_and_a_route() {
+    let level = ParamAddr {
+        scope: EffectTarget::Channel(1),
+        owner: ParamOwner::Source,
+        param: aux_in::PARAM_LEVEL,
+    };
+    let base = Project {
+        channels: vec![
+            muted_osc3_producer(),
+            aux_in_channel(1, Some(AudioSubscription::new(0, mlp8::OUTLET_OSC3))),
+        ],
+        ..Project::default()
+    };
+    let plain = render_blocks(&base, 0.5, 256);
+    assert!(peak(&plain) > 0.01, "the edge is inaudible before the lane");
+
+    // A lane that runs the level down to silence over the bar.
+    let mut automated = base.clone();
+    let mut lane = AutomationLane::new(level);
+    lane.upsert(AutomationPoint::new(1, 0, 1.0));
+    lane.upsert(AutomationPoint::new(2, 384, 0.0));
+    automated.channels[1].automation[0].push(lane);
+    let lanes = render_blocks(&automated, 0.5, 256);
+    assert!(
+        lanes
+            .iter()
+            .zip(plain.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-6),
+        "an automation lane on Level changed nothing"
+    );
+
+    // And a route from an LFO on the consumer's own rack.
+    let mut routed = base.clone();
+    let rack = &mut routed.channels[1].setup.modulation;
+    rack.install(
+        0,
+        ModulatorParams::Lfo(ModLfoParams {
+            rate_hz: 4.0,
+            ..ModLfoParams::default()
+        }),
+    );
+    rack.add_route(ModRoute::to_slot(0, level, 0.9, ModPolarity::Bipolar))
+        .expect("Level is a legal destination");
+    let routed = render_blocks(&routed, 0.5, 256);
+    assert!(
+        routed
+            .iter()
+            .zip(plain.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-6),
+        "a modulation route onto Level changed nothing"
+    );
 }
 
 /// A modulator's phase must not depend on a subscription somebody made on

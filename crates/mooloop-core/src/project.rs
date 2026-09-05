@@ -993,4 +993,39 @@ mod tests {
         let text = toml::to_string(&project).unwrap();
         assert_eq!(toml::from_str::<Project>(&text).unwrap(), project);
     }
+
+    /// An Aux In's subscription is the one generator parameter that names
+    /// another channel, so it is the one whose round trip is worth asserting
+    /// on its own: an edge that survived a save as "no source" would be a
+    /// silent channel with no error anywhere.
+    ///
+    /// The other half is the format's defaulted-field rule: a manifest
+    /// written before Aux In existed has no `aux_in` channel at all, and one
+    /// whose `state.params` is empty loads as an Aux In subscribed to
+    /// nothing — silent rather than invalid.
+    #[test]
+    fn an_aux_in_subscription_survives_a_round_trip_and_defaults_when_absent() {
+        let mut project = Project::default();
+        project.channels.push(ProjectChannel::aux_in_with_params(
+            1,
+            1,
+            crate::AuxInParams {
+                source_channel: 0,
+                source_outlet: crate::mlp8::OUTLET_OSC3,
+                level: 0.5,
+            },
+        ));
+        let text = toml::to_string(&project).unwrap();
+        let reloaded: Project = toml::from_str(&text).unwrap();
+        assert_eq!(reloaded, project);
+        assert_eq!(
+            reloaded.channels[1].setup.source.audio_subscription(),
+            Some(crate::AudioSubscription::new(0, crate::mlp8::OUTLET_OSC3))
+        );
+
+        let bare: ChannelSource =
+            toml::from_str("type = \"aux_in\"\n[state.params]\n").expect("an empty Aux In loads");
+        assert_eq!(bare.kind(), DeviceKind::AuxIn);
+        assert!(bare.audio_subscription().is_none());
+    }
 }

@@ -152,8 +152,8 @@ face. Four things the doing changed:
 
 ## Step 05: the measurements
 
-Eleven tests in `mooloop_engine::audio_edge_tests`, plus the device-level ones
-in `mooloop_dsp`.
+Twelve tests in `mooloop_engine::audio_edge_tests`, plus the device-level ones
+in `mooloop_dsp` and the persistence round trip in `mooloop_core::project`.
 
 - **The headline case, both halves.** An Aux In hears ML-P8's `Osc 3` while
   ML-P8's own output does not carry it, measured spectrally in both
@@ -180,6 +180,12 @@ in `mooloop_dsp`.
 - **A ring is refused and gives the edge back when broken**, and a
   three-channel ring too.
 - **A modulator's phase does not move** when an edge is added.
+- **Level takes a lane and a route**, through the engine rather than through
+  the descriptor table: it is the generic parameter path that has to reach a
+  generator kind that did not exist when it was written.
+- **A project with an Aux In saves and reloads**, subscription intact, and a
+  manifest with an empty `state.params` loads as an Aux In subscribed to
+  nothing rather than failing.
 - **Cost.** A sixteen-channel project with no edges pays 4 KiB more than
   before — twenty bytes a channel for the Aux In node, and eight and sixteen
   bytes a voice for ML-P8's and DS-01's published samples — and **no buffers
