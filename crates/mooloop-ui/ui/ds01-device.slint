@@ -2,11 +2,23 @@
 //
 // A drum sound is one event unfolding over a few hundred milliseconds, so
 // every control is either a description of a moment in that event or of a
-// layer's contribution to it. The face is that: three source layers as
-// parallel columns because they are parallel in the signal path, their sum as
-// the fourth column, and each layer's scope directly underneath the controls
-// that make it. `docs/plans/drum-synth-v2/08-the-face.md` has the argument,
-// and `mockups/` has the two layouts this one beat.
+// layer's contribution to it. The face spends **pages** on that: one page per
+// layer, one for the whole voice, one for the two envelopes that shape the
+// output, and one for the per-hit matrix.
+//
+// ## Why pages, and why the scopes are not the editor
+//
+// `08-the-face.md` fitted ninety-two controls on one screen by making the
+// scopes the envelope editor — every envelope time a handle dragged on a
+// curve rather than a knob — and paid for the rest with a 21px dial and an
+// 8px caption at five rack units. That is the same trade ML-P8's first face
+// made and Adam rejected: on a 14" laptop a dial that size is a smudge.
+//
+// So the scopes are displays again and every parameter has a control of its
+// own, at the 34px `KnobStack` the rest of the program uses. What used to buy
+// the fit is now bought by pages, exactly as `docs/plans/poly-synth-v2/
+// mockups/README.md` argues: a page is a few large controls inside modules
+// that share one chrome, never a grid of small ones.
 //
 // ## Why this face is indexed by parameter id
 //
@@ -15,8 +27,8 @@
 // table written out by hand — which is the thing the device exists not to
 // have. Instead the face takes arrays indexed by descriptor id and reports
 // edits as `(id, normalized)`, the same shape the modulation depths already
-// use. Rust owns the ranges, the curves and the formatting; the face owns the
-// layout and nothing else.
+// use. Rust owns the ranges, the curves, the polarity and the formatting; the
+// face owns the layout and nothing else.
 //
 // Values cross as *normalized* `0..1` rather than in natural units, because
 // that is the space a route and an automation lane both work in, and it is
@@ -24,131 +36,8 @@
 // parameter and an exponential one.
 
 import { Theme } from "theme.slint";
-import { MiniKnob, SectionLabel } from "controls.slint";
-
-// A knob with its name under it. `MiniKnob` draws only the dial, so a dense
-// row places its own captions.
-component CellKnob inherits Rectangle {
-    in property <string> label;
-    in property <int> param;
-    in property <[float]> values;
-    in property <[float]> defaults;
-    in property <[string]> value-texts;
-    in property <bool> bipolar;
-    in property <color> fill: Theme.accent;
-    in property <bool> modulation-armed;
-    in property <[float]> modulation-depths;
-    in property <[bool]> modulation-allowed;
-    in property <[float]> modulation-offsets;
-    in property <[int]> modulation-route-counts;
-    callback changed(int, float);
-    callback edit-started(int);
-    callback edit-finished(int);
-    callback modulation-depth-changed(int, float);
-    callback modulation-edit-started(int);
-    callback modulation-edit-finished(int);
-
-    height: 34px;
-    MiniKnob {
-        x: (parent.width - self.width) / 2;
-        y: (min(parent.height, 24px) - self.height) / 2;
-        diameter: 21px;
-        label: root.label;
-        value: root.values[root.param];
-        default-value: root.defaults[root.param];
-        value-text: root.value-texts[root.param];
-        bipolar: root.bipolar;
-        fill: root.fill;
-        modulation-armed: root.modulation-armed;
-        modulation-allowed: root.modulation-allowed[root.param];
-        modulation-depth: root.modulation-depths[root.param];
-        modulation-offset: root.modulation-offsets[root.param];
-        modulation-route-count: root.modulation-route-counts[root.param];
-        changed(v) => { root.changed(root.param, v); }
-        edit-started() => { root.edit-started(root.param); }
-        edit-finished() => { root.edit-finished(root.param); }
-        modulation-depth-changed(v) => { root.modulation-depth-changed(root.param, v); }
-        modulation-edit-started() => { root.modulation-edit-started(root.param); }
-        modulation-edit-finished() => { root.modulation-edit-finished(root.param); }
-    }
-    Text {
-        y: 24px;
-        width: 100%;
-        text: root.label;
-        color: Theme.text-muted;
-        font-size: 8px;
-        horizontal-alignment: center;
-        overflow: elide;
-    }
-}
-
-// A stepped control, shown as its current label and cycled by clicking.
-//
-// A chip rather than a knob because a stepped parameter is a choice, and
-// because the value a musician needs to read off it is its name. It cycles
-// rather than opening a list: none of DS-01's stepped controls has more than
-// a handful of positions, and the ones that do — Choke Group, Bits — read as
-// numbers anyway.
-component CellChip inherits Rectangle {
-    in property <string> label;
-    in property <int> param;
-    in property <[float]> values;
-    in property <[string]> value-texts;
-    in property <[int]> step-counts;
-    in property <color> text-color: Theme.text;
-    callback changed(int, float);
-
-    height: 34px;
-    private property <int> steps: max(2, root.step-counts[root.param]);
-
-    Rectangle {
-        x: 4px;
-        y: (min(parent.height, 21px) - self.height) / 2;
-        width: parent.width - 8px;
-        height: 17px;
-        background: touch.has-hover ? Theme.surface-active : Theme.surface-raised;
-        border-radius: Theme.radius-sm;
-        border-width: 1px;
-        border-color: Theme.border;
-        Text {
-            width: 100%;
-            height: 100%;
-            text: root.value-texts[root.param];
-            color: root.text-color;
-            font-size: 8px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        touch := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                // Cycle in normalized space, which is where a stepped
-                // descriptor's positions are evenly spaced.
-                let position = round(root.values[root.param] * (root.steps - 1));
-                let next = mod(position + 1, root.steps);
-                root.changed(root.param, next / (root.steps - 1));
-            }
-        }
-    }
-    Text {
-        y: 24px;
-        width: 100%;
-        text: root.label;
-        color: Theme.text-muted;
-        font-size: 8px;
-        horizontal-alignment: center;
-        overflow: elide;
-    }
-}
-
-component Rule inherits Rectangle { height: 1px; background: Theme.border; }
-component VRule inherits Rectangle { width: 1px; background: Theme.border; }
-
-component CellRow inherits Rectangle {
-    height: 34px;
-    HorizontalLayout { spacing: 0px; @children }
-}
+import { KnobStack, MiniKnob, PickerChip, SectionLabel } from "controls.slint";
+import { DevicePageButton } from "device-rack.slint";
 
 // One contour, as the face needs to draw it: every time is already a
 // fraction of the scope's span, because converting seconds into a fraction
@@ -167,15 +56,240 @@ export struct Ds01Contour {
     active: bool,
 }
 
+// One knob on this face: 34px, stacked, typed into, and addressed by id.
+//
+// A page is then a list of parameter ids rather than ten lines of modulation
+// plumbing repeated per knob, and the id is the whole address — every array
+// here is indexed by descriptor id, so a knob that knows its id knows its
+// value, its default, its text, its step, its polarity and its routes.
+component Ds01Knob inherits KnobStack {
+    in property <int> param;
+    in property <[float]> values;
+    in property <[float]> defaults;
+    in property <[string]> value-texts;
+    // `0` for a continuous parameter, the position count for a stepped one.
+    in property <[int]> step-counts;
+    in property <[bool]> bipolars;
+    in property <[float]> depths;
+    in property <[bool]> allowed;
+    in property <[float]> offsets;
+    in property <[int]> route-counts;
+    callback edited(int, float);
+    callback committed(int, string);
+    callback route-depth-changed(int, float);
+    callback route-edit-started(int);
+    callback route-edit-finished(int);
+
+    // The travel is the normalized range, whatever the parameter's own units
+    // and curve are. A stepped parameter's positions are evenly spaced in
+    // that space, so its step is one over the gaps between them.
+    minimum: 0;
+    maximum: 1;
+    // The model row is the value, and stays the value: `controlled` stops the
+    // knob writing its own property, so the binding below survives a drag.
+    // Without it the first drag drops the binding and this control never
+    // follows the patch again — see `ParameterKnob.controlled`. Rust closes
+    // the loop by writing the row back inside `value-changed`.
+    controlled: true;
+    value: root.values[root.param];
+    modulation-depth: root.depths[root.param];
+    default-value: root.defaults[root.param];
+    display-text: root.value-texts[root.param];
+    bipolar: root.bipolars[root.param];
+    step: root.step-counts[root.param] > 1
+        ? 1.0 / (root.step-counts[root.param] - 1)
+        : 0;
+    modulation-allowed: root.allowed[root.param];
+    modulation-offset: root.offsets[root.param];
+    modulation-route-count: root.route-counts[root.param];
+    changed(v) => { root.edited(root.param, v); }
+    text-committed(t) => { root.committed(root.param, t); }
+    modulation-depth-changed(v) => { root.route-depth-changed(root.param, v); }
+    modulation-edit-started => { root.route-edit-started(root.param); }
+    modulation-edit-finished => { root.route-edit-finished(root.param); }
+}
+
+// A small dial for a row that has no room for a stack: the matrix's amount
+// and curve. Same addressing, and controlled for the same reason.
+component Ds01Dial inherits MiniKnob {
+    in property <int> param;
+    in property <[float]> values;
+    in property <[float]> defaults;
+    in property <[string]> value-texts;
+    in property <[bool]> bipolars;
+    in property <[float]> depths;
+    in property <[bool]> allowed;
+    in property <[float]> offsets;
+    in property <[int]> route-counts;
+    callback edited(int, float);
+    callback route-depth-changed(int, float);
+    callback route-edit-started(int);
+    callback route-edit-finished(int);
+
+    controlled: true;
+    value: root.values[root.param];
+    modulation-depth: root.depths[root.param];
+    default-value: root.defaults[root.param];
+    value-text: root.value-texts[root.param];
+    bipolar: root.bipolars[root.param];
+    modulation-allowed: root.allowed[root.param];
+    modulation-offset: root.offsets[root.param];
+    modulation-route-count: root.route-counts[root.param];
+    changed(v) => { root.edited(root.param, v); }
+    modulation-depth-changed(v) => { root.route-depth-changed(root.param, v); }
+    modulation-edit-started() => { root.route-edit-started(root.param); }
+    modulation-edit-finished() => { root.route-edit-finished(root.param); }
+}
+
+// A stepped control shown as its current label and cycled by clicking.
+//
+// A chip rather than a knob because these are *choices* — Poly or Mono, one
+// of four noise generators, one of four drive characters, gated or one-shot —
+// and the value a musician needs to read off one is its name. Nothing that
+// reads as a number is drawn this way: a count is a knob with a step, so
+// Tune, Partials, Repeats and Bits keep their travel.
+//
+// Cycling rather than opening a list: none of them has more than four
+// positions. The matrix's two do, and they use `PickerChip`.
+component Ds01Chip inherits Rectangle {
+    in property <string> label;
+    in property <int> param;
+    in property <[float]> values;
+    in property <[string]> value-texts;
+    in property <[int]> step-counts;
+    callback changed(int, float);
+
+    private property <int> steps: max(2, root.step-counts[root.param]);
+
+    // The same height and caption line as `Ds01Knob`, so a chip in a knob row
+    // sits on the row rather than beside it.
+    width: 50px;
+    height: 69px;
+    VerticalLayout {
+        spacing: 2px;
+        Text {
+            height: 11px;
+            text: root.label;
+            color: Theme.text-muted;
+            font-size: 9px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Rectangle {
+            height: 54px;
+            background: touch.has-hover ? Theme.surface-active : Theme.surface-raised;
+            border-radius: Theme.radius-md;
+            border-width: 1px;
+            border-color: Theme.border;
+            accessible-role: button;
+            accessible-label: root.label;
+            accessible-value: root.value-texts[root.param];
+            Text {
+                width: 100%;
+                height: 100%;
+                text: root.value-texts[root.param];
+                color: Theme.text;
+                font-size: 9px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    // Cycle in normalized space, which is where a stepped
+                    // descriptor's positions are evenly spaced.
+                    let position = round(root.values[root.param] * (root.steps - 1));
+                    let next = mod(position + 1, root.steps);
+                    root.changed(root.param, next / (root.steps - 1));
+                }
+            }
+        }
+    }
+}
+
+// A row of controls under a module's display. Centred, because a row of four
+// under a display that is wider than it reads as a caption rather than as a
+// column of leftovers.
+component KnobRow inherits HorizontalLayout {
+    spacing: 6px;
+    alignment: center;
+    @children
+}
+
+// Where a burst's impulses fall, on a short axis beside the controls that set
+// them, so spacing and spread are seen rather than inferred from two numbers.
+// At Repeats 1 there is one tick, which is honest rather than empty.
+component BurstTicks inherits Rectangle {
+    in property <[float]> at;
+    height: 9px;
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: Theme.border;
+    }
+    for position in root.at : Rectangle {
+        x: clamp(parent.width * position, 0px, parent.width - 2px);
+        width: 2px;
+        height: 100%;
+        background: Theme.accent;
+    }
+}
+
+// A bounded group. Every module on every page has the same padding, the same
+// title row and the same corner, so nothing on this face is aligned by eye.
+component Module inherits Rectangle {
+    in property <string> title;
+    in property <string> caption;
+    in property <color> tint: Theme.accent;
+    // Impulse positions, when this module has a schedule to show. Drawn in
+    // the title row rather than over the controls: it is an axis, not a
+    // scope, and the burst has no vertical extent to draw.
+    in property <[float]> ticks;
+    background: Theme.panel;
+    border-radius: Theme.radius-sm;
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            height: 12px;
+            spacing: 6px;
+            Rectangle {
+                width: 3px;
+                height: 10px;
+                y: 1px;
+                background: root.tint;
+                border-radius: Theme.radius-xs;
+            }
+            SectionLabel { text: root.title; vertical-alignment: center; }
+            if root.ticks.length > 0 : BurstTicks {
+                at: root.ticks;
+                width: 108px;
+                y: 2px;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.caption;
+                color: Theme.text-faint;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+        }
+        @children
+    }
+}
+
 // One layer's contour over the scope's span.
 component Contour inherits Rectangle {
     in property <Ds01Contour> shape;
     in property <color> tint: Theme.accent;
     in property <bool> filled: true;
-    // A column nobody is touching stays legible and goes quiet, so the one
-    // being edited is the one being read. Dimmed by mixing further toward the
-    // panel rather than by alpha: the fill has to stay opaque, for the seam
-    // reasons above.
+    // A contour drawn for context rather than for editing — the amplitude
+    // envelope behind the pitch one — goes quiet, so the page's own contour
+    // is the one being read. Dimmed by mixing further toward the panel rather
+    // than by alpha: the fill has to stay opaque, for the seam reasons below.
     in property <bool> dim;
     private property <int> steps: 160;
     private property <color> fill-tint:
@@ -242,8 +356,8 @@ component Contour inherits Rectangle {
 }
 
 // The rendered hit, from the production voice path. v1's best property, and
-// the reason it sits in the amp column rather than behind every column: it is
-// the device's output, and the output is what the amp envelope shapes.
+// the reason it sits on the AMP page: it is the device's output, and the
+// output is what the amplitude envelope shapes.
 //
 // Drawn as min/max bins rather than a resampled line, so a transient shorter
 // than a pixel still occupies that pixel instead of falling between two.
@@ -268,86 +382,12 @@ component HitTrace inherits Rectangle {
     }
 }
 
-// The least a handle may be drawn from the one before it, as a fraction of
-// the scope.
-//
-// Two handles at the same value are two dots at the same point, and only the
-// one declared later can be grabbed — which is how Pitch Attack came to be
-// uneditable. An envelope's attack and hold are both zero in the default
-// patch, so this is the ordinary case rather than an edge one. The nudge is
-// a *drawing* minimum: the value it reports is still its own, and it only
-// ever applies where the segment is too short to see anyway.
-global HandleMetrics {
-    out property <float> min-gap: 0.045;
-}
-
-// A draggable envelope handle. Its presence is the claim that the scope is
-// where that envelope is *edited* rather than where it is shown, which is
-// what took the envelope times off the knob rows and what makes the device
-// fit on one face.
-component ScopeHandle inherits Rectangle {
-    in property <int> param;
-    // Where it sits, both as fractions of the scope.
-    in property <float> at-x;
-    in property <float> at-y;
-    // The scope's own size. Passed in rather than read from `parent`, which a
-    // component cannot reach from its own root's property bindings.
-    in property <length> span-width;
-    in property <length> span-height;
-    in property <color> tint: Theme.accent;
-    // Dragging left and right edits `param`. A handle that also carries
-    // `vertical-param` edits that one up and down — which the pitch
-    // envelope's peak needs, because when its attack ends and how high it got
-    // are the x and the y of the same corner, and two dots at one point means
-    // the lower one cannot be grabbed.
-    in property <int> vertical-param: -1;
-    callback dragged(int, float);
-    callback edit-started(int);
-    callback edit-finished(int);
-
-    width: 9px;
-    height: 9px;
-    x: clamp(root.span-width * root.at-x - 4px, 0px, root.span-width - 9px);
-    y: clamp(root.span-height * root.at-y - 4px, 0px, root.span-height - 9px);
-    border-radius: 4px;
-    background: touch.has-hover || touch.pressed ? Theme.text : root.tint;
-    border-width: 1px;
-    border-color: Theme.background;
-
-    touch := TouchArea {
-        // Bigger than the dot, so a 9px target is not a 9px target.
-        x: -4px;
-        y: -4px;
-        width: 17px;
-        height: 17px;
-        mouse-cursor: root.vertical-param >= 0 ? MouseCursor.move : MouseCursor.ew-resize;
-        pointer-event(event) => {
-            if (event.button == PointerEventButton.left) {
-                if (event.kind == PointerEventKind.down) { root.edit-started(root.param); }
-                if (event.kind == PointerEventKind.up) { root.edit-finished(root.param); }
-            }
-        }
-        moved => {
-            if (self.pressed) {
-                root.dragged(root.param, clamp(
-                    (root.x + 4px + self.mouse-x - self.pressed-x) / root.span-width,
-                    0, 1));
-                if (root.vertical-param >= 0) {
-                    root.dragged(root.vertical-param, clamp(
-                        1 - (root.y + 4px + self.mouse-y - self.pressed-y) / root.span-height,
-                        0, 1));
-                }
-            }
-        }
-    }
-}
-
-// The box a column's contours are drawn in. Faint verticals at the same
-// fractions in every column key the four scopes to one another without
-// pretending they are one continuous axis: they are four drawings of the same
-// span.
+// The box a contour is drawn in. Faint verticals at the same fractions on
+// every page key the scopes to one another without pretending they are one
+// continuous axis: they are four drawings of the same span, which the page
+// bar states once.
 component Scope inherits Rectangle {
-    background: Theme.panel;
+    background: Theme.surface;
     border-radius: Theme.radius-sm;
     border-width: 1px;
     border-color: Theme.border;
@@ -361,55 +401,117 @@ component Scope inherits Rectangle {
     @children
 }
 
-// Where a burst's impulses fall, on a short axis beside the controls that set
-// them, so spacing and spread are seen rather than inferred from two numbers.
-// At Repeats 1 there is one tick, which is honest rather than empty.
-component BurstTicks inherits Rectangle {
-    in property <[float]> at;
-    height: 9px;
-    Rectangle {
-        y: parent.height - 1px;
-        width: 100%;
-        height: 1px;
-        background: Theme.border;
-    }
-    for position in root.at : Rectangle {
-        x: clamp(parent.width * position, 0px, parent.width - 2px);
-        width: 2px;
-        height: 100%;
-        background: Theme.accent;
-    }
-}
+// One row of the per-hit matrix: what it reads, what it moves, how far, and
+// with what shaping.
+//
+// A row is never removed, only switched off, so the eight rows are eight rows
+// for the life of the patch and a route keeps its place. Source and
+// Destination are pickers rather than cycling chips because nine and
+// forty-seven are past what clicking through can carry.
+component MatrixRow inherits Rectangle {
+    in property <int> index;
+    in property <[float]> values;
+    in property <[float]> defaults;
+    in property <[string]> value-texts;
+    in property <[int]> step-counts;
+    in property <[bool]> bipolars;
+    in property <[string]> source-names;
+    in property <[string]> dest-names;
+    in property <bool> modulation-armed;
+    in property <[float]> depths;
+    in property <[bool]> allowed;
+    in property <[float]> offsets;
+    in property <[int]> route-counts;
+    callback changed(int, float);
+    callback route-depth-changed(int, float);
+    callback route-edit-started(int);
+    callback route-edit-finished(int);
 
-component Column inherits Rectangle {
-    in property <string> title;
-    in property <color> tint: Theme.accent;
-    in property <length> pad: 6px;
-    // Impulse positions, when this column has a schedule to show. Drawn in
-    // the title row rather than under the controls: it is an axis, not a
-    // scope, and the band has no vertical room to spare.
-    in property <[float]> ticks;
-    VerticalLayout {
-        padding: root.pad;
-        spacing: 3px;
-        HorizontalLayout {
-            spacing: 5px;
-            height: 11px;
-            Rectangle {
-                width: 3px;
-                height: 10px;
-                background: root.tint;
-                border-radius: Theme.radius-xs;
-            }
-            SectionLabel { text: root.title; }
-            Rectangle { width: 8px; }
-            if root.ticks.length > 0 : BurstTicks {
-                at: root.ticks;
-                width: 96px;
-            }
-            Rectangle { horizontal-stretch: 1; }
+    // The matrix's eight rows of four, 100-131.
+    private property <int> base: 100 + root.index * 4;
+    private property <int> source-steps: max(2, root.step-counts[root.base]);
+    private property <int> dest-steps: max(2, root.step-counts[root.base + 1]);
+    // Source 0 is None, which is what an unused row rests on.
+    private property <bool> live: round(root.values[root.base] * (root.source-steps - 1)) > 0;
+
+    height: 18px;
+    HorizontalLayout {
+        spacing: 5px;
+        Text {
+            width: 12px;
+            text: root.index + 1;
+            color: Theme.text-faint;
+            font-size: 9px;
+            vertical-alignment: center;
         }
-        @children
+        PickerChip {
+            width: 104px;
+            options: root.source-names;
+            selected-index: round(root.values[root.base] * (root.source-steps - 1));
+            tooltip: "What this row reads";
+            text-color: root.live ? Theme.accent : Theme.text-faint;
+            picked(i) => { root.changed(root.base, i / (root.source-steps - 1)); }
+        }
+        Text {
+            width: 10px;
+            text: "\u{2192}";
+            color: Theme.text-faint;
+            font-size: 9px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+        PickerChip {
+            horizontal-stretch: 1;
+            options: root.dest-names;
+            selected-index: round(root.values[root.base + 1] * (root.dest-steps - 1));
+            tooltip: "What this row moves";
+            text-color: root.live ? Theme.text : Theme.text-faint;
+            picked(i) => { root.changed(root.base + 1, i / (root.dest-steps - 1)); }
+        }
+        Ds01Dial {
+            diameter: 16px;
+            param: root.base + 2;
+            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+            bipolars: root.bipolars;
+            label: "Amount";
+            modulation-armed: root.modulation-armed;
+            depths: root.depths; allowed: root.allowed;
+            offsets: root.offsets; route-counts: root.route-counts;
+            edited(p, v) => { root.changed(p, v); }
+            route-depth-changed(p, v) => { root.route-depth-changed(p, v); }
+            route-edit-started(p) => { root.route-edit-started(p); }
+            route-edit-finished(p) => { root.route-edit-finished(p); }
+        }
+        Text {
+            width: 46px;
+            text: root.value-texts[root.base + 2];
+            color: root.live ? Theme.text : Theme.text-faint;
+            font-size: 9px;
+            font-family: "monospace";
+            vertical-alignment: center;
+        }
+        Ds01Dial {
+            diameter: 16px;
+            param: root.base + 3;
+            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+            bipolars: root.bipolars;
+            label: "Curve";
+            modulation-armed: root.modulation-armed;
+            depths: root.depths; allowed: root.allowed;
+            offsets: root.offsets; route-counts: root.route-counts;
+            edited(p, v) => { root.changed(p, v); }
+            route-depth-changed(p, v) => { root.route-depth-changed(p, v); }
+            route-edit-started(p) => { root.route-edit-started(p); }
+            route-edit-finished(p) => { root.route-edit-finished(p); }
+        }
+        Text {
+            width: 42px;
+            text: root.value-texts[root.base + 3];
+            color: root.live ? Theme.text : Theme.text-faint;
+            font-size: 9px;
+            font-family: "monospace";
+            vertical-alignment: center;
+        }
     }
 }
 
@@ -420,28 +522,23 @@ export component Ds01DeviceFace inherits Rectangle {
     in property <[string]> value-texts;
     // `0` for a continuous parameter, the position count for a stepped one.
     in property <[int]> step-counts;
+    // Whether a parameter swings both ways about zero, which decides where a
+    // dial fills from. Supplied rather than written out per knob: it is
+    // `descriptor.min < 0` and the face does not get a second copy of that.
+    in property <[bool]> bipolars;
     in property <bool> modulation-armed;
     in property <[float]> modulation-depths;
     in property <[bool]> modulation-allowed;
     in property <[float]> modulation-offsets;
     in property <[int]> modulation-route-counts;
-    // The span every scope is drawn over, as the header states it.
+    // The span every scope is drawn over, as the page bar states it.
     in property <string> span-text;
-    // Which column was last edited: 0 tone, 1 noise, 2 body, 3 amp, -1 none.
-    // Derived from the parameter rather than from a hover, because editing a
-    // control is the touch that matters and the id already says which column
-    // it belongs to.
-    in property <int> focused-column: -1;
-
-    callback value-changed(int, float);
-    callback edit-started(int);
-    callback edit-finished(int);
-    callback modulation-depth-changed(int, float);
-    callback modulation-edit-started(int);
-    callback modulation-edit-finished(int);
-
-    background: Theme.surface;
-
+    // VOICE, TONE, NOISE, BODY, AMP, DS-01 MOD.
+    in-out property <int> page;
+    /// `Ds01ModSource::ALL` and the destination list, labelled by Rust so the
+    /// face holds no second copy of either.
+    in property <[string]> matrix-source-names;
+    in property <[string]> matrix-dest-names;
     // The four contours, in a fixed order Rust fills: amp, pitch, noise, mod.
     in property <[Ds01Contour]> contours;
     // The rendered hit, in min/max bins over the same span.
@@ -449,960 +546,1041 @@ export component Ds01DeviceFace inherits Rectangle {
     in property <[float]> preview-maximums;
     // Impulse positions, as fractions of the burst's own length.
     in property <[float]> burst-ticks;
-    /// A handle moved: the parameter, and where it was dropped as a fraction
-    /// of the scope. Rust turns that back into seconds through the span and
-    /// the descriptor, because the conversion needs the parameter table.
-    callback handle-dragged(int, float);
-
-    VerticalLayout {
-        spacing: 0px;
-
-        // The globals, and the span every scope below is drawn over. The
-        // captions sit beside the controls rather than under them: a header
-        // row is read left to right, and the eight pixels it saves are eight
-        // pixels of scope in every column below.
-        Rectangle {
-            height: 26px;
-            background: Theme.surface;
-            HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
-                padding-top: 3px;
-                padding-bottom: 3px;
-                spacing: 6px;
-                Text {
-                    text: "DS-01";
-                    color: Theme.text;
-                    font-size: 10px;
-                    vertical-alignment: center;
-                    width: 44px;
-                }
-                Text {
-                    text: "TUNE";
-                    color: Theme.text-muted;
-                    font-size: 8px;
-                    vertical-alignment: center;
-                }
-                CellChip {
-                    width: 52px; height: 20px; param: 0; label: "";
-                    values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                    changed(p, v) => { root.value-changed(p, v); }
-                }
-                Text {
-                    text: "CHOKE";
-                    color: Theme.text-muted;
-                    font-size: 8px;
-                    vertical-alignment: center;
-                }
-                CellChip {
-                    width: 34px; height: 20px; param: 2; label: "";
-                    values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                    changed(p, v) => { root.value-changed(p, v); }
-                }
-                CellKnob {
-                    width: 24px; height: 20px; param: 3; label: "";
-                    values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                    modulation-armed: root.modulation-armed;
-                    modulation-depths: root.modulation-depths;
-                    modulation-allowed: root.modulation-allowed;
-                    modulation-offsets: root.modulation-offsets;
-                    modulation-route-counts: root.modulation-route-counts;
-                    changed(p, v) => { root.value-changed(p, v); }
-                    edit-started(p) => { root.edit-started(p); }
-                    edit-finished(p) => { root.edit-finished(p); }
-                    modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                    modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                Text {
-                    text: "RETRIG";
-                    color: Theme.text-muted;
-                    font-size: 8px;
-                    vertical-alignment: center;
-                }
-                CellChip {
-                    width: 52px; height: 20px; param: 4; label: "";
-                    values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                    changed(p, v) => { root.value-changed(p, v); }
-                }
-                Text {
-                    text: "VEL";
-                    color: Theme.text-muted;
-                    font-size: 8px;
-                    vertical-alignment: center;
-                }
-                CellKnob {
-                    width: 24px; height: 20px; param: 5; label: "";
-                    values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                    modulation-armed: root.modulation-armed;
-                    modulation-depths: root.modulation-depths;
-                    modulation-allowed: root.modulation-allowed;
-                    modulation-offsets: root.modulation-offsets;
-                    modulation-route-counts: root.modulation-route-counts;
-                    changed(p, v) => { root.value-changed(p, v); }
-                    edit-started(p) => { root.edit-started(p); }
-                    edit-finished(p) => { root.edit-finished(p); }
-                    modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                    modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                    modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                }
-                Rectangle { horizontal-stretch: 1; }
-                Text {
-                    text: root.span-text;
-                    color: Theme.text-faint;
-                    font-size: 8px;
-                    vertical-alignment: center;
-                }
-            }
-        }
-        Rule {}
-
-        // Three sources side by side because they are parallel in the signal
-        // path, their sum to the right of them. Each column is as wide as its
-        // own controls need, which is why they are not equal: the noise layer
-        // has ten cells and the body has six.
-        Rectangle {
-            vertical-stretch: 1;
-            background: Theme.surface;
-            HorizontalLayout {
-                spacing: 0px;
-                Column {
-                    title: "TONE";
-                    horizontal-stretch: 4;
-                    CellRow {
-                        CellKnob {
-                            label: "LEVEL"; param: 10; fill: Theme.accent;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "PITCH"; param: 11; fill: Theme.accent;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "WAVE"; param: 12; fill: Theme.accent;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellChip {
-                            label: "PART"; param: 13;
-                            values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                        }
-                    }
-                    CellRow {
-                        CellKnob {
-                            label: "SPREAD"; param: 14; fill: Theme.accent;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "FM"; param: 15; fill: Theme.accent;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "RATIO"; param: 16; fill: Theme.accent;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "P.CURVE"; param: 52; fill: Theme.warning;
-                            bipolar: true;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                    }
-                    Scope {
-                        vertical-stretch: 1;
-                        Contour {
-                            x: 1px; y: 1px;
-                            width: parent.width - 2px; height: parent.height - 2px;
-                            shape: root.contours[0]; tint: Theme.accent; filled: true;
-                            dim: root.focused-column >= 0 && root.focused-column != 0;
-                        }
-                        Contour {
-                            x: 1px; y: 1px;
-                            width: parent.width - 2px; height: parent.height - 2px;
-                            shape: root.contours[1]; tint: Theme.warning; filled: false;
-                            dim: root.focused-column >= 0 && root.focused-column != 0;
-                        }
-
-                        // The pitch envelope's own handles. The amplitude
-                        // envelope is drawn here because it is what shapes
-                        // this layer, but it is edited in its own column.
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            // The pitch envelope's peak: when its attack ends
-                            // and how far it went, which are one corner.
-                            param: 50; vertical-param: 53;
-                            at-x: root.contours[1].attack; at-y: 1 - root.contours[1].height;
-                            tint: Theme.warning;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 51; at-x: root.contours[1].attack + root.contours[1].decay; at-y: 1.0; tint: Theme.warning;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                    }
-                }
-                VRule {}
-                Column {
-                    title: "NOISE";
-                    tint: #6ea8d8;
-                    horizontal-stretch: 5;
-                    CellRow {
-                        CellKnob {
-                            label: "LEVEL"; param: 20; fill: #6ea8d8;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellChip {
-                            label: "COLOR"; param: 21;
-                            values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                        }
-                        CellKnob {
-                            label: "RATE"; param: 22; fill: #6ea8d8;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "MORPH"; param: 23; fill: #6ea8d8;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "CUTOFF"; param: 24; fill: #6ea8d8;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                    }
-                    CellRow {
-                        CellKnob {
-                            label: "RES"; param: 25; fill: #6ea8d8;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "CURVE"; param: 63; fill: #6ea8d8;
-                            bipolar: true;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "SUS"; param: 64; fill: #6ea8d8;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "REL"; param: 65; fill: #6ea8d8;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellChip {
-                            label: "GATE"; param: 66;
-                            values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                        }
-                    }
-                    Scope {
-                        vertical-stretch: 1;
-                        Contour {
-                            x: 1px; y: 1px;
-                            width: parent.width - 2px; height: parent.height - 2px;
-                            shape: root.contours[2]; tint: #6ea8d8; filled: true;
-                            dim: root.focused-column >= 0 && root.focused-column != 1;
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 60; at-x: root.contours[2].attack; at-y: 0.0; tint: #6ea8d8;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 61; at-y: 0.0;
-                            at-x: max(
-                                root.contours[2].attack + root.contours[2].hold,
-                                root.contours[2].attack + HandleMetrics.min-gap); tint: #6ea8d8;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 62; at-x: root.contours[2].attack + root.contours[2].hold + root.contours[2].decay; at-y: 1.0; tint: #6ea8d8;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                    }
-                }
-                VRule {}
-                Column {
-                    title: "BODY";
-                    tint: #d8a15a;
-                    horizontal-stretch: 3;
-                    CellRow {
-                        CellKnob {
-                            label: "LEVEL"; param: 30; fill: #d8a15a;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "PITCH"; param: 31; fill: #d8a15a;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "RATIO"; param: 32; fill: #d8a15a;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                    }
-                    CellRow {
-                        CellKnob {
-                            label: "DECAY"; param: 33; fill: #d8a15a;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "DAMP"; param: 34; fill: #d8a15a;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "EXCITE"; param: 35; fill: #d8a15a;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                    }
-                    Scope {
-                        vertical-stretch: 1;
-                        // The body has no envelope: it rings. Its ring time
-                        // is drawn as a contour so the column reads like its
-                        // neighbours, and dragged like one.
-                        Rectangle {
-                            x: 1px; y: 1px;
-                            width: parent.width - 2px; height: parent.height - 2px;
-                            Contour {
-                                width: 100%; height: 100%;
-                                shape: {
-                                    attack: 0.002,
-                                    hold: 0.0,
-                                    decay: root.body-decay-fraction,
-                                    curve: 0.0,
-                                    sustain: 0.0,
-                                    height: 1.0,
-                                    active: true,
-                                };
-                                tint: #d8a15a;
-                                dim: root.focused-column >= 0 && root.focused-column != 2;
-                            }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 33; at-x: root.body-decay-fraction; at-y: 1.0; tint: #d8a15a;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                    }
-                }
-                VRule {}
-                Column {
-                    title: "AMP \u{00b7} MOD ENV";
-                    horizontal-stretch: 4;
-                    CellRow {
-                        CellKnob {
-                            label: "CURVE"; param: 43; fill: Theme.accent;
-                            bipolar: true;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "SUSTAIN"; param: 44; fill: Theme.accent;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "RELEASE"; param: 45; fill: Theme.accent;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellChip {
-                            label: "GATE"; param: 46;
-                            values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                        }
-                    }
-                    CellRow {
-                        CellKnob {
-                            label: "M.CURVE"; param: 73; fill: #a78bfa;
-                            bipolar: true;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "M.SUS"; param: 74; fill: #a78bfa;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "M.REL"; param: 75; fill: #a78bfa;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellChip {
-                            label: "M.GATE"; param: 76;
-                            values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                        }
-                    }
-                    Scope {
-                        vertical-stretch: 1;
-                        Contour {
-                            x: 1px; y: 1px;
-                            width: parent.width - 2px; height: parent.height - 2px;
-                            shape: root.contours[0]; tint: Theme.accent; filled: true;
-                            dim: root.focused-column >= 0 && root.focused-column != 3;
-                        }
-                        Contour {
-                            x: 1px; y: 1px;
-                            width: parent.width - 2px; height: parent.height - 2px;
-                            shape: root.contours[3]; tint: #a78bfa; filled: false;
-                            dim: root.focused-column >= 0 && root.focused-column != 3;
-                        }
-                        // Over the envelope's fill rather than under it: the
-                        // fill is opaque, for the seam reasons the contour
-                        // documents, so a trace beneath it would be a trace
-                        // nobody sees. Above it the hit reads inside the
-                        // shape that made it, which is the relationship the
-                        // column is for.
-                        HitTrace {
-                            x: 1px; y: 1px;
-                            width: parent.width - 2px; height: parent.height - 2px;
-                            minimums: root.preview-minimums;
-                            maximums: root.preview-maximums;
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 40; at-x: root.contours[0].attack; at-y: 0.0; tint: Theme.accent;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 41; at-y: 0.0;
-                            at-x: max(
-                                root.contours[0].attack + root.contours[0].hold,
-                                root.contours[0].attack + HandleMetrics.min-gap); tint: Theme.accent;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 42; at-x: root.contours[0].attack + root.contours[0].hold + root.contours[0].decay; at-y: 1.0; tint: Theme.accent;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 70; at-x: root.contours[3].attack; at-y: 0.0; tint: #a78bfa;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 71; at-y: 0.0;
-                            at-x: max(
-                                root.contours[3].attack + root.contours[3].hold,
-                                root.contours[3].attack + HandleMetrics.min-gap); tint: #a78bfa;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                        ScopeHandle {
-                            span-width: parent.width; span-height: parent.height;
-                            param: 72; at-x: root.contours[3].attack + root.contours[3].hold + root.contours[3].decay; at-y: 1.0; tint: #a78bfa;
-                            dragged(p, f) => { root.handle-dragged(p, f); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                        }
-                    }
-                }
-            }
-        }
-        Rule {}
-
-        // The shaper and the burst come after the voice, so they sit in a
-        // band underneath the columns that make it.
-        Rectangle {
-            height: 56px;
-            background: Theme.surface;
-            HorizontalLayout {
-                spacing: 0px;
-                Column {
-                    title: "BURST";
-                    pad: 3px;
-                    ticks: root.burst-ticks;
-                    horizontal-stretch: 5;
-                    CellRow {
-                        CellChip {
-                            label: "REPEAT"; param: 80;
-                            values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                        }
-                        CellKnob {
-                            label: "SPACING"; param: 81; fill: Theme.accent;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "SPREAD"; param: 82; fill: Theme.accent;
-                            bipolar: true;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "LVL ST"; param: 83; fill: Theme.accent;
-                            bipolar: true;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "PCH ST"; param: 84; fill: Theme.accent;
-                            bipolar: true;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                    }
-                }
-                VRule {}
-                Column {
-                    title: "SHAPE";
-                    tint: Theme.warning;
-                    pad: 3px;
-                    horizontal-stretch: 6;
-                    CellRow {
-                        CellKnob {
-                            label: "DRIVE"; param: 90; fill: Theme.warning;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellChip {
-                            label: "CHAR"; param: 91;
-                            values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                        }
-                        CellKnob {
-                            label: "BIAS"; param: 92; fill: Theme.warning;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellChip {
-                            label: "BITS"; param: 93;
-                            values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                        }
-                        CellKnob {
-                            label: "OUT HP"; param: 94; fill: Theme.warning;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                        CellKnob {
-                            label: "LEVEL"; param: 1; fill: Theme.warning;
-                            values: root.values; defaults: root.defaults; value-texts: root.value-texts;
-                            modulation-armed: root.modulation-armed;
-                            modulation-depths: root.modulation-depths;
-                            modulation-allowed: root.modulation-allowed;
-                            modulation-offsets: root.modulation-offsets;
-                            modulation-route-counts: root.modulation-route-counts;
-                            changed(p, v) => { root.value-changed(p, v); }
-                            edit-started(p) => { root.edit-started(p); }
-                            edit-finished(p) => { root.edit-finished(p); }
-                            modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
-                            modulation-edit-started(p) => { root.modulation-edit-started(p); }
-                            modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
-                        }
-                    }
-                }
-                VRule {}
-                // The matrix's eight rows of four go here. The three
-                // checked-in concepts settled the columns and the bands and
-                // did not draw this panel, so the layout for thirty-two more
-                // controls is an open question rather than one to answer in
-                // passing -- `00-status.md` records it.
-                Rectangle {
-                    horizontal-stretch: 1;
-                    Text {
-                        width: 100%;
-                        height: 100%;
-                        text: "MOD  \u{2014}  eight rows, layout undecided";
-                        color: Theme.text-faint;
-                        font-size: 8px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
-    }
-
     // Where the body's ring reaches the end of the scope's span, as a
     // fraction. Rust supplies it beside the contours for the same reason: the
     // conversion from seconds needs the parameter table.
     in property <float> body-decay-fraction: 0.5;
+
+    callback value-changed(int, float);
+    callback text-committed(int, string);
+    callback modulation-depth-changed(int, float);
+    callback modulation-edit-started(int);
+    callback modulation-edit-finished(int);
+
+    background: Theme.surface;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 5px;
+
+        HorizontalLayout {
+            spacing: 3px;
+            DevicePageButton { text: "VOICE"; active: root.page == 0; clicked => { root.page = 0; } }
+            DevicePageButton { text: "TONE"; active: root.page == 1; clicked => { root.page = 1; } }
+            DevicePageButton { text: "NOISE"; active: root.page == 2; clicked => { root.page = 2; } }
+            DevicePageButton { text: "BODY"; active: root.page == 3; clicked => { root.page = 3; } }
+            DevicePageButton { text: "AMP"; active: root.page == 4; clicked => { root.page = 4; } }
+            // Not plain MOD. The common device frame's MOD opens the *channel*
+            // shelf, and a per-hit matrix row being mistaken for a channel
+            // route is exactly the confusion this name prevents.
+            DevicePageButton { text: "DS-01 MOD"; active: root.page == 5; clicked => { root.page = 5; } }
+            Rectangle { horizontal-stretch: 1; }
+            // Stated once for the whole face rather than once per scope: the
+            // pages are four drawings of the same span, and a span that moved
+            // per page would make a shorter contour look like a different
+            // scale instead of a shorter contour.
+            Text {
+                text: root.span-text;
+                color: Theme.text-faint;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+
+        // ---- VOICE -------------------------------------------------------
+        // Everything that belongs to the hit as a whole rather than to a
+        // layer: which drum this is, how it is chased off, how many impulses
+        // it fires, and what colour the shaper gives the sum.
+        if root.page == 0 : HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 6px;
+            Module {
+                horizontal-stretch: 1;
+                title: "VOICE";
+                KnobRow {
+                    Ds01Knob {
+                        label: "TUNE"; param: 0;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "LEVEL"; param: 1;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "VEL AMT"; param: 5;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "CHOKE"; param: 2;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "CHK TIME"; param: 3;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Chip {
+                        label: "RETRIG"; param: 4;
+                        values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
+                        changed(p, v) => { root.value-changed(p, v); }
+                    }
+                }
+            }
+            Module {
+                horizontal-stretch: 1;
+                title: "BURST";
+                ticks: root.burst-ticks;
+                KnobRow {
+                    Ds01Knob {
+                        label: "REPEATS"; param: 80;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "SPACING"; param: 81;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "SPREAD"; param: 82;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "LVL STEP"; param: 83;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "PCH STEP"; param: 84;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+            }
+            Module {
+                horizontal-stretch: 1;
+                title: "SHAPE";
+                tint: Theme.warning;
+                KnobRow {
+                    Ds01Knob {
+                        label: "DRIVE"; param: 90;
+                        fill: Theme.warning;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Chip {
+                        label: "CHAR"; param: 91;
+                        values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
+                        changed(p, v) => { root.value-changed(p, v); }
+                    }
+                    Ds01Knob {
+                        label: "BIAS"; param: 92;
+                        fill: Theme.warning;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "BITS"; param: 93;
+                        fill: Theme.warning;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "OUT HP"; param: 94;
+                        fill: Theme.warning;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+            }
+        }
+
+        // ---- TONE --------------------------------------------------------
+        if root.page == 1 : HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 6px;
+            Module {
+                width: 242px;
+                title: "TONE";
+                KnobRow {
+                    Ds01Knob {
+                        label: "LEVEL"; param: 10;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "PITCH"; param: 11;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "WAVE"; param: 12;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "PARTIALS"; param: 13;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "SPREAD"; param: 14;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "FM AMT"; param: 15;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "FM RATIO"; param: 16;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+            }
+            Module {
+                horizontal-stretch: 1;
+                title: "PITCH ENV";
+                tint: Theme.warning;
+                caption: "AMPLITUDE FOR SCALE";
+                Scope {
+                    vertical-stretch: 1;
+                    // The amplitude envelope behind it, quiet: a pitch sweep
+                    // is read against how long the hit lasts, and this is the
+                    // one page where that relationship is the whole point.
+                    Contour {
+                        x: 1px; y: 1px;
+                        width: parent.width - 2px; height: parent.height - 2px;
+                        shape: root.contours[0]; tint: Theme.accent; filled: false; dim: true;
+                    }
+                    Contour {
+                        x: 1px; y: 1px;
+                        width: parent.width - 2px; height: parent.height - 2px;
+                        shape: root.contours[1]; tint: Theme.warning; filled: true;
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "ATTACK"; param: 50;
+                        fill: Theme.warning;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "DECAY"; param: 51;
+                        fill: Theme.warning;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "CURVE"; param: 52;
+                        fill: Theme.warning;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "DEPTH"; param: 53;
+                        fill: Theme.warning;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+            }
+        }
+
+        // ---- NOISE -------------------------------------------------------
+        if root.page == 2 : HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 6px;
+            Module {
+                width: 186px;
+                title: "NOISE";
+                tint: #6ea8d8;
+                KnobRow {
+                    Ds01Knob {
+                        label: "LEVEL"; param: 20;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Chip {
+                        label: "COLOUR"; param: 21;
+                        values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
+                        changed(p, v) => { root.value-changed(p, v); }
+                    }
+                    Ds01Knob {
+                        label: "RATE"; param: 22;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "MORPH"; param: 23;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "CUTOFF"; param: 24;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "RESO"; param: 25;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+            }
+            Module {
+                horizontal-stretch: 1;
+                title: "NOISE ENV";
+                tint: #6ea8d8;
+                Scope {
+                    vertical-stretch: 1;
+                    Contour {
+                        x: 1px; y: 1px;
+                        width: parent.width - 2px; height: parent.height - 2px;
+                        shape: root.contours[2]; tint: #6ea8d8; filled: true;
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "ATTACK"; param: 60;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "HOLD"; param: 61;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "DECAY"; param: 62;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "CURVE"; param: 63;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "SUSTAIN"; param: 64;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "RELEASE"; param: 65;
+                        fill: #6ea8d8;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Chip {
+                        label: "GATE"; param: 66;
+                        values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
+                        changed(p, v) => { root.value-changed(p, v); }
+                    }
+                }
+            }
+        }
+
+        // ---- BODY --------------------------------------------------------
+        // The body has no envelope: it rings. Its ring time is drawn as a
+        // contour so the page reads like its neighbours.
+        if root.page == 3 : HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 6px;
+            Module {
+                width: 186px;
+                title: "BODY";
+                tint: #d8a15a;
+                KnobRow {
+                    Ds01Knob {
+                        label: "LEVEL"; param: 30;
+                        fill: #d8a15a;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "PITCH"; param: 31;
+                        fill: #d8a15a;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "RATIO"; param: 32;
+                        fill: #d8a15a;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "DECAY"; param: 33;
+                        fill: #d8a15a;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "DAMPING"; param: 34;
+                        fill: #d8a15a;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "EXCITE"; param: 35;
+                        fill: #d8a15a;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                }
+            }
+            Module {
+                horizontal-stretch: 1;
+                title: "RING";
+                tint: #d8a15a;
+                caption: "THREE TUNED RESONATORS";
+                Scope {
+                    vertical-stretch: 1;
+                    Rectangle {
+                        x: 1px; y: 1px;
+                        width: parent.width - 2px; height: parent.height - 2px;
+                        Contour {
+                            width: 100%; height: 100%;
+                            shape: {
+                                attack: 0.002,
+                                hold: 0.0,
+                                decay: root.body-decay-fraction,
+                                curve: 0.0,
+                                sustain: 0.0,
+                                height: 1.0,
+                                active: true,
+                            };
+                            tint: #d8a15a;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- AMP ---------------------------------------------------------
+        if root.page == 4 : HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 6px;
+            Module {
+                horizontal-stretch: 1;
+                title: "AMP ENV";
+                caption: "RENDERED HIT";
+                Scope {
+                    vertical-stretch: 1;
+                    Contour {
+                        x: 1px; y: 1px;
+                        width: parent.width - 2px; height: parent.height - 2px;
+                        shape: root.contours[0]; tint: Theme.accent; filled: true;
+                    }
+                    // Over the envelope's fill rather than under it: the fill
+                    // is opaque, for the seam reasons the contour documents,
+                    // so a trace beneath it would be a trace nobody sees.
+                    // Above it the hit reads inside the shape that made it,
+                    // which is the relationship the page is for.
+                    HitTrace {
+                        x: 1px; y: 1px;
+                        width: parent.width - 2px; height: parent.height - 2px;
+                        minimums: root.preview-minimums;
+                        maximums: root.preview-maximums;
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "ATTACK"; param: 40;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "HOLD"; param: 41;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "DECAY"; param: 42;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "CURVE"; param: 43;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "SUSTAIN"; param: 44;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "RELEASE"; param: 45;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Chip {
+                        label: "GATE"; param: 46;
+                        values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
+                        changed(p, v) => { root.value-changed(p, v); }
+                    }
+                }
+            }
+            Module {
+                horizontal-stretch: 1;
+                title: "MOD ENV";
+                tint: #a78bfa;
+                caption: "MATRIX SOURCE";
+                Scope {
+                    vertical-stretch: 1;
+                    Contour {
+                        x: 1px; y: 1px;
+                        width: parent.width - 2px; height: parent.height - 2px;
+                        shape: root.contours[3]; tint: #a78bfa; filled: true;
+                    }
+                }
+                KnobRow {
+                    Ds01Knob {
+                        label: "ATTACK"; param: 70;
+                        fill: #a78bfa;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "HOLD"; param: 71;
+                        fill: #a78bfa;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "DECAY"; param: 72;
+                        fill: #a78bfa;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "CURVE"; param: 73;
+                        fill: #a78bfa;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "SUSTAIN"; param: 74;
+                        fill: #a78bfa;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Knob {
+                        label: "RELEASE"; param: 75;
+                        fill: #a78bfa;
+                        values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                        step-counts: root.step-counts; bipolars: root.bipolars;
+                        modulation-armed: root.modulation-armed;
+                        depths: root.modulation-depths; allowed: root.modulation-allowed;
+                        offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                        edited(p, v) => { root.value-changed(p, v); }
+                        committed(p, t) => { root.text-committed(p, t); }
+                        route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                        route-edit-started(p) => { root.modulation-edit-started(p); }
+                        route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                    }
+                    Ds01Chip {
+                        label: "GATE"; param: 76;
+                        values: root.values; value-texts: root.value-texts; step-counts: root.step-counts;
+                        changed(p, v) => { root.value-changed(p, v); }
+                    }
+                }
+            }
+        }
+
+        // ---- DS-01 MOD ---------------------------------------------------
+        // The modulation the channel rack cannot provide: a channel source
+        // produces one number per control tick for the whole channel, and a
+        // drum channel can have eight hits ringing at once, each with its own
+        // velocity, its own position in a burst and its own envelopes.
+        if root.page == 5 : Module {
+            vertical-stretch: 1;
+            title: "DS-01 MOD";
+            caption: "PER HIT, INSIDE THE VOICE";
+            HorizontalLayout {
+                height: 11px;
+                spacing: 5px;
+                Rectangle { width: 12px; }
+                SectionLabel { text: "SOURCE"; width: 104px; }
+                Rectangle { width: 10px; }
+                SectionLabel { text: "DESTINATION"; horizontal-stretch: 1; }
+                SectionLabel { text: "AMOUNT"; width: 67px; }
+                SectionLabel { text: "CURVE"; width: 63px; }
+            }
+            VerticalLayout {
+                spacing: 1px;
+                for row in 8 : MatrixRow {
+                    index: row;
+                    values: root.values; defaults: root.defaults; value-texts: root.value-texts;
+                    step-counts: root.step-counts; bipolars: root.bipolars;
+                    source-names: root.matrix-source-names;
+                    dest-names: root.matrix-dest-names;
+                    modulation-armed: root.modulation-armed;
+                    depths: root.modulation-depths; allowed: root.modulation-allowed;
+                    offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
+                    changed(p, v) => { root.value-changed(p, v); }
+                    route-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+                    route-edit-started(p) => { root.modulation-edit-started(p); }
+                    route-edit-finished(p) => { root.modulation-edit-finished(p); }
+                }
+            }
+        }
+    }
 }

@@ -19,7 +19,7 @@ is worth reading before either.
 | Plan | State |
 | --- | --- |
 | `poly-synth-v2/` | **In progress.** ML-P8 steps 02-05 in; 06 mostly in (outlets declared, published and routable; the picker does not offer them and the audio outlets wait on typed edges); 07 after it. `origin/feat/mlp8-mod` is stale: it carried step 04's WIP, which has landed. |
-| `drum-synth-v2/` | **Approved, no code.** DS-01, nine steps, three rendered face concepts in `mockups/`. |
+| `drum-synth-v2/` | **Steps 02-08 in; step 09's bank ships, its listening does not.** DS-01 plays, is descriptor-addressed throughout, has a six-page face and a seventeen-patch factory bank. Step 07's published outlets are blocked on the shared device-outlet mechanism ML-P8's step 06 also waits for. `mockups/` holds four rendered concepts: the shipped pages, and the three one-screen layouts they replaced. |
 | `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
 | `session-layer-extraction/` | **Done, 2026-09-03.** Lifted `mooloop-session` -- the model, the edits, undo, and engine command emission -- out of `mooloop-ui/src/lib.rs`, which is down from 14,157 lines to 9,797. `cargo test -p mooloop-session` is 87 tests in under a second, and is the first coverage the edit logic has ever had. Two departures are recorded in `00-status.md`: `UiState::new` is still long (callback *registration*, no longer decisions), and the pump's meter polling stayed in the view on purpose. |

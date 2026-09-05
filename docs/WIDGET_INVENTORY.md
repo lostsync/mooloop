@@ -30,6 +30,18 @@ double-click-to-default and an armed modulation source do. `show-sync` adds
 the shared `O.` LED beside the caption, which is what let the LFO's Rate stop
 being a visibly smaller widget than its neighbours.
 
+**Closed 2026-09-04: the long-option picker.** `PickerChip` in
+`controls.slint`. A chip that opens a list and reports the index picked, for
+an option set past what a cycling chip or a segmented bank can carry. It was
+written inside `mlp8-device.slint` for a route list of six sources and
+thirty-one destinations; DS-01's matrix wanted the same thing against nine and
+forty-seven, which is the second use that turns a local component into a
+shared one. `KnobStack` gained a `fill` in the same pass, so a device whose
+pages are its layers can tint each page's dials to match, and `ParameterKnob`
+and `MiniKnob` gained `controlled` — report the change, do not write the
+property — which is what a face indexed by parameter id needs, because a knob
+that writes its own value drops the binding onto the model row it reads.
+
 ---
 
 ## 1. `PolylinePlot` — there is no plotting primitive

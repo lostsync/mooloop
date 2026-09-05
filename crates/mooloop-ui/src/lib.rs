@@ -128,7 +128,8 @@ const JACK_BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 const DRUM_PREVIEW_BINS: usize = 144;
 
 /// Bins in DS-01's rendered hit. Wider than v1's because its scope is wider:
-/// the device takes five rack units.
+/// the AMP page gives it half of a four-unit face rather than a corner of a
+/// three-unit one.
 const DS01_PREVIEW_BINS: usize = 256;
 
 /// How long a DS-01 edit sits still before the hit is re-rendered.
@@ -1353,6 +1354,11 @@ struct Ds01FaceValues {
     texts: Vec<SharedString>,
     /// `0` for a continuous parameter, the position count for a stepped one.
     steps: Vec<i32>,
+    /// Whether the parameter swings both ways about zero, which decides
+    /// whether its dial fills from the centre or from the floor. Sent rather
+    /// than written out per knob: it is `descriptor.min < 0`, and the face
+    /// does not get a second copy of the parameter table.
+    bipolars: Vec<bool>,
 }
 
 /// One past the highest DS-01 id, so an array indexed by id is long enough
@@ -1387,6 +1393,60 @@ fn ds01_step_label(id: u32, params: &Ds01Params) -> Option<&'static str> {
     })
 }
 
+/// How a DS-01 value is written: the factor between the number on the face
+/// and the natural value, and the unit that follows it.
+///
+/// One function, used by the formatter and by the parser, so a field always
+/// reads back what it shows. Three departures from the shared
+/// [`format_param_value`], all of them because a drum lives at the short end
+/// of every range this device has:
+///
+/// - **A time under a second is milliseconds.** Two decimals of seconds makes
+///   a 5 ms attack, a 1 ms one and a zero all read `0.00 s`, and sub-100 ms
+///   percussion is the range the instrument is *for*.
+/// - **A frequency over a kilohertz is kilohertz.** The shared formatter's
+///   `k` starts at ten thousand, which leaves the noise cutoff reading as a
+///   bare `7500`.
+/// - **A route's depth is a percentage**, which is what a share of a
+///   destination's range is called everywhere else in the program.
+fn ds01_display_unit(descriptor: &ParamDescriptor, natural: f32) -> (f32, &'static str) {
+    if ds01::matrix_offset(descriptor.id) == Some(ds01::MATRIX_OFFSET_AMOUNT) {
+        return (0.01, "%");
+    }
+    match descriptor.unit {
+        "s" if natural.abs() < 1.0 => (0.001, "ms"),
+        "Hz" if natural.abs() >= 1_000.0 => (1_000.0, "kHz"),
+        unit => (1.0, unit),
+    }
+}
+
+/// The number itself, at a precision that suits its unit and its size.
+///
+/// Milliseconds get their own rule because they are already the small unit:
+/// `240`, `45`, `5`, `0` rather than `240`, `45.0`, `5.00`, `0.00`.
+fn ds01_number(shown: f32, unit: &str) -> String {
+    let magnitude = shown.abs();
+    // A depth is a share of a range, and a tenth of a percent of one is not a
+    // distinction anybody makes.
+    if unit == "%" {
+        return format!("{shown:.0}");
+    }
+    if unit == "ms" {
+        return if magnitude >= 1.0 || magnitude == 0.0 {
+            format!("{shown:.0}")
+        } else {
+            format!("{shown:.1}")
+        };
+    }
+    if magnitude >= 100.0 {
+        format!("{shown:.0}")
+    } else if magnitude >= 10.0 {
+        format!("{shown:.1}")
+    } else {
+        format!("{shown:.2}")
+    }
+}
+
 /// A DS-01 value as its control reads it.
 ///
 /// A stepped control without an enum behind it is a count — a choke group, a
@@ -1401,15 +1461,65 @@ fn ds01_text(
     if let Some(label) = ds01_step_label(descriptor.id, params) {
         return label.into();
     }
+    let natural = descriptor.from_normalized(normalized);
     if matches!(descriptor.curve, ParamCurve::Stepped(_)) {
-        let natural = descriptor.from_normalized(normalized).round();
-        return if descriptor.unit.is_empty() {
-            format!("{natural:.0}").into()
+        let natural = natural.round();
+        // A tuning reads as an interval, so it keeps its sign in both
+        // directions; a count has no other direction to be in.
+        let sign = if descriptor.min < 0.0 && natural > 0.0 {
+            "+"
         } else {
-            format!("{natural:.0} {}", descriptor.unit).into()
+            ""
+        };
+        return if descriptor.unit.is_empty() {
+            format!("{sign}{natural:.0}").into()
+        } else {
+            format!("{sign}{natural:.0} {}", descriptor.unit).into()
         };
     }
-    format_param_value(descriptor, normalized).into()
+    let (scale, unit) = ds01_display_unit(descriptor, natural);
+    let shown = natural / scale;
+    let sign = if descriptor.min < 0.0 && shown > 0.0 {
+        "+"
+    } else {
+        ""
+    };
+    let number = ds01_number(shown, unit);
+    if unit.is_empty() {
+        format!("{sign}{number}").into()
+    } else if unit == "%" {
+        format!("{sign}{number}{unit}").into()
+    } else {
+        format!("{sign}{number} {unit}").into()
+    }
+}
+
+/// What a typed DS-01 value means.
+///
+/// The unit the user wrote wins; with none written, the number means whatever
+/// the field was already showing. That is the only self-consistent rule for a
+/// field whose unit follows its value: `240` typed over `240 ms` is 240
+/// milliseconds, and a second and a half is written `1.5 s`.
+fn ds01_typed_value(descriptor: &ParamDescriptor, text: &str, current: f32) -> Option<f32> {
+    let number = parse_typed_value(text)?;
+    let suffix = text
+        .trim()
+        .trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
+        .trim()
+        .to_ascii_lowercase();
+    let scale = if suffix.starts_with("ms") {
+        0.001
+    } else if suffix.starts_with('k') {
+        1_000.0
+    } else if suffix.starts_with('%') {
+        0.01
+    } else if suffix.is_empty() {
+        ds01_display_unit(descriptor, current).0
+    } else {
+        // A unit that is not a prefix — `s`, `Hz`, `st` — is the natural one.
+        1.0
+    };
+    Some(number * scale)
 }
 
 fn ds01_face_values(params: &Ds01Params) -> Ds01FaceValues {
@@ -1419,6 +1529,7 @@ fn ds01_face_values(params: &Ds01Params) -> Ds01FaceValues {
         defaults: vec![0.0; len],
         texts: vec![SharedString::new(); len],
         steps: vec![0; len],
+        bipolars: vec![false; len],
     };
     for descriptor in ds01::DESCRIPTORS.iter() {
         let index = descriptor.id as usize;
@@ -1427,6 +1538,7 @@ fn ds01_face_values(params: &Ds01Params) -> Ds01FaceValues {
         out.values[index] = normalized;
         out.defaults[index] = descriptor.to_normalized(descriptor.default);
         out.texts[index] = ds01_text(descriptor, params, normalized);
+        out.bipolars[index] = descriptor.min < 0.0;
         if let ParamCurve::Stepped(count) = descriptor.curve {
             out.steps[index] = i32::from(count);
         }
@@ -1441,6 +1553,24 @@ fn ds01_face_values(params: &Ds01Params) -> Ds01FaceValues {
 /// draws a 5 ms hat as a single spike and clips a 4 s ride entirely, which
 /// makes the display useless at both ends of the range this instrument is
 /// supposed to reach.
+/// What the matrix's two pickers offer, labelled by `mooloop_core`.
+///
+/// Nine sources and forty-seven destinations is well past what a cycling chip
+/// can carry, so the face picks from a list — and the list is built from the
+/// same descriptor table the routes resolve against, so a name on the face
+/// and a name in the engine cannot drift.
+fn ds01_matrix_names() -> (Vec<SharedString>, Vec<SharedString>) {
+    (
+        ds01::Ds01ModSource::ALL
+            .iter()
+            .map(|source| SharedString::from(source.label()))
+            .collect(),
+        ds01::destinations()
+            .map(|descriptor| SharedString::from(descriptor.name))
+            .collect(),
+    )
+}
+
 fn ds01_span_seconds(p: &Ds01Params) -> f32 {
     let env = |e: &mooloop_core::Ds01EnvParams| e.attack + e.hold + e.decay;
     let longest = env(&p.amp)
@@ -1542,6 +1672,10 @@ pub fn refresh_ds01(window: &MainWindow, params: &Ds01Params) {
     window.set_ds01_defaults(face.defaults.as_slice().into());
     window.set_ds01_value_texts(face.texts.as_slice().into());
     window.set_ds01_step_counts(face.steps.as_slice().into());
+    window.set_ds01_bipolars(face.bipolars.as_slice().into());
+    let (sources, destinations) = ds01_matrix_names();
+    window.set_ds01_matrix_source_names(sources.as_slice().into());
+    window.set_ds01_matrix_dest_names(destinations.as_slice().into());
     refresh_ds01_contours(window, params);
     sync_ds01_preview(window, params);
     sync_ds01_burst_ticks(window, params);
@@ -1581,57 +1715,6 @@ fn refresh_ds01_contours(window: &MainWindow, params: &Ds01Params) {
     );
 }
 
-/// Where an envelope segment starts, in seconds, so a handle dropped at a
-/// point on the scope becomes the length of its own segment rather than the
-/// distance from the origin.
-fn ds01_segment_start(p: &Ds01Params, id: u32) -> f32 {
-    let env = |e: &mooloop_core::Ds01EnvParams, offset: u32| match offset {
-        ds01::ENV_OFFSET_HOLD => e.attack,
-        ds01::ENV_OFFSET_DECAY => e.attack + e.hold,
-        _ => 0.0,
-    };
-    match id {
-        id if (ds01::PARAM_AMP_ENV_BASE..ds01::PARAM_AMP_ENV_BASE + ds01::ENV_BLOCK)
-            .contains(&id) =>
-        {
-            env(&p.amp, id - ds01::PARAM_AMP_ENV_BASE)
-        }
-        id if (ds01::PARAM_NOISE_ENV_BASE..ds01::PARAM_NOISE_ENV_BASE + ds01::ENV_BLOCK)
-            .contains(&id) =>
-        {
-            env(&p.noise_env, id - ds01::PARAM_NOISE_ENV_BASE)
-        }
-        id if (ds01::PARAM_MOD_ENV_BASE..ds01::PARAM_MOD_ENV_BASE + ds01::ENV_BLOCK)
-            .contains(&id) =>
-        {
-            env(&p.mod_env, id - ds01::PARAM_MOD_ENV_BASE)
-        }
-        ds01::PARAM_PITCH_DECAY => p.pitch.attack,
-        _ => 0.0,
-    }
-}
-
-/// Which column a parameter belongs to: 0 tone, 1 noise, 2 body, 3 amp.
-///
-/// The face dims the columns nobody is touching, and editing a control is the
-/// touch that matters — so focus follows the parameter rather than the
-/// pointer, and the id already says which column it is drawn in. The pitch
-/// envelope answers "tone" because that is the scope it is drawn on; the
-/// globals, the burst and the shaper answer nothing, because they are not
-/// columns and moving one should not blank the emphasis.
-fn ds01_column(id: u32) -> Option<i32> {
-    Some(match id {
-        10..=19 => 0,
-        20..=29 => 1,
-        30..=39 => 2,
-        40..=49 => 3,
-        50..=59 => 0,
-        60..=69 => 1,
-        70..=79 => 3,
-        _ => return None,
-    })
-}
-
 /// Whether moving this parameter changes what the scopes draw.
 ///
 /// The envelope blocks and the body's ring are the whole of it, and they are
@@ -1657,9 +1740,6 @@ fn touch_ds01_param(window: &MainWindow, params: &Ds01Params, id: u32) {
     let texts = window.get_ds01_value_texts();
     if index < texts.row_count() {
         texts.set_row_data(index, ds01_text(descriptor, params, normalized));
-    }
-    if let Some(column) = ds01_column(id) {
-        window.set_ds01_focused_column(column);
     }
     if ds01_redraws_contours(id) {
         refresh_ds01_contours(window, params);
@@ -3067,6 +3147,14 @@ impl AppUi {
         // configuration, and the browser simply shows one fewer category.
         if let Err(error) = mooloop_project::seed_mlm1_bank(&settings::channel_presets_dir()) {
             log_warn!("app", "could not write the ML-M1 factory bank: {error}");
+        }
+        // The DS-01 bank, in that device's own generator directory. Generator
+        // rather than channel because DS-01's modulation is inside its voice:
+        // a patch carries its own matrix and needs no channel rack.
+        if let Err(error) =
+            mooloop_project::seed_ds01_bank(&settings::generator_presets_dir(DeviceKind::Ds01))
+        {
+            log_warn!("app", "could not write the DS-01 factory bank: {error}");
         }
         // The effect banks, one directory a kind, on the same terms.
         for kind in EffectKind::ALL {
@@ -7904,61 +7992,66 @@ impl AppUi {
             });
         }
 
-        // A handle drop, as a fraction of the scope. The face cannot turn that
-        // back into a parameter value because the conversion needs the span
-        // and the descriptor, and the face has neither.
+        // A typed value field commits through one handler, because the
+        // descriptor id travels with the text. `GeneratorParams::set` does the
+        // clamping, so a typed number lands under exactly the same rules as a
+        // dragged one.
+        //
+        // Typed entry is what the paged face buys that the one-screen one
+        // could not: at a 21px dial there was no room for a field, so a time
+        // was dragged on a scope and a number could only be approached.
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             let redraw = schedule_ds01_preview.clone();
-            window.on_ds01_handle_dragged(move |id, fraction| {
-                let id = id as u32;
+            window.on_ds01_text_committed(move |id, text| {
+                let id = id.max(0) as u32;
                 let Some(descriptor) = ds01::descriptor(id) else {
                     return;
                 };
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                let base = channel.ds01_params;
-                let natural = if id == ds01::PARAM_PITCH_DEPTH {
-                    // The only handle that drags vertically: the pitch
-                    // envelope's depth is drawn as the contour's height, so
-                    // its height is what the drag reports. The sign stays
-                    // where the patch had it — a drag on a curve cannot say
-                    // "the other way", and flipping it silently would turn a
-                    // downward sweep into an upward one mid-gesture.
-                    let magnitude = fraction * descriptor.max;
-                    if base.pitch.depth < 0.0 {
-                        -magnitude
-                    } else {
-                        magnitude
+                let refresh = || {
+                    if let Some(window) = weak.upgrade() {
+                        let params = {
+                            let st = st.borrow();
+                            st.session.channels[st.session.selected].ds01_params
+                        };
+                        touch_ds01_param(&window, &params, id);
                     }
-                } else {
-                    // Every other handle is a time, and the scope is drawn
-                    // over the span, so the fraction is seconds directly.
-                    // Handles past the first in a chain report where they
-                    // were dropped, so the segment is the gap to the one
-                    // before it rather than the drop position.
-                    let seconds = fraction * ds01_span_seconds(&base);
-                    let before = ds01_segment_start(&base, id);
-                    (seconds - before).max(0.0)
                 };
-                let mut params = GeneratorParams::Ds01(base);
-                let Some(value) = params.set(id, natural) else {
+                // What the number means is decided against the value the
+                // field was showing, so `ms`, `kHz` and `%` read back as
+                // themselves and a bare number means the unit on the face.
+                let current = {
+                    let st = st.borrow();
+                    let params = st.session.channels[st.session.selected].ds01_params;
+                    ds01::get(&params, id).unwrap_or(descriptor.default)
+                };
+                let Some(typed) = ds01_typed_value(descriptor, text.as_str(), current) else {
+                    // Put the field back to what the patch says rather than
+                    // leaving a half-typed string standing where a value goes.
+                    refresh();
                     return;
                 };
-                if let GeneratorParams::Ds01(updated) = params {
-                    channel.ds01_params = updated;
+                {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    let mut params = GeneratorParams::Ds01(channel.ds01_params);
+                    let Some(value) = params.set(id, typed.clamp(descriptor.min, descriptor.max))
+                    else {
+                        return;
+                    };
+                    if let GeneratorParams::Ds01(updated) = params {
+                        channel.ds01_params = updated;
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                        channel: channel_index as u8,
+                        id,
+                        value,
+                    });
                 }
-                let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
-                    channel: channel_index as u8,
-                    id,
-                    value,
-                });
-                if let Some(window) = weak.upgrade() {
-                    touch_ds01_param(&window, &channel.ds01_params, id);
-                }
+                refresh();
                 redraw();
             });
         }
@@ -10049,4 +10142,69 @@ mod tests {
         );
     }
 
+
+    /// A DS-01 field has to read back what it shows, in the unit it shows it
+    /// in. That is one property over the pair of functions, and it is the
+    /// only thing keeping a typed number from meaning something the caption
+    /// contradicts.
+    #[test]
+    fn a_ds01_field_reads_back_what_it_shows() {
+        for descriptor in ds01::DESCRIPTORS.iter() {
+            if matches!(descriptor.curve, ParamCurve::Stepped(_)) {
+                continue;
+            }
+            for position in [0.0_f32, 0.17, 0.5, 0.83, 1.0] {
+                let natural = descriptor.from_normalized(position);
+                let shown = ds01_text(descriptor, &Ds01Params::default(), position);
+                let parsed = ds01_typed_value(descriptor, shown.as_str(), natural)
+                    .unwrap_or_else(|| panic!("{} showed {shown:?}", descriptor.name));
+                // Compared as the field writes them rather than as floats: a
+                // display rounds, so "reads back the same value" can only
+                // mean "reads back to the same reading".
+                let again = ds01_text(
+                    descriptor,
+                    &Ds01Params::default(),
+                    descriptor.to_normalized(parsed),
+                );
+                assert_eq!(
+                    shown, again,
+                    "{} showed {shown:?} at {natural} and read back as {parsed}",
+                    descriptor.name
+                );
+            }
+        }
+    }
+
+    /// The three departures from the shared formatter, stated as cases rather
+    /// than as a paragraph. Each exists because a drum lives at the short end
+    /// of the range: `0.00 s` is three different attacks.
+    #[test]
+    fn ds01_writes_values_in_the_units_a_drum_patch_uses() {
+        let amp_decay = ds01::descriptor(ds01::PARAM_AMP_DECAY).unwrap();
+        assert_eq!(ds01_display_unit(amp_decay, 0.24), (0.001, "ms"));
+        assert_eq!(ds01_display_unit(amp_decay, 4.0), (1.0, "s"));
+
+        let cutoff = ds01::descriptor(ds01::PARAM_FILTER_CUTOFF).unwrap();
+        assert_eq!(ds01_display_unit(cutoff, 220.0), (1.0, "Hz"));
+        assert_eq!(ds01_display_unit(cutoff, 7_500.0), (1_000.0, "kHz"));
+
+        let amount = ds01::descriptor(ds01::matrix_param(0, ds01::MATRIX_OFFSET_AMOUNT)).unwrap();
+        assert_eq!(ds01_display_unit(amount, 0.35), (0.01, "%"));
+
+        // A written unit wins; a bare number means the one on the face.
+        let reads = |descriptor: &ParamDescriptor, text: &str, current: f32, expected: f32| {
+            let got = ds01_typed_value(descriptor, text, current)
+                .unwrap_or_else(|| panic!("{text:?} did not parse"));
+            assert!(
+                (got - expected).abs() <= expected.abs() * 1.0e-5 + 1.0e-9,
+                "{text:?} read as {got}, not {expected}"
+            );
+        };
+        reads(amp_decay, "240 ms", 0.24, 0.24);
+        reads(amp_decay, "1.5 s", 0.24, 1.5);
+        reads(amp_decay, "300", 0.24, 0.3);
+        reads(amp_decay, "2", 4.0, 2.0);
+        reads(cutoff, "8 kHz", 7_500.0, 8_000.0);
+        reads(amount, "-50%", 0.35, -0.5);
+    }
 }

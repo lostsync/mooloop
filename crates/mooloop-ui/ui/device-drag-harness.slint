@@ -1,6 +1,7 @@
 import { EqDeviceFace } from "eq-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
+import { Ds01Contour, Ds01DeviceFace } from "ds01-device.slint";
 
 // Slint only generates Rust bindings for exported components that inherit
 // Window - EqDeviceFace inherits EffectDeviceShell (a
@@ -98,5 +99,67 @@ export component CompressorDeviceDragHarness inherits Window {
         detector-db: root.detector-db;
         gain-reduction-db: root.gain-reduction-db;
         threshold-changed(v) => { root.threshold-changed(v); }
+    }
+}
+
+// The DS-01's face, at the size the rack gives it: four rack units of
+// `DeviceRackMetrics` minus the two rails, by `face-height` minus the device
+// header.
+//
+// Here for the same reason as the three above, and for one more. The face is
+// indexed by descriptor id, so every control's value is a *binding* onto a
+// model row rather than a property Rust sets one at a time — and Slint drops
+// a binding at the first assignment to the property it feeds, which is what a
+// knob does to itself while it is dragged. A test that only invoked the
+// callbacks would never touch that, and neither would one that drove the
+// whole `MainWindow`, whose element positions the `ElementHandle` search API
+// could only find in a build with `SLINT_EMIT_DEBUG_INFO=1`.
+export component Ds01DeviceDragHarness inherits Window {
+    in property <[float]> values;
+    in property <[float]> defaults;
+    in property <[string]> value-texts;
+    in property <[int]> step-counts;
+    in property <[bool]> bipolars;
+    in property <[float]> modulation-depths;
+    in property <[bool]> modulation-allowed;
+    in property <[float]> modulation-offsets;
+    in property <[int]> modulation-route-counts;
+    in property <[Ds01Contour]> contours;
+    in property <[float]> preview-minimums;
+    in property <[float]> preview-maximums;
+    in property <[float]> burst-ticks;
+    in property <[string]> matrix-source-names;
+    in property <[string]> matrix-dest-names;
+    in property <float> body-decay-fraction;
+    in property <string> span-text;
+    in-out property <int> page;
+    callback value-changed(int, float);
+    callback text-committed(int, string);
+
+    preferred-width: 884px;
+    preferred-height: 240px;
+    Ds01DeviceFace {
+        width: 100%;
+        height: 100%;
+        values: root.values;
+        defaults: root.defaults;
+        value-texts: root.value-texts;
+        step-counts: root.step-counts;
+        bipolars: root.bipolars;
+        modulation-depths: root.modulation-depths;
+        modulation-allowed: root.modulation-allowed;
+        modulation-offsets: root.modulation-offsets;
+        modulation-route-counts: root.modulation-route-counts;
+        contours: root.contours;
+        preview-minimums: root.preview-minimums;
+        preview-maximums: root.preview-maximums;
+        burst-ticks: root.burst-ticks;
+        matrix-source-names: root.matrix-source-names;
+        matrix-dest-names: root.matrix-dest-names;
+        body-decay-fraction: root.body-decay-fraction;
+        span-text: root.span-text;
+        page <=> root.page;
+        value-changed(p, v) => { root.value-changed(p, v); }
+        text-committed(p, t) => { root.text-committed(p, t); }
     }
 }

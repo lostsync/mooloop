@@ -1207,13 +1207,14 @@ fn render_mlp8_source_editor() {
     write_snapshot(&narrow, "MOOLOOP_MLP8_NARROW_SNAPSHOT");
 }
 
-/// The DS-01's face, which is one screen with no page, tab or scroll.
+/// The DS-01's face, which spends six pages so its controls can be read.
 ///
-/// Two patches, because the scopes' span follows the patch rather than being
-/// fixed: a fixed window draws a 5 ms hat as a single spike and clips a 4 s
-/// ride entirely, which makes the display useless at both ends of the range
-/// this instrument is meant to reach. The two renders differing is that
-/// auto-scaling being real.
+/// Every page is rendered, because a page that never drew would look exactly
+/// like a page whose button was wired to the wrong index. Two patches for the
+/// pages that carry a scope, because the span follows the patch rather than
+/// being fixed: a fixed window draws a 5 ms hat as a single spike and clips a
+/// 4 s ride entirely, which makes the display useless at both ends of the
+/// range this instrument is meant to reach.
 #[test]
 fn render_the_ds01_face() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
@@ -1239,8 +1240,28 @@ fn render_the_ds01_face() {
     assert!(default_patch.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&default_patch, "MOOLOOP_DS01_SOURCE_SNAPSHOT");
 
-    // A four-second ride against a 240 ms kick: every scope has to restate
-    // its span, so every scope has to redraw.
+    // Six pages, six different pictures. Rendered against each other rather
+    // than against a stored image, so the assertion is "this page drew
+    // something of its own" and not "these pixels never change".
+    let mut pages = vec![default_patch.as_bytes().to_vec()];
+    for page in 1..6 {
+        ui.set_ds01_device_page(page);
+        let shot = ui.window().take_snapshot().unwrap();
+        for (earlier, bytes) in pages.iter().enumerate() {
+            assert_ne!(
+                bytes.as_slice(),
+                shot.as_bytes(),
+                "DS-01 page {page} drew the same thing as page {earlier}"
+            );
+        }
+        write_snapshot(&shot, &format!("MOOLOOP_DS01_PAGE{page}_SNAPSHOT"));
+        pages.push(shot.as_bytes().to_vec());
+    }
+
+    // A four-second ride against a 240 ms kick: the scopes restate their span,
+    // so the pages that carry one have to redraw.
+    ui.set_ds01_device_page(4);
+    let amp_page = ui.window().take_snapshot().unwrap();
     mooloop_ui::refresh_ds01(
         &ui,
         &Ds01Params {
@@ -1257,23 +1278,9 @@ fn render_the_ds01_face() {
     );
     let long_tail = ui.window().take_snapshot().unwrap();
     assert_ne!(
-        default_patch.as_bytes(),
+        amp_page.as_bytes(),
         long_tail.as_bytes(),
         "the scopes did not follow the patch"
     );
     write_snapshot(&long_tail, "MOOLOOP_DS01_LONG_TAIL_SNAPSHOT");
-
-    // Editing a control quiets the columns nobody is touching, so the one
-    // being read is the one being edited. Rendered here because a dimming
-    // that did nothing would look exactly like a dimming that worked.
-    mooloop_ui::refresh_ds01(&ui, &Ds01Params::default());
-    let unfocused = ui.window().take_snapshot().unwrap();
-    ui.set_ds01_focused_column(1);
-    let focused = ui.window().take_snapshot().unwrap();
-    assert_ne!(
-        unfocused.as_bytes(),
-        focused.as_bytes(),
-        "focusing a column changed nothing"
-    );
-    write_snapshot(&focused, "MOOLOOP_DS01_FOCUSED_SNAPSHOT");
 }

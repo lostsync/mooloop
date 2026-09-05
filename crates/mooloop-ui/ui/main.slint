@@ -54,7 +54,7 @@ export { DeviceRackConcepts } from "device-concepts.slint";
 // drag regression tests can drive them directly with real pointer events
 // instead of invoking their callbacks, which would pass even if event
 // routing to the handle were broken.
-export { CompressorDeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness } from "device-drag-harness.slint";
+export { CompressorDeviceDragHarness, Ds01DeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness } from "device-drag-harness.slint";
 export { MixerStripRow }
 export { OutputTargetRow }
 export { ShortcutRow }
@@ -975,13 +975,17 @@ export component MainWindow inherits Window {
     in-out property <[float]> ds01-preview-minimums;
     in-out property <[float]> ds01-preview-maximums;
     in-out property <[float]> ds01-burst-ticks;
-    in-out property <int> ds01-focused-column: -1;
+    in-out property <[bool]> ds01-bipolars;
+    in-out property <[string]> ds01-matrix-source-names;
+    in-out property <[string]> ds01-matrix-dest-names;
     in-out property <float> ds01-body-decay-fraction;
     in-out property <string> ds01-span-text;
+    // VOICE, TONE, NOISE, BODY, AMP, DS-01 MOD. Held on the window rather
+    // than inside the face so the page a musician left the device on survives
+    // selecting another channel and coming back.
+    in-out property <int> ds01-device-page;
     callback ds01-value-changed(int, float);
-    callback ds01-edit-started(int);
-    callback ds01-edit-finished(int);
-    callback ds01-handle-dragged(int, float);
+    callback ds01-text-committed(int, string);
 
     // ---- ML-P8 params of the selected channel ----
     // Which oscillator the ML-P8's left column is editing, and which of its
@@ -2603,21 +2607,16 @@ export component MainWindow inherits Window {
                                             // when the rack is following the mixer.
                                             source-device := DeviceFrame {
                                                 // A device declares its own width in units, the
-                                                // same way an effect slot does. DS-01 is five
-                                                // because it is one screen with no pages: its
-                                                // four columns and two bands are the whole
-                                                // instrument, and three units is the width at
-                                                // which that stops being true. The ML-P8 is
-                                                // four for the same reason and at the same
-                                                // boundary: three fitted its VOICE region
-                                                // exactly, with no slack at all, until step 05
-                                                // put allocation and character in there beside
-                                                // the filter. Widening the face was the only
-                                                // one of those that did not mean taking width
-                                                // from the network grid.
+                                                // same way an effect slot does. DS-01 and the
+                                                // ML-P8 are four: both spend pages rather than
+                                                // one dense screen, and four is the width at
+                                                // which a page holds three modules of 34px
+                                                // dials without shrinking one. DS-01 was five
+                                                // while it was one screen with no pages; the
+                                                // pages gave that unit back.
                                                 property <int> source-units: root.editing-bus
                                                     ? 2
-                                                    : (root.source-kind == 6 ? 5 : root.source-kind == 5 ? 4 : 3);
+                                                    : (root.source-kind == 6 || root.source-kind == 5 ? 4 : 3);
                                                 width: DeviceRackMetrics.unit-width * self.source-units
                                                     + DeviceRackMetrics.half-gap
                                                     + DeviceRackMetrics.rail-width * 2;
@@ -3052,18 +3051,19 @@ export component MainWindow inherits Window {
                                                     preview-minimums: root.ds01-preview-minimums;
                                                     preview-maximums: root.ds01-preview-maximums;
                                                     burst-ticks: root.ds01-burst-ticks;
-                                                    focused-column: root.ds01-focused-column;
+                                                    bipolars: root.ds01-bipolars;
+                                                    matrix-source-names: root.ds01-matrix-source-names;
+                                                    matrix-dest-names: root.ds01-matrix-dest-names;
                                                     body-decay-fraction: root.ds01-body-decay-fraction;
                                                     span-text: root.ds01-span-text;
+                                                    page <=> root.ds01-device-page;
                                                     modulation-armed: root.modulation-armed-slot >= 0;
                                                     modulation-depths: root.source-modulation-depths;
                                                     modulation-allowed: root.source-modulation-allowed;
                                                     modulation-offsets: root.source-modulation-offsets;
                                                     modulation-route-counts: root.source-modulation-route-counts;
                                                     value-changed(p, v) => { root.ds01-value-changed(p, v); }
-                                                    edit-started(p) => { root.ds01-edit-started(p); }
-                                                    edit-finished(p) => { root.ds01-edit-finished(p); }
-                                                    handle-dragged(p, f) => { root.ds01-handle-dragged(p, f); }
+                                                    text-committed(p, t) => { root.ds01-text-committed(p, t); }
                                                     modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
                                                     modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
                                                     modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }

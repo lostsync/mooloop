@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Divisions, KnobField, KnobStack, ParameterKnob, SectionLabel, SelectorBank, ToolButton, ValueScale } from "controls.slint";
+import { Divisions, KnobField, KnobStack, ParameterKnob, PickerChip, SectionLabel, SelectorBank, ToolButton, ValueScale } from "controls.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { FilterResponseDisplay, OscillatorTrace } from "device-displays.slint";
@@ -25,94 +25,6 @@ export struct MlP8RouteRow {
     // source rather than a control on the route: a unipolar source rests at
     // zero and the amount's sign chooses which way it goes from there.
     bipolar: bool,
-}
-
-// A chip that opens a list and reports the index picked.
-//
-// The route list needs two of these against models of six and thirty-one
-// entries, which is past what a cycling chip or a segmented bank can carry.
-component PickerChip inherits Rectangle {
-    in property <[string]> options;
-    in property <int> selected-index;
-    in property <string> tooltip;
-    in property <color> text-color: Theme.text;
-    callback picked(int);
-
-    height: 18px;
-    background: touch.has-hover ? Theme.surface-active : Theme.surface;
-    border-radius: Theme.radius-sm;
-    border-width: 1px;
-    border-color: Theme.border;
-
-    Text {
-        x: 5px;
-        width: parent.width - 16px;
-        height: parent.height;
-        text: root.options[root.selected-index];
-        color: root.text-color;
-        font-size: 9px;
-        vertical-alignment: center;
-        overflow: elide;
-    }
-    Text {
-        x: parent.width - 12px;
-        width: 10px;
-        height: parent.height;
-        text: "\u{25be}";
-        color: Theme.text-faint;
-        font-size: 8px;
-        vertical-alignment: center;
-    }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { menu.show(); }
-    }
-    menu := PopupWindow {
-        x: 0px;
-        y: root.height + 2px;
-        width: max(root.width, 132px);
-        height: min(220px, list.preferred-height + 8px);
-        close-policy: close-on-click-outside;
-        Rectangle {
-            background: Theme.surface;
-            border-width: 1px;
-            border-color: Theme.border;
-            border-radius: Theme.radius-md;
-            ScrollView {
-                x: 4px;
-                y: 4px;
-                width: parent.width - 8px;
-                height: parent.height - 8px;
-                list := VerticalLayout {
-                    spacing: 1px;
-                    for option[index] in root.options : Rectangle {
-                        height: 18px;
-                        border-radius: Theme.radius-sm;
-                        background: index == root.selected-index
-                            ? Theme.surface-active
-                            : row-touch.has-hover ? Theme.surface-active : transparent;
-                        Text {
-                            x: 6px;
-                            width: parent.width - 12px;
-                            height: parent.height;
-                            text: option;
-                            color: index == root.selected-index ? Theme.accent : Theme.text;
-                            font-size: 9px;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                        row-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                menu.close();
-                                root.picked(index);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 // One row of the route list: what it reads, what it moves, how much, and a

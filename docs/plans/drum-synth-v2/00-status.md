@@ -1,7 +1,7 @@
 # DS-01 plan status
 
-**Steps 02 through 07 are in except step 07's outlets, and step 08 is
-mostly in.** The device exists and plays: a new `Ds01` generator kind
+**Steps 02 through 08 are in except step 07's outlets, and step 09's bank
+ships and waits on ears.** The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
 state-variable filter, the amplitude and pitch envelopes, and the voice pool
@@ -338,7 +338,77 @@ and the matrix is what delivers that. `Trigger` is the one worth wanting
 soonest — it is what lets a kick duck a bass or fire an envelope on another
 device without a sidechain graph — and it arrives with the shared mechanism.
 
-And three from step 08:
+## The face was rebuilt — 2026-09-04
+
+The first face fitted the device on one screen by making the scopes the
+envelope editor: envelope times were handles dragged on a curve rather than
+knobs, and what was left over was a 21px dial with an 8px caption at five rack
+units. Adam's ruling is that this is the same trade ML-P8's first face made
+and he rejected — "might be ok on a 24 inch screen but not 14" — reached from
+the other direction, and that DS-01 should spend pages the way ML-P8 now does.
+
+`08-the-face.md` carries the new layout. Four things the rebuild turned up:
+
+- **Merging the display and the editor cost the device typed entry.** At a
+  21px dial there is no room for a value field, so every one of the ninety-two
+  controls could only be approached rather than typed. The paged face uses
+  `KnobStack`, which is a dial and a field, so a number is exact again — and
+  one `ds01-text-committed` handler covers all ninety-two, because the
+  descriptor id travels with the text.
+- **A model-bound control stops following the model once it is touched.** The
+  face is indexed by descriptor id, so a knob's value is a *binding* onto a
+  model row — and Slint drops a binding at the first assignment to the
+  property it feeds, which is exactly what a knob does to itself during a
+  drag. Nothing showed it, because the edit handler writes the same value
+  straight back. Loading a preset over a face somebody had been turning would
+  have left that control behind, which the factory bank makes an ordinary
+  action rather than a corner.
+
+  The first fix was wrong in an instructive way: a `changed` handler on a
+  private property that re-asserted the model value. It cannot work, because
+  a Slint binding is lazy — once nothing depends on that private property it
+  is never re-evaluated, so `changed` never fires. `a_dragged_knob_still_
+  follows_the_patch` in `crates/mooloop-ui/tests/ds01_face.rs` failed on it,
+  which is the whole reason that test was written before the code was
+  believed.
+
+  What works is making the control **not write its own value**:
+  `ParameterKnob` and `MiniKnob` gained a `controlled` flag that reports the
+  change and leaves the property alone. The owner writes the model, the
+  binding survives, and the value has one home. It is opt-in because every
+  other face two-way-binds its knob to a real property, and a `<=>` binding
+  *intercepts* the write and forwards it up rather than being removed —
+  `Property::set` in `i-slint-core` is explicit about that, and it is why this
+  had never bitten anything before.
+- **Column dimming and the fifth rack unit were both paid for by the one
+  screen.** Dimming existed to say which of four columns you were reading;
+  one layer per page says it without a mechanism, so `focused-column` is gone.
+  The fifth unit existed to make four columns fit; DS-01 is four units now,
+  the same as ML-P8, and the rack is that much narrower for it.
+- **The mod envelope moved to the AMP page, not the MOD page.** It is an
+  envelope and it is drawn like one, and eight matrix rows need the whole
+  height of a page — 8 x 18px plus a header, against a module's own 4px
+  spacing between children, which is what pushed the eighth row off the first
+  attempt.
+
+Three shared-widget changes came out of it, all additive: `PickerChip` moved
+from `mlp8-device.slint` into `controls.slint` — a second device needed to
+pick from forty-seven destinations — `KnobStack` gained a `fill` so a page's
+controls can carry its layer's colour, and `ParameterKnob`/`MiniKnob` gained
+`controlled`, above.
+
+One more thing the pages exposed rather than caused: **DS-01's values were
+formatted in the shared units and read badly at drum lengths.** Every envelope
+time is a field now, and `format_param_value` renders seconds with two
+decimals — so a 5 ms attack, a 1 ms one and a zero all read `0.00 s`, which is
+the whole range step 09's audit is about. `ds01_display_unit` states the unit
+once for both the formatter and the parser: a time under a second is
+milliseconds, a frequency over a kilohertz is kilohertz, and a route's depth
+is a percentage. A typed value means the unit it is written with, and with
+none written it means the unit the field was showing — the only rule that is
+self-consistent for a field whose unit follows its value.
+
+And three from step 08's first build, which the rebuild did not invalidate:
 
 - **The face is indexed by parameter id, not one property per parameter.**
   Every other device face here declares a property each; DS-01 has ninety-two,
@@ -349,39 +419,42 @@ And three from step 08:
   handler covers every control. Values cross normalized rather than natural,
   because that is the space a route and an automation lane both work in.
 - **A source device declares its own width.** It was three rack units for
-  every kind. DS-01 declares five, the way an effect slot declares its units:
-  three is the width at which "one screen, no pages" stops being true, and the
-  concept was drawn at a width the rack did not give a source. ML-P8 spent the
-  same problem on a second page instead.
-- **The columns are not equal width.** TONE, NOISE, BODY and AMP take 4, 5, 3
-  and 4, because that is how many cells they have. Equal columns would have
-  meant either a different knob size per column or leaving two of the noise
-  layer's controls out, which is the failure the plan refuses.
+  every kind; DS-01 was the first to ask for more, the way an effect slot
+  declares its units. It asked for five while it was one screen. It is four
+  now, which is where ML-P8 also landed, and the mechanism is the part that
+  outlived the number.
+- **The columns were not equal width.** TONE, NOISE, BODY and AMP took 4, 5, 3
+  and 4, because that is how many cells they had. That is the shape of the
+  problem the pages solved: a layout whose columns have to be sized by cell
+  count is a layout with no slack anywhere, and the next control added to any
+  of them takes width from a neighbour.
 
-## What step 08 still owes
+## What step 08 owed, and no longer does
 
-The layout, the controls, the four scopes and their handles are in, along with
-the rendered hit in the amp scope, the burst's impulse ticks and the focus
-dimming, verified by a software-rendered snapshot at
-the default patch and at a four-second one.
+**The MOD panel.** The three checked-in concepts settled the columns and the
+bands and none of them drew it, so the layout for the matrix's thirty-two
+controls was genuinely undecided rather than a detail to fill in. The band
+carried a labelled empty region where it went, and `00-status.md` recorded it
+as the one thing in the plan that wanted Adam before it wanted code.
 
-The preview follows the patch's span rather than a fixed window, which needed
-`Ds01::preview_waveform` to take the span and to *lower its sample rate* as
-the span grows: it is still the production voice path, clocked slower, because
-rendering four seconds at the full rate is a fifth of a second of arithmetic
-that `08-the-face.md` says must not happen on the UI thread. It is debounced
-on top of that, so a knob drag renders the hit once when it stops. One thing is not:
+Pages answered it. The matrix is a page of its own: eight rows of source,
+destination, amount and curve, full width, with the two pickers reading from
+lists `mooloop_core` labels so the face holds no second copy of either. Source
+and Destination are `PickerChip`s rather than cycling chips because nine and
+forty-seven are past what clicking through can carry, and Amount and Curve are
+ordinary modulation destinations, which is how a channel LFO gets to scale a
+per-hit relationship.
 
-- **The MOD panel.** The three checked-in concepts settled the columns and the
-  bands and none of them draws it, so the layout for the matrix's thirty-two
-  controls is genuinely undecided rather than a detail to fill in. The band
-  carries a labelled empty region where it goes. **This is the one thing in
-  the plan that wants Adam before it wants code.**
-Focus follows the last-edited *parameter* rather than the pointer: editing a
-control is the touch that matters, and its id already says which column it is
-drawn in, so nothing has to be threaded through forty-eight cells to say so.
-The globals, the burst and the shaper answer no column, because they are not
-columns and moving one should not blank the emphasis.
+The rest of what the step owed is in: every page, the four contours, the
+rendered hit, the burst's impulse ticks, and the span that follows the patch,
+verified by a software-rendered snapshot of every page and at a four-second
+patch. The preview still follows the patch's span rather than a fixed window,
+which needed `Ds01::preview_waveform` to take the span and to *lower its
+sample rate* as the span grows: it is still the production voice path, clocked
+slower, because rendering four seconds at the full rate is a fifth of a second
+of arithmetic that `08-the-face.md` says must not happen on the UI thread. It
+is debounced on top of that, so a knob drag renders the hit once when it
+stops.
 
 The ticks are read from `Ds01::burst_offsets`, which runs the same schedule
 the voice runs rather than re-deriving it from the controls: the spread's
@@ -389,6 +462,28 @@ compounding and the bound on the total are one implementation, so a drawn
 burst cannot disagree with a played one. They get their own axis rather than
 the scopes' span, because a twelve-millisecond flam inside a four-second ride
 would be four ticks in the first pixel.
+
+## The kit, from step 09
+
+`mooloop_core::ds01_factory` ships seventeen patches and
+`mooloop_project::seed_ds01_bank` writes them into `presets/generators/ds01/`
+once. Three things that file settled:
+
+- **Generator presets, not channel presets.** The ML-M1 bank is channel-scoped
+  because Sequence Bleep is nothing without a channel rack. A DS-01 patch's
+  modulation is its own matrix, inside the voice, so there is no rack to carry
+  and nothing to re-scope onto the channel it lands on.
+- **The bank is the DSP test's fixture.** `one_architecture_reaches_a_kit`
+  held its own thirteen patches; it reads `ds01_factory::patches()` now, so
+  what ships is what is asserted, and the tom-tuning and ghost-hit cases name
+  bank patches instead of rebuilding them.
+- **The gate had to be tested for termination, not excused from it.** The Ride
+  is the patch that uses the gate, and a gated patch rings for as long as it
+  is written — so the acceptance loop sends a note-off to any gated patch
+  rather than skipping the "it ends" assertion for the one patch that would
+  fail it for a legitimate reason.
+
+`09-the-kit.md` lists what the step still owes, which is the listening.
 
 The face is **not** part of steps 02 through 07. DS-01 is selectable, playable,
 automatable and modulatable without one — every parameter is
@@ -476,21 +571,20 @@ instrument. Hence DS-01.
 | `05-the-burst.md` | **In.** Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | **In.** Drive characters, the output stage, the gain contract |
 | `07-internal-modulation-and-outlets.md` | **Matrix in; outlets blocked** on the shared device-outlet mechanism |
-| `08-the-face.md` | **In except the MOD panel**, whose layout none of the three concepts settled |
-| `09-the-kit.md` | Factory patches, range tuning, and the listening pass |
+| `08-the-face.md` | **In.** Six pages, rebuilt from the one-screen face on 2026-09-04 |
+| `09-the-kit.md` | **Bank in; listening and range tuning open.** Seventeen patches, shipped and asserted |
 
 `mockups/` holds three rendered face concepts at the real face size, against
 the real widgets. They are checked in because they are the argument for a
-layout decision rather than notes from making one: the adopted layout is
-there, and so are the two that were built and rejected. `08-the-face.md`
-records why.
+layout decision rather than notes from making one, and what they settled still
+holds: how the device divides, which layers are peers, and that a display
+belongs beside the controls that make it.
 
-The adopted one is Adam's: each layer's scope sits directly under the controls
-that make it. It carries a consequence the earlier layouts had hidden —
-**DS-01's controls do not fit on one face unless the scopes are the envelope
-editor.** Envelope times are handles dragged on the curve, not knobs. A scope
-without handles is not a smaller version of this face; it is a different one
-that needs a page.
+What they got wrong is that the division had to fit at once. The third concept
+reached "DS-01's controls do not fit on one face unless the scopes are the
+envelope editor" and took that as a licence rather than as a warning. It is a
+warning: a device that only fits by deleting its knobs is a device that wants
+a page. See `08-the-face.md`.
 
 Descriptor addressing lands in **step 02**, not at the end. It is the reason
 this instrument exists; it does not get to be the last thing anyone gets to.

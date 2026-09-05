@@ -105,6 +105,14 @@ Envelope times are handles dragged on the curve, not knobs. A scope without
 handles is not a smaller version of that face; it is a different one that needs
 a page. Build the parameter model knowing the face has already been decided.
 
+**Steps 02 through 08 are in, and step 09's bank ships.** What is left of
+DS-01 is the listening: seventeen factory patches exist, seed into
+`presets/generators/ds01/`, and are the same patches the DSP acceptance test
+asserts — but nobody has heard them, and the range tuning that follows from
+hearing them is the open half. That needs Adam at the keyboard rather than
+more code. Step 07's published outlets stay blocked on the shared
+device-outlet mechanism, which is the same one ML-P8's step 06 waits for.
+
 Done when: one universal percussion voice covers kick, snare, hat, tom, rim,
 clap and roll from range and factory patches rather than from mode branches;
 every parameter is descriptor-addressed and modulatable; the note-on latch rule
@@ -135,13 +143,6 @@ chosen insert point, sequence an audible jump/reverse/repeat transformation,
 show what the read head is doing, survive save and reload, and render the same
 result offline. If that workflow is not materially better than bouncing a
 sample and loading it again, record why before expanding the device.
-
-### Queued, not yet placed in this sequence
-
-`docs/plans/drum-synth-v2/` is an approved design for **DS-01**, a second drum
-instrument, written in full before any code. Nothing is built. It is not
-numbered above because Adam has not said where it goes against the three
-steps; treat it as ready to start rather than as next.
 
 ## Fixes that may interrupt the sequence
 

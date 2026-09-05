@@ -1,3 +1,4 @@
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 
@@ -207,6 +208,95 @@ export component SelectorBank inherits Rectangle {
             clicked => {
                 root.selected-index = i;
                 root.selected(i);
+            }
+        }
+    }
+}
+
+// A chip that opens a list and reports the index picked.
+//
+// For an option set past what a cycling chip or a segmented bank can carry:
+// ML-P8's route list picks from six sources and thirty-one destinations,
+// DS-01's matrix from nine and forty-seven.
+export component PickerChip inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected-index;
+    in property <string> tooltip;
+    in property <color> text-color: Theme.text;
+    callback picked(int);
+
+    height: 18px;
+    background: touch.has-hover ? Theme.surface-active : Theme.surface;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    Text {
+        x: 5px;
+        width: parent.width - 16px;
+        height: parent.height;
+        text: root.options[root.selected-index];
+        color: root.text-color;
+        font-size: 9px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Text {
+        x: parent.width - 12px;
+        width: 10px;
+        height: parent.height;
+        text: "\u{25be}";
+        color: Theme.text-faint;
+        font-size: 8px;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { menu.show(); }
+    }
+    menu := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: max(root.width, 132px);
+        height: min(220px, list.preferred-height + 8px);
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            ScrollView {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                list := VerticalLayout {
+                    spacing: 1px;
+                    for option[index] in root.options : Rectangle {
+                        height: 18px;
+                        border-radius: Theme.radius-sm;
+                        background: index == root.selected-index
+                            ? Theme.surface-active
+                            : row-touch.has-hover ? Theme.surface-active : transparent;
+                        Text {
+                            x: 6px;
+                            width: parent.width - 12px;
+                            height: parent.height;
+                            text: option;
+                            color: index == root.selected-index ? Theme.accent : Theme.text;
+                            font-size: 9px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        row-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                menu.close();
+                                root.picked(index);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -503,6 +593,25 @@ export component ParameterKnob inherits Rectangle {
     // right now, and how many routes land on it.
     in property <float> modulation-offset;
     in property <int> modulation-route-count;
+    /// Whether the caller owns this knob's value.
+    ///
+    /// A knob normally writes its own `value` and reports the change. That is
+    /// right when the value is a property Rust sets one by one — but a face
+    /// indexed by parameter id binds `value` to a *model row*, and **Slint
+    /// drops a binding at the first assignment to the property it feeds**. So
+    /// such a knob would keep the last value it was dragged to for the rest
+    /// of the session, and the next patch loaded over it would leave that one
+    /// control behind, with nothing to see.
+    ///
+    /// Set this and the knob reports the change without writing it. The owner
+    /// updates the model, the binding re-evaluates, and there is exactly one
+    /// place the value lives. `modulation-depth` follows the same rule.
+    ///
+    /// A face that binds `value` with `<=>` does not need it: a two-way
+    /// binding intercepts the write and forwards it up the chain instead of
+    /// being dropped (`Property::set` in `i-slint-core`), which is why every
+    /// other device face here is fine as it is.
+    in property <bool> controlled;
     callback changed(float);
     callback modulation-depth-changed(float);
     callback modulation-edit-started();
@@ -550,7 +659,7 @@ export component ParameterKnob inherits Rectangle {
             : raw;
         let next = clamp(quantized, root.minimum, root.maximum);
         if (next != root.value) {
-            root.value = next;
+            if (!root.controlled) { root.value = next; }
             root.changed(next);
         }
     }
@@ -558,7 +667,7 @@ export component ParameterKnob inherits Rectangle {
     function set-modulation-depth(depth: float) {
         let next = clamp(depth, -1, 1);
         if (next != root.modulation-depth) {
-            root.modulation-depth = next;
+            if (!root.controlled) { root.modulation-depth = next; }
             root.modulation-edited = true;
             root.modulation-depth-changed(next);
         }
@@ -643,8 +752,9 @@ export component ParameterKnob inherits Rectangle {
                 root.set-modulation-depth(0);
                 if (root.modulation-edited) { root.modulation-edit-finished(); }
             } else {
-                root.value = clamp(root.default-value, root.minimum, root.maximum);
-                root.changed(root.value);
+                let reset = clamp(root.default-value, root.minimum, root.maximum);
+                if (!root.controlled) { root.value = reset; }
+                root.changed(reset);
             }
         }
         scroll-event(e) => {
@@ -1225,6 +1335,10 @@ export component MiniKnob inherits Rectangle {
     in-out property <float> modulation-depth;
     in property <float> modulation-offset;
     in property <int> modulation-route-count;
+    /// Whether the caller owns this knob's value; see `ParameterKnob`. A face
+    /// that binds `value` to a model row must set it, or the first drag drops
+    /// the binding and the control stops following the patch.
+    in property <bool> controlled;
     callback changed(float);
     callback modulation-depth-changed(float);
     callback modulation-edit-started();
@@ -1277,7 +1391,7 @@ export component MiniKnob inherits Rectangle {
             : raw;
         let next = clamp(quantized, root.minimum, root.maximum);
         if (next != root.value) {
-            root.value = next;
+            if (!root.controlled) { root.value = next; }
             root.changed(next);
         }
     }
@@ -1285,7 +1399,7 @@ export component MiniKnob inherits Rectangle {
     function set-modulation-depth(depth: float) {
         let next = clamp(depth, -1, 1);
         if (next != root.modulation-depth) {
-            root.modulation-depth = next;
+            if (!root.controlled) { root.modulation-depth = next; }
             root.modulation-edited = true;
             root.modulation-depth-changed(next);
         }
@@ -1340,8 +1454,9 @@ export component MiniKnob inherits Rectangle {
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {
                     root.edit-started();
-                    root.value = clamp(root.default-value, root.minimum, root.maximum);
-                    root.changed(root.value);
+                    let reset = clamp(root.default-value, root.minimum, root.maximum);
+                    if (!root.controlled) { root.value = reset; }
+                    root.changed(reset);
                     root.edit-finished();
                 }
             }
@@ -1558,6 +1673,14 @@ export component KnobStack inherits Rectangle {
     in property <ValueScale> scale: ValueScale.linear;
     in property <bool> bipolar;
     in property <length> diameter: 34px;
+    /// The dial's own colour. A device whose pages are its layers tints each
+    /// page's controls to match the layer, so a knob says which one it belongs
+    /// to without a second label.
+    in property <color> fill: Theme.accent;
+    /// Whether the caller owns this knob's value; see `ParameterKnob`. A face
+    /// that binds `value` to a model row must set it, or the first drag drops
+    /// the binding and the control stops following the patch.
+    in property <bool> controlled;
     in property <bool> modulation-armed;
     in property <bool> modulation-allowed: true;
     in-out property <float> modulation-depth;
@@ -1619,6 +1742,8 @@ export component KnobStack inherits Rectangle {
             show-label: false;
             show-value-text: false;
             diameter: root.diameter;
+            fill: root.fill;
+            controlled: root.controlled;
             tooltip: root.tooltip;
             value <=> root.value;
             minimum: root.minimum;

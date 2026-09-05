@@ -129,7 +129,19 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   rather than 46. AMP carries the amp envelope beside allocation and
   character: Unison and Chorus as selectors under a fixed `VOICES 8` and the
   note count Unison leaves, with Detune, Spread, Drift and Glide as knobs. The
-  face stays four rack units; DS-01 is five. The
+  face stays four rack units. The DS-01 face is six pages at four rack units
+  on the same argument -- VOICE, TONE, NOISE, BODY, AMP and DS-01 MOD -- with
+  every one of its ninety-two parameters on exactly one of them, at a 34px
+  dial with its value typed into. It reads in the units a drum patch is
+  written in: a time under a second is milliseconds, a frequency over a
+  kilohertz is kilohertz, and a matrix route's depth is a signed percentage.
+  A typed value means the unit it is written with, and with none written it
+  means whatever the field was showing. A page is its layer's controls beside that
+  layer's scope: the amplitude envelope carries the rendered hit inside its
+  own contour, the pitch envelope is drawn over a quiet amplitude one for
+  scale, and the eight-row matrix has a page to itself. The scopes are
+  displays, not editors; their shared span is stated once in the page bar and
+  follows the patch, so a 5 ms hat and a 4 s ride both read. The v1
   drum face keeps family, character, shared shaping, and voice-specific controls
   visible together. Replacing a source does not change the channel's notes or
   mixer state. Closed and open hats share a choke group in the generated
@@ -551,11 +563,16 @@ land on its own when it starts to matter:
   stage with four drive characters. Four AHD envelopes with a curve control
   and an optional gate; a burst that fires up to eight impulses from one
   trigger inside one voice; and its own eight-row modulation matrix whose
-  sources are per hit. Its face is one screen: four columns, each layer's
-  scope directly under the controls that make it, envelope times dragged on
-  the curves rather than dialled. Its published outlets are not built and are
-  blocked on the same device-outlet mechanism ML-P8's step 06 needs; its
-  factory bank and listening pass are step 09 and have not happened.
+  sources are per hit. It ships a factory bank of seventeen patches --
+  three kicks, three snares including a velocity-shaped ghost, rim, clap, one
+  tom at three tunings, both hats sharing a choke group, a gated ride,
+  cowbell, clave and a zap -- seeded once into `presets/generators/ds01/` as
+  generator presets, since a DS-01 patch's modulation is inside its own voice
+  and has no channel rack to re-scope. Those are the same patches the DSP
+  acceptance test asserts, so what ships is what is checked; **nobody has
+  listened to them yet**, and the range tuning that follows from listening is
+  the open half of the plan's last step. Its published outlets are not built
+  and are blocked on the same device-outlet mechanism ML-P8's step 06 needs.
 - **A device's published outlets can drive other devices.**
   `mooloop_core::outlet` states the vocabulary — control versus audio domain,
   the tap point an audio outlet is taken at, and the one-block latency every
