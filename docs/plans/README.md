@@ -9,11 +9,13 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
-Last swept 2026-09-05, five times, the last when `typed-audio-edges/` was
-written. Earlier the same day, four times: once when DS-01's step 09 closed, again
-when `FOCUS.md` was rewritten around the debt those two instruments left,
-again when ML-P8's step 07 listening pass closed, and again when
-`latency-compensation/` finished and archived.
+Last swept 2026-09-05, six times, the last when `typed-audio-edges/` finished
+and took `poly-synth-v2/` and `drum-synth-v2/` into `archive/` with it — three
+directories closing on one mechanism, which is why it was worth building once
+rather than twice. Earlier the same day, five times: when the plan was
+written, when DS-01's step 09 closed, when `FOCUS.md` was rewritten around the
+debt those two instruments left, when ML-P8's step 07 listening pass closed,
+and when `latency-compensation/` finished and archived.
 
 `docs/ARCHITECTURE_REVIEW.md` is where the two newest plans came from, and it
 is worth reading before either.
@@ -22,9 +24,6 @@ is worth reading before either.
 
 | Plan | State |
 | --- | --- |
-| `typed-audio-edges/` | **Step 02 in; 03 next.** `AUDIO_ARCHITECTURE.md`'s migration step 6, `FOCUS.md`'s step 1, and the last thing holding `poly-synth-v2/` and `drum-synth-v2/` out of `archive/`. `compile_audio_graph` turns the channels' subscriptions into an order that renders producers before consumers and refuses rings, retaining what it refuses. Nothing is audible yet: a project with no subscriptions compiles to the order the engine already walks. `01-what-this-is.md` records why same-block delivery is forced rather than chosen, and Adam's choice of an `Aux In` source device as the consumer. |
-| `poly-synth-v2/` | **Every step in but 06's audio outlets, and it is first in the sequence.** ML-P8 steps 02-05 and 07 in: the control outlets are declared, published, routable and offered by the shelf's OUTLETS pane, and Adam played the eight-patch bank on 2026-09-05 and closed 07 without moving a range. What is left is 06's audio half, waiting on typed audio edges — the same work as `drum-synth-v2/`'s step 07, which is why it is done once, here, and why both directories archive together. `origin/feat/mlp8-mod` is stale: it carried step 04's WIP, which has landed. |
-| `drum-synth-v2/` | **Every step in but 07's outlets, which are blocked.** DS-01 plays, is descriptor-addressed throughout, has a six-page face and a seventeen-patch factory bank, and was played and signed off on 2026-09-04. Step 07's published outlets are blocked on the shared device-outlet mechanism ML-P8's step 06 also waits for, which is the only thing keeping the directory out of `archive/` — and which `FOCUS.md` now makes step 1 of the active sequence, so both directories archive together. `mockups/` holds four rendered concepts: the shipped pages, and the three one-screen layouts they replaced. |
 | `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
 | `session-layer-extraction/` | **Done, 2026-09-03.** Lifted `mooloop-session` -- the model, the edits, undo, and engine command emission -- out of `mooloop-ui/src/lib.rs`, which is down from 14,157 lines to 9,797. `cargo test -p mooloop-session` is 87 tests in under a second, and is the first coverage the edit logic has ever had. Two departures are recorded in `00-status.md`: `UiState::new` is still long (callback *registration*, no longer decisions), and the pump's meter polling stayed in the view on purpose. |
@@ -49,9 +48,18 @@ These have steps but no `00-status.md`, because nothing has landed to record.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
+`typed-audio-edges/` (all five, closed 2026-09-05; the first half of
+`AUDIO_ARCHITECTURE.md`'s migration step 6, and the plan that closed the two
+below. Read it before building parallel sends or a sidechain input: the
+compiled order and the refusal table are what they hang off, and its status
+records why same-block delivery was forced rather than chosen) ·
+`poly-synth-v2/` (all six, closed 2026-09-05; the ML-P8, its own modulation,
+its voice pool, its five-page face and its eight-patch bank) ·
+`drum-synth-v2/` (all nine, closed 2026-09-05; the DS-01, its six-page face
+and its seventeen-patch kit) ·
 `latency-compensation/` (all five, closed 2026-09-05; it is
 `AUDIO_ARCHITECTURE.md`'s migration step 5, and the reason typed audio edges
-can be built against an aligned tree) ·
+could be built against an aligned tree) ·
 `effects-feedback/` (all fourteen, closed 2026-09-02) ·
 `gain-structure/` (all eight; `docs/GAIN_STRUCTURE.md` is the standing
 reference) · `modulator-modules/` · `modulator-capacity/` ·

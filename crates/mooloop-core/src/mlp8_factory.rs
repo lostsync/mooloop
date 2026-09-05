@@ -7,7 +7,7 @@
 //! And a patch is a set of parameters, so [`MlP8Params`] is its natural form;
 //! the bundle on disk is a serialization of it, not the other way round.
 //!
-//! `docs/plans/poly-synth-v2/07-poly-factory-patches.md` names the list, and
+//! `docs/plans/archive/poly-synth-v2/07-poly-factory-patches.md` names the list, and
 //! the claim it is here to prove is ML-P8's whole argument: **the instrument
 //! is a three-oscillator network with its own modulation, not a supersaw
 //! followed by a chorus.** So the plan's standing constraint is a constraint

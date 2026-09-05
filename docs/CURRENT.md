@@ -22,9 +22,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - The complete 256-channel addressable bank. A new song starts with a lightly
   randomized four-channel drum kit (kick, snare, closed hat, and open hat);
   creating another new song generates a new variation. Channels can use any of
-  six sources — the sampler, the drum synth, the v1 mono synth, the ML-M1, the
-  v1 poly synth, or the ML-P8 — and every rack row exposes mute, output
-  volume, and constant-power stereo pan.
+  eight sources — the sampler, the v1 drum synth, the DS-01, the v1 mono
+  synth, the ML-M1, the v1 poly synth, the ML-P8, or Aux In, which plays
+  another channel's published audio outlet — and every rack row exposes mute,
+  output volume, and constant-power stereo pan.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.
@@ -143,7 +144,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   displays, not editors; their shared span is stated once in the page bar and
   follows the patch, so a 5 ms hat and a 4 s ride both read. The v1
   drum face keeps family, character, shared shaping, and voice-specific controls
-  visible together. Replacing a source does not change the channel's notes or
+  visible together. The Aux In face is two rack units and one page, because a
+  source, an outlet and a level is the whole device: two pickers, a Level
+  knob, and a line saying where the signal is tapped from or why the
+  subscription was refused. Replacing a source does not change the channel's notes or
   mixer state. Closed and open hats share a choke group in the generated
   starter kit.
 - Every insert runs inside a shared device host. The host owns bypass, a
@@ -265,7 +269,7 @@ UI commands -> rtrb queue -> shared render state -> transport + sequencer
                          timed events/channel
                                   |
                                   v
-selected source (sampler / drum synth / DS-01 / v1 mono / ML-M1 / ML-P8 / poly) -> effect chain -> gain/pan/mute
+selected source (sampler / drum synth / DS-01 / v1 mono / ML-M1 / ML-P8 / poly / aux in) -> effect chain -> gain/pan/mute
                                                            |
                                                            v
                                              assigned mixer bus (0-16)
@@ -287,6 +291,14 @@ buses. A JACK-independent render state owns transport, scheduling, instruments,
 effects, mixing, and metering. The JACK adapter drains fixed-size commands into
 that state and publishes position and master peak events; offline export drives
 the same render path without JACK ports.
+
+Channels render in a compiled order rather than in index order, so a producer
+runs before any channel subscribed to one of its audio outlets and the samples
+arrive in the same block. A project with no subscriptions compiles to the
+identity order and allocates no tap buffers, so the schedule is provably
+inaudible until an edge is authored. The channel modulator tick pass stays in
+index order and stays a separate loop: a modulator's phase must not depend on
+a subscription somebody made on another channel.
 
 Every strip preallocates every source node and switches its active source
 without allocating in the callback. WAV decode, waveform construction, and
@@ -624,8 +636,8 @@ land on its own when it starts to matter:
   device with no sidechain graph. `Gate` is honest rather than useful here —
   it answers "any hit is still waiting on its note-off", which is low for the
   one-shot patches most of the kit uses. Its four audio outlets (`Tone`,
-  `Noise`, `Body`, `Pre-Shape`) are declared with frozen ids and tap points
-  and are not connectable, pending typed audio edges.
+  `Noise`, `Body`, `Pre-Shape`) are declared with frozen ids and tap points,
+  and an Aux In channel can read any of them.
 - **A device's published outlets can drive other devices.**
   `mooloop_core::outlet` states the vocabulary — control versus audio domain,
   the tap point an audio outlet is taken at, and the one-block latency every
@@ -644,9 +656,10 @@ land on its own when it starts to matter:
   the route it writes names the outlet by its durable id. An outlet has no
   editor, because the device that publishes it owns its behaviour; the pane
   beside it shows the declaration instead. A generator that publishes nothing
-  has no pane at all rather than an empty one. The audio outlets are declared
-  and not connectable, pending typed audio edges, and are never offered as
-  control sources.
+  has no pane at all rather than an empty one. The audio outlets never appear
+  in that pane: they are not control sources, and `OutletDomain` is what
+  refuses them structurally rather than a rule the picker remembers. An Aux In
+  channel is where they are read instead.
   **The two kinds of source publish in different ranges, and a route's
   polarity is about the module convention.** A rack module always emits
   `-1..1`, and `Unipolar` lifts that into `0..1` so a one-way module rests at
@@ -655,6 +668,43 @@ land on its own when it starts to matter:
   own default — `Bipolar`, which passes the value through. `Unipolar` on an
   outlet remains meaningful, but only for a genuinely bipolar one such as
   ML-P8's `LFO`.
+- **A channel can play another channel's published audio outlet.** `Aux In`
+  is a generator kind whose sound is one subscription: a source channel and
+  one of its declared audio outlets, at a Level. The samples arrive in the
+  block they were made in, not the one after, because the channel loop walks
+  a compiled order that puts a producer before its consumers —
+  `mooloop_core::compile_audio_graph`, beside the bus graph and the
+  compensation plan. A block-sized delay was ruled out on purpose: its length
+  would be the host's buffer size, so the same project would render
+  differently at 128 and 512 frames.
+
+  The useful case is the surprising one. An audio outlet declares where in the
+  device it is tapped, and ML-P8's five source outlets are tapped *before*
+  each source's own Level — so an oscillator turned down to silence in ML-P8's
+  own mix still publishes, and an Aux In can play it while it stays absent
+  from the producer's output. The face says `pre-level` rather than leaving
+  that to be discovered. A muted producer publishes too: mute is a decision
+  about what reaches the bus.
+
+  **A tap exists only while somebody is subscribed to it.** ML-P8 declares
+  seven stereo outlets and materialising them all would be 448 KB a channel;
+  the compiler names the distinct (producer, outlet) pairs somebody reads, the
+  buffers are allocated on the control thread and installed with the schedule
+  they belong to, and a project that has never authored an edge holds none.
+  Two channels reading the same outlet share one buffer.
+
+  An edge that cannot resolve is refused and **kept**: a subscription naming a
+  departed channel, a device that publishes no audio, an outlet that is not
+  declared, a control outlet, an outlet tapped after its channel's effects, or
+  a ring of subscriptions. The face says which, and a user who builds a cycle
+  and then breaks it gets the edge back rather than authoring it again. Aux In
+  publishes its own output, so Aux Ins chain — and that is what makes a ring
+  constructible at all.
+
+  It is not a send: the producing channel does not know it is being read and
+  its own routing does not move. It is not a router either — one subscription,
+  one channel, one outlet. Parallel sends and sidechain key inputs are still
+  absent and are what the compiled edge model exists for next.
 - The ML-P8 has a device output stage: Volume and Pan, before the channel
   strip's own. They exist to be the base its per-voice `VcaLevel` and `Pan`
   modulation destinations offset from, which resolved from hardcoded unity and

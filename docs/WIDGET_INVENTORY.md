@@ -42,6 +42,11 @@ and `MiniKnob` gained `controlled` — report the change, do not write the
 property — which is what a face indexed by parameter id needs, because a knob
 that writes its own value drops the binding onto the model row it reads.
 
+A third caller arrived 2026-09-05 and needed nothing new: `aux-in-device.slint`
+picks a source channel and a published outlet from two `PickerChip`s, and the
+whole face is that pair, a `ParameterKnob` and two `SectionLabel`s. A device
+whose face adds no widget is the outcome this list is for.
+
 ---
 
 ## 1. `PolylinePlot` — there is no plotting primitive
@@ -197,7 +202,7 @@ private to that file **on this list's own rule** — twelve cells is twelve
 instantiations of one component in one device, not two devices sharing one.
 
 It is recorded because there is a plausible second caller. Step 04 of
-`docs/plans/poly-synth-v2/` adds ML-P8's internal modulation routes, and a
+`docs/plans/archive/poly-synth-v2/` adds ML-P8's internal modulation routes, and a
 source-by-destination grid is the same picture with a different vocabulary;
 if that step reaches for this, it becomes a shared component then rather
 than speculatively now.

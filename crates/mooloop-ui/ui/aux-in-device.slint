@@ -1,0 +1,165 @@
+import { Theme } from "theme.slint";
+import { ParameterKnob, PickerChip, SectionLabel } from "controls.slint";
+import { GainMath } from "gain.slint";
+
+// Aux In: a channel whose sound is another channel's published audio outlet.
+//
+// Small, and it should be. What makes the device worth building is the edge
+// underneath it rather than the breadth of the face on top: one source, one
+// outlet, one level, and an honest line about where the signal is tapped from.
+//
+// The outlet picker offers the source channel's *audio* outlets only. That is
+// `OutletDomain` doing the refusal structurally on the Rust side rather than
+// the picker remembering a rule, so this face never has to know that a control
+// outlet exists.
+export component AuxInDeviceFace inherits Rectangle {
+    // "None" plus every channel that publishes audio, in the order the Rust
+    // side built them. The list is already filtered, so an index into it is
+    // not a channel index -- `source-picked` reports the row and the session
+    // maps it back.
+    in property <[string]> source-names;
+    in property <int> source-index;
+    // The chosen channel's audio outlets, likewise already filtered.
+    in property <[string]> outlet-names;
+    in property <int> outlet-index;
+    in property <float> level;
+    in property <string> level-text;
+    // Where the signal is tapped from, in the words `OutletTap::status`
+    // returns, so `pre-level` is visible before somebody discovers it by
+    // wondering why a muted oscillator is audible.
+    in property <string> tap-text;
+    // Why this channel hears nothing, when it asked to hear something. Empty
+    // when the edge resolved. `compile_audio_graph` keeps a refused
+    // subscription precisely so this has something honest to draw.
+    in property <string> refusal-text;
+    in property <bool> modulation-armed;
+    in property <[float]> modulation-depths;
+    in property <[bool]> modulation-allowed;
+    in property <[float]> modulation-offsets;
+    in property <[int]> modulation-route-counts;
+    callback source-picked(int);
+    callback outlet-picked(int);
+    callback level-changed(float);
+    callback modulation-depth-changed(int, float);
+    callback modulation-edit-started(int);
+    callback modulation-edit-finished(int);
+
+    private property <bool> connected: root.source-index > 0;
+
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 6px;
+
+        Rectangle {
+            background: Theme.panel;
+            border-radius: Theme.radius-sm;
+            horizontal-stretch: 1;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 6px;
+                SectionLabel { text: "SOURCE"; }
+
+                Text {
+                    text: "Channel";
+                    color: Theme.text-muted;
+                    font-size: 9px;
+                }
+                PickerChip {
+                    options: root.source-names;
+                    selected-index: root.source-index;
+                    tooltip: "Channel this input reads";
+                    text-color: root.connected ? Theme.text : Theme.text-faint;
+                    picked(i) => { root.source-picked(i); }
+                }
+
+                Text {
+                    text: "Outlet";
+                    color: root.connected ? Theme.text-muted : Theme.text-faint;
+                    font-size: 9px;
+                }
+                if root.connected : PickerChip {
+                    options: root.outlet-names;
+                    selected-index: root.outlet-index;
+                    tooltip: "Published signal this input reads";
+                    picked(i) => { root.outlet-picked(i); }
+                }
+                if !root.connected : Text {
+                    text: "\u{2014}";
+                    color: Theme.text-faint;
+                    font-size: 9px;
+                    height: 18px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+
+        Rectangle {
+            width: 120px;
+            background: Theme.panel;
+            border-radius: Theme.radius-sm;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 6px;
+                SectionLabel { text: "INPUT"; }
+                HorizontalLayout {
+                    alignment: center;
+                    vertical-stretch: 1;
+                    ParameterKnob {
+                        label: "Level";
+                        tooltip: "Aux In level";
+                        value: root.level;
+                        minimum: 0;
+                        maximum: GainMath.db-to-linear(12.0);
+                        default-value: 0.3552344;
+                        value-text: root.level-text;
+                        modulation-armed: root.modulation-armed;
+                        modulation-allowed: root.modulation-allowed[2];
+                        modulation-depth: root.modulation-depths[2];
+                        modulation-offset: root.modulation-offsets[2];
+                        modulation-route-count: root.modulation-route-counts[2];
+                        changed(v) => { root.level-changed(v); }
+                        modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+                        modulation-edit-started() => { root.modulation-edit-started(2); }
+                        modulation-edit-finished() => { root.modulation-edit-finished(2); }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            width: 150px;
+            background: Theme.panel;
+            border-radius: Theme.radius-sm;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 6px;
+                SectionLabel { text: "SIGNAL"; }
+                Text {
+                    text: root.refusal-text != ""
+                        ? root.refusal-text
+                        : !root.connected
+                            ? "No source. Pick a channel that publishes audio."
+                            : "Tapped " + root.tap-text + ", in the same block.";
+                    color: root.refusal-text != ""
+                        ? Theme.warning
+                        : root.connected ? Theme.text-muted : Theme.text-faint;
+                    font-size: 9px;
+                    wrap: word-wrap;
+                }
+                // The one behaviour worth stating on the face rather than in
+                // a manual: a pre-level tap keeps signalling while its source
+                // is muted in the producer's own mix, and that is what makes a
+                // silent oscillator available here at all.
+                if root.refusal-text == "" && root.connected && root.tap-text == "pre-level" : Text {
+                    text: "A source muted in its own device still publishes here.";
+                    color: Theme.text-faint;
+                    font-size: 9px;
+                    wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+    }
+}

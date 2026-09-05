@@ -7,7 +7,7 @@
 //! And a patch is a set of parameters, so [`Ds01Params`] is its natural form;
 //! the bundle on disk is a serialization of it, not the other way round.
 //!
-//! `docs/plans/drum-synth-v2/09-the-kit.md` names the list, and the claim it
+//! `docs/plans/archive/drum-synth-v2/09-the-kit.md` names the list, and the claim it
 //! is here to prove is DS-01's whole argument: **one universal percussion
 //! voice reaches every drum type from range and factory patches rather than
 //! from mode branches**. `mooloop_dsp::ds01`'s `one_architecture_reaches_a_kit`

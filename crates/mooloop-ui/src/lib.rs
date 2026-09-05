@@ -38,6 +38,7 @@ use mooloop_core::{
     ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
     ControlRate, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, SignalShape,
     modulation::outlet_slot,
+    aux_in, AuxInParams, EdgeRefusal,
     ds01, Ds01Params,
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
@@ -1610,6 +1611,88 @@ fn ds01_format_span(seconds: f32) -> String {
     }
 }
 
+// --- Aux In ---------------------------------------------------------------
+
+/// The channels an Aux In on `consumer` may read: every channel whose
+/// generator publishes at least one audio outlet, and not itself.
+///
+/// A channel cannot read itself -- `compile_audio_graph` refuses that as
+/// `SelfSubscribed` -- so the picker does not offer it. That is the one
+/// refusal it is worth preventing rather than reporting, because there is no
+/// state of the project in which the answer changes.
+fn aux_in_sources(session: &Session, consumer: usize) -> Vec<(u8, String)> {
+    session
+        .channels
+        .iter()
+        .enumerate()
+        .filter(|(index, channel)| {
+            *index != consumer && channel.kind.outlets().iter().any(|o| !o.is_control())
+        })
+        .map(|(index, channel)| (index as u8, channel.name.clone()))
+        .collect()
+}
+
+/// One channel's audio outlets, in declared order. The domain does the
+/// refusing structurally, so this picker never has to remember that a control
+/// outlet exists.
+fn aux_in_outlets(session: &Session, channel: u8) -> Vec<&'static OutletDescriptor> {
+    session
+        .channels
+        .get(channel as usize)
+        .map(|channel| {
+            channel
+                .kind
+                .outlets()
+                .iter()
+                .filter(|outlet| !outlet.is_control())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What a refused edge tells the user.
+///
+/// One sentence each, and each one names a different fix: an edge into a
+/// channel that stopped publishing and an edge that closes a ring both
+/// produce silence, and a user cannot repair either without being told them
+/// apart. That is why `EdgeRefusal` is a value rather than a bare `None`.
+fn aux_in_refusal_text(refusal: EdgeRefusal) -> &'static str {
+    match refusal {
+        EdgeRefusal::NoSuchChannel => "The channel this read is gone. Pick another source.",
+        EdgeRefusal::SelfSubscribed => "A channel cannot read itself.",
+        EdgeRefusal::NotAProducer => "That channel's device publishes no audio.",
+        EdgeRefusal::NoSuchOutlet => "That device no longer publishes this outlet.",
+        EdgeRefusal::NotAudio => "That outlet is a control signal, not audio.",
+        EdgeRefusal::TapIsLate => "That outlet is tapped after its channel's effects, so it \
+                                   would arrive late.",
+        EdgeRefusal::Cycle => "Refused: this would close a loop of inputs.",
+    }
+}
+
+/// Send both halves of a subscription to the engine.
+///
+/// Both, always: the audio thread's copy of an Aux In's parameters is only
+/// what the device reads back, and sending one half would leave the two
+/// disagreeing with the model the render plan is compiled from. The plan
+/// itself does not travel here -- the pump derives it from the session and
+/// sends it whole, once, when it changes.
+fn send_aux_in_subscription(
+    tx: &EngineCommandSender,
+    channel: usize,
+    params: AuxInParams,
+) {
+    for (id, value) in [
+        (aux_in::PARAM_SOURCE_CHANNEL, f32::from(params.source_channel)),
+        (aux_in::PARAM_SOURCE_OUTLET, f32::from(params.source_outlet)),
+    ] {
+        let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+            channel: channel as u8,
+            id,
+            value,
+        });
+    }
+}
+
 /// Push a DS-01 patch into the face.
 ///
 /// Public because the face is a view of a patch and nothing else: handing it
@@ -2833,6 +2916,67 @@ impl UiState {
         window.set_editing_bus_allowed(self.allowed_destinations(index));
     }
 
+    /// Push the selected channel's Aux In into its face.
+    ///
+    /// Everything the face shows comes from one walk of the project: the
+    /// pickers, the tap the outlet declares, and the refusal, which is read
+    /// from the compiled graph rather than re-derived here. A silent `None`
+    /// would be indistinguishable from a working edge into a silent producer,
+    /// which is why `compile_audio_graph` keeps a refused subscription
+    /// inspectable in the first place.
+    fn refresh_aux_in(&self, window: &MainWindow) {
+        let consumer = self.session.selected;
+        let Some(channel) = self.session.channels.get(consumer) else {
+            return;
+        };
+        let params = channel.aux_in_params;
+
+        let sources = aux_in_sources(&self.session, consumer);
+        let mut source_names: Vec<SharedString> = vec!["None".into()];
+        source_names.extend(sources.iter().map(|(_, name)| SharedString::from(name.as_str())));
+        // Row zero is "None", so a channel's row is one past its position in
+        // the filtered list. A subscription naming a channel that is no
+        // longer offered -- deleted, or switched to a device that publishes
+        // nothing -- falls back to row zero, and the refusal below is what
+        // says so rather than the picker quietly forgetting it.
+        let subscription = params.subscription();
+        let source_index = subscription
+            .and_then(|s| sources.iter().position(|(index, _)| *index == s.channel))
+            .map_or(0, |row| row as i32 + 1);
+        window.set_aux_in_source_names(source_names.as_slice().into());
+        window.set_aux_in_source_index(source_index);
+
+        let outlets = subscription
+            .map(|s| aux_in_outlets(&self.session, s.channel))
+            .unwrap_or_default();
+        let outlet_names: Vec<SharedString> =
+            outlets.iter().map(|o| SharedString::from(o.name)).collect();
+        let outlet_row = outlets
+            .iter()
+            .position(|o| Some(o.id) == subscription.map(|s| s.outlet));
+        window.set_aux_in_outlet_names(outlet_names.as_slice().into());
+        window.set_aux_in_outlet_index(outlet_row.map_or(0, |row| row as i32));
+        window.set_aux_in_tap_text(
+            outlet_row
+                .map(|row| outlets[row].tap.status())
+                .unwrap_or_default()
+                .into(),
+        );
+
+        window.set_aux_in_level(params.level);
+        window.set_aux_in_level_text(format!("{:.1} dB", linear_to_db(params.level)).into());
+
+        let graph = self.session.audio_graph_plan();
+        window.set_aux_in_refusal_text(
+            graph
+                .edge(consumer)
+                .refusal()
+                .map(aux_in_refusal_text)
+                .unwrap_or_default()
+                .into(),
+        );
+    }
+
     /// Refresh the bottom editor's properties from `selected`.
     fn refresh_editor(&self, window: &MainWindow) {
         let Some(ch) = self.session.channels.get(self.session.selected) else {
@@ -2987,6 +3131,9 @@ impl UiState {
         // interaction work the preview's own debounce exists to avoid.
         if ch.kind == DeviceKind::Ds01 {
             refresh_ds01(window, &ch.ds01_params);
+        }
+        if ch.kind == DeviceKind::AuxIn {
+            self.refresh_aux_in(window);
         }
         let mlm1 = ch.mlm1_params;
         window.set_mlm1_osc1_wave(osc_wave_to_int(mlm1.osc[0].wave));
@@ -8040,6 +8187,116 @@ impl AppUi {
             });
         }
 
+        // Aux In. Three closures rather than DS-01's one indexed handler,
+        // because two of the three parameters are pickers whose *rows* are not
+        // their values: the source list is filtered to the channels that
+        // publish audio, so a row has to be mapped back to a channel index
+        // here, where the project is in hand. The value that goes on the wire
+        // is still the descriptor's, so a lane and a knob agree.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_aux_in_source_picked(move |row| {
+                let (consumer, params) = {
+                    let mut st = st.borrow_mut();
+                    let consumer = st.session.selected;
+                    let sources = aux_in_sources(&st.session, consumer);
+                    // Row zero is "None"; every other row indexes the
+                    // filtered list, whose entries carry their real index.
+                    let picked = (row > 0)
+                        .then(|| sources.get(row as usize - 1).map(|(index, _)| *index))
+                        .flatten();
+                    let outlets = picked
+                        .map(|source| {
+                            aux_in_outlets(&st.session, source)
+                                .iter()
+                                .map(|outlet| outlet.id)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let Some(channel) = st.session.channels.get_mut(consumer) else {
+                        return;
+                    };
+                    channel.aux_in_params.source_channel = picked.map_or(-1, i16::from);
+                    // A fresh pick lands on something rather than on a
+                    // refusal: if the outlet it was reading is not published
+                    // by the new source, take that source's first.
+                    if !outlets.is_empty()
+                        && !outlets.contains(&channel.aux_in_params.source_outlet)
+                    {
+                        channel.aux_in_params.source_outlet = outlets[0];
+                    }
+                    (consumer, channel.aux_in_params)
+                };
+                send_aux_in_subscription(&tx, consumer, params);
+                if let Some(window) = weak.upgrade() {
+                    st.borrow().refresh_editor(&window);
+                }
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_aux_in_outlet_picked(move |row| {
+                let (consumer, params) = {
+                    let mut st = st.borrow_mut();
+                    let consumer = st.session.selected;
+                    let Some(source) = st
+                        .session
+                        .channels
+                        .get(consumer)
+                        .and_then(|channel| channel.aux_in_params.subscription())
+                        .map(|subscription| subscription.channel)
+                    else {
+                        return;
+                    };
+                    let outlets = aux_in_outlets(&st.session, source);
+                    let Some(outlet) = outlets.get(row.max(0) as usize).map(|o| o.id) else {
+                        return;
+                    };
+                    let Some(channel) = st.session.channels.get_mut(consumer) else {
+                        return;
+                    };
+                    channel.aux_in_params.source_outlet = outlet;
+                    (consumer, channel.aux_in_params)
+                };
+                send_aux_in_subscription(&tx, consumer, params);
+                if let Some(window) = weak.upgrade() {
+                    st.borrow().refresh_editor(&window);
+                }
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_aux_in_level_changed(move |level| {
+                let mut st = st.borrow_mut();
+                let consumer = st.session.selected;
+                let Some(channel) = st.session.channels.get_mut(consumer) else {
+                    return;
+                };
+                let mut params = GeneratorParams::AuxIn(channel.aux_in_params);
+                let Some(value) = params.set(aux_in::PARAM_LEVEL, level) else {
+                    return;
+                };
+                if let GeneratorParams::AuxIn(updated) = params {
+                    channel.aux_in_params = updated;
+                }
+                let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                    channel: consumer as u8,
+                    id: aux_in::PARAM_LEVEL,
+                    value,
+                });
+                drop(st);
+                if let Some(window) = weak.upgrade() {
+                    window.set_aux_in_level_text(format!("{:.1} dB", linear_to_db(value)).into());
+                }
+            });
+        }
+
         // A typed value field commits through one handler, because the
         // descriptor id travels with the text. `GeneratorParams::set` does the
         // clamping, so a typed number lands under exactly the same rules as a
@@ -9354,6 +9611,12 @@ impl AppUi {
                 // after a structural edit
                 // (`docs/plans/latency-compensation/04-preallocated-delays.md`).
                 st.borrow_mut().session.sync_compensation(&mut handle);
+                // Beside it and for the same reasons: an edge's fate is a
+                // property of every channel at once, so deriving and diffing
+                // once a tick cannot be forgotten the way a per-edit call site
+                // can. Allocates the taps only when the plan says somebody is
+                // listening.
+                st.borrow_mut().session.sync_audio_graph(&mut handle);
                 if document_title_needs_refresh {
                     let Some(window) = weak.upgrade() else { return };
                     st.borrow().update_document_title(&window);

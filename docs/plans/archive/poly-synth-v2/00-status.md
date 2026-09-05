@@ -1,8 +1,20 @@
 # ML-P8 plan status
 
-**Steps 02, 03, 04, 05 and 07 are in. 06's control half is in; its audio
-outlets wait on typed audio edges, and they are the only thing left in this
-plan.**
+**Every step is in, and the plan closed 2026-09-05.** Steps 02 through 05 and
+07 landed first; 06's control half followed, and its audio half was the last
+thing open in this directory.
+
+**06 closed 2026-09-05**, by `typed-audio-edges/`. ML-P8's seven audio outlets
+are connectable: a producer fills a tap only for an outlet somebody has
+subscribed to, and an `Aux In` channel is what subscribes. The step's own
+acceptance fixture is a test —
+`an_aux_in_hears_an_oscillator_its_producer_does_not_carry` — and it holds both
+halves, that `Osc 3` at level zero is audible through the edge *and* that
+ML-P8's own output does not carry it. Read
+`docs/plans/archive/typed-audio-edges/00-status.md` for what the doing changed;
+the one thing worth knowing here is that a subscriber had to become a reason
+to *run* an oscillator, since `Prepared` skips a source at level zero that
+nothing else needs — which is exactly the source this step exists to publish.
 
 ## The face was rebuilt on 2026-09-04
 
@@ -136,7 +148,10 @@ An outlet has no editor pane, because the device that publishes it owns its
 behaviour; the pane shows the declaration -- shape, rate, and block latency --
 and the arm button, which is the reason it is in the picker.
 
-**What 06 still needs:** the audio outlets.
+**What 06 needed was the audio outlets, and they landed 2026-09-05**, in
+`docs/plans/archive/typed-audio-edges/`. Nothing in the control half above
+changed to accommodate them: an audio outlet is still never offered as a
+control source, and `OutletDomain` is still what refuses it.
 
 ## Step 07 is closed: the bank shipped and was played
 
@@ -189,10 +204,13 @@ outlet -- says outright that it waits for typed audio edges, and the automation
 abuse pass has been run over the control surface the device actually exposes.
 Neither holds the step open; both belong to 06.
 
-The audio outlets stay declared and unconnectable, which is the split the step
-itself offers. Materialising seven stereo taps with nothing able to read them
-would cost 56 KB a channel and put buffers in the callback for no consumer,
-which the same step forbids in its last line.
+The audio outlets stayed declared and unconnectable until 2026-09-05, which is
+the split the step itself offers, and the reason was cost: materialising seven
+stereo taps with nothing able to read them would be 56 KB a channel and
+buffers in the callback for no consumer, which the same step forbids in its
+last line. `typed-audio-edges/` paid it the other way round — a tap is
+allocated when it is subscribed and not before — and its footprint test
+records that a project with no edges holds no buffers at all.
 
 Step 05 finished the pool. A note is a *group* of physical slots: Unison at
 1x/2x/4x/8x spends the eight rather than growing them, groups are allocated and

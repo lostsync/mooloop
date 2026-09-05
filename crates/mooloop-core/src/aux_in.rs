@@ -1,6 +1,6 @@
 //! Aux In: a channel whose sound is another channel's published audio outlet.
 //!
-//! The consumer half of `docs/plans/typed-audio-edges/`. It takes a channel's
+//! The consumer half of `docs/plans/archive/typed-audio-edges/`. It takes a channel's
 //! generator slot like any other source, and what it renders is the samples a
 //! producer wrote into a tap this same block -- not the block before, which is
 //! why the compiled order in [`crate::compile_audio_graph`] exists.

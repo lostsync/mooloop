@@ -57,18 +57,20 @@ asset_mode = "embedded" # "embedded" or "referenced"
 
 Readers reject unknown format versions and document types before installing
 any state. Version 1 is fixed at PPQ 96 and 4/4. Its tagged source envelope
-carries all six generator kinds without changing the sampler representation.
-Two of the six tags were chosen rather than inherited from serde's
-`rename_all`, and both are frozen:
+carries all eight generator kinds without changing the sampler representation.
+Three of the eight tags were chosen rather than inherited from serde's
+`rename_all`, and all three are frozen:
 
 | Generator | `source.type` |
 | --- | --- |
 | Sampler | `sampler` |
-| Drum synth | `drum_synth` |
+| v1 drum synth | `drum_synth` |
 | v1 mono synth | `mono_synth` |
 | v1 poly synth | `poly_synth` |
 | ML-M1 | `ml1` — the device shipped under the wrong name and the tag is an on-disk identifier, so it was frozen rather than corrected |
 | ML-P8 | `mlp8` — picked deliberately the first time, for the reason above |
+| DS-01 | `ds01` — chosen the same way and for the same reason |
+| Aux In | `aux_in` — what `rename_all` would have spelled it anyway, written out on purpose so nobody has to derive an on-disk identifier from an attribute |
 
 `asset_mode` records the requested save policy. Each file sample also carries
 its own `embedded` flag because a referenced save may retain a bundle-owned
@@ -189,6 +191,30 @@ stage's volume and pan. Neither
 shares the v1 synths' parameter ids — see `CURRENT.md` on ML-P8's separate id
 namespace — but both are ordinary `#[serde(default)]` structures, so a field
 added later reads as its default rather than failing the load.
+
+`ds01` stores its universal percussion voice's whole parameter set — the tone
+and noise layers, the body resonators, the burst schedule, four envelopes and
+its eight-row modulation matrix — under the same envelope and the same
+defaulting rule.
+
+`aux_in` is the smallest of them and the only one that names another channel.
+Its `state.params` is three fields: `source_channel` (the producing channel's
+index, or `-1` for none), `source_outlet` (that device's durable outlet id),
+and `level`. All three default, so an Aux In with no source loads as silent
+rather than invalid, which is what the format's defaulted-field rule buys
+here.
+
+**The subscription is a channel-scoped address, and channel indices move.**
+Deleting or pasting a channel renumbers every route destination and automation
+lane that named a later one; a subscription goes through that same pass rather
+than growing a repair path of its own. A subscription whose *producer* was the
+deleted channel is retained and pointed at the last addressable index, where
+it is refused visibly, rather than being handed to whichever channel closed
+the gap. The integrity pass checks the three values are in range and
+deliberately does not check the subscription's target: whether the named
+channel exists and publishes that outlet is recompiled every time the project
+changes, and repairing it at load would destroy the orphan state the consumer's
+face is meant to show.
 
 ## Effects, modulation, and automation
 

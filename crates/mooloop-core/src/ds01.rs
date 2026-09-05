@@ -1,7 +1,7 @@
 //! Parameters for the DS-01.
 //!
 //! A second drum instrument beside [`crate::DrumSynthParams`], not a
-//! migration of it, per `docs/plans/drum-synth-v2/`. The v1 device keeps its
+//! migration of it, per `docs/plans/archive/drum-synth-v2/`. The v1 device keeps its
 //! kind, its fields, and its saved projects.
 //!
 //! ## Why a new device rather than a table over the old one
@@ -13,7 +13,7 @@
 //! and then silently stop doing anything when the mode changed. DS-01 has one
 //! universal voice instead: every control is live in every configuration, so
 //! one id means one thing forever. See
-//! `docs/plans/drum-synth-v2/00-status.md`.
+//! `docs/plans/archive/drum-synth-v2/00-status.md`.
 //!
 //! ## Its own parameter id space
 //!
@@ -957,7 +957,7 @@ const _: () = assert!(DS01_CONTROL_OUTLETS <= crate::modulation::MAX_GENERATOR_O
 /// What DS-01 publishes.
 ///
 /// Six control signals and four audio taps, per
-/// `docs/plans/drum-synth-v2/07-internal-modulation-and-outlets.md`. Not every
+/// `docs/plans/archive/drum-synth-v2/07-internal-modulation-and-outlets.md`. Not every
 /// internal value: an outlet is designed rather than discovered, so this is
 /// the list another device has a use for.
 ///

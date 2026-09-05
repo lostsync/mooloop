@@ -12,7 +12,7 @@ surface. Source and tests settle any disagreement with either document.
 ## The line has moved
 
 The previous sequence was ML-P8, then DS-01, then Buffer. **Its first two steps
-are done but for one thing, and it is the same thing in both.**
+are done**, the last of it on 2026-09-05.
 
 - **ML-P8 plays.** Steps 02 through 05 are in: the three-oscillator network,
   all six directed XMOD routes, sync, the derived sub, coloured noise, both
@@ -25,17 +25,18 @@ are done but for one thing, and it is the same thing in both.**
   percussion voice reaches a kit from range and patches rather than mode
   branches, every parameter is descriptor-addressed, and the six-page face
   holds all ninety-two of them at a readable size.
-- **What both are waiting on is one mechanism.** ML-P8 step 06 and DS-01 step
-  07 both publish device outlets. **The control half is finished** as of
-  2026-09-05 — `mooloop_core::outlet` is the vocabulary, ML-P8 publishes seven
-  control values and DS-01 six, a route can name one, and the shelf offers
-  them. The audio half needs the typed auxiliary audio edges
-  `AUDIO_ARCHITECTURE.md` describes and that do not exist. Two plan directories
-  are held out of `archive/` by that one gap.
+- **What both were waiting on was one mechanism, and it landed 2026-09-05.**
+  ML-P8 step 06 and DS-01 step 07 both publish device outlets.
+  `mooloop_core::outlet` is the vocabulary; the control half went through the
+  modulation shelf, and the audio half through the typed audio edges
+  `AUDIO_ARCHITECTURE.md` describes, whose consumer is an `Aux In` channel.
+  Both instrument directories are archived, and so is
+  `typed-audio-edges/` itself.
 
-So the sequence below starts by clearing the debt those two instruments left,
-and only then moves to the interface, which is where Adam's standing list has
-accumulated.
+The debt those two instruments left is cleared, so **step 3 — the interface —
+is where the sequence stands**, and it is where Adam's standing list has
+accumulated. Steps 1 and 2 are kept below as a record of what they were and
+what closing them turned up.
 
 ## The rule
 
@@ -54,9 +55,30 @@ showed is not progress either.
 
 ## The sequence
 
-### 1. Publish device outlets, and close two plans
+### 1. ~~Publish device outlets, and close two plans~~ — done, 2026-09-05
 
-Finish `docs/plans/poly-synth-v2/` step 06 and `docs/plans/drum-synth-v2/`
+**All three directories are in `docs/plans/archive/`.** ML-P8's step 06 and
+DS-01's step 07 both closed on the one mechanism, which is why they were done
+together: a channel set to `Aux In` plays another channel's published audio
+outlet, in the same block, and a `Osc 3` muted in ML-P8's own mix is audible
+through one while staying absent from its producer's output. That was the
+acceptance case both instrument plans named, and it is a test.
+
+`docs/plans/archive/typed-audio-edges/00-status.md` records what the doing
+changed. The two worth knowing from here: a subscriber had to become a reason
+to *run* a source, since both devices skip a layer at level zero that nothing
+else needs — which is precisely the layer a pre-level tap exists to publish —
+and `Aux In` publishes its own output, without which no ring of edges could be
+constructed from the program and the compiler's cycle refusal would have been
+reachable only from a unit test.
+
+Parallel sends and sidechain key inputs are still absent. They are what the
+compiled edge model exists for next, and they are now a feature on top of a
+mechanism rather than a mechanism.
+
+The original entry follows.
+
+Finish `docs/plans/archive/poly-synth-v2/` step 06 and `docs/plans/archive/drum-synth-v2/`
 step 07. They are the same work seen from two devices, which is why doing it
 once is the point.
 
@@ -75,12 +97,12 @@ Two pieces, in order:
   nothing implements it. This is the one genuine architecture gap left behind
   by the instrument push, and it is also what parallel sends and sidechain
   will want later — build it as an edge type, not as an ML-P8 feature.
-  **Planned 2026-09-05 in `docs/plans/typed-audio-edges/`**, five steps: the
+  **Planned 2026-09-05 in `docs/plans/archive/typed-audio-edges/`**, five steps: the
   edge is same-block rather than one-block latent, because a block-sized delay
   is a delay whose length is the host's buffer size, so what this really
   builds is a compiled channel order with cycle refusal. Adam's call on the
   consumer: an `Aux In` source device, whose sound is another channel's
-  published outlet.
+  published outlet. **All five steps landed the same day.**
 
 This is first because two finished instruments are sitting in `plans/` unable
 to be archived on account of it, because the contract gets designed once
@@ -117,8 +139,10 @@ thing in its plan.
 
 Done when: a route can name a device outlet from the picker; audio outlets obey
 their declared rate and latency contracts; `poly-synth-v2/` and
-`drum-synth-v2/` both move to `docs/plans/archive/`. ML-P8's bank has been
-played, which was the third of those and closed on 2026-09-05.
+`drum-synth-v2/` both move to `docs/plans/archive/`. **All of it closed on
+2026-09-05**: the picker on the control half, an edge that delivers in the
+same block and renders identically offline and at any block size on the audio
+half, and both directories archived.
 
 ### 2. ~~Give the v1 drum synth automation support~~ — done, 2026-09-05
 

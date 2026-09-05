@@ -1,7 +1,7 @@
 # DS-01 plan status
 
-**Every step is in except step 07's four audio outlets, which are blocked
-rather than skipped. Its six control outlets are built.** Adam played the device and its bank on 2026-09-04 and
+**Every step is in, and the plan closed 2026-09-05** when step 07's four audio
+outlets became connectable. Adam played the device and its bank on 2026-09-04 and
 closed step 09 on 2026-09-05. The device exists and plays: a new `Ds01` generator kind
 beside the v1 drum synth, the tone layer with its wave morph, partial bank and
 FM, the noise layer with four colours, a rate reducer and a morphing
@@ -41,8 +41,8 @@ control tick for the whole channel, and a drum channel can have eight hits
 ringing at once, each with its own velocity, its own position in a burst and
 its own envelopes.
 
-**Step 07's published outlets are not built, and are blocked rather than
-skipped.** See below.
+**Step 07's published outlets are built.** The control half landed with ML-P8's
+step 06; the audio half landed 2026-09-05 with `typed-audio-edges/`. See below.
 
 Step 08 built the face. It first fitted on one screen by making the scopes the
 envelope editor, and was rebuilt on 2026-09-04 into the six pages it ships as,
@@ -55,11 +55,14 @@ asserts.
 
 Read `01-what-ds01-is.md` for what the device is; the steps are done.
 
-**The directory stays out of `archive/` for one reason:** step 07's four audio
-outlets, which wait on the typed auxiliary audio edges `AUDIO_ARCHITECTURE.md`
-describes. The control half is finished -- the shared mechanism landed with
-ML-P8's step 06, and DS-01 publishes its own six values -- and nothing else in
-the plan is unbuilt.
+**The directory stayed out of `archive/` for one reason** until 2026-09-05:
+step 07's four audio outlets, which waited on the typed auxiliary audio edges
+`AUDIO_ARCHITECTURE.md` describes. Those exist now, in
+`docs/plans/archive/typed-audio-edges/`, and `Tone`, `Noise`, `Body` and
+`Pre-Shape` are readable by an `Aux In` channel. The mechanism was built once
+and both instruments got it, which is the reason it was worth waiting for:
+`the_same_edge_works_through_ds01s_tone` is the test that says one device
+passing was not evidence the edge type was general.
 
 Four things step 02 turned up that the plan could not have known:
 
@@ -327,13 +330,21 @@ Those two are out of the matrix's destination list now — a channel route still
 reaches them, which is the right level for a device-wide control — and
 `DS01_DESTINATIONS` is 47 rather than 49.
 
-## What is blocked
+## What was blocked, and is not any more
 
-**Step 07's audio outlets are not built.** The shared mechanism the control
-half waited for landed with ML-P8's step 06 and DS-01's six control values
-followed it; the audio half still waits. Building either one for DS-01 alone
-would have been the special-case knowledge `COMPOSABLE_DEVICE_UNITS.md` exists
-to prevent:
+**Step 07's audio outlets landed 2026-09-05.** Both halves were built once,
+shared, rather than twice for DS-01 alone — which would have been the
+special-case knowledge `COMPOSABLE_DEVICE_UNITS.md` exists to prevent. The
+control half came with ML-P8's step 06; the audio half came with
+`typed-audio-edges/`, and DS-01's four taps are filled at the points its
+descriptors declare, summed across sounding voices.
+
+One thing the audio half turned up on this instrument specifically: **the body
+is skipped when nothing needs it**, so a subscriber had to become one of the
+things that needs it. A layer at zero level still publishing its pre-Level tap
+is `01-what-ds01-is.md`'s rule, and without folding tap demand into
+`body_live` the outlet would have published the silence of a resonator that
+was never run.
 
 - **Control outlets are in.** `Amp Envelope`, `Mod Envelope`, `Velocity`,
   `Note`, `Gate` and `Trigger` are declared with frozen ids and published once

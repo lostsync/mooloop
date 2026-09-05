@@ -5,7 +5,7 @@
 //! with no name are configurations of the same architecture, and every
 //! control is live in every one of them. That is what makes one descriptor id
 //! mean one thing forever, which is the whole reason the device exists — see
-//! `docs/plans/drum-synth-v2/01-what-ds01-is.md`.
+//! `docs/plans/archive/drum-synth-v2/01-what-ds01-is.md`.
 //!
 //! This step builds the tone layer, the noise layer, the amplitude and pitch
 //! envelopes, and the voice pool. The body resonator (04), the burst (05) and

@@ -186,7 +186,7 @@ changes that add capacity. Both this plan and the egui port are capacity.
 Neither makes a sound.
 
 So the next task is not in this directory. It is `docs/FOCUS.md`'s sequence:
-**finish ML-P8** — `docs/plans/poly-synth-v2/` steps 05 through 07 — which is
+**finish ML-P8** — `docs/plans/archive/poly-synth-v2/` steps 05 through 07 — which is
 half built with its cost known. The honest measure of a fixed loop is that it
 stops being something anyone thinks about, and the way to find out whether
 this one is fixed is to go and use it on something that makes a noise.

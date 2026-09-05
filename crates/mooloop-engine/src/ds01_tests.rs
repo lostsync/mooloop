@@ -1,7 +1,7 @@
 //! DS-01 through the engine.
 //!
 //! `mooloop_dsp::ds01` tests the device against its own `process`; these test
-//! the three claims in `docs/plans/drum-synth-v2/02-the-voice-and-the-descriptor-table.md`
+//! the three claims in `docs/plans/archive/drum-synth-v2/02-the-voice-and-the-descriptor-table.md`
 //! that are only true of the *assembled* program — that it plays from a
 //! pattern, that a channel modulator reaches it, and that what it renders does
 //! not depend on how the audio is cut into blocks.

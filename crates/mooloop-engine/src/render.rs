@@ -6437,7 +6437,7 @@ mod footprint {
         // carries, a sub, coloured noise, two envelopes, two filter stages, a
         // drive follower and the feedback loop's delay.
         //
-        // Step 04 of `docs/plans/poly-synth-v2/` added 1,536 of it, and where
+        // Step 04 of `docs/plans/archive/poly-synth-v2/` added 1,536 of it, and where
         // it went is the point. Just over a thousand is per *voice*: the
         // thirty-one destination offsets a voice resolves each sample, which
         // is the price of the modulation landing per voice rather than per

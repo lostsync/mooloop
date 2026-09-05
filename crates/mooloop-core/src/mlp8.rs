@@ -1,7 +1,7 @@
 //! Parameters for the ML-P8.
 //!
 //! A new eight-voice instrument, not a rename or a migration of
-//! [`crate::PolySynthParams`], per `docs/plans/poly-synth-v2/`. The v1 poly
+//! [`crate::PolySynthParams`], per `docs/plans/archive/poly-synth-v2/`. The v1 poly
 //! synth keeps its kind, its ids, and its saved projects; this device starts
 //! from an empty namespace.
 //!
@@ -33,7 +33,7 @@ use crate::{OscParams, OscWave, ParamCurve, ParamDescriptor};
 
 /// Physical voice slots. Not a knob: "eight voices" is the instrument's name
 /// and its CPU ceiling, and Unison spends these slots rather than adding to
-/// them. See `docs/plans/poly-synth-v2/01-what-poly-is.md`.
+/// them. See `docs/plans/archive/poly-synth-v2/01-what-poly-is.md`.
 pub const MLP8_VOICES: usize = 8;
 
 /// Which oscillator hard-syncs this one. `Off` is not "no oscillator" — it is

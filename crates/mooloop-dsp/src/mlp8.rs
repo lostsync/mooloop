@@ -2,7 +2,7 @@
 //!
 //! Deliberately not a variant of [`crate::polysynth`]. That device layers
 //! three oscillators; this one wires them together, per
-//! `docs/plans/poly-synth-v2/01-what-poly-is.md`. What is here now, from step
+//! `docs/plans/archive/poly-synth-v2/01-what-poly-is.md`. What is here now, from step
 //! 02 of that plan:
 //!
 //! - six directed cross-modulation routes, one for every ordered pair, all

@@ -7,7 +7,7 @@
 //! that a ring refuses itself and gives the edge back when it is broken, and
 //! that an unused feature costs nothing.
 //!
-//! `docs/plans/typed-audio-edges/05-acceptance.md` is the list these come
+//! `docs/plans/archive/typed-audio-edges/05-acceptance.md` is the list these come
 //! from.
 
 use crate::render::RenderState;

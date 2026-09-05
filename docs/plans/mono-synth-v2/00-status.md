@@ -51,7 +51,7 @@ Consequences for the steps below:
   extend first" work in 02 is moot here and the pre-v2 migration in 02.5 does
   not apply — there is no pre-v2 form of this device on disk.
   ML-P8's plan folds its separate filter envelope and keytracking into
-  `docs/plans/poly-synth-v2/03-the-multimode-filter.md`; ML-M1 step 02 is not a
+  `docs/plans/archive/poly-synth-v2/03-the-multimode-filter.md`; ML-M1 step 02 is not a
   prerequisite.
 - **The descriptor split happened differently.** `MONO_DESCRIPTORS` and
   `POLY_DESCRIPTORS` still have their inheritance (`POLY_DESCRIPTORS` copies

@@ -55,7 +55,7 @@ pub enum DeviceKind {
     /// The DS-01: one universal percussion voice, descriptor-addressed from
     /// its first commit. A new kind rather than a table over
     /// [`Self::DrumSynth`], whose parameters are a mode-union and so cannot
-    /// carry ids that mean one thing — see `docs/plans/drum-synth-v2/`.
+    /// carry ids that mean one thing — see `docs/plans/archive/drum-synth-v2/`.
     ///
     /// Serialized as `ds01`, chosen rather than inherited, for the reason the
     /// ML-M1 above records: an on-disk identifier is frozen the day it ships,

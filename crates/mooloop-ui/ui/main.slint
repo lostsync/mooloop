@@ -42,6 +42,7 @@ import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { MlM1DeviceFace } from "mlm1-device.slint";
 import { MlP8DeviceFace, MlP8RouteRow } from "mlp8-device.slint";
+import { AuxInDeviceFace } from "aux-in-device.slint";
 import { Ds01Contour, Ds01DeviceFace } from "ds01-device.slint";
 import { PolyDeviceFace } from "poly-device.slint";
 import { SamplerDeviceFace } from "sampler-device.slint";
@@ -561,7 +562,22 @@ export component MainWindow inherits Window {
     in-out property <[float]> browser-info-waveform;
     in-out property <string> browser-info-name;
     in-out property <string> browser-info-stats;
-    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly, 4=ML-M1, 5=ML-P8, 6=DS-01
+    in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly, 4=ML-M1, 5=ML-P8, 6=DS-01, 7=Aux In
+
+    // ---- Aux In of the selected channel ----
+    // "None" plus every channel that publishes audio. Already filtered, so a
+    // row is not a channel index and the callbacks report the row.
+    in property <[string]> aux-in-source-names;
+    in-out property <int> aux-in-source-index;
+    in property <[string]> aux-in-outlet-names;
+    in-out property <int> aux-in-outlet-index;
+    in-out property <float> aux-in-level;
+    in property <string> aux-in-level-text;
+    in property <string> aux-in-tap-text;
+    in property <string> aux-in-refusal-text;
+    callback aux-in-source-picked(int);
+    callback aux-in-outlet-picked(int);
+    callback aux-in-level-changed(float);
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
     in-out property <int> poly-device-page;
@@ -2536,7 +2552,7 @@ export component MainWindow inherits Window {
                                             vertical-alignment: center;
                                         }
                                         if !root.editing-bus : SelectorBank {
-                                            options: ["Sampler", "Drum", "Mono", "Poly", "ML-M1", "ML-P8", "DS-01"];
+                                            options: ["Sampler", "Drum", "Mono", "Poly", "ML-M1", "ML-P8", "DS-01", "Aux In"];
                                             selected-index <=> root.source-kind;
                                             segment-width: 48px;
                                             tooltip: "Source device";
@@ -2605,8 +2621,13 @@ export component MainWindow inherits Window {
                                                 // dials without shrinking one. DS-01 was five
                                                 // while it was one screen with no pages; the
                                                 // pages gave that unit back.
+                                                // Aux In is two: a source, an
+                                                // outlet and a level is the whole
+                                                // device, and a wider face would
+                                                // be empty rather than generous.
                                                 property <int> source-units: root.editing-bus
                                                     ? 2
+                                                    : root.source-kind == 7 ? 2
                                                     : (root.source-kind == 6 || root.source-kind == 5 ? 4 : 3);
                                                 width: DeviceRackMetrics.unit-width * self.source-units
                                                     + DeviceRackMetrics.half-gap
@@ -3068,6 +3089,32 @@ export component MainWindow inherits Window {
                                                     modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
                                                 }
 
+                                                if !root.editing-bus && root.source-kind == 7 : AuxInDeviceFace {
+                                                    x: DeviceRackMetrics.rail-width;
+                                                    y: DeviceRackMetrics.header-height;
+                                                    width: parent.content-width;
+                                                    height: parent.height - DeviceRackMetrics.header-height;
+                                                    source-names: root.aux-in-source-names;
+                                                    source-index: root.aux-in-source-index;
+                                                    outlet-names: root.aux-in-outlet-names;
+                                                    outlet-index: root.aux-in-outlet-index;
+                                                    level: root.aux-in-level;
+                                                    level-text: root.aux-in-level-text;
+                                                    tap-text: root.aux-in-tap-text;
+                                                    refusal-text: root.aux-in-refusal-text;
+                                                    modulation-armed: root.modulation-armed-slot >= 0;
+                                                    modulation-depths: root.source-modulation-depths;
+                                                    modulation-allowed: root.source-modulation-allowed;
+                                                    modulation-offsets: root.source-modulation-offsets;
+                                                    modulation-route-counts: root.source-modulation-route-counts;
+                                                    source-picked(i) => { root.aux-in-source-picked(i); }
+                                                    outlet-picked(i) => { root.aux-in-outlet-picked(i); }
+                                                    level-changed(v) => { root.aux-in-level-changed(v); }
+                                                    modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
+                                                    modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
+                                                    modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }
+                                                }
+
                                                 if !root.editing-bus : DeviceHeader {
                                                     x: DeviceRackMetrics.rail-width; y: 0px; width: parent.content-width;
                                                     name: root.source-kind == 0 ? "Sampler"
@@ -3075,7 +3122,8 @@ export component MainWindow inherits Window {
                                                         : root.source-kind == 2 ? "Mono Synth"
                                                         : root.source-kind == 3 ? "Poly Synth"
                                                         : root.source-kind == 4 ? "ML-M1"
-                                                        : root.source-kind == 5 ? "ML-P8" : "DS-01";
+                                                        : root.source-kind == 5 ? "ML-P8"
+                                                        : root.source-kind == 6 ? "DS-01" : "Aux In";
                                                     kind: "SOURCE / " + source-device.source-units + "U";
                                                     preset: root.source-preset-name;
                                                     device-color: Theme.accent;

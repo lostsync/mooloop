@@ -16,8 +16,10 @@ execution.
 reference and agrees with this document almost everywhere. Its one finding
 against the engine was that migration step 5 below — graph-wide latency
 compensation — was the next infrastructure step and cheaper then than it would
-ever be again. It landed on 2026-09-05, which is what leaves step 6, the typed
-audio and dependency edges, as the next one.
+ever be again. It landed on 2026-09-05, and step 6's first half — the typed
+audio edge itself — landed the same day. What remains of step 6 is parallel
+sends and sidechain inputs, both of which now hang off a compiled edge model
+rather than waiting for one.
 
 ## Design Character
 
@@ -249,7 +251,8 @@ ownership queue.
 
 ## Migration Sequence
 
-Steps 1 through 5 have landed. Steps 6 and 7 are next; 6 depended on 5.
+Steps 1 through 5 have landed, and so has the first half of 6. Sends,
+sidechains and step 7 are next.
 
 1. Move project construction out of the JACK callback. Prepare a complete
    render state on the control thread, swap it at a block boundary, and return
@@ -269,6 +272,23 @@ Steps 1 through 5 have landed. Steps 6 and 7 are next; 6 depended on 5.
    longer wait on it.
 6. Generalize the render plan from one audio output edge per bus to typed audio
    and dependency edges. Add parallel sends, then auxiliary sidechain inputs.
+   **The typed audio edge landed 2026-09-05**, in
+   `docs/plans/archive/typed-audio-edges/`: `compile_audio_graph` turns the
+   channels' declared subscriptions into a render order and a refusal for each
+   edge that cannot resolve, a producer fills a tap only when somebody has
+   subscribed to it, and Aux In is the source device that reads one. Delivery
+   is same-block by construction — the consumer renders after its producer —
+   so the whole-project null holds across block sizes and an export matches a
+   live take sample for sample.
+
+   Two things it deliberately did not do. **Parallel sends** are still absent:
+   a channel feeds exactly one bus, and what landed is an auxiliary input to a
+   *device* rather than a second output from a strip. **Sidechain key inputs**
+   need the dependency-edge half — a signal that schedules a producer without
+   being summed into the consumer — which the compiled order built here is
+   what they would hang off. A cycle is refused and its subscription retained
+   as inspectable orphan state; external audio feedback still needs step 7's
+   general delay policy.
 7. Route retained-audio buffers and explicit feedback through the same port,
    timing, preparation, and reclamation contracts.
 
