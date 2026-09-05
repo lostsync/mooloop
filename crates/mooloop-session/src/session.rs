@@ -21,7 +21,7 @@ use mooloop_core::{
     MonoSynthParams, MonoSynthState, NoteId, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerParams, SamplerState,
-    modulation::CONTROL_SOURCE_SLOTS,
+    SignalShape, modulation::CONTROL_SOURCE_SLOTS,
     SlotRemap, MAX_MODULATORS_PER_CHANNEL, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
     TICKS_PER_STEP,
 };
@@ -1110,15 +1110,36 @@ impl Session {
             return ArmedRoute::Unchanged;
         }
         let depth = policy.clamp_depth(depth);
+        // Which kind of source is armed decides both the route's polarity and
+        // how it is authored, and both answers come from the same place: an
+        // outlet declares its signal shape, a module is its kind.
+        let outlet = self.selected_channel_outlet(source_slot);
+        // A slot in the outlet band that resolves to no outlet names nothing:
+        // the generator was swapped while the gesture was armed. Refusing
+        // here rather than falling through matters because the rack half
+        // would refuse it too, and would call it a full matrix.
+        if outlet.is_none() && mooloop_core::modulation::outlet_of_slot(source_slot).is_some() {
+            return ArmedRoute::Unchanged;
+        }
         let Some(channel) = self.channels.get_mut(self.selected) else {
             return ArmedRoute::Unchanged;
         };
-        let default_polarity = match channel.modulation.params(source_slot as usize) {
-            // Sources that only ever swing one way default to a unipolar
-            // route, so their resting value is the destination's base.
-            Some(ModulatorParams::Envelope(_)) => ModPolarity::Unipolar,
-            Some(ModulatorParams::Random(random)) if !random.bipolar => ModPolarity::Unipolar,
-            _ => policy.default_polarity,
+        let default_polarity = match outlet {
+            // An outlet's declared shape is the answer, and it is a better
+            // one than a module's kind: a Gate or a Trigger that defaulted to
+            // bipolar would rest at half its depth below the base value with
+            // nothing playing.
+            Some(outlet) => match outlet.signal {
+                SignalShape::Bipolar => policy.default_polarity,
+                _ => ModPolarity::Unipolar,
+            },
+            None => match channel.modulation.params(source_slot as usize) {
+                // Sources that only ever swing one way default to a unipolar
+                // route, so their resting value is the destination's base.
+                Some(ModulatorParams::Envelope(_)) => ModPolarity::Unipolar,
+                Some(ModulatorParams::Random(random)) if !random.bipolar => ModPolarity::Unipolar,
+                _ => policy.default_polarity,
+            },
         };
         let current = channel
             .modulation
@@ -1130,14 +1151,19 @@ impl Session {
         if current.is_some_and(|current| (current - depth).abs() < f32::EPSILON) {
             return ArmedRoute::Unchanged;
         }
-        let Some(index) = channel.modulation.add_route(ModRoute::to_slot(
-            source_slot,
-            destination,
-            depth,
-            default_polarity,
-        )) else {
-            // The armed slot was checked above, so the only way the rack
-            // refuses is a full matrix.
+        // An outlet route is authored complete: its id is already durable, so
+        // there is no slot to stamp an identity out of.
+        let authored = match outlet {
+            Some(outlet) => {
+                ModRoute::from_outlet(outlet.id, destination, depth, default_polarity)
+            }
+            None => ModRoute::to_slot(source_slot, destination, depth, default_polarity),
+        };
+        let Some(index) = channel.modulation.add_route(authored) else {
+            // Both authored forms resolve: the module slot was checked above
+            // and an outlet's locator is bounded arithmetic on an id this
+            // generator publishes. So the only way the rack refuses is a full
+            // matrix.
             return ArmedRoute::Full;
         };
         // The rack stamped the durable source id on the way in; that stamped

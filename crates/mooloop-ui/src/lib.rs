@@ -36,7 +36,8 @@ use mooloop_core::{
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
     ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
-    ModulatorKind, ModulatorParams,
+    ControlRate, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, SignalShape,
+    modulation::outlet_slot,
     ds01, Ds01Params,
     NoteEvent,
     NoteId, NotePriority, OscWave, ParamAddr,
@@ -1282,6 +1283,33 @@ pub fn note_hit_test(notes: &[NoteCell], tick: i32, midi_note: i32) -> NoteHit {
         .unwrap_or_default()
 }
 
+/// An outlet's declaration, as its header states it: shape, update rate, and
+/// how many blocks behind a consumer reads it.
+///
+/// Read off the descriptor rather than written out, because the three are the
+/// contract a consumer is entitled to rely on. Upper case to sit where a
+/// module's `kind-signal` sits in the shelf.
+fn outlet_declaration(outlet: &OutletDescriptor) -> String {
+    let shape = match outlet.signal {
+        SignalShape::Bipolar => "BIPOLAR",
+        SignalShape::Unipolar => "UNIPOLAR",
+        SignalShape::Gate => "GATE",
+        SignalShape::Stepped => "STEPPED",
+        SignalShape::Trigger => "TRIGGER",
+    };
+    let rate = match outlet.update {
+        ControlRate::Subdivision32 => "PER TICK",
+        ControlRate::NoteEvent => "PER NOTE",
+        ControlRate::PerBlock => "PER BLOCK",
+        ControlRate::Manual => "MANUAL",
+    };
+    let blocks = outlet.latency.blocks;
+    format!(
+        "{shape}  ·  {rate}  ·  {blocks} BLOCK{}",
+        if blocks == 1 { "" } else { "S" }
+    )
+}
+
 fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
     let start = (step as u32).saturating_mul(TICKS_PER_STEP);
     let end = start.saturating_add(TICKS_PER_STEP);
@@ -1781,6 +1809,11 @@ struct UiState {
     /// are models rather than fixed slot properties because the shelf must
     /// show a collection, not four vacant bays.
     modulation_source_model: Rc<VecModel<ModulationSourceRow>>,
+    /// The generator's published control outlets. A separate model rather
+    /// than more rows in the source one: an outlet is not a module, and a
+    /// combined model would have to carry a discriminator into every reorder,
+    /// remove and editor lookup the source rows already do by position.
+    modulation_outlet_model: Rc<VecModel<ModulationOutletRow>>,
     modulation_route_model: Rc<VecModel<ModulationRouteRow>>,
     mixer_strip_model: Rc<VecModel<MixerStripRow>>,
     /// Flattened sample-browser tree, rebuilt whenever locations or folder
@@ -2306,6 +2339,22 @@ impl UiState {
                 self.modulation_source_model.set_row_data(index, row);
             }
         }
+        // The outlet chips carry the same telemetry, and are touched the
+        // same way: the engine already publishes the whole flat row, so an
+        // outlet's meter costs nothing the module band was not paying.
+        for index in 0..self.modulation_outlet_model.row_count() {
+            let Some(mut row) = self.modulation_outlet_model.row_data(index) else {
+                continue;
+            };
+            let next = usize::try_from(row.slot)
+                .ok()
+                .and_then(|slot| outputs.get(slot).copied())
+                .unwrap_or(0.0);
+            if row.output != next {
+                row.output = next;
+                self.modulation_outlet_model.set_row_data(index, row);
+            }
+        }
         window.set_source_modulation_offsets(self.destination_offsets(
             channel.generator_params().kind().descriptors(),
             |param| ParamAddr {
@@ -2342,28 +2391,34 @@ impl UiState {
         }
         let Some(channel) = self.session.channels.get(self.session.selected) else {
             self.modulation_source_model.set_vec(Vec::new());
+            self.modulation_outlet_model.set_vec(Vec::new());
             self.modulation_route_model.set_vec(Vec::new());
             self.session.modulation_selected_slot.set(None);
             self.session.modulation_armed_slot.set(None);
             window.set_modulation_selected_slot(-1);
             window.set_modulation_armed_slot(-1);
+            window.set_modulation_armed_name(Default::default());
+            window.set_modulation_outlet_device(Default::default());
+            window.set_modulation_selected_outlet_name(Default::default());
+            window.set_modulation_selected_outlet_signal(Default::default());
             return;
         };
 
-        let selected = self.session.modulation_selected_slot.get().filter(|slot| {
-            channel
-                .modulation
-                .slots
-                .get(*slot as usize)
-                .is_some_and(Option::is_some)
-        });
-        let armed = self.session.modulation_armed_slot.get().filter(|slot| {
-            channel
-                .modulation
-                .slots
-                .get(*slot as usize)
-                .is_some_and(Option::is_some)
-        });
+        // A slot survives only while it still names something. That is now
+        // two questions rather than one -- an occupied rack slot, or a
+        // control outlet this generator still publishes -- and the second is
+        // why a channel that swaps its ML-P8 for a sampler drops a selection
+        // pointed at `Trigger` instead of keeping an invisible one.
+        let selected = self
+            .session
+            .modulation_selected_slot
+            .get()
+            .filter(|slot| self.session.control_source_exists(*slot));
+        let armed = self
+            .session
+            .modulation_armed_slot
+            .get()
+            .filter(|slot| self.session.control_source_exists(*slot));
         self.session.modulation_selected_slot.set(selected);
         self.session.modulation_armed_slot.set(armed);
         let bpm = f64::from(window.get_bpm().max(1));
@@ -2455,15 +2510,14 @@ impl UiState {
             .enumerate()
             .filter_map(|(index, route)| {
                 let route = route.as_ref()?;
-                let source_name = channel
-                    .modulation
-                    .params(route.source_slot as usize)
-                    .map_or_else(
-                        || "SOURCE ?".to_string(),
-                        |params| {
-                            format!("{} {}", params.kind().badge(), route.source_slot + 1)
-                        },
-                    );
+                // A module by its badge and slot, an outlet by its name, and
+                // "SOURCE ?" for a route whose source has left -- which is
+                // now also how a route reads when the channel's generator
+                // has been swapped out from under it.
+                let source_name = self
+                    .session
+                    .control_source_name(route.source_slot)
+                    .unwrap_or_else(|| "SOURCE ?".to_string());
                 let (destination, allowed) = self
                     .session.channel_modulation_destination(route.destination)
                     .map(|(device, descriptor)| {
@@ -2500,8 +2554,48 @@ impl UiState {
                 })
             })
             .collect();
+        // The generator's published control outlets, offered as sources on
+        // the same terms as a module. Only the control run: an audio outlet
+        // is not a control signal that happens to be fast, and offering one
+        // here is exactly the confusion `OutletDomain` exists to prevent.
+        let outlets: Vec<ModulationOutletRow> = channel
+            .kind
+            .control_outlets()
+            .iter()
+            .map(|outlet| {
+                let slot = outlet_slot(outlet.id);
+                ModulationOutletRow {
+                    slot: i32::from(slot),
+                    name: outlet.name.into(),
+                    bipolar: matches!(outlet.signal, SignalShape::Bipolar),
+                    output: outputs.get(slot as usize).copied().unwrap_or(0.0),
+                    selected: selected == Some(slot),
+                }
+            })
+            .collect();
+        let selected_outlet = selected.and_then(|slot| self.session.selected_channel_outlet(slot));
         self.modulation_source_model.set_vec(sources);
+        self.modulation_outlet_model.set_vec(outlets);
         self.modulation_route_model.set_vec(routes);
+        // The publishing device, named the way a route's destination names
+        // it -- the channel's own name -- so "ML-P8 1 publishes this" and
+        // "ML-P8 1 · Cutoff" are visibly the same device.
+        window.set_modulation_outlet_device(channel.name.as_str().into());
+        window.set_modulation_armed_name(
+            armed
+                .and_then(|slot| self.session.control_source_name(slot))
+                .unwrap_or_default()
+                .into(),
+        );
+        window.set_modulation_selected_outlet_name(
+            selected_outlet.map_or("", |outlet| outlet.name).into(),
+        );
+        window.set_modulation_selected_outlet_signal(
+            selected_outlet
+                .map(outlet_declaration)
+                .unwrap_or_default()
+                .into(),
+        );
         window.set_modulation_shelf_open(self.session.modulation_shelf_open);
         window.set_modulation_selected_slot(selected.map_or(-1, i32::from));
         window.set_modulation_armed_slot(armed.map_or(-1, i32::from));
@@ -3246,6 +3340,7 @@ impl AppUi {
         let playhead_model = Rc::new(VecModel::from(Vec::<f32>::new()));
         let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
         let modulation_source_model = Rc::new(VecModel::from(Vec::<ModulationSourceRow>::new()));
+        let modulation_outlet_model = Rc::new(VecModel::from(Vec::<ModulationOutletRow>::new()));
         let modulation_route_model = Rc::new(VecModel::from(Vec::<ModulationRouteRow>::new()));
         let mixer_strip_model = Rc::new(VecModel::from(Vec::<MixerStripRow>::new()));
         let browser_row_model = Rc::new(VecModel::from(Vec::<BrowserRow>::new()));
@@ -3259,6 +3354,7 @@ impl AppUi {
         window.set_playhead_positions(ModelRc::from(playhead_model.clone()));
         window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
         window.set_modulation_sources(ModelRc::from(modulation_source_model.clone()));
+        window.set_modulation_outlets(ModelRc::from(modulation_outlet_model.clone()));
         window.set_modulation_routes(ModelRc::from(modulation_route_model.clone()));
         window.set_mixer_strips(ModelRc::from(mixer_strip_model.clone()));
         window.set_browser_rows(ModelRc::from(browser_row_model.clone()));
@@ -3281,6 +3377,7 @@ impl AppUi {
             playhead_model,
             effect_slot_model,
             modulation_source_model,
+            modulation_outlet_model,
             modulation_route_model,
             mixer_strip_model,
             browser_rows: browser_row_model,

@@ -1313,6 +1313,22 @@ pub const fn outlet_slot(outlet: u16) -> u8 {
     (MAX_MODULATORS_PER_CHANNEL + outlet as usize) as u8
 }
 
+/// The outlet a runtime slot names, or `None` when the slot is a rack
+/// module's.
+///
+/// The inverse of [`outlet_slot`], and the question every surface that holds
+/// a slot number asks before it can say what it is looking at: the assignment
+/// gesture, the route list, and the shelf's selection all carry one flat slot
+/// and have to tell the two halves apart. Written once here rather than as
+/// arithmetic repeated at each of them, because getting the boundary wrong
+/// would offer a module's editor for an outlet.
+pub const fn outlet_of_slot(slot: u8) -> Option<u16> {
+    match (slot as usize).checked_sub(MAX_MODULATORS_PER_CHANNEL) {
+        Some(outlet) if outlet < MAX_GENERATOR_OUTLETS => Some(outlet as u16),
+        _ => None,
+    }
+}
+
 /// One channel's control sources, as a route resolves them.
 ///
 /// Two slices rather than one array, because the two halves are captured at

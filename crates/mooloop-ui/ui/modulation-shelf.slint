@@ -34,6 +34,23 @@ export struct ModulationSourceRow {
     selected: bool,
 }
 
+// One control outlet the channel's generator publishes, as the picker offers
+// it. Not a module: it has no editor, cannot be added, removed or reordered,
+// and its number is a device-interface id rather than a position, so the chip
+// shows its name and never a slot. `slot` is where it sits in the same flat
+// control address space a module occupies, which is what lets one selection
+// and one assignment gesture serve both (docs/MODULATOR_SYSTEM_SPEC.md).
+export struct ModulationOutletRow {
+    slot: int,
+    name: string,
+    // Whether the signal swings both ways, which is what decides whether the
+    // chip's live fill grows from the centre or from the left.
+    bipolar: bool,
+    // Live value, telemetry exactly like a module tile's meter.
+    output: float,
+    selected: bool,
+}
+
 // A route remains explicit even when it is currently parked at zero depth or
 // aimed at a destination that later becomes unavailable. The owner token is
 // an adapter for Slint: -1 means the source device, -2 the channel strip, and
@@ -83,6 +100,21 @@ global ModuleGrid {
     public pure function height-for(count: int) -> length {
         return max(root.column-height,
             root.rows-for(count) * root.tile-height + (root.rows-for(count) - 1) * root.gap);
+    }
+}
+
+// The outlet band's geometry. One column, beside the module grid rather than
+// under it: an outlet is named, not numbered -- "Filter Envelope" has to stay
+// readable, and a chip narrow enough to sit four-across would elide it. Beside
+// also costs the grid no height, so publishing outlets never takes a row of
+// modules off the screen.
+global OutletBand {
+    out property <length> chip-width: 112px;
+    out property <length> chip-height: 16px;
+    out property <length> gap: 4px;
+
+    public pure function height-for(count: int) -> length {
+        return count * root.chip-height + (count - 1) * root.gap;
     }
 }
 
@@ -466,6 +498,55 @@ component ModuleTile inherits Rectangle {
     }
 }
 
+// One published outlet in the picker. A module tile draws the signal it is
+// configured to produce; an outlet has no configuration to draw, so the chip
+// shows its name over the live value instead. The fill *is* the meter rather
+// than a bar under the name, which is what lets a chip be one line tall and
+// the whole band fit beside the grid.
+component OutletChip inherits Rectangle {
+    in property <string> name;
+    in property <bool> bipolar;
+    in property <float> output;
+    in property <bool> selected;
+    in property <bool> armed;
+    callback clicked();
+
+    width: OutletBand.chip-width;
+    height: OutletBand.chip-height;
+    border-radius: Theme.radius-sm;
+    border-width: root.selected ? 1px : 0px;
+    border-color: root.armed ? Theme.focus : Theme.accent;
+    background: tap.pressed ? Theme.surface-active
+        : root.selected ? Theme.surface-raised : Theme.surface;
+    clip: true;
+
+    // Centre-origin for a bipolar signal and left-origin for the rest, so a
+    // gate reads as filling and an LFO reads as swinging.
+    Rectangle {
+        x: root.bipolar ? parent.width / 2 + min(0, clamp(root.output, -1, 1)) * parent.width / 2 : 0px;
+        width: root.bipolar
+            ? abs(clamp(root.output, -1, 1)) * parent.width / 2
+            : clamp(root.output, 0, 1) * parent.width;
+        height: parent.height;
+        background: root.armed ? Theme.focus : Theme.accent;
+        opacity: 0.28;
+    }
+    Text {
+        text: root.name;
+        color: root.selected ? Theme.text : Theme.text-muted;
+        font-size: 8px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        width: parent.width - 4px;
+        x: 2px;
+    }
+    tap := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 component RouteRow inherits Rectangle {
     in property <string> destination;
     in property <float> depth;
@@ -585,6 +666,21 @@ export component ModulationShelf inherits Rectangle {
     // stays a protocol edit rather than a UI one.
     in property <int> max-sources: 0;
     in property <[string]> slot-names;
+    // The channel generator's published control outlets, and what to call the
+    // device that publishes them. Empty for a generator that publishes
+    // nothing, and the band is then absent rather than empty: an outlet is
+    // designed, not discovered, so there is nothing to show a placeholder for.
+    in property <[ModulationOutletRow]> outlets;
+    in property <string> outlet-device;
+    // What the armed source is called. A module's badge and slot number, or an
+    // outlet's name -- resolved in Rust because only one of the two is a
+    // position, and the header should not have to know which it is holding.
+    in property <string> armed-name;
+    // The selected outlet's declaration, when the selection is an outlet.
+    // Empty means a module (or nothing) is selected, which is what gates the
+    // module header, the jack strip, and the empty state below.
+    in property <string> selected-outlet-name;
+    in property <string> selected-outlet-signal;
     callback toggled();
     callback source-selected(int);
     // (rack slot, target position in the grid). The rack compacts as it
@@ -683,7 +779,7 @@ export component ModulationShelf inherits Rectangle {
                     border-radius: Theme.radius-sm;
                     background: Theme.accent-active;
                     Text {
-                        text: "ASSIGN · " + root.kind-badge(root.selected-kind) + " " + (root.armed-slot + 1);
+                        text: "ASSIGN · " + root.armed-name;
                         color: Theme.focus;
                         font-size: 8px;
                         horizontal-alignment: center;
@@ -838,6 +934,53 @@ export component ModulationShelf inherits Rectangle {
                     }
                 }
 
+                // The generator's published control outlets: a pane of its
+                // own, beside the rack rather than inside it, because these
+                // are not the rack's. Nothing here can be added, removed or
+                // reordered, and they belong to whichever device the channel
+                // currently holds. A generator that publishes nothing has no
+                // pane at all rather than an empty one -- an outlet is
+                // designed, not discovered, so there is nothing to hold a
+                // place for.
+                if root.outlets.length > 0 : Rectangle {
+                    width: OutletBand.chip-width + 10px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding: 4px;
+                        spacing: 3px;
+                        HorizontalLayout {
+                            height: 10px;
+                            Text { text: "OUTLETS"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text { text: root.outlet-device; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            width: OutletBand.chip-width + 2px;
+                            viewport-width: OutletBand.chip-width;
+                            viewport-height: OutletBand.height-for(root.outlets.length);
+                            Rectangle {
+                                width: OutletBand.chip-width;
+                                height: OutletBand.height-for(root.outlets.length);
+                                for outlet[index] in root.outlets : OutletChip {
+                                    y: index * (OutletBand.chip-height + OutletBand.gap);
+                                    name: outlet.name;
+                                    bipolar: outlet.bipolar;
+                                    output: outlet.output;
+                                    selected: outlet.selected;
+                                    armed: root.armed-slot == outlet.slot;
+                                    clicked => {
+                                        root.add-source-menu-open = false;
+                                        root.source-selected(outlet.slot);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // The selected module, expanded: one header and one jack
                 // strip for every kind, then that kind's own knob surface,
                 // with its destinations underneath.
@@ -852,7 +995,7 @@ export component ModulationShelf inherits Rectangle {
                         VerticalLayout {
                             padding: 4px;
                             spacing: 3px;
-                            if root.selected-slot >= 0 : HorizontalLayout {
+                            if root.selected-slot >= 0 && root.selected-outlet-name == "" : HorizontalLayout {
                                 height: 15px;
                                 spacing: 5px;
                                 Text {
@@ -889,7 +1032,7 @@ export component ModulationShelf inherits Rectangle {
                             // clock, or source slot is what it is patched to,
                             // so it reads as a connection rather than as one
                             // more parameter in the row.
-                            if root.selected-slot >= 0 : Rectangle {
+                            if root.selected-slot >= 0 && root.selected-outlet-name == "" : Rectangle {
                                 height: 22px;
                                 background: Theme.surface;
                                 border-radius: Theme.radius-sm;
@@ -965,10 +1108,52 @@ export component ModulationShelf inherits Rectangle {
                                     Rectangle { horizontal-stretch: 1; }
                                 }
                             }
+                            // A selected outlet, which has no surface to
+                            // open: the device that publishes it owns its
+                            // behaviour, so what the pane shows instead is
+                            // the declaration -- shape, rate and latency --
+                            // and the arm button that is the reason an outlet
+                            // is in the picker at all.
+                            if root.selected-outlet-name != "" : HorizontalLayout {
+                                height: 15px;
+                                spacing: 5px;
+                                Text {
+                                    text: root.selected-outlet-name;
+                                    color: Theme.text;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: root.selected-outlet-signal;
+                                    color: Theme.text-faint;
+                                    font-size: 7px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                ToggleButton {
+                                    text: root.assigning ? "ASSIGNING" : "ASSIGN";
+                                    tooltip: root.assigning
+                                        ? "Stop assigning routes and edit base values"
+                                        : "Assign this outlet to highlighted controls";
+                                    checked: root.assigning;
+                                    min-width: 82px; max-width: 82px; min-height: 15px; max-height: 15px;
+                                    toggled(value) => { root.assignment-toggled(); }
+                                }
+                            }
+                            if root.selected-outlet-name != "" : Text {
+                                vertical-stretch: 1;
+                                text: root.outlet-device + " publishes this. It has no controls of its "
+                                    + "own: arm it, then drag a knob to route it.";
+                                color: Theme.text-muted;
+                                font-size: 10px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
                             // The module pane is a layout now, so the empty
                             // state takes its width from the layout rather
                             // than reading it back off its parent.
-                            if root.selected-slot < 0 : Text {
+                            if root.selected-slot < 0 && root.selected-outlet-name == "" : Text {
                                 vertical-stretch: 1;
                                 text: root.sources.length == 0
                                     ? "Add a module to begin."

@@ -36,7 +36,7 @@ import { EqDeviceFace } from "eq-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
 import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
-import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, ModulationRouteRow } from "modulation-shelf.slint";
+import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, ModulationOutletRow, ModulationRouteRow } from "modulation-shelf.slint";
 import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
@@ -597,6 +597,7 @@ export component MainWindow inherits Window {
     // The shelf belongs to the selected channel, never the bus chain. Values
     // are plain UI rows; Rust owns their `ModRack` / `ParamAddr` conversion.
     in property <[ModulationSourceRow]> modulation-sources;
+    in property <[ModulationOutletRow]> modulation-outlets;
     in property <[ModulationRouteRow]> modulation-routes;
     in-out property <bool> modulation-shelf-open;
     in-out property <int> modulation-selected-slot: -1;
@@ -618,6 +619,10 @@ export component MainWindow inherits Window {
     in property <float> modulation-selected-envelope-preview-release;
     in property <int> modulation-max-sources;
     in property <[string]> modulation-slot-names;
+    in property <string> modulation-outlet-device;
+    in property <string> modulation-armed-name;
+    in property <string> modulation-selected-outlet-name;
+    in property <string> modulation-selected-outlet-signal;
     callback modulation-shelf-toggled();
     callback modulation-source-selected(int);
     callback modulation-source-moved(int, int);
@@ -3514,6 +3519,7 @@ export component MainWindow inherits Window {
                                             width: parent.width - 16px;
                                             open: root.modulation-shelf-open;
                                             sources: root.modulation-sources;
+                                            outlets: root.modulation-outlets;
                                             routes: root.modulation-routes;
                                             selected-slot: root.modulation-selected-slot;
                                             armed-slot: root.modulation-armed-slot;
@@ -3528,6 +3534,10 @@ export component MainWindow inherits Window {
                                             selected-envelope-preview-release: root.modulation-selected-envelope-preview-release;
                                             max-sources: root.modulation-max-sources;
                                             slot-names: root.modulation-slot-names;
+                                            outlet-device: root.modulation-outlet-device;
+                                            armed-name: root.modulation-armed-name;
+                                            selected-outlet-name: root.modulation-selected-outlet-name;
+                                            selected-outlet-signal: root.modulation-selected-outlet-signal;
                                             toggled => { root.modulation-shelf-toggled(); }
                                             source-selected(slot) => { root.modulation-source-selected(slot); }
                                             source-moved(slot, target) => { root.modulation-source-moved(slot, target); }

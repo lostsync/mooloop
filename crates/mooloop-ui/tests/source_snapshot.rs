@@ -1,8 +1,8 @@
 use mooloop_core::{Ds01EnvParams, Ds01Params, DrumMode, DrumSynthParams};
 use mooloop_dsp::DrumSynth;
 use mooloop_ui::{
-    ChannelRow, EffectSlotRow, MainWindow, MlP8RouteRow, ModulationRouteRow, ModulationSourceRow,
-    StepCell,
+    ChannelRow, EffectSlotRow, MainWindow, MlP8RouteRow, ModulationOutletRow, ModulationRouteRow,
+    ModulationSourceRow, StepCell,
 };
 use slint::platform::WindowEvent;
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
@@ -261,6 +261,7 @@ fn render_sampler_source_editor() {
     ui.set_modulation_shelf_open(true);
     ui.set_modulation_selected_slot(1);
     ui.set_modulation_armed_slot(1);
+    ui.set_modulation_armed_name(SharedString::from("ENV 2"));
     ui.set_modulation_sources(ModelRc::from(Rc::new(VecModel::from(vec![
         ModulationSourceRow {
             slot: 0,
@@ -390,6 +391,67 @@ fn render_sampler_source_editor() {
     assert_eq!((modulation.width(), modulation.height()), (1440, 900));
     assert_ne!(snapshot.as_bytes(), modulation.as_bytes());
     write_snapshot(&modulation, "MOOLOOP_MODULATION_SHELF_SNAPSHOT");
+
+    // A generator that publishes control outlets grows a pane beside the
+    // module grid, and one of its chips can be the selected and armed source.
+    // The shot is what catches the two failure modes markup review cannot: a
+    // pane that appears when the model is empty, and a module grid that lost a
+    // row of tiles to make space for one that is not.
+    ui.set_modulation_outlet_device(SharedString::from("ML-P8 1"));
+    ui.set_modulation_outlets(ModelRc::from(Rc::new(VecModel::from(
+        [
+            ("LFO", true, -0.62_f32),
+            ("Amp Envelope", false, 0.81),
+            ("Filter Envelope", false, 0.35),
+            ("Velocity", false, 0.9),
+            ("Note", false, 0.5),
+            ("Gate", false, 1.0),
+            ("Trigger", false, 1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(outlet, (name, bipolar, output))| ModulationOutletRow {
+            // The rack's eight slots, then the outlet band: the same flat
+            // control address space the session arms from.
+            slot: 8 + outlet as i32,
+            name: SharedString::from(name),
+            bipolar,
+            output,
+            selected: name == "Trigger",
+        })
+        .collect::<Vec<_>>(),
+    ))));
+    ui.set_modulation_selected_slot(14);
+    ui.set_modulation_armed_slot(14);
+    ui.set_modulation_armed_name(SharedString::from("Trigger"));
+    ui.set_modulation_selected_kind(-1);
+    ui.set_modulation_selected_outlet_name(SharedString::from("Trigger"));
+    ui.set_modulation_selected_outlet_signal(SharedString::from(
+        "TRIGGER  ·  PER BLOCK  ·  1 BLOCK",
+    ));
+    let outlets = ui.window().take_snapshot().unwrap();
+    assert_ne!(modulation.as_bytes(), outlets.as_bytes());
+    write_snapshot(&outlets, "MOOLOOP_MODULATION_OUTLETS_SNAPSHOT");
+
+    // Back to the module the rest of this test is about, and to a generator
+    // that publishes nothing -- which is the state every other device is in,
+    // and the one that must leave the shelf exactly as it was.
+    ui.set_modulation_outlets(ModelRc::from(Rc::new(VecModel::from(
+        Vec::<ModulationOutletRow>::new(),
+    ))));
+    ui.set_modulation_outlet_device(SharedString::new());
+    ui.set_modulation_selected_outlet_name(SharedString::new());
+    ui.set_modulation_selected_outlet_signal(SharedString::new());
+    ui.set_modulation_selected_slot(1);
+    ui.set_modulation_armed_slot(1);
+    ui.set_modulation_armed_name(SharedString::from("ENV 2"));
+    ui.set_modulation_selected_kind(1);
+    let restored = ui.window().take_snapshot().unwrap();
+    assert_eq!(
+        modulation.as_bytes(),
+        restored.as_bytes(),
+        "a generator that publishes nothing changed the shelf"
+    );
 
     // The source faces are parameter readouts, not generic type icons. A
     // zero-time attack has a vertical leading edge, while a long attack

@@ -56,8 +56,10 @@ asserts.
 Read `01-what-ds01-is.md` for what the device is; the steps are done.
 
 **The directory stays out of `archive/` for one reason:** step 07's published
-outlets, which wait on the shared device-outlet mechanism ML-P8's step 06
-waits for. Nothing else in the plan is unbuilt.
+outlets. Their shared mechanism has landed with ML-P8's step 06 -- a route can
+name a control outlet, and the shelf offers one -- so what remains is DS-01
+publishing its own six control values, and the audio outlets, which still wait
+on typed auxiliary audio edges. Nothing else in the plan is unbuilt.
 
 Four things step 02 turned up that the plan could not have known:
 
@@ -327,16 +329,28 @@ reaches them, which is the right level for a device-wide control — and
 
 ## What is blocked
 
-**Step 07's published outlets are not built.** Both halves need infrastructure
-that does not exist, and building either one for DS-01 alone would be the
-special-case knowledge `COMPOSABLE_DEVICE_UNITS.md` exists to prevent:
+**Step 07's published outlets are not built.** The shared mechanism the
+control half waited for has since landed; the audio half still waits. Building
+either one for DS-01 alone would have been the special-case knowledge
+`COMPOSABLE_DEVICE_UNITS.md` exists to prevent:
 
 - **Control outlets** (`Amp Envelope`, `Mod Envelope`, `Velocity`, `Note`,
-  `Gate`, `Trigger`) need a device-outlet modulator kind and the per-channel
-  published table `MODULATOR_SYSTEM_SPEC.md` describes. `ModulatorKind` has
-  five kinds and none of them is one; that spec lists "Generator outlet" and
-  "Device outlet" as *Planned*. ML-P8's step 06 is blocked on the same thing,
-  which is the argument for building it once rather than twice.
+  `Gate`, `Trigger`) needed the per-channel published table
+  `MODULATOR_SYSTEM_SPEC.md` describes, and a way to route from it. **That
+  mechanism now exists and is complete**, built once through ML-P8's step 06
+  rather than twice: `mooloop_core::outlet` is the declaration, a route names
+  an outlet through `ModSourceRef::GeneratorOutlet`, the engine fills the
+  outlet half of the flat control table a block ahead of the strips, and the
+  modulation shelf offers a publishing generator's outlets as sources in their
+  own pane. Note that it did *not* turn out to need a device-outlet
+  `ModulatorKind`, which is what this entry expected: an outlet is a source a
+  route names, not a module the rack holds, and giving it a slot in the rack
+  would have made it removable and reorderable when it is neither.
+
+  What is left for DS-01 is its own half: the voice has to *compute and
+  publish* the six values, the way `MlP8::publish_outlets` does, and
+  `DeviceKind::outlets` has to answer with a DS-01 table. Both are DS-01 work
+  now rather than shared infrastructure, and neither is blocked.
 - **Audio outlets** (`Tone`, `Noise`, `Body`, `Pre-Shape`) need the typed
   auxiliary audio edges `AUDIO_ARCHITECTURE.md` describes, which
   `COMPOSABLE_DEVICE_UNITS.md` explicitly says a device may not bypass.
@@ -603,7 +617,7 @@ instrument. Hence DS-01.
 | `04-the-body-resonator.md` | **In.** The tuned modal layer — toms, rims, bells, clangs |
 | `05-the-burst.md` | **In.** Multi-impulse triggering: clap, flam, roll, buzz |
 | `06-the-shape-stage.md` | **In.** Drive characters, the output stage, the gain contract |
-| `07-internal-modulation-and-outlets.md` | **Matrix in; outlets blocked** on the shared device-outlet mechanism |
+| `07-internal-modulation-and-outlets.md` | **Matrix in; outlets unbuilt.** The shared control mechanism landed with ML-P8's step 06; DS-01 has yet to publish its six, and the audio four wait on typed audio edges |
 | `08-the-face.md` | **In.** Six pages, rebuilt from the one-screen face on 2026-09-04 |
 | `09-the-kit.md` | **In.** Seventeen patches, shipped, asserted, and played |
 

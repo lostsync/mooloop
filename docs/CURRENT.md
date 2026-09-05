@@ -556,7 +556,9 @@ land on its own when it starts to matter:
   destination's base, on generator parameters as well as effect ones. The
   envelope's gate input is an explicit channel-note picker — the first
   adapter for a typed generator `Gate` outlet, which does not exist yet.
-  Device outlets, cross-channel sources, and macros remain planned.
+  A published generator outlet is a source in the same shelf, in its own pane
+  beside the modules. Device (effect) outlets, cross-channel sources, and
+  macros remain planned.
 - The retained-audio buffer is descriptor-addressed: `Offset` places the read
   head behind the writer in beats and `Crossfade` sets the declick length.
   Offset is position mode, the same as a hand scrub — the head chases the
@@ -607,9 +609,18 @@ land on its own when it starts to matter:
   latency is an ordering fact rather than a delay: the control table is filled
   before the strips render, so a route necessarily reads what the generator
   published in the previous block, live and offline alike.
-  What is missing is the *surface*: the source picker does not list outlets,
-  so such a route can be written by a project file but not built by hand. The
-  audio outlets are declared and not connectable, pending typed audio edges.
+  The shelf offers them: a channel whose generator publishes control outlets
+  grows an OUTLETS pane beside its module grid, one named chip per outlet with
+  the same live meter a module tile carries. A chip selects and arms like a
+  module, so the ordinary assign-then-drag gesture builds an outlet route —
+  and the route it writes names the outlet by its durable id, taking its
+  polarity from the outlet's declared shape, so a Gate or a Trigger rests at
+  the destination's base rather than half a depth below it. An outlet has no
+  editor, because the device that publishes it owns its behaviour; the pane
+  beside it shows the declaration instead. A generator that publishes nothing
+  has no pane at all rather than an empty one. The audio outlets are declared
+  and not connectable, pending typed audio edges, and are never offered as
+  control sources.
 - The ML-P8 has a device output stage: Volume and Pan, before the channel
   strip's own. They exist to be the base its per-voice `VcaLevel` and `Pan`
   modulation destinations offset from, which resolved from hardcoded unity and

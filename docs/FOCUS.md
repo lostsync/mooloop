@@ -26,11 +26,12 @@ are done but for one thing, and it is the same thing in both.**
   branches, every parameter is descriptor-addressed, and the six-page face
   holds all ninety-two of them at a readable size.
 - **What both are waiting on is one mechanism.** ML-P8 step 06 and DS-01 step
-  07 both publish device outlets. The control half is built — `mooloop_core::outlet`
-  is the vocabulary, ML-P8 declares fourteen outlets and publishes its seven
-  control values, and a route can name one. The audio half needs the typed
-  auxiliary audio edges `AUDIO_ARCHITECTURE.md` describes and that do not
-  exist. Two plan directories are held out of `archive/` by that one gap.
+  07 both publish device outlets. The control half is built and reachable —
+  `mooloop_core::outlet` is the vocabulary, ML-P8 declares fourteen outlets and
+  publishes its seven control values, a route can name one, and as of
+  2026-09-05 the shelf offers them. The audio half needs the typed auxiliary
+  audio edges `AUDIO_ARCHITECTURE.md` describes and that do not exist. Two plan
+  directories are held out of `archive/` by that one gap.
 
 So the sequence below starts by clearing the debt those two instruments left,
 and only then moves to the interface, which is where Adam's standing list has
@@ -61,10 +62,12 @@ once is the point.
 
 Two pieces, in order:
 
-- **The control slice's last mile.** The mechanism is built and tested; what
-  is missing is the *source picker offering outlets*, so a route onto one can
-  be made by hand rather than only by hand-editing a project file. This is
-  small and it is the difference between a feature and a file format.
+- ~~**The control slice's last mile.**~~ **Done, 2026-09-05.** The shelf grows
+  an OUTLETS pane beside its module grid on any channel whose generator
+  publishes control outlets, and a chip selects and arms exactly like a
+  module, so the ordinary assign-then-drag gesture builds an outlet route.
+  What remains of the control half is DS-01 publishing its own six values,
+  which is DS-01 work rather than shared infrastructure.
 - **Typed auxiliary audio edges.** ML-P8's `Osc 1/2/3`, `Sub`, `Noise`,
   `Pre-Filter Mix` and `Filter` taps are audio-rate ports. The one-block
   control table cannot carry them and downsampling them destroys the reason

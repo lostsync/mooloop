@@ -163,6 +163,29 @@ impl OutletDescriptor {
 /// leading run and stop.
 pub trait PublishesOutlets {
     fn outlets(&self) -> &'static [OutletDescriptor];
+
+    /// The leading run of control outlets: everything a control route can
+    /// name today.
+    ///
+    /// A provided method rather than a slice every caller re-derives, because
+    /// "take the control prefix" is the whole contract the control-first
+    /// declaration order exists to make cheap, and a surface that got the
+    /// prefix wrong would offer an audio tap as a modulation source.
+    fn control_outlets(&self) -> &'static [OutletDescriptor] {
+        let outlets = self.outlets();
+        &outlets[..control_count(outlets)]
+    }
+
+    /// One published control outlet by its durable id, or `None` when this
+    /// device does not publish it as a control signal.
+    ///
+    /// The question a route surface asks before it offers a source, and the
+    /// one it asks again before it resolves a saved route: an outlet id is
+    /// durable, but the device that publishes it is whichever generator the
+    /// channel currently holds.
+    fn control_outlet(&self, id: u16) -> Option<&'static OutletDescriptor> {
+        self.control_outlets().iter().find(|outlet| outlet.id == id)
+    }
 }
 
 /// Look one outlet up by its durable id.
@@ -257,5 +280,40 @@ pub(crate) mod tests {
         assert_eq!(find(&TABLE, 9).unwrap().name, "Filter");
         assert!(find(&TABLE, 1).is_none());
         assert_eq!(control_count(&TABLE), 1);
+    }
+
+    /// The picker asks a `DeviceKind` what it publishes, so the answer has to
+    /// be the control prefix and nothing else. An audio outlet offered as a
+    /// modulation source is exactly the confusion `OutletDomain` exists to
+    /// prevent, and `control_outlet` is where the refusal happens.
+    #[test]
+    fn a_device_kind_offers_its_control_outlets_and_refuses_its_audio_ones() {
+        use crate::DeviceKind;
+
+        let published = DeviceKind::MlP8.control_outlets();
+        assert_eq!(published.len(), crate::mlp8::MLP8_CONTROL_OUTLETS);
+        assert!(published.iter().all(OutletDescriptor::is_control));
+        assert_eq!(
+            DeviceKind::MlP8.control_outlet(crate::mlp8::OUTLET_GATE).unwrap().name,
+            "Gate"
+        );
+        assert!(
+            DeviceKind::MlP8.control_outlet(crate::mlp8::OUTLET_OSC1).is_none(),
+            "an audio tap was offered as a control source"
+        );
+
+        // A device that has not designed an interface publishes nothing, and
+        // says so rather than leaving the question open.
+        for kind in [
+            DeviceKind::Sampler,
+            DeviceKind::DrumSynth,
+            DeviceKind::MonoSynth,
+            DeviceKind::PolySynth,
+            DeviceKind::MlM1,
+            DeviceKind::Ds01,
+        ] {
+            assert!(kind.outlets().is_empty(), "{kind:?} publishes unexpectedly");
+            assert!(kind.control_outlet(0).is_none());
+        }
     }
 }

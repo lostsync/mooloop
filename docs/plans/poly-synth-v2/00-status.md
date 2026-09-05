@@ -101,9 +101,33 @@ Two things that came out of wiring it:
   and 16 KiB of the reserved figure. The engine's footprint test is what asked
   the question, for the second time in two steps.
 
-**What 06 still needs:** the source picker does not list outlets, so a route to
-one can be built in code and by a project file but not by hand. That and the
-audio outlets are what is left.
+**The picker offers them.** A generator that publishes control outlets gives
+the modulation shelf an OUTLETS pane beside its module grid: one named chip per
+outlet, with the live meter a module tile already carries, selectable and
+armable on exactly the terms a module is. The assign gesture is unchanged --
+arm, then drag a knob -- because selection and arming were already carried as a
+slot in the flat control address space, and an outlet's slot is in the upper
+half of it. Three things it took:
+
+- **`DeviceKind` had to answer what it publishes.** `PublishesOutlets` had no
+  implementor: the table existed and nothing could be asked for it. It answers
+  with the control prefix, so an audio tap cannot reach a control destination
+  by being in the same table as one -- the refusal is a domain check rather
+  than a rule the picker has to remember.
+- **An outlet's polarity comes from its declared shape, not from a kind.** A
+  module's default polarity is read off what kind of module it is. An outlet
+  has no kind, and a `Gate` or `Trigger` route defaulting to bipolar would rest
+  half a depth *below* the destination's base with nothing playing.
+- **An outlet does not move, and a reorder must not disturb it.** Selection and
+  arming follow a module's durable id across a drag; an outlet has no rack
+  identity to follow, so it keeps its slot. Re-deriving it through the rack
+  would have silently disarmed a `Trigger` every time two LFOs were swapped.
+
+An outlet has no editor pane, because the device that publishes it owns its
+behaviour; the pane shows the declaration -- shape, rate, and block latency --
+and the arm button, which is the reason it is in the picker.
+
+**What 06 still needs:** the audio outlets.
 
 The audio outlets stay declared and unconnectable, which is the split the step
 itself offers. Materialising seven stereo taps with nothing able to read them
