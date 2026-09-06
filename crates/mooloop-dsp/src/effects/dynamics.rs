@@ -178,7 +178,7 @@ impl AudioNode for GateEffect {
     /// has to settle before the device can be left alone is the *state*, and
     /// for a reason that is easy to miss — a node frozen mid-release wakes up
     /// still holding the reduction it had when the music stopped, and applies
-    /// it to the next transient. Running until the detector has released is
+    /// it to the next transient. Waiting for that state to stop moving is
     /// what makes waking up indistinguishable from never having slept.
     ///
     /// For the gate that is the hold and the shut ramp, and the question is
@@ -328,9 +328,10 @@ impl AudioNode for CompressorEffect {
     /// it to the next transient. Running until the detector has released is
     /// what makes waking up indistinguishable from never having slept.
     ///
-    /// The detector is what settles here, and it is smoothing a *level*: from
-    /// the loudest thing the range admits down under the lowest threshold is
-    /// about ten time constants, so fifteen is the margin.
+    /// The detector is what settles here, and it settles *exactly*: it snaps
+    /// the last of the gap rather than decaying through it forever, so a
+    /// follower fed silence reaches zero and holds it, and freezing it there
+    /// is the same thing as continuing to run it.
     fn is_at_rest(&self) -> bool {
         // The detector, and the three lags feeding the gain computer. A knob
         // still travelling would be frozen where it was, and a detector still
@@ -477,9 +478,10 @@ impl AudioNode for LimiterEffect {
     /// it to the next transient. Running until the detector has released is
     /// what makes waking up indistinguishable from never having slept.
     ///
-    /// The same fifteen release time constants as the compressor, for the same
-    /// detector. Its attack is fixed and instantaneous, so it contributes
-    /// nothing to how long the device takes to let go.
+    /// The same detector as the compressor's, and the same exactness: it
+    /// snaps to zero rather than asymptoting toward it. Its attack is fixed
+    /// and instantaneous, so only the release decides how long the device
+    /// takes to let go.
     fn is_at_rest(&self) -> bool {
         self.detector.is_at_rest() && self.ceiling_db.is_settled() && self.gain_db.is_settled()
     }

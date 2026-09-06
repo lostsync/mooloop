@@ -70,8 +70,6 @@ impl ModulationEffect {
         }
     }
 
-    pub fn debug_phase(&self) -> f32 { self.lfo.debug_phase() }
-
     pub fn params(&self) -> ModulationParams {
         self.params
     }
