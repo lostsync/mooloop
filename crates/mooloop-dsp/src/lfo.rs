@@ -77,9 +77,18 @@ impl Lfo {
 
     /// Advance without producing a value, for stretches where the voice is
     /// silent. Keeps a free-running LFO in phase with the transport.
+    ///
+    /// One sample at a time, and not because the phase could not be added in
+    /// one go. `advance` folds at every wrap and refreshes the held value
+    /// there, so a stride is not the same state as the samples it stands in
+    /// for -- and it does not have to span two cycles to differ, because the
+    /// accumulation itself rounds differently. That is a render that depends
+    /// on how the audio was cut into blocks, which is the one thing an export
+    /// matching a take rules out. What a skip does save is `shape_at`, whose
+    /// value nothing is going to read.
     pub fn skip(&mut self, frames: usize, rate_hz: f32, sample_rate: u32) {
-        if frames > 0 {
-            self.advance(frames as f32, rate_hz, sample_rate);
+        for _ in 0..frames {
+            self.advance(1.0, rate_hz, sample_rate);
         }
     }
 
@@ -154,7 +163,30 @@ mod tests {
             running.next_sample(rate, LfoWave::Sine, sr);
         }
         skipping.skip(1000, rate, sr);
-        assert!((running.phase - skipping.phase).abs() < 1.0e-4);
+        // Exactly, not nearly: skipping is the same arithmetic with the shape
+        // evaluation left out, so any difference at all would mean the two
+        // paths had stopped agreeing about where the transport is.
+        assert_eq!(running.phase, skipping.phase);
+        assert_eq!(running.hold, skipping.hold);
+    }
+
+    /// The property the engine's block-size tests rest on, stated where it is
+    /// actually decided. One skip of 1024 and eight of 128 have to leave the
+    /// same state, or a device that slept renders differently depending on
+    /// the host's buffer size.
+    #[test]
+    fn a_skip_does_not_depend_on_how_it_is_divided() {
+        let sr = 48_000;
+        for rate in [0.5f32, 3.0, 7.0, 19.0] {
+            let mut whole = Lfo::new();
+            let mut eighths = Lfo::new();
+            whole.skip(1024, rate, sr);
+            for _ in 0..8 {
+                eighths.skip(128, rate, sr);
+            }
+            assert_eq!(whole.phase, eighths.phase, "phase diverged at {rate} Hz");
+            assert_eq!(whole.hold, eighths.hold, "held value diverged at {rate} Hz");
+        }
     }
 
     #[test]
@@ -186,3 +218,4 @@ mod tests {
         assert_eq!(probe.phase, phase_before, "peek must not advance the phase");
     }
 }
+

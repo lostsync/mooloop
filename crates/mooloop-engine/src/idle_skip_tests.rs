@@ -14,8 +14,8 @@
 //! matching a take.
 
 use mooloop_core::{
-    mlp8, AudioSubscription, AuxInParams, EffectKind, EffectSlotState, NoteEvent, Project,
-    ProjectChannel, ReverbParams,
+    mlp8, AudioSubscription, AuxInParams, EffectKind, EffectSlotState, LfoWave, NoteEvent,
+    Project, ProjectChannel, ReverbParams,
 };
 use mooloop_dsp::SILENCE_PEAK;
 
@@ -234,5 +234,74 @@ fn an_aux_in_channel_is_never_slept_out_of_its_producer() {
         peak(late) > 1.0e-3,
         "the Aux In went to sleep and missed its producer's second note: {}",
         peak(late)
+    );
+}
+
+/// A note still sounding when the pattern ends is placed one sample
+/// differently depending on the host's buffer size.
+///
+/// **This records a bug rather than a property, and is ignored because it
+/// fails.** It is here because it took a measurement to find and would take
+/// another to find again.
+///
+/// Nothing above catches it. `sparse_project`'s notes happen not to land on
+/// the rounding, and the three tests that assert block-size independence all
+/// use it. Narrowed, the fault is in neither the devices nor the skipping:
+///
+/// - the mono synth *device*, driven directly at 128 and 1024 frames, is
+///   bit-identical, so it is not the generator;
+/// - skipping on and skipping off agree exactly at the same block size, so it
+///   is not the rest-and-tail mechanism;
+/// - a sampler channel with the same notes does not diverge at all, because
+///   its one-shot has finished by then and nothing is left to shift;
+/// - both synths diverge from exactly the same sample, 95999, which is one
+///   short of tick 384 — the end of the pattern, and the note-off of the note
+///   that ends on it.
+///
+/// The cause is `Sequencer::schedule_edge_once` taking a sample offset as
+/// `((tick - start_tick) / ticks_per_sample).round()`, where `start_tick` is
+/// `Transport::position_ticks` — an `f64` that accumulates `frames *
+/// ticks_per_sample` once per block. Eight small blocks accumulate a
+/// different error than one large one, so the rounding falls either side of
+/// the boundary and the note-off moves a sample. `Transport::frames_played`
+/// is the exact count the module's own header calls "ground truth that never
+/// accumulates float error", and the scheduler does not use it.
+///
+/// Deriving the tick from the frame count would fix this and would also
+/// re-time everything before a tempo change, so it wants an anchor — a
+/// (frames, ticks) pair reset when the tempo moves — rather than a
+/// substitution. That is a decision about musical timing, which is why this
+/// is a recorded bug and not a patch.
+#[test]
+#[ignore = "records a known bug: block size moves a note-off by one sample"]
+fn a_note_off_on_the_pattern_boundary_does_not_depend_on_the_block_size() {
+    let mut lead = ProjectChannel::mono_synth(0, 1);
+    lead.setup.channel.volume = 0.8;
+    if let Some(state) = lead.setup.source.mono_synth_state_mut() {
+        state.params.lfo.wave = LfoWave::Sine;
+        state.params.lfo.rate_hz = 7.0;
+        state.params.lfo.retrigger = false;
+        state.params.lfo.to_filter = 2.0;
+    }
+    // The second note ends exactly on tick 384, the pattern's last tick.
+    // Both inside the pattern: `render_blocks` does not loop, so a note past
+    // the end never plays and the comparison would be of one note with
+    // itself.
+    lead.notes[0].push(NoteEvent::new(1, 0, 24, 55, 110));
+    lead.notes[0].push(NoteEvent::new(2, 288, 96, 55, 110));
+    let project = Project {
+        channels: vec![lead],
+        ..Project::default()
+    };
+
+    // Skipping off, so what is left is the scheduler and nothing else.
+    let small = render_blocks(&project, 2.5, 128, false);
+    let large = render_blocks(&project, 2.5, 1024, false);
+    assert!(peak(&small) > 0.05, "the comparison is against silence");
+    assert_eq!(small.len(), large.len());
+    let (worst, at) = worst_difference(&small, &large);
+    assert!(
+        worst == 0.0,
+        "block size changed the render by {worst} at frame {at}"
     );
 }

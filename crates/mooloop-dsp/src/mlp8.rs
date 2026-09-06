@@ -454,15 +454,18 @@ impl MlP8Lfo {
         }
     }
 
-    /// One sample, bipolar in `[-1, 1]`.
-    fn next_sample(&mut self, params: &MlP8LfoParams, bpm: f64, sample_rate: u32) -> f32 {
-        let sr = sample_rate as f32;
+    /// The phase increment per sample, and the rate it came from.
+    fn step(params: &MlP8LfoParams, bpm: f64, sr: f32) -> (f32, f32) {
         // A quarter of the sample rate is the same ceiling the shared LFO
         // uses: past it the "shape" is decided by where the samples land
         // rather than by the wave.
         let rate = Self::rate_hz(params, bpm).clamp(0.0, sr * 0.25);
-        let dt = rate / sr;
+        (rate, rate / sr)
+    }
 
+    /// Advance every part of the state one sample and return the unslewed
+    /// shape it passed through.
+    fn step_raw(&mut self, dt: f32, params: &MlP8LfoParams) -> f32 {
         let raw = match params.wave {
             MlP8LfoWave::Chaos => {
                 self.advance_chaos(dt);
@@ -474,9 +477,67 @@ impl MlP8Lfo {
                 periodic_shape(warp_phase(read, params.warp), wave)
             }
         };
-
         self.advance(dt, params);
+        raw
+    }
+
+    /// The same advance with the shape left out.
+    ///
+    /// Only the shapes carry no state: the accumulator, the held value and
+    /// the chaos pair all move exactly as they do in [`Self::step_raw`], and
+    /// what is skipped is the sine or the table read whose result was going to
+    /// be discarded.
+    fn step_state(&mut self, dt: f32, params: &MlP8LfoParams) {
+        if params.wave == MlP8LfoWave::Chaos {
+            self.advance_chaos(dt);
+        }
+        self.advance(dt, params);
+    }
+
+    /// One sample, bipolar in `[-1, 1]`.
+    fn next_sample(&mut self, params: &MlP8LfoParams, bpm: f64, sample_rate: u32) -> f32 {
+        let sr = sample_rate as f32;
+        let (rate, dt) = Self::step(params, bpm, sr);
+        let raw = self.step_raw(dt, params);
         self.slew(raw, rate, params.slew, sr)
+    }
+
+    /// Advance `frames` samples without producing anything, leaving exactly
+    /// the state `next_sample` would have left.
+    ///
+    /// A sample at a time, not a stride: the accumulator folds at every wrap
+    /// and refreshes the held value there, the chaos pair is two phasors
+    /// bending each other's rate, and neither survives being added up in one
+    /// go. The engine holds a sleeping device to rendering identically at any
+    /// block size, and that is the claim this must not spend.
+    ///
+    /// What it does spend is the shape, on the one path where nothing reads
+    /// it. With no slew, `slew` assigns its target rather than filtering
+    /// toward it, so every value but the last is overwritten unread -- and
+    /// the last is the only one worth evaluating. That is a sine a sample
+    /// removed from a block that renders nothing, which is most of what a
+    /// sleeping ML-P8 channel cost.
+    fn skip(&mut self, params: &MlP8LfoParams, bpm: f64, sample_rate: u32, frames: usize) {
+        if frames == 0 {
+            return;
+        }
+        let sr = sample_rate as f32;
+        let (rate, dt) = Self::step(params, bpm, sr);
+        if params.slew.clamp(0.0, 1.0) > 0.0 && rate > 0.0 {
+            // A one-pole toward a moving target: every sample's shape is part
+            // of where it ends up, so all of them have to be evaluated.
+            for _ in 0..frames {
+                let raw = self.step_raw(dt, params);
+                self.slew(raw, rate, params.slew, sr);
+            }
+            return;
+        }
+        for _ in 0..frames - 1 {
+            self.step_state(dt, params);
+        }
+        let raw = self.step_raw(dt, params);
+        self.slewed = raw;
+        self.primed = true;
     }
 
     /// Advance the phase accumulator, refreshing the held value on the wrap.
@@ -2469,10 +2530,8 @@ impl AudioNode for MlP8 {
     /// while it is off, which is when its line is cleared and its processor
     /// genuinely does not run.
     fn skip_block(&mut self, ctx: &ProcessContext) {
-        let lfo = self.params.lfo;
-        for _ in 0..ctx.frames {
-            self.lfo.next_sample(&lfo, ctx.bpm, ctx.sample_rate);
-        }
+        self.lfo
+            .skip(&self.params.lfo, ctx.bpm, ctx.sample_rate, ctx.frames);
     }
 
     fn process(
@@ -2489,6 +2548,73 @@ impl AudioNode for MlP8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `MlP8Lfo::skip` exists to be cheaper than the loop it replaces, and it
+    /// is only allowed to be cheaper -- never different. Every wave, with the
+    /// slew on and off, against the sample loop it stands in for, compared on
+    /// the whole state rather than on the value nobody reads.
+    ///
+    /// Bit-exact on purpose. The engine asserts that a project renders
+    /// identically at any block size, and a sleeping device is the one place
+    /// where the block size decides how the state is advanced; a tolerance
+    /// here would be a tolerance on that.
+    #[test]
+    fn skipping_the_lfo_leaves_exactly_what_running_it_would_have() {
+        let bpm = 128.0;
+        for wave in MlP8LfoWave::ALL {
+            for slew in [0.0f32, 0.4] {
+                for warp in [0.0f32, -0.6] {
+                    let params = MlP8LfoParams {
+                        wave,
+                        rate_hz: 6.0,
+                        phase: 0.2,
+                        warp,
+                        slew,
+                        ..MlP8LfoParams::default()
+                    };
+                    for frames in [1usize, 7, 128, 1024] {
+                        let mut run = MlP8Lfo::new();
+                        let mut skipped = MlP8Lfo::new();
+                        for _ in 0..frames {
+                            run.next_sample(&params, bpm, SR);
+                        }
+                        skipped.skip(&params, bpm, SR, frames);
+                        let what = format!("{wave:?} slew {slew} warp {warp} over {frames}");
+                        assert_eq!(run.phase, skipped.phase, "phase: {what}");
+                        assert_eq!(run.hold, skipped.hold, "held value: {what}");
+                        assert_eq!(run.chaos, skipped.chaos, "chaos: {what}");
+                        assert_eq!(run.slewed, skipped.slewed, "slewed: {what}");
+                        assert_eq!(run.primed, skipped.primed, "primed: {what}");
+                        assert_eq!(run.value(), skipped.value(), "published value: {what}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The same claim the shared LFO makes, for the device that has four more
+    /// pieces of state to get wrong: one skip and the several a smaller host
+    /// buffer would have taken have to land in the same place.
+    #[test]
+    fn a_skipped_lfo_does_not_depend_on_how_the_block_is_divided() {
+        for wave in MlP8LfoWave::ALL {
+            let params = MlP8LfoParams {
+                wave,
+                rate_hz: 6.0,
+                slew: 0.3,
+                ..MlP8LfoParams::default()
+            };
+            let mut whole = MlP8Lfo::new();
+            let mut eighths = MlP8Lfo::new();
+            whole.skip(&params, 128.0, SR, 1024);
+            for _ in 0..8 {
+                eighths.skip(&params, 128.0, SR, 128);
+            }
+            assert_eq!(whole.phase, eighths.phase, "phase diverged on {wave:?}");
+            assert_eq!(whole.slewed, eighths.slewed, "slew diverged on {wave:?}");
+            assert_eq!(whole.chaos, eighths.chaos, "chaos diverged on {wave:?}");
+        }
+    }
     use crate::event::TimedEvent;
     use mooloop_core::mlp8::{xmod_index, PARAM_FILTER_CUTOFF, PARAM_VOICE_FEEDBACK};
     use mooloop_core::{MlP8FilterMode, MlP8Unison, SubOctave, SubSource, SyncSource};

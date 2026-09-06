@@ -352,7 +352,7 @@ The last one is a small piece of numerical honesty that took an hour: **a one-po
 
 `RenderState::set_idle_skipping` is what holds all of it honest: a render can be run twice and compared sample for sample, because a mechanism whose whole claim is that it changes nothing has to be checkable against the thing it claims not to change. The equivalence test also asserts that a quarter of the channel-blocks were actually skipped, since a skip that never fires would pass every other test in the file.
 
-## Sep 5 (last) — the control pass cost more than the audio it was skipping
+## Sep 5 (later again) — the control pass cost more than the audio it was skipping
 
 The entry above stopped a channel with nothing to play from being rendered. Measuring what a block then cost said the skip had barely moved the number: thirty-two ML-P8 channels *doing nothing* cost 254 microseconds a 128-frame block against 280 for the same thirty-two playing. A sleeping channel was within a tenth of a sounding one, which means almost none of the block was ever the audio.
 
@@ -367,6 +367,72 @@ The entry above stopped a channel with nothing to play from being rendered. Meas
 At a 128-frame buffer and thirty-two channels that is 280,528 nanoseconds a block down to 64,053 — 10.5% of the block's budget to 2.4%, and idle 254,007 down to 63,414. The shape changed as well as the size: an idle arrangement now costs a quarter of a playing one instead of the same.
 
 What is left is honest DSP with one exception, and the measurement points straight at it. Thirty-two *sleeping* channels still cost 240 microseconds at a 512-frame buffer, scaling exactly with frames times channels, because `MlP8::skip_block` advances the device LFO one sample at a time for the whole block. The reason it advances at all is right and was argued in the previous entry — a clock-driven phase that froze would come back somewhere else. Advancing it by N samples in N iterations is what is not obviously necessary, and closed-forming it per waveform is the next thing to measure rather than the next thing to assume.
+
+## Sep 5 (last) — a sleeping device evaluates a shape nobody reads
+
+The entry above left one thing measured and unfixed: thirty-two *sleeping*
+ML-P8 channels cost 240 microseconds at a 512-frame buffer, scaling exactly
+with frames times channels, and the suspicion was `MlP8::skip_block`. Adding a
+sampler column to `block_cost.rs` settled it before anything was changed —
+a sampler takes the default `skip_block`, which does nothing — and the split
+was unambiguous: 23 microseconds of engine, 218 of device. Ninety-three per
+cent of an idle ML-P8 block was the device declining to stay still.
+
+The obvious fix was the wrong one, and the previous entry says why: the
+implementations mirror the sample loop rather than closed-forming it, because
+a phase that arrived by a different route is a different phase, and
+`skipping_renders_the_same_at_any_block_size` asserts that to the bit. So the
+question is not how to advance the state in fewer steps. It is what a skipped
+block is computing that it does not need.
+
+**The shape.** `MlP8Lfo::next_sample` evaluates the wave and then slews toward
+it; `skip_block` threw every one of those values away. With no slew — which
+is the default and most patches — `slew` *assigns* its target rather than
+filtering toward it, so every value but the last is overwritten unread. The
+state still walks a sample at a time, because that is the part the block-size
+contract is about; what walks with it now is a phase accumulator and a wrap
+check rather than a sine. `PolySynth::skip_block` had the same shape and the
+shared `Lfo::skip` was already the right primitive for it. The device's own
+idle cost fell from 218 microseconds to 72 at 512 frames and thirty-two
+channels, and by the same factor of three at every other size.
+
+Two bit-exact tests hold it there: `skip` against the sample loop it stands in
+for, over all six waves with the slew on and off, compared on the whole state
+rather than the value nobody reads; and one skip of 1024 against eight of 128.
+
+**And the primitive it reached for was wrong.** `Lfo::skip` advanced in a
+single stride — `advance(frames as f32)` — where the loop it claimed to
+replace advanced a sample at a time. One skip of 1024 left the phase at
+0.19466671 and eight of 128 left it at 0.19466706. `MonoSynth::skip_block`
+used it, so a sleeping mono synth rendered differently depending on the host's
+buffer size, which is the exact property three tests in `idle_skip_tests.rs`
+exist to defend. None of them caught it, because `sparse_project` has a DS-01,
+a poly synth and a sampler in it and no mono synth. `skip` is a loop now, and
+the tolerance in its own test is gone: it is the same arithmetic with the
+shape left out, so it is equal or it is broken.
+
+**Which turned up a second divergence that is not this one.** Written as a
+test and narrowed by elimination: the mono synth *device*, driven directly at
+128 and 1024 frames, is bit-identical; skipping on and off agree exactly; a
+sampler with the same notes does not diverge at all; and both synths diverge
+from exactly sample 95999, one short of tick 384 — the end of the pattern, and
+the note-off of the note that ends on it.
+`Sequencer::schedule_edge_once` takes its offset as
+`((tick - start_tick) / ticks_per_sample).round()`, and `start_tick` is
+`Transport::position_ticks`, an `f64` accumulating `frames * ticks_per_sample`
+once per block. Eight small blocks accumulate a different error than one large
+one, the rounding falls either side, and the note-off moves a sample.
+`Transport::frames_played` is the exact count that module's own header calls
+"ground truth that never accumulates float error", and the scheduler does not
+use it.
+
+That one is recorded rather than patched, as
+`a_note_off_on_the_pattern_boundary_does_not_depend_on_the_block_size`, which
+is `#[ignore]`d because it fails. Deriving the tick from the frame count fixes
+it and also re-times everything before a tempo change, so it wants an anchor —
+a (frames, ticks) pair reset when the tempo moves — rather than a
+substitution. That is a decision about musical timing rather than a bug fix,
+and it is Adam's.
 
 ## Patterns worth noticing
 
@@ -408,7 +474,7 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 
 - ~~The v1 drum synth is still the only generator that cannot be modulated~~ — it has a table as of 2026-09-05 (`FOCUS.md` step 2). DS-01 is done and archived: nine steps, a six-page face, a seventeen-patch bank, played and signed off on 2026-09-04, and step 07's audio outlets closed on 2026-09-05.
 - ~~ML-P8 stops inside step 06~~ — closed 2026-09-05, along with DS-01's step 07 and `typed-audio-edges/` itself. All three directories are archived. What is *not* built is the rest of `AUDIO_ARCHITECTURE.md`'s step 6: parallel sends (a channel still feeds exactly one bus) and sidechain key inputs (they need a dependency edge that schedules a producer without summing it in). Both now extend a compiled edge model rather than needing one built first.
-- `MlP8::skip_block` advances the device LFO one sample at a time for a block nothing is rendering, so thirty-two sleeping channels still cost 240 microseconds at a 512-frame buffer. Closed-forming the advance per waveform is the obvious answer and is not obviously correct for the ones with per-sample state; `block_cost.rs` is the measurement to hold it to.
+- A note-off landing on the pattern's last tick moves by one sample depending on the host's buffer size, so an export does not match a take for any generator still sounding there. Narrowed to `Sequencer::schedule_edge_once` rounding a delta off `Transport::position_ticks`, which accumulates per block where `frames_played` does not; recorded as an `#[ignore]`d test in `idle_skip_tests.rs`. The fix needs a tempo anchor, not a substitution.
 - Buffer Stage 1's acceptance test 8 — no allocations or locks in the callback — is still unverified. It needs an allocation-tracking harness, not a reading of the code.
 - The sampler's four-voice stretching polyphony cap is not enforced anywhere: `StretchPool::new` builds a reader for all sixteen voices.
 - Acid's Cutoff knob means a different frequency from the other two ML-M1 models — 0.41x nominal against 0.65–0.68x. The compensation constant is load-bearing, not a typo; correcting it lines the corners up and breaks the filter. Lining them up means re-deriving it, and whether it *should* track the others is a taste question Adam has not been asked.

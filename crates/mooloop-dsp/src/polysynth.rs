@@ -373,11 +373,14 @@ impl AudioNode for PolySynth {
     /// not a voice is sounding, so this mirrors that rather than taking one
     /// stride over the block: a sample-and-hold shape resolves per cycle, and
     /// the two do not land in the same place.
+    ///
+    /// `Lfo::skip` is that same per-sample walk with the shape evaluation
+    /// left out, which is the only part of `next_sample` a skipped block was
+    /// throwing away — and for a sine it was a transcendental a sample, on a
+    /// block that renders nothing.
     fn skip_block(&mut self, ctx: &ProcessContext) {
-        let (rate, wave) = (self.params.lfo.rate_hz, self.params.lfo.wave);
-        for _ in 0..ctx.frames {
-            self.lfo.next_sample(rate, wave, ctx.sample_rate);
-        }
+        self.lfo
+            .skip(ctx.frames, self.params.lfo.rate_hz, ctx.sample_rate);
     }
 
     fn process(
