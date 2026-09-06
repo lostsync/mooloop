@@ -802,19 +802,13 @@ impl EffectChain {
     }
 
     /// Whether every occupied slot in this chain would be skipped this
-    /// block.
-    ///
-    /// Test-only for now: this is the condition a whole idle channel strip
-    /// has to satisfy before it can be skipped, which is the next step in
-    /// `docs/plans/auto-offline-idle-devices/`. Until then it is what the
-    /// equivalence tests use to check that a chain fed silence really did go
-    /// to sleep, rather than passing by never having tried.
+    /// block: the condition a whole channel strip has to satisfy before it
+    /// can be left uncalled.
     ///
     /// A bypassed slot runs no device, so the only thing it can still be
     /// holding is its dry-path aligner, and that is empty once the slot has
     /// seen silence for as long as the ring is. An empty slot is trivially
     /// at rest.
-    #[cfg(test)]
     fn is_at_rest(&self) -> bool {
         (0..self.bound).all(|slot| {
             let Some(node) = self.nodes[slot].as_ref() else {
@@ -829,6 +823,35 @@ impl EffectChain {
             }
             self.bypassed(slot) || node.is_at_rest() || silent > node.tail_frames()
         })
+    }
+
+    /// Sleep the whole chain for one block, because the strip around it is
+    /// asleep and nothing will be handed to it.
+    ///
+    /// The bookkeeping `process` would have done, minus the audio: every
+    /// occupied slot's silence counter grows so the chain stays at rest, and
+    /// every device gets the chance to move whatever it runs on the clock. A
+    /// chain is only ever slept while `is_at_rest` holds, so this cannot be
+    /// reached with anything still decaying in it.
+    fn sleep(&mut self, context: &ProcessContext) {
+        for slot in 0..self.bound {
+            // A bypassed slot's device is not called at all while the strip
+            // is running, so bypass has already frozen whatever it runs on
+            // the clock. Moving it here would make a sleeping strip and a
+            // running one disagree, which is the one thing none of this may
+            // do. Its counter still grows: what a bypassed slot holds is its
+            // aligner, and that is empty once the silence outlasts the ring.
+            let bypassed = self.bypassed(slot);
+            let Some(node) = self.nodes[slot].as_mut() else {
+                continue;
+            };
+            if !bypassed {
+                node.skip_block(context);
+            }
+            if let Some(state) = self.slots[slot].as_deref_mut() {
+                state.silent_frames = state.silent_frames.saturating_add(context.frames as u32);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1224,6 +1247,17 @@ pub struct ChannelStrip {
     /// `mooloop_core::compile_latency` and the ring arrives preallocated;
     /// see `docs/plans/latency-compensation/`.
     compensation: Option<Box<IntegerDelay>>,
+    /// Consecutive frames of silence the generator has put on this strip's
+    /// bus, counted where the source meter is already read.
+    ///
+    /// A generator has no input to go quiet, so this is its *output*: the one
+    /// measurement that covers every reason a device might still be making
+    /// sound, including the finishing stages that outlive its voices.
+    source_silent_frames: u32,
+    /// Whether the strip was left uncalled last block. Only used to do the
+    /// once-off tidying that falling asleep needs -- emptying the bus and the
+    /// compensation ring -- rather than repeating it every idle block.
+    sleeping: bool,
 }
 
 impl ChannelStrip {
@@ -1249,6 +1283,8 @@ impl ChannelStrip {
             output: OutputStage::new(0.8),
             destination: MASTER_BUS,
             compensation: None,
+            source_silent_frames: 0,
+            sleeping: false,
         }
     }
 
@@ -1375,6 +1411,92 @@ impl ChannelStrip {
                 GeneratorParams::AuxIn(state.params)
             }
         };
+    }
+
+    /// The generator this channel is running, as the node it is.
+    ///
+    /// The rest contract is on `AudioNode`, so asking a channel whether its
+    /// source has anything left to do should not mean a second `match` over
+    /// the eight device kinds every time. This is that match, once.
+    fn source_node(&self) -> &dyn AudioNode {
+        match self.active_source {
+            DeviceKind::Sampler => &self.sampler,
+            DeviceKind::DrumSynth => &self.drum_synth,
+            DeviceKind::MonoSynth => &self.mono_synth,
+            DeviceKind::PolySynth => &self.poly_synth,
+            DeviceKind::MlM1 => &self.mlm1,
+            DeviceKind::MlP8 => &self.mlp8,
+            DeviceKind::Ds01 => &self.ds01,
+            DeviceKind::AuxIn => &self.aux_in,
+        }
+    }
+
+    fn source_node_mut(&mut self) -> &mut dyn AudioNode {
+        match self.active_source {
+            DeviceKind::Sampler => &mut self.sampler,
+            DeviceKind::DrumSynth => &mut self.drum_synth,
+            DeviceKind::MonoSynth => &mut self.mono_synth,
+            DeviceKind::PolySynth => &mut self.poly_synth,
+            DeviceKind::MlM1 => &mut self.mlm1,
+            DeviceKind::MlP8 => &mut self.mlp8,
+            DeviceKind::Ds01 => &mut self.ds01,
+            DeviceKind::AuxIn => &mut self.aux_in,
+        }
+    }
+
+    /// Record how loud the generator was this block, and return how many
+    /// consecutive frames of silence it has now produced.
+    fn note_source_level(&mut self, peak: f32, frames: usize) -> u32 {
+        self.source_silent_frames = if peak <= SILENCE_PEAK {
+            self.source_silent_frames.saturating_add(frames as u32)
+        } else {
+            0
+        };
+        self.source_silent_frames
+    }
+
+    /// Whether this strip can be left unrendered for a block.
+    ///
+    /// Three questions, and the generator is asked two of them. `is_at_rest`
+    /// is about its voices -- a device with one still releasing says no --
+    /// and the silence count is about everything downstream of them inside
+    /// the device, which is how a finishing stage that outlives its voices is
+    /// covered without the host knowing one exists. Then the chain, which has
+    /// been counting the same way slot by slot.
+    ///
+    /// Aux In answers the first question with a flat no, and that is the
+    /// point: its sound is another channel's, and it can start without an
+    /// event of its own.
+    fn is_idle(&self) -> bool {
+        let source = self.source_node();
+        source.is_at_rest()
+            && self.source_silent_frames > source.tail_frames()
+            && self.effects.is_at_rest()
+    }
+
+    /// Spend a block asleep: move whatever runs on the clock, and the first
+    /// time round, empty what would otherwise be emitted on waking.
+    fn sleep(&mut self, context: &ProcessContext) {
+        self.source_node_mut().skip_block(context);
+        self.effects.sleep(context);
+        self.source_silent_frames = self.source_silent_frames.saturating_add(context.frames as u32);
+        if self.sleeping {
+            return;
+        }
+        self.sleeping = true;
+        // Once, on the way down. Nothing writes either of these while the
+        // strip is asleep, so emptying them again every block would be work
+        // to reach a state they are already in.
+        //
+        // The bus so nothing downstream can read what the last audible block
+        // left in it, and the compensation ring for the reason the mute path
+        // empties it: a silent producer's pipeline is silent too, and a ring
+        // still holding pre-silence audio would emit it on the first block
+        // after the strip wakes.
+        self.bus.clear(context.frames.min(self.bus.capacity()));
+        if let Some(delay) = self.compensation.as_mut() {
+            delay.reset();
+        }
     }
 
     fn choke_group(&self) -> u8 {
@@ -1642,6 +1764,13 @@ pub(crate) struct RenderState {
     /// straight into one would be thrown away before anything read it. A
     /// fixed array, so filling it allocates nothing.
     auditions: [Option<Audition>; MAX_AUDITIONS_PER_BLOCK],
+    /// How many channel-blocks have been skipped since this state was built.
+    ///
+    /// One `u64` for the whole engine and one add per skipped strip. It is
+    /// here so the equivalence tests can say that the two renders they
+    /// compared were not simply the same render twice: a skip mechanism that
+    /// never fires would pass every one of them.
+    slept_strip_blocks: u64,
     /// Whether devices and strips with nothing to do may be left uncalled.
     ///
     /// On by default and not exposed as a user setting. It exists so the
@@ -1674,6 +1803,7 @@ impl RenderState {
         let mut state = Self {
             transport: Transport::new(sample_rate),
             skip_idle: true,
+            slept_strip_blocks: 0,
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
             sample_slots: slots_for_growth,
@@ -3062,6 +3192,10 @@ impl RenderState {
                 if let Some(delay) = self.strips[index].compensation.as_mut() {
                     delay.reset();
                 }
+                // Nothing measured this block, so nothing may be concluded
+                // from it: unmuting always renders at least one block before
+                // the channel is allowed to decide it is idle.
+                self.strips[index].source_silent_frames = 0;
                 continue;
             }
             let modulation = ModulationBlock {
@@ -3183,6 +3317,32 @@ impl RenderState {
                 &modulation,
                 automation.as_ref(),
             );
+            // A channel with nothing to answer, nothing sounding, and nothing
+            // still decaying in its chain is not rendered at all. On a
+            // thirty-two channel arrangement with four things playing, that
+            // is twenty-eight generators, twenty-eight effect chains and
+            // twenty-eight pan stages that do not run.
+            //
+            // The event list has to be *empty*, not merely free of notes. A
+            // modulated or automated source parameter resolves into
+            // `ParamValue` events just above, and a generator splits its
+            // block at every event it is given -- so a strip that slept
+            // through them would advance its free-running state in one stride
+            // where a running one took several, and the two would not agree
+            // to the bit. A channel whose source is being driven therefore
+            // keeps rendering, which is also the honest reading: something is
+            // still moving in it.
+            if skip_idle && self.events[index].is_empty() && self.strips[index].is_idle() {
+                self.strips[index].sleep(&context);
+                self.slept_strip_blocks += 1;
+                // Positions are stored rather than peak-held, so unlike the
+                // meters they do have to be written: otherwise the last
+                // sounding voice's playhead stays pinned in the UI.
+                self.playhead_meters
+                    .publish(index, &[0.0; MAX_SAMPLER_VOICES as usize]);
+                continue;
+            }
+            self.strips[index].sleeping = false;
             // The edge this channel reads, taken before the port group so the
             // bank is borrowed once each way rather than both at once.
             let source = self.audio.source(index).is_some_and(|tap| {
@@ -3219,10 +3379,12 @@ impl RenderState {
                 if let Some(delay) = self.strips[index].compensation.as_mut() {
                     delay.reset();
                 }
+                self.strips[index].source_silent_frames = 0;
                 continue;
             }
             let strip = &mut self.strips[index];
             let source_peak = strip.bus.peak(frames);
+            strip.note_source_level(source_peak.0.max(source_peak.1), frames);
             self.device_meters
                 .publish_output(index, 0, source_peak.0, source_peak.1);
             self.playhead_meters
@@ -3318,6 +3480,24 @@ impl RenderState {
 
     pub fn master(&self) -> &StereoBus {
         &self.buses[MASTER_BUS as usize].bus
+    }
+
+    /// Turn skipping idle devices and idle channels off, or back on.
+    ///
+    /// Not a user setting and not exposed as a command: it exists so a render
+    /// can be run twice and the two compared sample for sample. A mechanism
+    /// whose whole claim is that it changes nothing has to be checkable
+    /// against the thing it claims not to change, and this is what makes that
+    /// check a test rather than an argument.
+    #[cfg(test)]
+    pub fn set_idle_skipping(&mut self, enabled: bool) {
+        self.skip_idle = enabled;
+    }
+
+    /// Channel-blocks skipped since this state was built. See the field.
+    #[cfg(test)]
+    pub fn slept_strip_blocks(&self) -> u64 {
+        self.slept_strip_blocks
     }
 
     pub fn play(&mut self) {
@@ -6840,7 +7020,13 @@ mod footprint {
         // variant. A channel that is not an Aux In and publishes nothing pays
         // 20 bytes for a node it never runs, which is what every generator
         // kind already costs every channel.
-        assert_eq!(size_of::<ChannelStrip>(), 41_920);
+        // Letting an idle channel stop rendering added eight: a count of the
+        // frames its generator has been silent for, and a flag saying whether
+        // it is currently asleep. The chain's half of the same bookkeeping is
+        // free -- a `u32` fits in `EffectSlot`'s existing padding, which is
+        // why the assertion above did not move, and an addressable-but-empty
+        // slot still costs a pointer.
+        assert_eq!(size_of::<ChannelStrip>(), 41_928);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -6857,7 +7043,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_360);
+        assert_eq!(per_live, 60_368);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved

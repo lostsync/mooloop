@@ -162,6 +162,9 @@ eventual processing contract needs to describe:
 - tail behavior and reset/transport discontinuities;
 - stable parameter descriptors and instance identity.
 
+Latency and tail are implemented; "Rest And Tail" below states what they mean
+and what a host may do with them. Reset and transport discontinuities are not.
+
 `COMPOSABLE_DEVICE_UNITS.md` defines the recursive design contract above and
 below this adapter: primitives and composites have intentional parameters,
 typed inlets, and typed outlets, while private fixed topology stays private.
@@ -180,6 +183,47 @@ Node latency is a property of the active processing path. Bypass, dry/wet
 mixing, and latency-changing parameters need defined behavior. An effect with
 an oversampled wet path must align its own dry path before the graph compiler
 can compensate that effect against neighbouring paths.
+
+### Rest And Tail
+
+A node says whether it has anything to do, and the host stops calling it when
+it has not. Three defaulted methods carry it, and the defaults mean "never
+skip me" so a node that has not opted in behaves exactly as it did before:
+
+- `tail_frames` — how long this node can still be heard after its input goes
+  silent. `u32::MAX` means unbounded or unknown.
+- `is_at_rest` — whether its own state has settled, so that silent input
+  produces silent output now. A statement about the node, not about the audio
+  it was last handed: the host tracks input silence, because that is the only
+  side that can still count while the node is asleep.
+- `skip_block` — called in place of `process` for a block the host skips, so
+  the node can move whatever it runs on the clock rather than on the audio.
+
+The host skips a slot whose input has been silent longer than its tail, or
+whose state has settled, once its dry-path aligner has emptied. A whole
+channel strip is skipped when it has no events, its generator is at rest and
+has been putting out silence, and every occupied slot in its chain would be
+skipped. Nothing is published: the device meters are peak-hold cells the GUI
+empties as it reads them, so not writing one is publishing silence.
+
+Two rules follow from the block-boundary rule above, and both were found by
+breaking them:
+
+- **A tail must cover any ring a parameter can move a read head inside**, not
+  just the time the device takes to go quiet. A sleeping node's delay lines
+  stop advancing, so a delay time swept up afterwards would read audio from
+  before the silence.
+- **Free-running state has to keep running.** An LFO that keeps its phase
+  across silence, a reverb's line modulation, a sample-and-hold's counter: if
+  those freeze, a device comes back somewhere else, and *how far* depends on
+  the host's buffer size — which would make a bounce stop matching a take.
+  `skip_block` mirrors the sample loop rather than closed-forming it, because
+  a phase that arrived by a different route is a different phase.
+
+A device that cannot honour this declines in writing rather than by omission.
+The retained-audio buffer makes sound out of a silent input by design; Aux In's
+sound is another channel's and can start without an event of its own; ML-P8
+with its chorus switched on has a delay line and an LFO in its finisher.
 
 ## Audio Buffers And Ports
 

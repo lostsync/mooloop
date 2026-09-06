@@ -9,7 +9,10 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
-Last swept 2026-09-05, six times, the last when `typed-audio-edges/` finished
+Last swept 2026-09-05, seven times, the last when `auto-offline-idle-devices/`
+finished: `AudioNode` can say it has nothing to do, and a thirty-two channel
+project with one channel playing now costs a tenth of what it did per block.
+Before that, when `typed-audio-edges/` finished
 and took `poly-synth-v2/` and `drum-synth-v2/` into `archive/` with it — three
 directories closing on one mechanism, which is why it was worth building once
 rather than twice. Earlier the same day, five times: when the plan was
@@ -39,7 +42,6 @@ These have steps but no `00-status.md`, because nothing has landed to record.
 | `poly-v1-mono-mode/` | One step. The only thing blocking deletion of `DeviceKind::MonoSynth`, which is what lets `MlM1` take the plain name. The held-note stack it needs already exists. |
 | `preset-system/` | **Done: steps 01-04 ran 2026-09-04 and landed on `main` after Adam confirmed the interface.** A preset's unit is a device, with relative addressing. The effect-level preset exists end to end: one rack row, no routes, no absolute addressing, `contains = ["effect_params"]` in the manifest so a later fragment format can supersede it cleanly, `presets/effects/<kind>/` on disk, an undoable load through the session, and the rack row's rail buttons wired. `PresetSummary` names three preset classes. Every effect kind ships a factory bank, seeded like the ML-M1 one. A second pass fixed the load path — an effect preset is a rack edit, not a document load — and put the preset's name in the device header. `00-status.md` records what the run found. A second entry, 2026-09-05, moves the *generator* half onto the device rail beside the effect half and gives the source device a preset label in its header. The browser, the taxonomy surface, and an updatable factory mechanism are unblocked now that DS-01's bank ships. As of 2026-09-05 the browser has a home: Adam wants preset browsing in the sample browser panel, and `FOCUS.md` step 3 carries it. |
 | `adopt-shared-biquad-in-eq/` | `effects/eq.rs:30` still declares its own `Biquad` after the shared one was promoted out of it. |
-| `auto-offline-idle-devices/` | `AudioNode` has no rest/tail contract, so every occupied slot and every channel strip runs every block regardless of whether it is doing anything. |
 | `extract-mid-level-dsp-blocks/` | The primitives-to-devices ladder has no middle rung on the DSP side, and `device-displays.slint` holds eight visualizers with no shared canvas. |
 
 ## Archived
@@ -48,6 +50,9 @@ These have steps but no `00-status.md`, because nothing has landed to record.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
+`auto-offline-idle-devices/` (all three, closed 2026-09-05; read its status
+before touching anything a device runs on the clock rather than on its input,
+and before assuming a frozen delay line reads the same as a running one) ·
 `typed-audio-edges/` (all five, closed 2026-09-05; the first half of
 `AUDIO_ARCHITECTURE.md`'s migration step 6, and the plan that closed the two
 below. Read it before building parallel sends or a sidechain input: the

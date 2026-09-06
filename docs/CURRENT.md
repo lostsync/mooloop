@@ -300,6 +300,18 @@ inaudible until an edge is authored. The channel modulator tick pass stays in
 index order and stays a separate loop: a modulator's phase must not depend on
 a subscription somebody made on another channel.
 
+Devices and channels with nothing to do are not rendered. A device says how
+long it can still be heard after its input goes silent and whether its own
+state has settled; the host stops calling an effect slot whose input has been
+quiet longer than that, and stops rendering a whole channel strip when it has
+no events, its generator has no voices and has been putting out silence, and
+every effect on it would be skipped. Waking is the first block with audio in
+it, from the state the device had when it stopped — nothing is reset and
+nothing ramps. On a thirty-two channel project with one channel playing, a
+256-frame block costs about a tenth of what it did; with every channel playing
+it costs what it did before, because nothing is skipped. What a project
+renders is unchanged either way, at any block size.
+
 Every strip preallocates every source node and switches its active source
 without allocating in the callback. WAV decode, waveform construction, and
 directory scanning occur off the audio thread. A decoded sample is published

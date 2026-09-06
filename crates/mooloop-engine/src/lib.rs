@@ -41,6 +41,8 @@ mod audio_edge_tests;
 mod ds01_tests;
 #[cfg(test)]
 mod gain_structure_tests;
+#[cfg(test)]
+mod idle_skip_tests;
 
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
