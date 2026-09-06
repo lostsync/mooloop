@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-05
-- Sessions: 55
+- Sessions: 56
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -87,7 +87,8 @@ Alphabetical by model name, then by harness.
   edges with the Aux In device that consumes them, the rest/tail
   contract that lets idle devices and idle channels stop rendering, and the
   block-path measurement that found the control pass costing more than the
-  audio, and the sleeping-device shape evaluation behind it. Longer accounts of
+  audio, the sleeping-device shape evaluation behind it, and what an effect
+  costs while it rests. Longer accounts of
   most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

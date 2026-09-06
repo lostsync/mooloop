@@ -434,6 +434,58 @@ a (frames, ticks) pair reset when the tempo moves — rather than a
 substitution. That is a decision about musical timing rather than a bug fix,
 and it is Adam's.
 
+## Sep 6 — what an effect costs while it is resting, and being wrong about it twice
+
+The generator side of resting was settled yesterday, so this asked the same
+question of the effects: `block_cost.rs` grew a table of sixteen sampler
+channels with nothing to play, one effect each, one row per kind.
+
+The first table said a reverb cost **1.76 milliseconds a block** — sixteen per
+cent of a 512-frame budget, for sixteen channels doing nothing — and that none
+of them ever slept. Both halves of that were wrong, and in the same way. The
+reverb's tail is three times its decay plus a quarter second, which at the
+default 2.4 s decay is 7.45 s, and the measurement warmed up for 0.68 s and
+ran for 4.3. It was timing a reverb still correctly running its tail and
+calling it a reverb that would not sleep.
+
+So the harness had to say two things it was not saying. It now rests for
+twelve seconds — longer than the longest declared tail in the program — before
+the clock starts, and it prints what share of the channel-blocks in the
+measured stretch were actually skipped. Without that column an expensive
+`skip_block` and a device that never reached one are the same number, which
+is exactly the mistake above. With it, the table is unambiguous: everything
+sleeps, and the reverb costs 48 microseconds rather than 1,760.
+
+What the honest table then showed, over sixteen resting channels at 512
+frames: Modulation 56 microseconds, Delay 55, Drive 55, Reverb 48, Bitcrush
+24, and everything else — EQ, Filter, Plate, Gate, Compressor, Limiter — under
+a microsecond. The last group is the interesting one, because it says the
+mechanism works and the question is only about the five that opt out of it.
+
+**Two of them were writing zeros a frame at a time.** The delay and the chorus
+both push silence through their ring while asleep, and for a good reason that
+is written down where they do it: `DelayLine::read` takes its interpolation
+fraction from `write - 1 - offset`, so a frozen head comes back reading
+between different samples than a running one. That is a requirement about
+where the head *ends up*, not about how it got there — and a zero does not
+depend on the order it was stored in. `DelayLine::write_silence` fills the
+spans and lands the head in the same slot, which is the same ring bytes for
+bytes. The delay went from 55 microseconds to 4.
+
+**The chorus only came down to 40**, because what is left of it is the LFO,
+advancing a sample at a time. That is the floor the block-size contract sets
+and yesterday's entry argued for; it is the same 4.8 nanoseconds a
+channel-frame the ML-P8 LFO settles at, and it is not going lower without
+giving up the property that a bounce matches a take.
+
+**And one of them is unexplained.** Drive costs the same 54 microseconds as
+the delay did, has no `skip_block` at all — it takes the default, which does
+nothing — and slept for every one of the measured blocks, so the awake path
+that handles its oversampler and its dry aligner was not reached. Something
+about a slot that declares latency is being paid for on a channel that is
+asleep. That is written here as a measurement without a cause rather than a
+guess with one, and it is the first thing to pick up next.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
@@ -474,6 +526,7 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 
 - ~~The v1 drum synth is still the only generator that cannot be modulated~~ — it has a table as of 2026-09-05 (`FOCUS.md` step 2). DS-01 is done and archived: nine steps, a six-page face, a seventeen-patch bank, played and signed off on 2026-09-04, and step 07's audio outlets closed on 2026-09-05.
 - ~~ML-P8 stops inside step 06~~ — closed 2026-09-05, along with DS-01's step 07 and `typed-audio-edges/` itself. All three directories are archived. What is *not* built is the rest of `AUDIO_ARCHITECTURE.md`'s step 6: parallel sends (a channel still feeds exactly one bus) and sidechain key inputs (they need a dependency edge that schedules a producer without summing it in). Both now extend a compiled edge model rather than needing one built first.
+- Drive costs 54 microseconds a block over bare on sixteen *sleeping* channels, with no `skip_block` of its own and the awake path unreached. Every other effect that costs anything at rest has a per-sample loop to point at; this one does not. `resting_effect_cost` in `block_cost.rs` is the measurement.
 - A note-off landing on the pattern's last tick moves by one sample depending on the host's buffer size, so an export does not match a take for any generator still sounding there. Narrowed to `Sequencer::schedule_edge_once` rounding a delta off `Transport::position_ticks`, which accumulates per block where `frames_played` does not; recorded as an `#[ignore]`d test in `idle_skip_tests.rs`. The fix needs a tempo anchor, not a substitution.
 - Buffer Stage 1's acceptance test 8 — no allocations or locks in the callback — is still unverified. It needs an allocation-tracking harness, not a reading of the code.
 - The sampler's four-voice stretching polyphony cap is not enforced anywhere: `StretchPool::new` builds a reader for all sixteen voices.

@@ -16,7 +16,9 @@
 use std::time::Instant;
 
 use crate::render::RenderState;
-use mooloop_core::{MlP8Params, NoteEvent, Project, ProjectChannel};
+use mooloop_core::{
+    EffectKind, EffectSlotState, MlP8Params, NoteEvent, Project, ProjectChannel,
+};
 
 const SAMPLE_RATE: u32 = 48_000;
 
@@ -58,22 +60,69 @@ fn idle_sampler_project(count: usize) -> Project {
     project
 }
 
+/// `count` sampler channels, each carrying one `kind` and nothing to play.
+///
+/// The effect half of the same question `idle_sampler_project` asks about
+/// generators. A resting channel still runs `skip_block` on every occupied
+/// slot, because a node with a clock in it has to keep time whether or not
+/// anything is passing through -- so this is what an arrangement's effect
+/// racks cost between the parts, and the sampler underneath contributes the
+/// nothing it is measured contributing elsewhere.
+fn resting_effect_project(count: usize, kind: EffectKind) -> Project {
+    let mut project = Project::default();
+    project.channels.clear();
+    for index in 0..count {
+        let mut channel = ProjectChannel::sampler(index, 1);
+        channel.setup.effects.push(EffectSlotState::of_kind(kind));
+        project.channels.push(channel);
+    }
+    project
+}
+
 /// Median nanoseconds per `process_block`, after a warm-up that lets every
 /// voice reach steady state.
 fn per_block_nanos(project: &Project, frames: usize, blocks: usize) -> u128 {
+    timed(project, frames, blocks).0
+}
+
+/// The median block, and what share of the channel-blocks in the measured
+/// stretch were skipped. The second number is what tells a cheap `skip_block`
+/// apart from a channel that never reached one.
+fn timed(project: &Project, frames: usize, blocks: usize) -> (u128, f64) {
+    timed_after(project, frames, blocks, 64 * frames)
+}
+
+/// The same, with the warm-up given in frames rather than blocks.
+///
+/// Anything measuring a *resting* arrangement has to say how long it waited,
+/// because a tail is a declared length and some of them are long: the
+/// reverb's is three times its decay plus a quarter second, which at the
+/// default 2.4 s decay is 7.45 s. Warm up for less than that and the figure
+/// is the cost of a reverb still running, correctly, with nothing to show it.
+fn timed_after(
+    project: &Project,
+    frames: usize,
+    blocks: usize,
+    warmup_frames: usize,
+) -> (u128, f64) {
     let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
     render.play();
-    for _ in 0..64 {
+    let mut warmed = 0usize;
+    while warmed < warmup_frames {
         render.process_block(frames);
+        warmed += frames;
     }
+    let before = render.slept_strip_blocks();
     let mut samples = Vec::with_capacity(blocks);
     for _ in 0..blocks {
         let started = Instant::now();
         render.process_block(frames);
         samples.push(started.elapsed().as_nanos());
     }
+    let slept = render.slept_strip_blocks() - before;
+    let possible = (blocks * project.channels.len()) as f64;
     samples.sort_unstable();
-    samples[samples.len() / 2]
+    (samples[samples.len() / 2], slept as f64 / possible * 100.0)
 }
 
 /// The block path across the channel counts and buffer sizes a host actually
@@ -124,5 +173,49 @@ fn idle_block_cost() {
                 heavy as i128 - sampler as i128
             );
         }
+    }
+}
+
+/// What each effect kind costs on a channel that is resting.
+///
+/// Sixteen channels at 512 frames, which is a large arrangement and a large
+/// buffer on purpose: per-sample work in a `skip_block` shows up as a figure
+/// that scales with both, and anything that does not is a fixed cost worth
+/// far less attention. The bare sampler row is the floor to read the rest
+/// against.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn resting_effect_cost() {
+    let channels = 16;
+    let frames = 512;
+    // Twelve seconds of silence before the clock starts: longer than the
+    // longest declared tail in the program, so what is being timed is an
+    // arrangement that has finished resting rather than one still doing it.
+    let warmup = SAMPLE_RATE as usize * 12;
+    println!();
+    println!("  {channels} channels, {frames}-frame block, rested 12 s");
+    println!("  effect         ns/block   over bare   channel-blocks slept");
+    let (bare, bare_slept) = timed_after(&idle_sampler_project(channels), frames, 400, warmup);
+    println!("  {:<12}  {bare:>9}  {:>10}  {bare_slept:>18.0}%", "(none)", "");
+    for kind in [
+        EffectKind::Eq,
+        EffectKind::Modulation,
+        EffectKind::Filter,
+        EffectKind::Drive,
+        EffectKind::Bitcrush,
+        EffectKind::Delay,
+        EffectKind::Reverb,
+        EffectKind::Plate,
+        EffectKind::Gate,
+        EffectKind::Compressor,
+        EffectKind::Limiter,
+    ] {
+        let (nanos, slept) =
+            timed_after(&resting_effect_project(channels, kind), frames, 400, warmup);
+        println!(
+            "  {:<12}  {nanos:>9}  {:>10}  {slept:>18.0}%",
+            format!("{kind:?}"),
+            nanos as i128 - bare as i128
+        );
     }
 }

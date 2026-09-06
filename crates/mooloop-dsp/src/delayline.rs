@@ -67,6 +67,41 @@ impl DelayLine {
         self.write = (self.write + 1) % capacity;
     }
 
+    /// Append `frames` silent frames, advancing the write head exactly as
+    /// writing them one at a time would.
+    ///
+    /// Identical to that loop rather than merely equivalent to it: a zero does
+    /// not depend on what order it is stored in, and the head lands in the
+    /// same slot, so the ring holds the same bytes afterwards. What it saves
+    /// is doing it a sample at a time on a block with nothing passing through,
+    /// which is what a delay or a chorus does for as long as its tail lasts.
+    pub fn write_silence(&mut self, frames: usize) {
+        let capacity = self.capacity();
+        if frames == 0 {
+            return;
+        }
+        // A skip longer than the ring overwrites every slot whatever the head
+        // was doing, so there is no span to work out.
+        if frames >= capacity {
+            self.left.fill(0.0);
+            self.right.fill(0.0);
+            self.write = (self.write + frames) % capacity;
+            return;
+        }
+        let end = self.write + frames;
+        if end <= capacity {
+            self.left[self.write..end].fill(0.0);
+            self.right[self.write..end].fill(0.0);
+        } else {
+            let wrapped = end - capacity;
+            self.left[self.write..].fill(0.0);
+            self.right[self.write..].fill(0.0);
+            self.left[..wrapped].fill(0.0);
+            self.right[..wrapped].fill(0.0);
+        }
+        self.write = end % capacity;
+    }
+
     /// Read `offset` frames behind the write head, interpolating between
     /// samples with a 4-point cubic Hermite kernel.
     ///
@@ -220,6 +255,38 @@ mod tests {
             line.write(v, -v);
         }
         line
+    }
+
+    /// `write_silence` is an optimisation, so the only interesting question
+    /// is whether it is indistinguishable from what it replaces. Compared on
+    /// the buffers and the head, over a ring that starts part-written and a
+    /// skip that starts mid-buffer: short of the end, exactly to it, across
+    /// the wrap, exactly one lap, and more than one.
+    #[test]
+    fn writing_silence_in_bulk_is_the_same_as_writing_it_a_frame_at_a_time() {
+        let capacity = 32;
+        for head in [0usize, 1, 17, 31] {
+            for frames in [0usize, 1, 5, 31, 32, 33, 70] {
+                let mut looped = DelayLine::with_capacity_frames(capacity);
+                let mut bulk = DelayLine::with_capacity_frames(capacity);
+                // Something to overwrite, and a head that is not at zero.
+                for i in 0..head {
+                    let v = i as f32 + 1.0;
+                    looped.write(v, -v);
+                    bulk.write(v, -v);
+                }
+
+                for _ in 0..frames {
+                    looped.write(0.0, 0.0);
+                }
+                bulk.write_silence(frames);
+
+                let what = format!("head {head}, {frames} frames");
+                assert_eq!(looped.left, bulk.left, "left: {what}");
+                assert_eq!(looped.right, bulk.right, "right: {what}");
+                assert_eq!(looped.write, bulk.write, "write head: {what}");
+            }
+        }
     }
 
     #[test]

@@ -316,18 +316,17 @@ impl AudioNode for ModulationEffect {
     /// that is what the sample loop does and the two do not land in the same
     /// place.
     fn skip_block(&mut self, ctx: &ProcessContext) {
-        for _ in 0..ctx.frames {
-            self.lfo.skip(1, self.params.rate_hz, self.sample_rate);
-            // The line is written too, and not because of what is in it --
-            // it is silent either way. `DelayLine::read` derives its
-            // interpolation fraction from `write - 1 - offset`, so where the
-            // write head sits changes the last few bits of that fraction.
-            // A frozen ring would come back reading between different
-            // samples than a running one, and a chorus's read head moves fast
-            // enough over noisy material for that to show. Keeping ring time
-            // and wall time the same thing costs two stores a frame.
-            self.line.write(0.0, 0.0);
-        }
+        self.lfo.skip(ctx.frames, self.params.rate_hz, self.sample_rate);
+        // The line is written too, and not because of what is in it -- it is
+        // silent either way. `DelayLine::read` derives its interpolation
+        // fraction from `write - 1 - offset`, so where the write head sits
+        // changes the last few bits of that fraction. A frozen ring would
+        // come back reading between different samples than a running one, and
+        // a chorus's read head moves fast enough over noisy material for that
+        // to show. Keeping ring time and wall time the same thing is a
+        // requirement about where the head ends up, not about how it got
+        // there, so the zeros go in as spans.
+        self.line.write_silence(ctx.frames);
     }
 
     fn process(

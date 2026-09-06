@@ -263,9 +263,7 @@ impl AudioNode for DelayEffect {
     /// this device has to have stopped moving before it may sleep at all,
     /// which is what `tail_frames` spends its first two checks on.
     fn skip_block(&mut self, ctx: &ProcessContext) {
-        for _ in 0..ctx.frames {
-            self.line.write(0.0, 0.0);
-        }
+        self.line.write_silence(ctx.frames);
     }
 
     fn process(
