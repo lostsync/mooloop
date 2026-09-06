@@ -112,10 +112,10 @@ pub const REST_EPSILON: f32 = 1.0e-9;
 /// `trip_frames` to decay below [`SILENCE_PEAK`], as a [`AudioNode::tail_frames`]
 /// answer.
 ///
-/// One shared derivation because three devices need the same one — the delay's
-/// repeats, the modulation line's regeneration, and anything else built on a
-/// ring that feeds itself. A gain of one or more never decays and returns
-/// `u32::MAX`, which is the trait's "never skip me".
+/// One shared derivation because two devices already need the same one — the
+/// delay's repeats and the modulation line's regeneration — and anything else
+/// built on a ring that feeds itself will need it too. A gain of one or more
+/// never decays and returns `u32::MAX`, which is the trait's "never skip me".
 pub fn feedback_tail_frames(gain: f32, trip_frames: f32) -> u32 {
     let trip = trip_frames.max(1.0);
     let gain = gain.abs();
@@ -173,6 +173,14 @@ pub trait AudioNode {
     /// and combines the two. A memoryless effect is therefore always at rest,
     /// and it is still only skipped once its input goes quiet. The default is
     /// `false`, so a node that has not opted in is never skipped.
+    ///
+    /// **Nothing driven by the input may still be moving.** Silence is not
+    /// only about what can be heard: a parameter lag halfway to its target or
+    /// a delay head halfway through a glide would be frozen where it was and
+    /// come back describing settings nobody dialled. `Smoothed::is_settled`
+    /// is the usual answer, and it is exact because the lag snaps rather than
+    /// asymptoting. What moves whether or not the node is called belongs to
+    /// [`Self::skip_block`] instead, not here.
     ///
     /// Must be cheap — a field read or a handful of comparisons. It is called
     /// once per node per block on the audio thread, and it must never scan a
