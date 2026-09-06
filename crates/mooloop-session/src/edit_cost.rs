@@ -23,8 +23,10 @@ use crate::session::Session;
 /// `channels` channels over four patterns, `notes` notes in each pattern of
 /// each channel, and an automation lane on the first two channels.
 fn song(channels: usize, notes: usize, lanes: usize) -> Project {
-    let mut project = Project::default();
-    project.pattern_lengths = vec![64; 4];
+    let mut project = Project {
+        pattern_lengths: vec![64; 4],
+        ..Project::default()
+    };
     project.channels.clear();
     for index in 0..channels {
         let mut channel = ProjectChannel::mlp8(index, 4);
@@ -190,8 +192,10 @@ fn undo_install_cost() {
     println!("  sampler channels  seconds each   ms per undo");
     for channels in [1usize, 4, 8, 16] {
         for seconds in [1.0f32, 10.0] {
-            let mut project = Project::default();
-            project.pattern_lengths = vec![64; 1];
+            let mut project = Project {
+                pattern_lengths: vec![64; 1],
+                ..Project::default()
+            };
             project.channels.clear();
             let mut samples = Vec::new();
             for index in 0..channels {
@@ -226,8 +230,10 @@ fn committed_project(
     channels: usize,
     seconds: f32,
 ) -> (Project, Vec<Option<std::sync::Arc<mooloop_dsp::SampleData>>>) {
-    let mut project = Project::default();
-    project.pattern_lengths = vec![64; 1];
+    let mut project = Project {
+        pattern_lengths: vec![64; 1],
+        ..Project::default()
+    };
     project.channels.clear();
     let mut samples = Vec::new();
     for index in 0..channels {

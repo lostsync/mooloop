@@ -1235,7 +1235,7 @@ impl BusStrip {
     fn is_resting(&self) -> bool {
         self.effects.is_at_rest()
             && self.silent_frames
-                >= self.compensation.as_ref().map_or(0, |delay| delay.len() as u32)
+                >= self.compensation.as_ref().map_or(0, |delay| delay.frames() as u32)
     }
 
     fn reset(&mut self, reclaim: &mut Reclaim) {

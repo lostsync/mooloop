@@ -54,6 +54,8 @@ pub mod scale;
 pub mod shaper;
 pub mod smooth;
 pub mod stretch;
+#[cfg(test)]
+mod stretch_cost;
 pub mod taps;
 
 mod synth_voice;

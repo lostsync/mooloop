@@ -727,6 +727,45 @@ indices by luck and only the last channel missed — the table said the cost was
 described as per-channel work. Distinct samples, which is what a real project
 has, is what made it scale.
 
+## Sep 6 (last) — the stretch is sound, and three commits of clippy warnings were not
+
+Every other subsystem had been measured, so this measured the heaviest DSP in
+the program. `stretch_cost` reports the realtime factor of a `StretchReader`,
+which is what the audio thread runs per sounding voice: **Music 26.3x, Drums
+38.4x, Grain 77.7x**, flat across ratios from 1.0 to 8.0. The offline render a
+commit pays is 57, 39 and 19 milliseconds per source second respectively.
+
+**Nothing is wrong with it**, which is worth writing down as an outcome rather
+than treating as a failed search. The sampler already declines to run the
+stretcher at all when the ratio is 1.0 and the mode is not Grain
+(`stretch_is_active`), and the pool is installed only for a patch that asks to
+stretch. There was no waste to remove.
+
+What the numbers do is put a figure on an open thread that had only a
+description. `StretchPool::new` builds a reader for every one of the sixteen
+voices, at 100 KB each: **1.6 MB reserved per stretching channel** against 401
+KB for the four the thread says were intended. Sixteen Music-mode voices
+sounding at once is 12.7 microseconds a frame — sixty-one per cent of a core,
+for one channel. That is not a fix this could make: `polyphony` arrives as an
+ordinary parameter on the audio thread, so a pool sized to it would silently
+stop stretching voices above the old size when the user raised it, and capping
+*stretching* at four while polyphony stays sixteen changes how voice five
+sounds. Both are Adam's to decide; the thread now carries the arithmetic.
+
+**And the run turned up six clippy warnings, all mine, from the previous three
+commits.** Two `len` methods without an `is_empty` beside them
+(`IntegerDelay`, `History`) and four field assignments after
+`Default::default()` in the measurement fixtures. Every one of those three
+commits reported clippy clean, and every one of those reports was wrong: the
+check was `grep -E "^error|^warning: unu"` over the output, which matches a
+compiler error and an unused-import warning and nothing else clippy actually
+says. A grep narrow enough to always pass is not a check.
+
+The `len`s are renamed rather than given an `is_empty`, because neither has an
+empty case worth reporting — `IntegerDelay::new` returns `None` instead of
+building a ring of no frames, and a history with nothing in it is what
+`can_undo` already answers. `frames()` and `retained()` say what they return.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
@@ -770,7 +809,7 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 - A reverb on a bus feeding a compressor on the master renders differently at 128 frames a block than at 1024, by 2e-16. Narrowed to the slot silence counter advancing a block at a time; recorded as an `#[ignore]`d test in `idle_skip_tests.rs`. Inaudible, but it bounds a claim three other tests make without qualification.
 - A note-off landing on the pattern's last tick moves by one sample depending on the host's buffer size, so an export does not match a take for any generator still sounding there. Narrowed to `Sequencer::schedule_edge_once` rounding a delta off `Transport::position_ticks`, which accumulates per block where `frames_played` does not; recorded as an `#[ignore]`d test in `idle_skip_tests.rs`. The fix needs a tempo anchor, not a substitution.
 - Buffer Stage 1's acceptance test 8 — no allocations or locks in the callback — is still unverified. It needs an allocation-tracking harness, not a reading of the code.
-- The sampler's four-voice stretching polyphony cap is not enforced anywhere: `StretchPool::new` builds a reader for all sixteen voices.
+- The sampler's four-voice stretching polyphony cap is not enforced anywhere: `StretchPool::new` builds a reader for all sixteen voices, at 100 KB each — 1.6 MB a stretching channel against 401 KB for four. Sixteen Music-mode voices is 12.7 us a frame, sixty-one per cent of a core for one channel (`stretch_cost`). Sizing the pool to `polyphony` is not free: it arrives as a parameter on the audio thread, so voices above the old size would silently stop stretching when it was raised.
 - Acid's Cutoff knob means a different frequency from the other two ML-M1 models — 0.41x nominal against 0.65–0.68x. The compensation constant is load-bearing, not a typo; correcting it lines the corners up and breaks the filter. Lining them up means re-deriving it, and whether it *should* track the others is a taste question Adam has not been asked.
 - Mixer: inserts only, no sends, sidechain, solo, stem export, or bus renaming. An `Aux In` channel reads another channel's published outlet as of 2026-09-05, which is an input to a device rather than a send: the producing channel does not know it is being read and its own routing does not move.
 - No plugin-delay compensation, so no lookahead anywhere.

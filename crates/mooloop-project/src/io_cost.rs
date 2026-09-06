@@ -27,8 +27,10 @@ use crate::{load_bundle, save_song, AssetMode};
 /// on every channel -- which is what a mixed arrangement looks like rather
 /// than a bare one.
 fn song(channels: usize, notes: usize) -> Project {
-    let mut project = Project::default();
-    project.pattern_lengths = vec![64; 4];
+    let mut project = Project {
+        pattern_lengths: vec![64; 4],
+        ..Project::default()
+    };
     project.channels.clear();
     for index in 0..channels {
         let mut channel = ProjectChannel::mlp8(index, 4);

@@ -114,8 +114,12 @@ impl<T> History<T> {
 
     /// How many edits are currently retained. For the test that pins the
     /// bound; nothing in the interface asks.
+    ///
+    /// Not `len`: a history with nothing in it is an ordinary state and the
+    /// question callers ask about it is `can_undo`, so an `is_empty` beside
+    /// this would be a second way to ask something already answered.
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    pub fn retained(&self) -> usize {
         self.entries.len()
     }
 }
@@ -226,7 +230,7 @@ mod bound_tests {
         for value in 0..MAX_ENTRIES + 50 {
             history.record(edit(value));
         }
-        assert_eq!(history.len(), MAX_ENTRIES);
+        assert_eq!(history.retained(), MAX_ENTRIES);
         assert!(history.can_undo());
         assert!(!history.can_redo());
 
@@ -255,6 +259,6 @@ mod bound_tests {
                 ..edit(value)
             });
         }
-        assert_eq!(history.len(), 1);
+        assert_eq!(history.retained(), 1);
     }
 }

@@ -50,7 +50,11 @@ impl IntegerDelay {
     /// A caller that has fed it silence for at least this many frames knows
     /// every slot holds a zero, and so knows that freezing it changes
     /// nothing — which is what lets a resting bus stop running it.
-    pub fn len(&self) -> usize {
+    ///
+    /// Not `len`: a ring of no frames is not a delay, and `IntegerDelay::new`
+    /// returns `None` rather than building one, so there is no empty case for
+    /// an `is_empty` to report.
+    pub fn frames(&self) -> usize {
         self.left.len()
     }
 
